@@ -1,0 +1,8 @@
+*.zip
+.release/
+backup/
+*.bak
+.audit-*
+node_modules/
+package.json
+package-lock.json

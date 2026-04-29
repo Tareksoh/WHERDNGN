@@ -1,0 +1,30 @@
+## Interface: 120005
+## Title: WHEREDNGN
+## Notes: 4-player Saudi Baloot card game over party addon channel.
+## Author: Tareksoh
+## Version: @project-version@
+## X-Curse-Project-ID: 1529200
+## SavedVariables: WHEREDNGNDB
+## SavedVariablesPerCharacter: WHEREDNGNLog
+## X-Category: Miscellaneous
+
+# Foundational - no deps
+Log.lua
+Constants.lua
+
+# Pure logic
+Cards.lua
+Rules.lua
+
+# Game runtime
+State.lua
+Bot.lua
+Net.lua
+
+# UI
+UI.lua
+MinimapIcon.lua
+
+# Entry
+WHEREDNGN.lua
+Slash.lua
