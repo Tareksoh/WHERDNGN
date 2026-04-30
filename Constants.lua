@@ -163,7 +163,8 @@ K.SND_VOICE_SUN    = SND_BASE .. "sun.ogg"        -- "صن"
 K.SND_VOICE_ASHKAL = SND_BASE .. "ashkal.ogg"     -- "أشكال"
 K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "بَسْ" — round-1 pass
 K.SND_VOICE_WLA    = SND_BASE .. "wla.ogg"        -- "ولا" — round-2 pass
-K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوّل" (round start)
+K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوَل" (round-1 bidding start)
+K.SND_VOICE_THANY  = SND_BASE .. "thany.ogg"      -- "ثآني" (round-2 bidding start)
 
 -- -- Tunables ---------------------------------------------------------
 

@@ -46,7 +46,8 @@ CUES = {
     "sun":    "صَنْ",
     "pass":   "بَسْ",       # round-1 pass
     "wla":    "ولا",        # round-2 pass ("none / no preference")
-    "awal":   "أوَل",
+    "awal":   "أوَل",        # round-1 bidding start
+    "thany":  "ثآني",       # round-2 bidding start
 }
 
 

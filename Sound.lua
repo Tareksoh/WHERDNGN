@@ -19,15 +19,21 @@ local function enabled()
 end
 
 -- Throttle identical cues so a flurry of rapid trick-end sounds (or
--- a debug double-fire) doesn't stack into one harsh blast.
+-- a debug double-fire) doesn't stack into one harsh blast. Voice cues
+-- (string paths) get a longer min interval than SFX (number IDs)
+-- because the actual audio is ~0.6s and overlapping back-to-back
+-- announcements blur into "passpasspass" mush.
 local lastFire = {}
-local MIN_INTERVAL = 0.10  -- 100ms is below the threshold of human hearing as separate events
+local SFX_INTERVAL   = 0.10
+local VOICE_INTERVAL = 0.80
 
 function M.Cue(soundId)
     if not soundId or not enabled() then return end
     local now = GetTime and GetTime() or 0
     local last = lastFire[soundId] or 0
-    if now - last < MIN_INTERVAL then return end
+    local minInterval = (type(soundId) == "string")
+        and VOICE_INTERVAL or SFX_INTERVAL
+    if now - last < minInterval then return end
     lastFire[soundId] = now
     -- Numeric IDs in WoW's UI sound space are SoundKit IDs and must go
     -- through PlaySound, NOT PlaySoundFile (which expects a path or a

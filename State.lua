@@ -815,6 +815,8 @@ function S.HostBeginRound2()
     s.bidRound = 2
     s.bids = {}
     s.phase = K.PHASE_DEAL2BID
+    -- Round-2 bidding starts: announce "ثآني" (Thany / second).
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_THANY) end
 end
 
 function S.HostScoreRoundResult()

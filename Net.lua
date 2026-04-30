@@ -358,6 +358,9 @@ function N._OnDealPhase(sender, phase)
         S.s.phase = K.PHASE_DEAL2BID
         S.s.bids = {}                -- clear round-1 bids on receivers too
         S.s.bidRound = 2
+        -- Round-2 announcement on non-host clients (host fired it via
+        -- HostBeginRound2 already; this branch is for everyone else).
+        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_THANY) end
     elseif phase == "3" then S.s.phase = K.PHASE_DEAL3
     elseif phase == "play" then S.ApplyPlayPhase()
     end
@@ -1195,9 +1198,13 @@ end
 -- round was reset, the timer returns silently.
 -- ---------------------------------------------------------------------
 
-local BOT_DELAY_BID  = 1.0
+-- Bot pacing. The bid voice cue (~0.6s for the Saud "بَسْ"/"حكم"/etc)
+-- has to finish before the next bot acts, otherwise rapid all-pass
+-- rounds produce a "passpasspass" run that doesn't line up with the
+-- visual turn pointer. 1.6s gives the announcement room to breathe.
+local BOT_DELAY_BID  = 1.6
 local BOT_DELAY_PLAY = 1.2
-local BOT_DELAY_BEL  = 0.8
+local BOT_DELAY_BEL  = 1.4   -- Bel/Bel-Re also has a voice cue
 
 local function isBotSeat(seat)
     return S.s.isHost and seat and S.s.seats[seat] and S.s.seats[seat].isBot
