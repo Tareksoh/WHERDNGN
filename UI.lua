@@ -244,10 +244,12 @@ local function buildMain()
 
     -- Scale controls. The whole window scales as a single unit (the
     -- main frame is the parent of every child; SetScale propagates).
-    -- Persisted to WHEREDNGNDB.scale and restored on Show.
+    -- Persisted to WHEREDNGNDB.scale and restored on Show. Placed on
+    -- the top-left after the Sound checkbox so they never overlap the
+    -- centered title.
     local SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.7, 1.5, 0.1
     local scaleDown = makeButton(f, "−", 22, 22)
-    scaleDown:SetPoint("TOP", title, "TOP", -56, 4)
+    scaleDown:SetPoint("TOPLEFT", 96, -8)
     local scaleUp = makeButton(f, "+", 22, 22)
     scaleUp:SetPoint("LEFT", scaleDown, "RIGHT", 2, 0)
     local function applyScale(s)
