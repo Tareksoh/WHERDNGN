@@ -23,9 +23,14 @@ local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 -- Tuning thresholds. Higher = more conservative bidding. Randomized
 -- per-call so two bots dealt similar hands don't always pick the same
 -- bid — eliminates the "predictable cliff" feel.
-local TH_HOKM_R1_BASE = 50
-local TH_HOKM_R2_BASE = 38
-local TH_SUN_BASE     = 60
+--
+-- Originally these were tuned for "professional" bot bidding (J+9 of
+-- trump + length), which produced too-quiet rounds where 3-of-4 bots
+-- pass on most deals. Lowered so a bot with one strong card in the
+-- bid-card suit (J alone, or A+T+K of trump) commits in round 1.
+local TH_HOKM_R1_BASE = 35
+local TH_HOKM_R2_BASE = 28
+local TH_SUN_BASE     = 50
 local BID_JITTER      = 6   -- ±6 swing per call
 
 local function jitter(base, amp)

@@ -28,6 +28,11 @@ end
 local function init()
     ensureDB()
     B.State.s.target = WHEREDNGNDB.target or 152
+    -- Persisted team labels (host-only setting, applied account-wide).
+    if WHEREDNGNDB.teamNames then
+        B.State.ApplyTeamNames(WHEREDNGNDB.teamNames.A,
+                               WHEREDNGNDB.teamNames.B)
+    end
     B.State.SetLocalName(GetUnitName("player", true))
     L.Info("init", "local name: %s", tostring(B.State.s.localName))
 end

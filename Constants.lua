@@ -69,6 +69,9 @@ K.MULT_BASE   = 1
 K.MULT_SUN    = 2  -- sun contracts score x2
 K.MULT_BEL    = 2  -- doubled
 K.MULT_BELRE  = 4  -- redoubled
+K.MULT_TRIPLE = 8  -- ثري — defender's 3rd-stage escalation
+K.MULT_FOUR   = 16 -- فور — bidder's 4th-stage escalation
+K.MULT_GAHWA  = 32 -- قهوة (coffee) — defender's 5th and final escalation
 
 -- -- Melds (declarations in trick 1) -----------------------------------
 
@@ -105,6 +108,9 @@ K.PHASE_DEAL1    = "deal1"       -- 5 cards out, bid card up, round-1 bidding
 K.PHASE_DEAL2BID = "deal2bid"    -- all passed round 1, round-2 bidding
 K.PHASE_DOUBLE   = "double"      -- contract decided, opp window for Bel
 K.PHASE_REDOUBLE = "redouble"    -- Bel happened, contracting team window for Bel-Re
+K.PHASE_TRIPLE   = "triple"      -- Bel-Re happened, opp window for Triple (×8)
+K.PHASE_FOUR     = "four"        -- Triple happened, bidder window for Four (×16)
+K.PHASE_GAHWA    = "gahwa"       -- Four happened, opp window for Gahwa (×32)
 K.PHASE_DEAL3    = "deal3"       -- final 3 cards out, optional meld declarations
 K.PHASE_PLAY     = "play"        -- trick play
 K.PHASE_SCORE    = "score"       -- showing score, host advances to next round
@@ -129,6 +135,9 @@ K.MSG_BID      = "B"   -- a bid was made
 K.MSG_CONTRACT = "C"   -- contract finalized
 K.MSG_DOUBLE   = "X"   -- Bel
 K.MSG_REDOUBLE = "Y"   -- Bel-Re
+K.MSG_TRIPLE   = "3"   -- Triple (×8)
+K.MSG_FOUR     = "4"   -- Four (×16)
+K.MSG_GAHWA    = "5"   -- Gahwa (×32)
 K.MSG_MELD     = "M"   -- meld declaration in trick 1
 K.MSG_PLAY     = "P"   -- card played
 K.MSG_TRICK    = "W"   -- trick winner + points
@@ -138,10 +147,14 @@ K.MSG_RESYNC_REQ = "?" -- request state from host
 K.MSG_RESYNC_RES = "="  -- host's resync payload
 K.MSG_SKIP_DBL   = "n"  -- defender voted skip on double window
 K.MSG_SKIP_RDBL  = "m"  -- bidder voted skip on redouble window
+K.MSG_SKIP_TRP   = "u"  -- defender voted skip on triple window
+K.MSG_SKIP_FOR   = "v"  -- bidder voted skip on four window
+K.MSG_SKIP_GHW   = "w"  -- defender voted skip on gahwa window
 K.MSG_TAKWEESH     = "k"  -- player calls Takweesh (catches an illegal play)
 K.MSG_TAKWEESH_OUT = "z"  -- host's outcome: caught or false-call
 K.MSG_KAWESH       = "a"  -- player calls Kawesh/Saneen (5-card 7/8/9 annul)
 K.MSG_PAUSE        = "p"  -- host pauses/unpauses; payload "1" or "0"
+K.MSG_TEAMS        = "t"  -- host broadcasts custom team names; payload teamA;teamB
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:
@@ -165,6 +178,9 @@ K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "بَسْ" — round-1 pass
 K.SND_VOICE_WLA    = SND_BASE .. "wla.ogg"        -- "ولا" — round-2 pass
 K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوَل" (round-1 bidding start)
 K.SND_VOICE_THANY  = SND_BASE .. "thany.ogg"      -- "ثآني" (round-2 bidding start)
+K.SND_VOICE_TRIPLE = SND_BASE .. "triple.ogg"     -- "ثري" (×8 escalation)
+K.SND_VOICE_FOUR   = SND_BASE .. "four.ogg"       -- "فور" (×16 escalation)
+K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.ogg"      -- "قهوة" (×32 escalation, Coffee)
 
 -- -- Tunables ---------------------------------------------------------
 

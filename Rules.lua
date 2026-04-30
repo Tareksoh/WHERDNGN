@@ -382,14 +382,25 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     elseif bidderTotal < oppTotal then
         outcome_kind = "fail"
     else
-        -- Tie. Saudi rule 4-10: count goes to non-buyer.
-        --   no escalation     → bidder is "buyer" → fail
-        --   doubled (only)    → doubler is "buyer" → bidder takes
-        --   redoubled         → bidder is "buyer" again → fail
-        if contract.redoubled then
-            outcome_kind = "fail"
-        elseif contract.doubled then
-            outcome_kind = "take"
+        -- Tie. Saudi rule 4-10: count goes to non-buyer. The "buyer"
+        -- alternates with each escalation level — whoever made the
+        -- LAST decision is the current "buyer". Tie means that buyer
+        -- failed, so the OTHER side takes the count.
+        --   no escalation         → bidder is buyer       → fail (def takes)
+        --   doubled               → defender is buyer     → take (bidder takes)
+        --   redoubled             → bidder is buyer again → fail
+        --   tripled (×8)          → defender is buyer     → take
+        --   foured (×16)          → bidder is buyer       → fail
+        --   gahwa (×32)           → defender is buyer     → take
+        local highest
+        if contract.gahwa     then highest = "gahwa"
+        elseif contract.foured  then highest = "four"
+        elseif contract.tripled then highest = "triple"
+        elseif contract.redoubled then highest = "redouble"
+        elseif contract.doubled   then highest = "double"
+        else                            highest = "none" end
+        if highest == "double" or highest == "triple" or highest == "gahwa" then
+            outcome_kind = "take"   -- defender escalated last; tie → bidder takes
         else
             outcome_kind = "fail"
         end
@@ -428,11 +439,17 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         elseif outcome == "B" then meldPoints.B = meldB end
     end
 
-    -- Multipliers: Sun, Bel, Bel-Re stack.
+    -- Multipliers: Sun stacks with the highest active escalation level
+    -- (Bel ×2, Bel-Re ×4, Triple ×8, Four ×16, Gahwa ×32). Only one
+    -- escalation multiplier applies — they replace each other rather
+    -- than compound.
     local mult = K.MULT_BASE
     if contract.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if contract.redoubled then mult = mult * K.MULT_BELRE
-    elseif contract.doubled then mult = mult * K.MULT_BEL end
+    if     contract.gahwa     then mult = mult * K.MULT_GAHWA
+    elseif contract.foured    then mult = mult * K.MULT_FOUR
+    elseif contract.tripled   then mult = mult * K.MULT_TRIPLE
+    elseif contract.redoubled then mult = mult * K.MULT_BELRE
+    elseif contract.doubled   then mult = mult * K.MULT_BEL end
 
     local rawA = (cardA + meldPoints.A) * mult
     local rawB = (cardB + meldPoints.B) * mult

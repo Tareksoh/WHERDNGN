@@ -348,13 +348,47 @@ local function buildLobby()
     h:SetPoint("TOP", 0, -8)
     h:SetText("|cffaaaaaaLobby|r")
 
+    -- Team-name inputs (host-only). Edits broadcast to all clients via
+    -- MSG_TEAMS so everyone sees matching labels in the score line and
+    -- the round-end banner.
+    local teamRow = CreateFrame("Frame", nil, lobbyPanel)
+    teamRow:SetSize(440, 24)
+    teamRow:SetPoint("TOP", h, "BOTTOM", 0, -10)
+    local function makeTeamEdit(letter, anchorX)
+        local lbl = makeText(teamRow, 11, "RIGHT")
+        lbl:SetPoint("LEFT", teamRow, "LEFT", anchorX, 0)
+        lbl:SetWidth(54)
+        lbl:SetText(("|cff66ff88Team %s|r"):format(letter))
+        local box = CreateFrame("EditBox", nil, teamRow, "InputBoxTemplate")
+        box:SetSize(140, 18)
+        box:SetPoint("LEFT", lbl, "RIGHT", 8, 0)
+        box:SetAutoFocus(false)
+        box:SetMaxLetters(20)
+        box:SetFontObject("ChatFontNormal")
+        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        local function commit(self)
+            self:ClearFocus()
+            if not S.s.isHost then return end
+            local a = lobbyPanel.teamA:GetText() or ""
+            local b = lobbyPanel.teamB:GetText() or ""
+            S.ApplyTeamNames(a, b)
+            if B.Net and B.Net.SendTeams then B.Net.SendTeams(a, b) end
+            U.Refresh()
+        end
+        box:SetScript("OnEnterPressed", commit)
+        box:SetScript("OnEditFocusLost", commit)
+        return box
+    end
+    lobbyPanel.teamA = makeTeamEdit("A", 16)
+    lobbyPanel.teamB = makeTeamEdit("B", 230)
+
     -- 4 seat slots
     local seatLabels = { "Seat 1 (Host)", "Seat 2", "Seat 3 (Host's partner)", "Seat 4" }
     lobbyPanel.seatTexts = {}
     for i = 1, 4 do
         local row = CreateFrame("Frame", nil, lobbyPanel, "BackdropTemplate")
         row:SetSize(380, 28)
-        row:SetPoint("TOP", 0, -38 - (i - 1) * 34)
+        row:SetPoint("TOP", 0, -76 - (i - 1) * 34)
         setBackdrop(row, true)
         local lbl = makeText(row, 12, "LEFT")
         lbl:SetPoint("LEFT", 8, 0)
@@ -559,7 +593,10 @@ local function buildTable()
     pauseBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     tablePanel.pauseBtn = pauseBtn
 
-    -- "PAUSED" overlay shown while S.s.paused is true.
+    -- "PAUSED" overlay shown while S.s.paused is true. Sits at DIALOG
+    -- strata to dim the trick area, but the peek/pause buttons get
+    -- bumped HIGHER (FULLSCREEN_DIALOG) below so the host can still
+    -- click Resume without first dismissing the overlay.
     local pauseOverlay = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
     pauseOverlay:SetAllPoints(centerPad)
     pauseOverlay:SetFrameStrata("DIALOG")
@@ -572,6 +609,14 @@ local function buildTable()
     pauseOverlay.sub:SetPoint("CENTER", 0, -22)
     pauseOverlay.sub:SetTextColor(0.9, 0.9, 0.9)
     tablePanel.pauseOverlay = pauseOverlay
+
+    -- Re-stack the peek + pause buttons ABOVE the pause overlay so
+    -- they remain clickable when the game is paused. Both were created
+    -- earlier inside centerPad with default strata (MEDIUM); bumping
+    -- them to FULLSCREEN_DIALOG puts them on top of the DIALOG
+    -- overlay regardless of creation order.
+    peekBtn:SetFrameStrata("FULLSCREEN_DIALOG")
+    pauseBtn:SetFrameStrata("FULLSCREEN_DIALOG")
 
     -- BALOOT! / contract result banner with full breakdown (shown
     -- during PHASE_SCORE / PHASE_GAME_END). Title at top, then per-team
@@ -619,8 +664,11 @@ local function buildTable()
     actionPanel:SetPoint("BOTTOM", handRow, "TOP", 0, 6)
 
     -- Local player bar: name + meld text. Above the action panel.
+    -- Sized to match the side seat-badges (~280 wide, centered) so the
+    -- four players read as a balanced cross around the felt rather
+    -- than a long banner across the bottom.
     local localBar = CreateFrame("Frame", nil, tablePanel, "BackdropTemplate")
-    localBar:SetSize(540, 26)
+    localBar:SetSize(280, 26)
     localBar:SetPoint("BOTTOM", actionPanel, "TOP", 0, 6)
     setBackdrop(localBar, true, COL.feltLight, COL.woodEdge, 8)
     localBar.nameText = makeText(localBar, 12, "LEFT")
@@ -629,6 +677,13 @@ local function buildTable()
     localBar.meldText = makeText(localBar, 11, "RIGHT")
     localBar.meldText:SetPoint("RIGHT", -10, 0)
     localBar.meldText:SetTextColor(1, 0.84, 0.30)
+    -- Turn glow overlay matching the other seat badges. Shown only
+    -- when it's our turn so the highlight reads as strongly as the
+    -- other three seats' glow when they're up.
+    localBar.turnGlow = localBar:CreateTexture(nil, "OVERLAY")
+    localBar.turnGlow:SetAllPoints()
+    localBar.turnGlow:SetColorTexture(unpack(COL.activeGlow))
+    localBar.turnGlow:Hide()
     tablePanel.localBar = localBar
 
     -- Center trick: 4 card faces in a cross inside centerPad
@@ -795,6 +850,32 @@ local function renderActions()
             -- the game. Confirmation is mandatory.
             addConfirmAction("Bel-Re (x4)", "|cffff5555Confirm Bel-Re?|r",
                 function() net().LocalRedouble() end)
+            addAction("Skip", function() net().LocalSkipDouble() end)
+        end
+    elseif S.s.phase == K.PHASE_TRIPLE then
+        local b = S.s.contract and S.s.contract.bidder
+        local def = b and ((b % 4) + 1) or nil
+        if def == S.s.localSeat then
+            addConfirmAction("Triple (x8)",
+                "|cffff5555Confirm Triple?|r",
+                function() net().LocalTriple() end)
+            addAction("Skip", function() net().LocalSkipDouble() end)
+        end
+    elseif S.s.phase == K.PHASE_FOUR then
+        local b = S.s.contract and S.s.contract.bidder
+        if b == S.s.localSeat then
+            addConfirmAction("Four (x16)",
+                "|cffff3333Confirm Four?|r",
+                function() net().LocalFour() end)
+            addAction("Skip", function() net().LocalSkipDouble() end)
+        end
+    elseif S.s.phase == K.PHASE_GAHWA then
+        local b = S.s.contract and S.s.contract.bidder
+        local def = b and ((b % 4) + 1) or nil
+        if def == S.s.localSeat then
+            addConfirmAction("|cffffd055Gahwa (x32)|r",
+                "|cffff0000Confirm Gahwa?|r",
+                function() net().LocalGahwa() end)
             addAction("Skip", function() net().LocalSkipDouble() end)
         end
     elseif S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY then
@@ -1110,8 +1191,10 @@ local function renderSeats()
     lb.meldText:SetText(meldsDescForSeat(me))
     if S.s.turn == me then
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
+        if lb.turnGlow then lb.turnGlow:Show() end
     else
         lb:SetBackdropBorderColor(unpack(COL.woodEdge))
+        if lb.turnGlow then lb.turnGlow:Hide() end
     end
 end
 
@@ -1301,6 +1384,21 @@ local function renderLobby()
         if info and info.name == S.s.localName then canJoin = false end
     end
     joinBtn:SetShown(canJoin)
+    -- Team-name boxes: pre-fill from current state, host-only editable.
+    if lobbyPanel.teamA and lobbyPanel.teamB and S.s.teamNames then
+        if not lobbyPanel.teamA:HasFocus() then
+            lobbyPanel.teamA:SetText(S.s.teamNames.A or "")
+        end
+        if not lobbyPanel.teamB:HasFocus() then
+            lobbyPanel.teamB:SetText(S.s.teamNames.B or "")
+        end
+        local editable = S.s.isHost
+        lobbyPanel.teamA:SetEnabled(editable)
+        lobbyPanel.teamB:SetEnabled(editable)
+        local color = editable and { 1, 1, 1, 1 } or { 0.6, 0.6, 0.6, 1 }
+        lobbyPanel.teamA:SetTextColor(unpack(color))
+        lobbyPanel.teamB:SetTextColor(unpack(color))
+    end
 end
 
 -- ----------------------------------------------------------------------
@@ -1324,6 +1422,9 @@ local function statusFor(phase)
     end
     if phase == K.PHASE_DOUBLE then return "Defenders: Bel?" end
     if phase == K.PHASE_REDOUBLE then return "Bidder: Bel-Re?" end
+    if phase == K.PHASE_TRIPLE then return "Defenders: Triple? (×8)" end
+    if phase == K.PHASE_FOUR then return "Bidder: Four? (×16)" end
+    if phase == K.PHASE_GAHWA then return "Defenders: Gahwa? (×32)" end
     if phase == K.PHASE_DEAL3 then return "Final 3 dealt — declare melds" end
     if phase == K.PHASE_PLAY then
         if S.IsMyTurn() then return "|cff55ff55Your turn|r" end
@@ -1343,7 +1444,8 @@ end
 
 -- Helper: short team label including the seated names of that team.
 local function teamLabel(t)
-    if not S.s.localSeat then return ("Team " .. t) end
+    local custom = (S.s.teamNames and S.s.teamNames[t]) or ("Team " .. t)
+    if not S.s.localSeat then return custom end
     local seats = (t == "A") and { 1, 3 } or { 2, 4 }
     local names = {}
     for _, sn in ipairs(seats) do
@@ -1352,8 +1454,8 @@ local function teamLabel(t)
             names[#names + 1] = shortName(info.name)
         end
     end
-    if #names == 0 then return ("Team " .. t) end
-    return ("Team %s (%s)"):format(t, table.concat(names, "+"))
+    if #names == 0 then return custom end
+    return ("%s (%s)"):format(custom, table.concat(names, "+"))
 end
 
 -- Show/hide the round-result banner. Host has the full result struct
@@ -1362,6 +1464,25 @@ end
 local function renderBanner()
     local banner = tablePanel and tablePanel.banner
     if not banner then return end
+
+    -- Redeal announcement (all-pass both rounds → dealer rotates).
+    -- Shown for ~3 seconds before the actual deal lands. Takes priority
+    -- over any other banner state so the player can clearly see who
+    -- the next dealer is.
+    if S.s.redealing and S.s.redealing.nextDealer then
+        local seat = S.s.redealing.nextDealer
+        local info = S.s.seats and S.s.seats[seat]
+        local nm = (info and info.name) and shortName(info.name) or ("seat " .. seat)
+        banner:Show()
+        banner:SetBackdropBorderColor(unpack(COL.legalEdge))
+        banner.bidder:SetText(""); banner.defender:SetText("")
+        banner.modifiers:SetText("|cffaaaaaaShuffling…|r")
+        banner.belote:SetText("")
+        banner.title:SetText("|cffffd055All passed — redealing|r")
+        banner.final:SetText(("Next dealer: |cff66ddff%s|r"):format(nm))
+        return
+    end
+
     if S.s.phase ~= K.PHASE_SCORE and S.s.phase ~= K.PHASE_GAME_END then
         banner:Hide(); return
     end
@@ -1460,6 +1581,8 @@ local function renderPauseControls()
     local activePhase =
         S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
         or S.s.phase == K.PHASE_DOUBLE or S.s.phase == K.PHASE_REDOUBLE
+        or S.s.phase == K.PHASE_TRIPLE or S.s.phase == K.PHASE_FOUR
+        or S.s.phase == K.PHASE_GAHWA
         or S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY
     btn:SetShown(S.s.isHost and activePhase)
     btn:SetText(S.s.paused and ">" or "II")
@@ -1475,9 +1598,12 @@ end
 local function renderStatus()
     statusText:SetText(statusFor(S.s.phase))
 
-    -- score
-    scoreText:SetText(("Us(A): |cff66ff66%d|r   Them(B): |cffff6666%d|r   /  %d"):format(
-        S.s.cumulative.A or 0, S.s.cumulative.B or 0, S.s.target or 152))
+    -- score (uses host-customizable team names; falls back to "Team A"/"B")
+    local nA = (S.s.teamNames and S.s.teamNames.A) or "Team A"
+    local nB = (S.s.teamNames and S.s.teamNames.B) or "Team B"
+    scoreText:SetText(("%s: |cff66ff66%d|r   %s: |cffff6666%d|r   /  %d"):format(
+        nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0,
+        S.s.target or 152))
 
     -- contract
     if S.s.contract then

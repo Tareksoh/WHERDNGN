@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.1.6 — escalation chain, redeal pause, polish
+
+**New gameplay**
+- Full Triple / Four / Gahwa escalation chain (×8 / ×16 / ×32) per
+  Saudi rule 4-10. Bot opponents skip these by default with a small
+  random escalation chance.
+- Voice cues "ثري" / "فور" / "قهوة" announce each step.
+- Doubled-tie inversion logic now follows the alternating "buyer"
+  rule across all 5 escalation levels.
+
+**Bidding feel**
+- Bots commit on more typical biddable hands (thresholds lowered
+  ~30%) — fewer all-pass rounds.
+- Bel-skip no longer plays the pass voice (it was confusing right
+  after a contract announcement).
+- Round-2 pass says "ولا" (round-1 still says "بَسْ").
+- "ثآني" announces the round-2 bidding window (mirrors "أوَل").
+- AWAL / THANY voices delayed 0.5s so the visual round-start lands
+  first, then the audio.
+- All-pass redeal now holds for 3s with a "Next dealer: NAME"
+  banner so the rotation is obvious instead of instant.
+- Trick-resolve buffer 1.5s → 2.2s; bot delays 1.0s → 1.6s.
+
+**UI polish**
+- Custom team A / B names — host edits in lobby, broadcast to all
+  clients, persists per-account, applied across score line + banner.
+- Local player bar narrower (540 → 280px) and centered, with the
+  same turn-glow texture the other three seat badges use.
+- Card back replaced with a programmatic navy/gold diamond pattern.
+- Ace of Clubs no longer renders a white square (chroma-keyed the
+  source PNG's solid card body to transparent).
+- Pause/peek buttons elevated to FULLSCREEN_DIALOG strata so they
+  remain clickable when the pause overlay is up.
+- Title/scale buttons no longer overlap.
+
 ## v0.1.3 — session persistence
 
 - Game state survives `/reload` and logout. The host's snapshot

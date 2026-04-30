@@ -57,6 +57,10 @@ local function reset()
     -- scores
     s.cumulative  = { A = 0, B = 0 }
     s.target      = 152
+    -- Team display names. Default to generic A/B labels but the host
+    -- can rename via the lobby inputs (broadcast on MSG_TEAMS so all
+    -- clients see the same labels). 20-char max enforced UI-side.
+    s.teamNames   = { A = "Team A", B = "Team B" }
     -- pause: host-driven freeze that suspends bot scheduling and AFK
     -- timers without dropping any in-flight state. Network-mirrored.
     s.paused      = false
@@ -70,6 +74,51 @@ end
 
 function S.ApplyPause(paused)
     s.paused = (paused and true) or false
+end
+
+-- Set or clear the redeal-announcement banner. The host calls this
+-- when all 4 players have passed both bidding rounds and is about to
+-- rotate the dealer; receivers also call it from _OnDealPhase("redeal")
+-- so every client shows the same "Next dealer: NAME" banner during the
+-- 3-second hold before cards are re-dealt.
+function S.ApplyRedealAnnouncement(nextDealerSeat)
+    if not nextDealerSeat then
+        s.redealing = nil
+        return
+    end
+    s.redealing = {
+        nextDealer = nextDealerSeat,
+        ts         = (GetTime and GetTime()) or 0,
+    }
+    -- Auto-clear after 3.5s in case the actual deal is delayed by
+    -- network or a paused host. UI re-renders on the next state
+    -- change so this is best-effort cleanup.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(3.5, function()
+            if s.redealing
+               and s.redealing.nextDealer == nextDealerSeat then
+                s.redealing = nil
+                if B.UI and B.UI.Refresh then B.UI.Refresh() end
+            end
+        end)
+    end
+end
+
+-- Custom team labels. Falls back to "Team A"/"Team B" when the host
+-- sends empty strings or this hasn't been called yet. UI-side reads
+-- s.teamNames[t] anywhere it currently shows a bare A/B label.
+function S.ApplyTeamNames(teamA, teamB)
+    s.teamNames = s.teamNames or { A = "Team A", B = "Team B" }
+    if teamA and teamA ~= "" then s.teamNames.A = teamA:sub(1, 20) end
+    if teamB and teamB ~= "" then s.teamNames.B = teamB:sub(1, 20) end
+    -- Persist per-account so the host's chosen names survive between
+    -- sessions; the lobby UI pre-fills from this on next /reload.
+    if WHEREDNGNDB then
+        WHEREDNGNDB.teamNames = {
+            A = s.teamNames.A,
+            B = s.teamNames.B,
+        }
+    end
 end
 
 -- ---------------------------------------------------------------------
@@ -393,8 +442,17 @@ function S.ApplyStart(roundNumber, dealer)
     s.meldsByTeam  = { A = {}, B = {} }
     s.meldsDeclared= {}
     s.phase        = K.PHASE_DEAL1
-    -- Round-start "Awal" announcement.
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_AWAL) end
+    -- A redeal announcement banner (all-pass) is dismissed by the
+    -- arrival of a real ApplyStart for the new round.
+    s.redealing    = nil
+    -- Round-start "Awal" announcement. Delayed half a second so the
+    -- new hand + bid card finish landing visually before the voice
+    -- fires — without the delay, clicking "Next Round" plays Awal
+    -- immediately while the previous round's score banner is still
+    -- on screen, which feels off.
+    if B.Sound and B.Sound.Cue then
+        C_Timer.After(0.5, function() B.Sound.Cue(K.SND_VOICE_AWAL) end)
+    end
 end
 
 function S.ApplyHand(cards, forRound)
@@ -505,6 +563,40 @@ function S.ApplyRedouble(seat)
     if not s.contract then return end
     s.contract.redoubled = true
     s.belrePending = nil
+    -- After Bel-Re, defenders (opp of bidder) get the Triple window.
+    s.phase = K.PHASE_TRIPLE
+    s.turn = nil
+    s.turnKind = nil
+end
+
+-- Triple (×8) — defender's escalation after Bel-Re.
+function S.ApplyTriple(seat)
+    if not s.contract then return end
+    s.contract.tripled = true
+    s.phase = K.PHASE_FOUR
+    s.turn = nil
+    s.turnKind = nil
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_TRIPLE) end
+end
+
+-- Four (×16) — bidder's escalation after Triple.
+function S.ApplyFour(seat)
+    if not s.contract then return end
+    s.contract.foured = true
+    s.phase = K.PHASE_GAHWA
+    s.turn = nil
+    s.turnKind = nil
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_FOUR) end
+end
+
+-- Gahwa / Coffee (×32) — defender's terminal escalation.
+function S.ApplyGahwa(seat)
+    if not s.contract then return end
+    s.contract.gahwa = true
+    -- No further escalation; HostFinishDeal proceeds to PLAY.
+    s.turn = nil
+    s.turnKind = nil
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_GAHWA) end
 end
 
 function S.ApplyMeld(seat, kind, suit, top, encodedCards)
@@ -816,7 +908,11 @@ function S.HostBeginRound2()
     s.bids = {}
     s.phase = K.PHASE_DEAL2BID
     -- Round-2 bidding starts: announce "ثآني" (Thany / second).
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_THANY) end
+    -- Same 0.5s delay as Awal so the bid-card flip / UI re-render
+    -- finishes before the voice plays.
+    if B.Sound and B.Sound.Cue then
+        C_Timer.After(0.5, function() B.Sound.Cue(K.SND_VOICE_THANY) end)
+    end
 end
 
 function S.HostScoreRoundResult()

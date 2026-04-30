@@ -125,6 +125,18 @@ function N.SendRedouble(seat)
     broadcast(("%s;%d"):format(K.MSG_REDOUBLE, seat))
 end
 
+function N.SendTriple(seat)
+    broadcast(("%s;%d"):format(K.MSG_TRIPLE, seat))
+end
+
+function N.SendFour(seat)
+    broadcast(("%s;%d"):format(K.MSG_FOUR, seat))
+end
+
+function N.SendGahwa(seat)
+    broadcast(("%s;%d"):format(K.MSG_GAHWA, seat))
+end
+
 function N.SendMeld(seat, meld)
     broadcast(("%s;%d;%s;%s;%s;%s"):format(
         K.MSG_MELD, seat, meld.kind, meld.suit or "", meld.top or "",
@@ -149,6 +161,10 @@ end
 
 function N.SendPause(paused)
     broadcast(("%s;%s"):format(K.MSG_PAUSE, paused and "1" or "0"))
+end
+
+function N.SendTeams(teamA, teamB)
+    broadcast(("%s;%s;%s"):format(K.MSG_TEAMS, teamA or "", teamB or ""))
 end
 
 -- Resync senders. Request is a broadcast (we don't know the host's
@@ -232,7 +248,7 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_START then
         N._OnStart(sender, tonumber(fields[2]), tonumber(fields[3]))
     elseif tag == K.MSG_DEAL then
-        N._OnDealPhase(sender, fields[2])
+        N._OnDealPhase(sender, fields[2], fields[3])
     elseif tag == K.MSG_HAND then
         -- Wire format: "h;<roundNum>;<encoded>".  Older single-field
         -- form ("h;<encoded>") is tolerated for back-compat.
@@ -253,10 +269,22 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnDouble(sender, tonumber(fields[2]))
     elseif tag == K.MSG_REDOUBLE then
         N._OnRedouble(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_TRIPLE then
+        N._OnTriple(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_FOUR then
+        N._OnFour(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_GAHWA then
+        N._OnGahwa(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_DBL then
         N._OnSkipDouble(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_RDBL then
         N._OnSkipRedouble(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_SKIP_TRP then
+        N._OnSkipTriple(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_SKIP_FOR then
+        N._OnSkipFour(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_SKIP_GHW then
+        N._OnSkipGahwa(sender, tonumber(fields[2]))
     elseif tag == K.MSG_MELD then
         N._OnMeld(sender, tonumber(fields[2]), fields[3], fields[4], fields[5], fields[6])
     elseif tag == K.MSG_PLAY then
@@ -276,6 +304,8 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnKawesh(sender, tonumber(fields[2]))
     elseif tag == K.MSG_PAUSE then
         N._OnPause(sender, fields[2])
+    elseif tag == K.MSG_TEAMS then
+        N._OnTeams(sender, fields[2], fields[3])
     elseif tag == K.MSG_RESYNC_REQ then
         N._OnResyncReq(sender, fields[2])
     elseif tag == K.MSG_RESYNC_RES then
@@ -350,7 +380,7 @@ function N._OnStart(sender, roundNumber, dealer)
     S.ApplyStart(roundNumber, dealer)
 end
 
-function N._OnDealPhase(sender, phase)
+function N._OnDealPhase(sender, phase, extra)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if phase == "1" then S.s.phase = K.PHASE_DEAL1
@@ -358,11 +388,22 @@ function N._OnDealPhase(sender, phase)
         S.s.phase = K.PHASE_DEAL2BID
         S.s.bids = {}                -- clear round-1 bids on receivers too
         S.s.bidRound = 2
-        -- Round-2 announcement on non-host clients (host fired it via
-        -- HostBeginRound2 already; this branch is for everyone else).
-        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_THANY) end
+        -- Round-2 announcement. 0.5s delay so the round-2 bid panel
+        -- has rendered before the voice plays. (Mirrors the same
+        -- delay in S.HostBeginRound2 / S.ApplyStart.)
+        if B.Sound and B.Sound.Cue then
+            C_Timer.After(0.5, function()
+                B.Sound.Cue(K.SND_VOICE_THANY)
+            end)
+        end
     elseif phase == "3" then S.s.phase = K.PHASE_DEAL3
     elseif phase == "play" then S.ApplyPlayPhase()
+    elseif phase == "redeal" then
+        -- Host broadcasts this when all four players passed both rounds
+        -- and the deal is rotating. The trailing field is the next
+        -- dealer's seat number; mirror it to a state flag the UI reads.
+        local nextDealer = tonumber(extra)
+        S.ApplyRedealAnnouncement(nextDealer)
     end
 end
 
@@ -437,6 +478,48 @@ function N._OnRedouble(sender, seat)
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyRedouble(seat)
+    -- After Bel-Re the phase is TRIPLE (defender's escalation window).
+    -- MaybeRunBot dispatches the bot triple decision OR arms the AFK
+    -- timer for a human defender.
+    if S.s.isHost then N.MaybeRunBot() end
+end
+
+function N._OnTriple(sender, seat)
+    if fromSelf(sender) then return end
+    if not seat then return end
+    if not S.s.contract or S.s.contract.tripled then return end
+    if S.s.phase ~= K.PHASE_TRIPLE then return end
+    -- Triple is the DEFENDER's escalation: NextSeat(bidder).
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if seat ~= eligibleSeat then return end
+    if not authorizeSeat(seat, sender) then return end
+    S.ApplyTriple(seat)
+    if S.s.isHost then N.MaybeRunBot() end
+end
+
+function N._OnFour(sender, seat)
+    if fromSelf(sender) then return end
+    if not seat then return end
+    if not S.s.contract or S.s.contract.foured then return end
+    if S.s.phase ~= K.PHASE_FOUR then return end
+    -- Four is the BIDDER's escalation.
+    if seat ~= S.s.contract.bidder then return end
+    if not authorizeSeat(seat, sender) then return end
+    S.ApplyFour(seat)
+    if S.s.isHost then N.MaybeRunBot() end
+end
+
+function N._OnGahwa(sender, seat)
+    if fromSelf(sender) then return end
+    if not seat then return end
+    if not S.s.contract or S.s.contract.gahwa then return end
+    if S.s.phase ~= K.PHASE_GAHWA then return end
+    -- Gahwa is the DEFENDER's terminal escalation.
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if seat ~= eligibleSeat then return end
+    if not authorizeSeat(seat, sender) then return end
+    S.ApplyGahwa(seat)
+    -- Terminal: no further window. Move into PLAY.
     if S.s.isHost then N.HostFinishDeal() end
 end
 
@@ -447,8 +530,6 @@ function N._OnSkipDouble(sender, seat)
     local eligibleSeat = (S.s.contract.bidder % 4) + 1
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
-    -- Skipping the Bel window is "passing the contract" — voice it.
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
     if S.s.isHost then N.HostFinishDeal() end
 end
 
@@ -458,7 +539,35 @@ function N._OnSkipRedouble(sender, seat)
     if not seat or not S.s.contract then return end
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
+    if S.s.isHost then N.HostFinishDeal() end
+end
+
+function N._OnSkipTriple(sender, seat)
+    if fromSelf(sender) then return end
+    if S.s.phase ~= K.PHASE_TRIPLE then return end
+    if not seat or not S.s.contract then return end
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if seat ~= eligibleSeat then return end
+    if not authorizeSeat(seat, sender) then return end
+    if S.s.isHost then N.HostFinishDeal() end
+end
+
+function N._OnSkipFour(sender, seat)
+    if fromSelf(sender) then return end
+    if S.s.phase ~= K.PHASE_FOUR then return end
+    if not seat or not S.s.contract then return end
+    if seat ~= S.s.contract.bidder then return end
+    if not authorizeSeat(seat, sender) then return end
+    if S.s.isHost then N.HostFinishDeal() end
+end
+
+function N._OnSkipGahwa(sender, seat)
+    if fromSelf(sender) then return end
+    if S.s.phase ~= K.PHASE_GAHWA then return end
+    if not seat or not S.s.contract then return end
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if seat ~= eligibleSeat then return end
+    if not authorizeSeat(seat, sender) then return end
     if S.s.isHost then N.HostFinishDeal() end
 end
 
@@ -555,9 +664,14 @@ function N._HostStepPlay()
         N.MaybeRunBot()
         return
     end
-    C_Timer.After(1.5, function()
+    -- Hold the full 4-card view long enough for the player to read it,
+    -- including the case where THEY were the 4th to play (in which case
+    -- the trick resolves on the same turn they clicked and 1.5s felt
+    -- abrupt). 2.2s gives the slide-in animation (~0.22s) + plenty of
+    -- "see the trick" time + the winner-glow read.
+    C_Timer.After(2.2, function()
         if not S.s.isHost then return end
-        -- A Takweesh during the 1.5s window can move phase to SCORE.
+        -- A Takweesh during the wait window can move phase to SCORE.
         -- Don't resolve the trick if we're no longer in PLAY.
         if S.s.phase ~= K.PHASE_PLAY then return end
         if not S.s.contract then return end
@@ -599,23 +713,35 @@ function N._HostRedeal()
     -- next dealer (no team scored, but the seat rotates). Round number
     -- stays the same since no real round was played.
     local nextDealer = (S.s.dealer % 4) + 1
-    S.s.dealer = nextDealer
-    if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
-    S.ApplyStart(S.s.roundNumber, nextDealer)
-    N.SendStart(S.s.roundNumber, nextDealer)
+    -- Surface a "redeal" banner with the next-dealer name on every
+    -- client for 3 seconds before the actual deal lands. The host
+    -- broadcasts a synthetic MSG_DEAL phase "redeal" so non-hosts can
+    -- show the same banner; everyone counts down off their own clock.
+    S.ApplyRedealAnnouncement(nextDealer)
+    broadcast(("%s;redeal;%d"):format(K.MSG_DEAL, nextDealer))
     print("|cffaaaaaaWHEREDNGN|r all passed — redealing with next dealer.")
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
 
-    local hands, bidCard = S.HostDealInitial()
-    dealHandsToHumans(hands)
-    S.ApplyHand(hands[S.s.localSeat])
-    S.ApplyBidCard(bidCard)
-    N.SendBidCard(bidCard)
-    S.s.phase = K.PHASE_DEAL1
-    N.SendDealPhase("1")
-    local first = (nextDealer % 4) + 1
-    S.ApplyTurn(first, "bid")
-    N.SendTurn(first, "bid")
-    N.MaybeRunBot()
+    C_Timer.After(3.0, function()
+        if not S.s.isHost then return end
+        S.s.dealer = nextDealer
+        if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
+        S.ApplyStart(S.s.roundNumber, nextDealer)
+        N.SendStart(S.s.roundNumber, nextDealer)
+
+        local hands, bidCard = S.HostDealInitial()
+        dealHandsToHumans(hands)
+        S.ApplyHand(hands[S.s.localSeat])
+        S.ApplyBidCard(bidCard)
+        N.SendBidCard(bidCard)
+        S.s.phase = K.PHASE_DEAL1
+        N.SendDealPhase("1")
+        local first = (nextDealer % 4) + 1
+        S.ApplyTurn(first, "bid")
+        N.SendTurn(first, "bid")
+        N.MaybeRunBot()
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+    end)
 end
 
 -- -- Driving host actions from UI ----------------------------------
@@ -688,6 +814,44 @@ function N.LocalRedouble()
     cancelLocalWarn()
     S.ApplyRedouble(S.s.localSeat)
     N.SendRedouble(S.s.localSeat)
+    -- Phase moved to TRIPLE; let MaybeRunBot dispatch the bot/AFK
+    -- handling for the defender's window.
+    if S.s.isHost then N.MaybeRunBot() end
+end
+
+function N.LocalTriple()
+    if S.s.paused then return end
+    if not S.s.contract or S.s.contract.tripled then return end
+    if S.s.phase ~= K.PHASE_TRIPLE then return end
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if S.s.localSeat ~= eligibleSeat then return end
+    cancelLocalWarn()
+    S.ApplyTriple(S.s.localSeat)
+    N.SendTriple(S.s.localSeat)
+    if S.s.isHost then N.MaybeRunBot() end
+end
+
+function N.LocalFour()
+    if S.s.paused then return end
+    if not S.s.contract or S.s.contract.foured then return end
+    if S.s.phase ~= K.PHASE_FOUR then return end
+    if S.s.localSeat ~= S.s.contract.bidder then return end
+    cancelLocalWarn()
+    S.ApplyFour(S.s.localSeat)
+    N.SendFour(S.s.localSeat)
+    if S.s.isHost then N.MaybeRunBot() end
+end
+
+function N.LocalGahwa()
+    if S.s.paused then return end
+    if not S.s.contract or S.s.contract.gahwa then return end
+    if S.s.phase ~= K.PHASE_GAHWA then return end
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if S.s.localSeat ~= eligibleSeat then return end
+    cancelLocalWarn()
+    S.ApplyGahwa(S.s.localSeat)
+    N.SendGahwa(S.s.localSeat)
+    -- Terminal: no further window.
     if S.s.isHost then N.HostFinishDeal() end
 end
 
@@ -697,16 +861,26 @@ function N.LocalSkipDouble()
     if S.s.paused then return end
     if not S.s.contract or not S.s.localSeat then return end
     cancelLocalWarn()
+    local def = (S.s.contract.bidder % 4) + 1
     if S.s.phase == K.PHASE_DOUBLE then
-        local b = S.s.contract.bidder
-        if S.s.localSeat ~= (b % 4) + 1 then return end
+        if S.s.localSeat ~= def then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, S.s.localSeat))
-        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_REDOUBLE then
         if S.s.localSeat ~= S.s.contract.bidder then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, S.s.localSeat))
-        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
+        if S.s.isHost then N.HostFinishDeal() end
+    elseif S.s.phase == K.PHASE_TRIPLE then
+        if S.s.localSeat ~= def then return end
+        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, S.s.localSeat))
+        if S.s.isHost then N.HostFinishDeal() end
+    elseif S.s.phase == K.PHASE_FOUR then
+        if S.s.localSeat ~= S.s.contract.bidder then return end
+        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, S.s.localSeat))
+        if S.s.isHost then N.HostFinishDeal() end
+    elseif S.s.phase == K.PHASE_GAHWA then
+        if S.s.localSeat ~= def then return end
+        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
     end
 end
@@ -951,6 +1125,12 @@ function N._OnPause(sender, payload)
     S.ApplyPause(paused)
 end
 
+function N._OnTeams(sender, teamA, teamB)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    S.ApplyTeamNames(teamA, teamB)
+end
+
 -- Resync request (broadcast). Only the host responds, and only if the
 -- requester is in our seat roster — otherwise spurious requests from
 -- unrelated party members would leak game state.
@@ -1158,12 +1338,22 @@ function N._HostBelTimeout(seat, kind)
     if kind == "double" and S.s.phase == K.PHASE_DOUBLE then
         log("Info", "AFK timeout: bel skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
-        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
         N.HostFinishDeal()
     elseif kind == "redouble" and S.s.phase == K.PHASE_REDOUBLE then
         log("Info", "AFK timeout: bel-re skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, seat))
-        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
+        N.HostFinishDeal()
+    elseif kind == "triple" and S.s.phase == K.PHASE_TRIPLE then
+        log("Info", "AFK timeout: triple skip seat=%d", seat)
+        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, seat))
+        N.HostFinishDeal()
+    elseif kind == "four" and S.s.phase == K.PHASE_FOUR then
+        log("Info", "AFK timeout: four skip seat=%d", seat)
+        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, seat))
+        N.HostFinishDeal()
+    elseif kind == "gahwa" and S.s.phase == K.PHASE_GAHWA then
+        log("Info", "AFK timeout: gahwa skip seat=%d", seat)
+        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, seat))
         N.HostFinishDeal()
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -1240,9 +1430,6 @@ function N.MaybeRunBot()
                         N.MaybeRunBot()
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
-                        if B.Sound and B.Sound.Cue then
-                            B.Sound.Cue(K.SND_VOICE_PASS)
-                        end
                         N.HostFinishDeal()
                     end
                 end)
@@ -1276,18 +1463,88 @@ function N.MaybeRunBot()
                 if B.Bot.PickRedouble(bidder) then
                     S.ApplyRedouble(bidder)
                     N.SendRedouble(bidder)
+                    -- Phase is now TRIPLE; recurse to handle that
+                    -- window's defender response.
+                    N.MaybeRunBot()
                 else
                     broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, bidder))
-                    if B.Sound and B.Sound.Cue then
-                        B.Sound.Cue(K.SND_VOICE_PASS)
-                    end
+                    N.HostFinishDeal()
+                end
+                if B.UI then B.UI.Refresh() end
+            end)
+            return
+        else
+            N.StartBelTimer(bidder, "redouble")
+            return
+        end
+    end
+
+    -- Triple decision: defender. Bots default to skip with a small
+    -- chance to escalate so they're not perfectly predictable.
+    local function escalateChance(_seat) return math.random() < 0.10 end
+    if S.s.phase == K.PHASE_TRIPLE and S.s.contract then
+        local defSeat = (S.s.contract.bidder % 4) + 1
+        if isBotSeat(defSeat) then
+            C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.phase ~= K.PHASE_TRIPLE then return end
+                if escalateChance(defSeat) then
+                    S.ApplyTriple(defSeat)
+                    N.SendTriple(defSeat)
+                    N.MaybeRunBot()
+                else
+                    broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, defSeat))
+                    N.HostFinishDeal()
+                end
+                if B.UI then B.UI.Refresh() end
+            end)
+            return
+        else
+            N.StartBelTimer(defSeat, "triple")
+            return
+        end
+    end
+
+    -- Four decision: bidder.
+    if S.s.phase == K.PHASE_FOUR and S.s.contract then
+        local bidder = S.s.contract.bidder
+        if isBotSeat(bidder) then
+            C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.phase ~= K.PHASE_FOUR then return end
+                if escalateChance(bidder) then
+                    S.ApplyFour(bidder)
+                    N.SendFour(bidder)
+                    N.MaybeRunBot()
+                else
+                    broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, bidder))
+                    N.HostFinishDeal()
+                end
+                if B.UI then B.UI.Refresh() end
+            end)
+            return
+        else
+            N.StartBelTimer(bidder, "four")
+            return
+        end
+    end
+
+    -- Gahwa decision: defender (terminal).
+    if S.s.phase == K.PHASE_GAHWA and S.s.contract then
+        local defSeat = (S.s.contract.bidder % 4) + 1
+        if isBotSeat(defSeat) then
+            C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.phase ~= K.PHASE_GAHWA then return end
+                if escalateChance(defSeat) then
+                    S.ApplyGahwa(defSeat)
+                    N.SendGahwa(defSeat)
+                else
+                    broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, defSeat))
                 end
                 N.HostFinishDeal()
                 if B.UI then B.UI.Refresh() end
             end)
             return
         else
-            N.StartBelTimer(bidder, "redouble")
+            N.StartBelTimer(defSeat, "gahwa")
             return
         end
     end

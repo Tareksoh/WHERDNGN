@@ -48,6 +48,9 @@ CUES = {
     "wla":    "ولا",        # round-2 pass ("none / no preference")
     "awal":   "أوَل",        # round-1 bidding start
     "thany":  "ثآني",       # round-2 bidding start
+    "triple": "ثري",         # ×8 escalation (defender)
+    "four":   "فور",         # ×16 escalation (bidder)
+    "gahwa":  "قهوة",        # ×32 escalation (defender, "coffee")
 }
 
 
