@@ -15,7 +15,20 @@ K.SUIT_INDEX = { S=1, H=2, D=3, C=4 }
 
 K.SUIT_GLYPH  = { S = "\226\153\160", H = "\226\153\165", D = "\226\153\166", C = "\226\153\163" } -- ♠ ♥ ♦ ♣
 K.SUIT_NAME   = { S = "Spades", H = "Hearts", D = "Diamonds", C = "Clubs" }
+
+-- Suit colors for chat/log on the dark WoW chat background.
 K.SUIT_COLOR  = { S = "ffffffff", H = "ffff5555", D = "ffff8800", C = "ff66ff66" }
+
+-- Suit colors for the cream card face. Uses the four-color-deck poker
+-- convention (♠ black, ♥ red, ♦ blue, ♣ green) so same-shape pairs
+-- (♠/♣, ♥/♦) are unambiguous at a glance — the traditional 2-color
+-- red/black scheme makes them indistinguishable at small sizes.
+K.SUIT_COLOR_ONCARD = {
+    S = "ff111111",  -- near-black
+    H = "ffcc1f1f",  -- deep red
+    D = "ff1f5fcc",  -- deep blue
+    C = "ff1c8a3c",  -- forest green
+}
 
 -- WoW's default font (Friz Quadrata) lacks the U+2660-U+2666 card suit
 -- glyphs and renders them as missing-glyph boxes. Arial Narrow ships with
@@ -128,6 +141,28 @@ K.MSG_SKIP_RDBL  = "m"  -- bidder voted skip on redouble window
 K.MSG_TAKWEESH     = "k"  -- player calls Takweesh (catches an illegal play)
 K.MSG_TAKWEESH_OUT = "z"  -- host's outcome: caught or false-call
 K.MSG_KAWESH       = "a"  -- player calls Kawesh/Saneen (5-card 7/8/9 annul)
+K.MSG_PAUSE        = "p"  -- host pauses/unpauses; payload "1" or "0"
+
+-- -- Sound effects ----------------------------------------------------
+-- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:
+-- short crisp card slaps + gentle bell chimes for milestones). All
+-- routed via PlaySoundFile in Sound.lua. Files live in sounds/.
+local SND_BASE = "Interface\\AddOns\\WHEREDNGN\\sounds\\"
+K.SND_TURN_PING = SND_BASE .. "turn_ping.ogg"     -- soft bell, your turn
+K.SND_CARD_PLAY = SND_BASE .. "card_play.ogg"     -- card-slap noise burst
+K.SND_CARD_SWISH = SND_BASE .. "card_swish.ogg"   -- slide-across-table whoosh
+K.SND_CONTRACT  = SND_BASE .. "contract.ogg"      -- two-note ascending chime
+K.SND_TRICK_WON = SND_BASE .. "trick_won.ogg"     -- triad arpeggio, our team won
+K.SND_BALOOT    = SND_BASE .. "baloot.ogg"        -- four-note fanfare
+
+-- Arabic voice cues (Saudi-accented edge-tts) for the bid actions, in
+-- the spirit of the kammelna.com baloot announcer. Fired from the
+-- bid-handler hooks so every player on every client hears them.
+K.SND_VOICE_HOKM   = SND_BASE .. "hokm.ogg"       -- "حكم"
+K.SND_VOICE_SUN    = SND_BASE .. "sun.ogg"        -- "صن"
+K.SND_VOICE_ASHKAL = SND_BASE .. "ashkal.ogg"     -- "أشكال"
+K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "باس"
+K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوّل" (round start)
 
 -- -- Tunables ---------------------------------------------------------
 

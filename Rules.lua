@@ -329,12 +329,6 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     end
 
     local handTotal   = (contract.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-    -- Pagat: "If the bidders have AT LEAST half the points of the hand
-    -- including their declarations, the contract is made." So the
-    -- threshold is half (inclusive), not half + 1. For 162 → 81; for
-    -- 130 → 65. Was `floor/2 + 1` previously which made bidder fail at
-    -- exactly 81/65 contrary to the rule.
-    local madeTarget  = math.floor(handTotal / 2)
     local bidderTeam  = R.TeamOf(contract.bidder)
     local oppTeam     = bidderTeam == "A" and "B" or "A"
 
@@ -365,8 +359,43 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     if trickCount.A == 8 then sweepTeam = "A"
     elseif trickCount.B == 8 then sweepTeam = "B" end
 
-    local bidderTotal = teamPoints[bidderTeam] + (bidderTeam == "A" and meldA or meldB)
-    local bidderMade  = bidderTotal >= madeTarget
+    -- Saudi rule 4-2/4-3: bidder must STRICTLY beat defender's total.
+    -- Equal totals = tie; tie default goes to defenders. Bidder's total
+    -- includes tricks + melds + belote (rule 4-5 explicitly carves out
+    -- the "without belote" case, implying belote shifts the threshold).
+    local beloteA = (belote == "A") and K.MELD_BELOTE or 0
+    local beloteB = (belote == "B") and K.MELD_BELOTE or 0
+    local bidderTotal = teamPoints[bidderTeam] +
+        (bidderTeam == "A" and (meldA + beloteA) or (meldB + beloteB))
+    local oppTotal = teamPoints[oppTeam] +
+        (oppTeam == "A" and (meldA + beloteA) or (meldB + beloteB))
+
+    -- Outcome resolution. Three branches:
+    --   "make"  bidder strictly beat opp → normal scoring
+    --   "fail"  defenders take handTotal + all melds (×mult)
+    --   "take"  rule 4-10 doubled-tie inversion: bidder takes the full
+    --           count because the doubler (now the "buyer") tied and
+    --           thus failed
+    local outcome_kind
+    if bidderTotal > oppTotal then
+        outcome_kind = "make"
+    elseif bidderTotal < oppTotal then
+        outcome_kind = "fail"
+    else
+        -- Tie. Saudi rule 4-10: count goes to non-buyer.
+        --   no escalation     → bidder is "buyer" → fail
+        --   doubled (only)    → doubler is "buyer" → bidder takes
+        --   redoubled         → bidder is "buyer" again → fail
+        if contract.redoubled then
+            outcome_kind = "fail"
+        elseif contract.doubled then
+            outcome_kind = "take"
+        else
+            outcome_kind = "fail"
+        end
+    end
+
+    local bidderMade = (outcome_kind == "make" or outcome_kind == "take")
 
     local cardA, cardB
     if sweepTeam then
@@ -375,13 +404,20 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         cardB = (sweepTeam == "B") and bonus or 0
         meldPoints.A = (sweepTeam == "A") and meldA or 0
         meldPoints.B = (sweepTeam == "B") and meldB or 0
-    elseif not bidderMade then
+    elseif outcome_kind == "fail" then
         -- "WHEREDNGN" / failed contract: defenders take all card points AND
         -- ALL melds (regardless of who declared). Bidder team scores 0.
         cardA = (oppTeam == "A") and handTotal or 0
         cardB = (oppTeam == "B") and handTotal or 0
         meldPoints[oppTeam]   = meldA + meldB
         meldPoints[bidderTeam] = 0
+    elseif outcome_kind == "take" then
+        -- Doubled tie: rule 4-10 inversion. Bidder takes the entire
+        -- handTotal + all melds × mult.
+        cardA = (bidderTeam == "A") and handTotal or 0
+        cardB = (bidderTeam == "B") and handTotal or 0
+        meldPoints[bidderTeam] = meldA + meldB
+        meldPoints[oppTeam]    = 0
     else
         -- Made: each team gets their card points. Meld winner-takes-all
         -- by best-meld comparison (now contract-aware so trump-suit

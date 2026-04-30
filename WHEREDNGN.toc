@@ -11,6 +11,7 @@
 # Foundational - no deps
 Log.lua
 Constants.lua
+Sound.lua
 
 # Pure logic
 Cards.lua

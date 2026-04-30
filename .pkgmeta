@@ -9,3 +9,11 @@ ignore:
   - LICENSE
   - CHANGELOG.md
   - "*.zip"
+  - cards/_src
+  - cards/_convert.py
+  - cards/_make_back.py
+  - cards/_make_textures.py
+  - sounds/_make_sounds.py
+  - sounds/_make_voice.py
+  - sounds/_make_voice_gtts.py
+  - sounds/_make_voice_eleven.py

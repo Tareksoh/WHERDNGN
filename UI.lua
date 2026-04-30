@@ -112,18 +112,60 @@ local function setBackdrop(frame, edge, bgRGBA, edgeRGBA, edgeSize, bgKind)
     end
 end
 
--- Build a "card face" frame: cream rectangle with dark thin border.
--- Caller anchors and sets size. Returns { frame, label } where `label`
--- is the FontString to set with C.PrettyOnCard(card).
+-- Path to the bundled card-face TGAs (Vector Playing Cards art,
+-- 128x192 RGBA). Cards in cards/<rank><suit>.tga, plus back.tga.
+-- WoW's texture loader takes a path WITHOUT the file extension.
+local CARD_TEX_DIR = "Interface\\AddOns\\WHEREDNGN\\cards\\"
+
+-- Returns the texture path for a card id ("AS", "9D", etc) or for the
+-- card back if `card` is nil. Returns nil if the card id is unparseable.
+local function cardTexturePath(card)
+    if not card then return CARD_TEX_DIR .. "back" end
+    if not C.IsValid or not C.IsValid(card) then return nil end
+    return CARD_TEX_DIR .. card  -- e.g. AS, 9D, TJ
+end
+
+-- Build a "card face" frame: shows a real card image (Texture). When
+-- the texture is missing or no card is set yet, falls back to a cream
+-- rectangle with a centered FontString so partial deploys don't render
+-- an empty white box.
+-- Caller anchors and sets size. Returned table:
+--   .frame   the parent Frame
+--   .label   FontString fallback (used only if no texture set)
+--   .tex     Texture for the card image; SetCard(slot, card) writes here
 local function makeCardFace(parent, w, h)
     local frame = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     frame:SetSize(w or 50, h or 70)
     setBackdrop(frame, true, COL.cardFace, COL.cardEdge, 8, "solid")
+    local tex = frame:CreateTexture(nil, "ARTWORK")
+    tex:SetPoint("TOPLEFT", 2, -2)
+    tex:SetPoint("BOTTOMRIGHT", -2, 2)
+    tex:Hide()
     local label = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     label:SetFont(K.CARD_FONT, math.floor((h or 70) * 0.32), "OUTLINE")
     label:SetPoint("CENTER", 0, 0)
     label:SetJustifyH("CENTER")
-    return { frame = frame, label = label }
+    return { frame = frame, label = label, tex = tex }
+end
+
+-- Set a card-face slot to display `card` (id like "AS"), or pass nil
+-- to clear it. Hides the fallback label when the texture is in use.
+local function setCardSlot(slot, card)
+    if not slot then return end
+    if not card then
+        slot.tex:Hide()
+        if slot.label then slot.label:SetText("") end
+        return
+    end
+    local path = cardTexturePath(card)
+    if path then
+        slot.tex:SetTexture(path)
+        slot.tex:Show()
+        if slot.label then slot.label:SetText("") end
+    else
+        slot.tex:Hide()
+        if slot.label then slot.label:SetText(C.PrettyOnCard(card)) end
+    end
 end
 
 -- Build a "card back" badge: navy blue card with a decorative inner
@@ -135,25 +177,14 @@ local function makeCardBack(parent, w, h)
     frame:SetSize(w, h)
     setBackdrop(frame, true, COL.cardBack, COL.cardBackEdge, 4, "solid")
 
-    -- Inner inset rectangle creates the "framed" card-back look.
-    local inset = frame:CreateTexture(nil, "ARTWORK")
-    inset:SetTexture("Interface\\Buttons\\WHITE8X8")
-    inset:SetVertexColor(0.06, 0.18, 0.42, 1)
-    inset:SetPoint("TOPLEFT", 4, -4)
-    inset:SetPoint("BOTTOMRIGHT", -4, 4)
-
-    -- Lighter inner highlight stripe gives depth.
-    local stripe = frame:CreateTexture(nil, "ARTWORK", nil, 1)
-    stripe:SetTexture("Interface\\Buttons\\WHITE8X8")
-    stripe:SetVertexColor(0.22, 0.36, 0.62, 1)
-    stripe:SetPoint("TOPLEFT", 6, -6)
-    stripe:SetPoint("BOTTOMRIGHT", -6, 6)
-
-    -- Centered diamond glyph as a faux pattern.
-    local glyph = frame:CreateFontString(nil, "OVERLAY")
-    glyph:SetFont(K.CARD_FONT, math.floor(h * 0.55), "OUTLINE")
-    glyph:SetPoint("CENTER", 0, 0)
-    glyph:SetText("|cff7799bb\226\153\166|r")  -- ♦
+    -- Use the bundled card-back image so seat hands match the face-card
+    -- art style. Falls back to a tinted rectangle if the texture is
+    -- missing (which shouldn't happen post-install, but keeps the
+    -- partial-deploy debug experience sane).
+    local tex = frame:CreateTexture(nil, "ARTWORK")
+    tex:SetPoint("TOPLEFT", 2, -2)
+    tex:SetPoint("BOTTOMRIGHT", -2, 2)
+    tex:SetTexture(CARD_TEX_DIR .. "back")
     return frame
 end
 
@@ -210,6 +241,73 @@ local function buildMain()
     local title = makeText(f, 16, "CENTER")
     title:SetPoint("TOP", 0, -10)
     title:SetText("|cff66ddffWHEREDNGN|r")
+
+    -- Scale controls. The whole window scales as a single unit (the
+    -- main frame is the parent of every child; SetScale propagates).
+    -- Persisted to WHEREDNGNDB.scale and restored on Show.
+    local SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.7, 1.5, 0.1
+    local scaleDown = makeButton(f, "−", 22, 22)
+    scaleDown:SetPoint("TOP", title, "TOP", -56, 4)
+    local scaleUp = makeButton(f, "+", 22, 22)
+    scaleUp:SetPoint("LEFT", scaleDown, "RIGHT", 2, 0)
+    local function applyScale(s)
+        s = math.max(SCALE_MIN, math.min(SCALE_MAX, s))
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.scale = s
+        f:SetScale(s)
+    end
+    scaleDown:SetScript("OnClick", function()
+        local cur = (WHEREDNGNDB and WHEREDNGNDB.scale) or 1.0
+        applyScale(cur - SCALE_STEP)
+    end)
+    scaleUp:SetScript("OnClick", function()
+        local cur = (WHEREDNGNDB and WHEREDNGNDB.scale) or 1.0
+        applyScale(cur + SCALE_STEP)
+    end)
+    scaleDown:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("Shrink window", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    scaleDown:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    scaleUp:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("Grow window", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    scaleUp:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- Sound toggle (top-left). Persists in WHEREDNGNDB.sound. Default
+    -- ON. The Sound module already reads this flag — we just need a
+    -- one-click affordance instead of a /baloot sound chat command.
+    local muteBtn = CreateFrame("CheckButton", nil, f,
+                                "UICheckButtonTemplate")
+    muteBtn:SetSize(22, 22)
+    muteBtn:SetPoint("TOPLEFT", 8, -8)
+    muteBtn:SetHitRectInsets(0, -60, 0, 0)  -- extend hitbox to cover label
+    if muteBtn.text then
+        muteBtn.text:SetText("|cffaaaaaaSound|r")
+    else
+        local lbl = muteBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        lbl:SetPoint("LEFT", muteBtn, "RIGHT", 2, 1)
+        lbl:SetText("|cffaaaaaaSound|r")
+    end
+    muteBtn:SetScript("OnShow", function(self)
+        local on = not (WHEREDNGNDB and WHEREDNGNDB.sound == false)
+        self:SetChecked(on)
+    end)
+    muteBtn:SetScript("OnClick", function(self)
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.sound = self:GetChecked() and true or false
+    end)
+    muteBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("WHEREDNGN sound", 1, 1, 1)
+        GameTooltip:AddLine("Toggle card play / chime / fanfare cues.",
+                            0.8, 0.8, 0.8)
+        GameTooltip:Show()
+    end)
+    muteBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     gameIDText = makeText(f, 11, "RIGHT")
     gameIDText:SetPoint("TOPRIGHT", -36, -12)
@@ -330,6 +428,13 @@ local function buildSeatBadge(parent, anchorCb)
     setBackdrop(b, true, COL.feltLight, COL.woodEdge)
     anchorCb(b)
 
+    -- Avatar circle: bot seats show a colored numbered badge generated
+    -- in cards/avatar_<seat>.tga; human seats leave the texture hidden.
+    local avatar = b:CreateTexture(nil, "OVERLAY")
+    avatar:SetSize(28, 28)
+    avatar:SetPoint("TOPLEFT", 6, -4)
+    avatar:Hide()
+
     local nameTx = makeText(b, 13, "CENTER")
     nameTx:SetPoint("TOP", 0, -6)
     nameTx:SetTextColor(0.94, 0.90, 0.78)
@@ -367,13 +472,26 @@ local function buildSeatBadge(parent, anchorCb)
 
     return { frame = b, nameText = nameTx, backs = backs,
              countText = countTx, meldText = meldTx,
-             dealerText = dealerTx, turnGlow = turnGlow }
+             dealerText = dealerTx, turnGlow = turnGlow,
+             avatar = avatar }
 end
 
 local function buildCenterSlot(parent, anchorCb)
     local face = makeCardFace(parent, 64, 90)
     anchorCb(face.frame)
     face.frame:Hide()  -- shown only when a card is in this slot
+
+    -- Winner glow: soft gold halo behind the card. Drawn on a child
+    -- frame so it can extend BEYOND the card edge without being
+    -- clipped. Hidden by default; renderCenter shows it for the seat
+    -- that won the trick.
+    local glow = face.frame:CreateTexture(nil, "BACKGROUND", nil, 0)
+    glow:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\glow")
+    glow:SetBlendMode("ADD")
+    glow:SetPoint("TOPLEFT", -16, 16)
+    glow:SetPoint("BOTTOMRIGHT", 16, -16)
+    glow:Hide()
+    face.glow = glow
     return face
 end
 
@@ -394,6 +512,18 @@ local function buildTable()
     setBackdrop(centerPad, true, COL.centerPad, COL.woodEdge, 10)
     tablePanel.centerPad = centerPad
 
+    -- Felt-green tiled texture overlaid on the solid backdrop. The
+    -- felt.tga is 128x128 tileable noise; SetHorizTile/SetVertTile
+    -- repeats it instead of stretching, so the grain stays consistent
+    -- regardless of the pad size.
+    local feltTex = centerPad:CreateTexture(nil, "BACKGROUND", nil, 1)
+    feltTex:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\felt",
+                       "REPEAT", "REPEAT")
+    feltTex:SetHorizTile(true)
+    feltTex:SetVertTile(true)
+    feltTex:SetPoint("TOPLEFT", 4, -4)
+    feltTex:SetPoint("BOTTOMRIGHT", -4, 4)
+
     -- Last-trick peek button: small "?" button anchored to centerPad.
     -- Disabled once used per hand (S.s.peekedThisRound).
     local peekBtn = makeButton(centerPad, "?", 22, 22)
@@ -407,6 +537,39 @@ local function buildTable()
     end)
     peekBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     tablePanel.peekBtn = peekBtn
+
+    -- Pause toggle (host-only). Suspends bot scheduling and AFK timers
+    -- without dropping any in-flight state. The label flips to "Resume"
+    -- while paused.
+    local pauseBtn = makeButton(centerPad, "II", 22, 22)
+    pauseBtn:SetPoint("TOPRIGHT", peekBtn, "TOPLEFT", -4, 0)
+    pauseBtn:SetScript("OnClick", function()
+        if not S.s.isHost then return end
+        net().LocalPause(not S.s.paused)
+    end)
+    pauseBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine(S.s.paused and "Resume game" or "Pause game", 1, 1, 1)
+        GameTooltip:AddLine("Host only. Freezes bots and the AFK timer.",
+            0.8, 0.8, 0.8)
+        GameTooltip:Show()
+    end)
+    pauseBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    tablePanel.pauseBtn = pauseBtn
+
+    -- "PAUSED" overlay shown while S.s.paused is true.
+    local pauseOverlay = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
+    pauseOverlay:SetAllPoints(centerPad)
+    pauseOverlay:SetFrameStrata("DIALOG")
+    setBackdrop(pauseOverlay, true, { 0, 0, 0, 0.55 }, COL.legalEdge, 12, "solid")
+    pauseOverlay:Hide()
+    pauseOverlay.title = makeText(pauseOverlay, 28, "CENTER")
+    pauseOverlay.title:SetPoint("CENTER", 0, 8)
+    pauseOverlay.title:SetText("|cffffd055PAUSED|r")
+    pauseOverlay.sub = makeText(pauseOverlay, 12, "CENTER")
+    pauseOverlay.sub:SetPoint("CENTER", 0, -22)
+    pauseOverlay.sub:SetTextColor(0.9, 0.9, 0.9)
+    tablePanel.pauseOverlay = pauseOverlay
 
     -- BALOOT! / contract result banner with full breakdown (shown
     -- during PHASE_SCORE / PHASE_GAME_END). Title at top, then per-team
@@ -484,6 +647,33 @@ end
 local actionPool = {}
 local actionUsed = 0
 
+-- Double-click-to-confirm wrapper for high-stakes actions. The first
+-- click flips the button label to a red "ARE YOU SURE?" prompt and arms
+-- a 2-second window; a second click within that window fires the real
+-- action, anything else cancels. Cheaper than a modal and harder to
+-- mis-fire than a single-click button.
+local CONFIRM_WINDOW_SEC = 2.0
+local function bindConfirm(btn, normalLabel, armedLabel, fire)
+    btn.armed   = false
+    btn.armedTk = nil
+    local function disarm()
+        btn.armed = false
+        if btn.armedTk then btn.armedTk:Cancel(); btn.armedTk = nil end
+        btn:SetText(normalLabel)
+    end
+    btn:SetScript("OnClick", function()
+        if btn.armed then
+            disarm()
+            fire()
+        else
+            btn.armed = true
+            btn:SetText(armedLabel)
+            if btn.armedTk then btn.armedTk:Cancel() end
+            btn.armedTk = C_Timer.NewTimer(CONFIRM_WINDOW_SEC, disarm)
+        end
+    end)
+end
+
 local function clearActions()
     for i = 1, actionUsed do
         local b = actionPool[i]
@@ -506,8 +696,19 @@ local function addAction(label, onclick)
     else
         b:SetPoint("LEFT", actionPool[actionUsed - 1], "RIGHT", 4, 0)
     end
+    -- Reset any leftover confirm-arm state from a previous render so a
+    -- pooled button doesn't carry "armed" state into a new phase.
+    if b.armedTk then b.armedTk:Cancel(); b.armedTk = nil end
+    b.armed = false
     b:SetScript("OnClick", onclick)
     b:Show()
+    return b
+end
+
+local function addConfirmAction(label, armedLabel, fire)
+    local b = addAction(label, nil)
+    bindConfirm(b, label, armedLabel, fire)
+    return b
 end
 
 local function renderActions()
@@ -578,13 +779,20 @@ local function renderActions()
         local b = S.s.contract and S.s.contract.bidder
         local nextSeat = b and ((b % 4) + 1) or nil
         if nextSeat == S.s.localSeat then
-            addAction("Bel (x2)", function() net().LocalDouble() end)
+            -- Bel doubles the round stakes (×2). Confirm before firing
+            -- so a stray click can't accidentally double a hand the
+            -- defender wasn't actually planning to challenge.
+            addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
+                function() net().LocalDouble() end)
             addAction("Skip", function() net().LocalSkipDouble() end)
         end
     elseif S.s.phase == K.PHASE_REDOUBLE then
         local b = S.s.contract and S.s.contract.bidder
         if b == S.s.localSeat then
-            addAction("Bel-Re (x4)", function() net().LocalRedouble() end)
+            -- Bel-Re takes stakes to ×4 — biggest single-click swing in
+            -- the game. Confirmation is mandatory.
+            addConfirmAction("Bel-Re (x4)", "|cffff5555Confirm Bel-Re?|r",
+                function() net().LocalRedouble() end)
             addAction("Skip", function() net().LocalSkipDouble() end)
         end
     elseif S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY then
@@ -614,8 +822,13 @@ local function renderActions()
         end
         -- Takweesh button is always available during PLAY. Any player
         -- can press to call out an illegal play by the opposing team.
+        -- Confirmation required: a false call ends the round with the
+        -- full handTotal × mult going to the OTHER team — easy to fire
+        -- by mistake from the always-visible action bar otherwise.
         if S.s.phase == K.PHASE_PLAY and S.s.localSeat then
-            addAction("|cffff5555TAKWEESH|r", function() net().LocalTakweesh() end)
+            addConfirmAction("|cffff5555TAKWEESH|r",
+                "|cffff5555TAKWEESH? again to confirm|r",
+                function() net().LocalTakweesh() end)
         end
     elseif S.s.phase == K.PHASE_SCORE then
         if S.s.isHost then
@@ -645,28 +858,30 @@ end
 local handPool = {}
 local handUsed = 0
 
--- Real-card layout: corner pips have the rank on top with a smaller
--- suit symbol stacked underneath; the center shows a large suit symbol
--- alongside the rank for at-a-glance reading.
+-- Hand button layout:
+--   • A Texture child fills the button with the bundled card-face image.
+--   • FontString labels (corner + center) are kept as a fallback for
+--     situations where the texture isn't available; they get cleared
+--     once the texture is bound.
 local function makeHandButton(parent)
     local b = CreateFrame("Button", nil, parent, "BackdropTemplate")
     setBackdrop(b, true, COL.cardFace, COL.cardEdge, 6, "solid")
 
-    -- Top-left corner: rank then suit, stacked
+    b.tex = b:CreateTexture(nil, "ARTWORK")
+    b.tex:SetPoint("TOPLEFT", 2, -2)
+    b.tex:SetPoint("BOTTOMRIGHT", -2, 2)
+    b.tex:Hide()
+
+    -- Fallback FontStrings, used only if the card texture is missing.
     b.tlRank = b:CreateFontString(nil, "OVERLAY")
     b.tlRank:SetFont(K.CARD_FONT, 14, "")
     b.tlRank:SetPoint("TOPLEFT", 5, -4)
     b.tlSuit = b:CreateFontString(nil, "OVERLAY")
     b.tlSuit:SetFont(K.CARD_FONT, 12, "")
     b.tlSuit:SetPoint("TOPLEFT", 5, -19)
-
-    -- Center: big suit symbol
     b.center = b:CreateFontString(nil, "OVERLAY")
     b.center:SetFont(K.CARD_FONT, 36, "OUTLINE")
     b.center:SetPoint("CENTER", 0, 0)
-
-    -- Bottom-right corner: rank + suit, stacked (suit on top, rank on
-    -- bottom — visually "rotated 180°" without actual rotation).
     b.brSuit = b:CreateFontString(nil, "OVERLAY")
     b.brSuit:SetFont(K.CARD_FONT, 12, "")
     b.brSuit:SetPoint("BOTTOMRIGHT", -5, 19)
@@ -705,11 +920,11 @@ local function renderHand()
     local total = #sortable * (btnW + 6) - 6
     local startX = -total / 2 + btnW / 2
 
-    -- Rank+suit colored separately so we can place them in distinct slots
-    -- and pick a single suit color for ♥/♦ (red) and ♠/♣ (black-ish).
+    -- FontString fallback (only used when the card texture is missing).
+    -- Four-color deck colors so same-shape suits are still distinct.
     local function rankSuitFor(card)
         local r, s = C.Rank(card), C.Suit(card)
-        local color = (s == "H" or s == "D") and "ffcc1f1f" or "ff111111"
+        local color = K.SUIT_COLOR_ONCARD[s] or "ff111111"
         local rankStr = ("|c%s%s|r"):format(color, C.RankGlyph(r))
         local suitStr = ("|c%s%s|r"):format(color, K.SUIT_GLYPH[s] or s)
         return rankStr, suitStr, color
@@ -727,13 +942,23 @@ local function renderHand()
         b:SetPoint("CENTER", tablePanel.handRow, "CENTER",
             startX + (i - 1) * (btnW + 6), 0)
 
-        local rankStr, suitStr, color = rankSuitFor(card)
-        b.tlRank:SetText(rankStr)
-        b.tlSuit:SetText(suitStr)
-        b.brRank:SetText(rankStr)
-        b.brSuit:SetText(suitStr)
-        -- Center: rank + suit together so rank is readable at a glance.
-        b.center:SetText(rankStr .. suitStr)
+        -- Prefer the bundled card texture. If it loads, blank out the
+        -- fallback FontStrings; otherwise leave them populated so the
+        -- card is still readable.
+        local path = cardTexturePath(card)
+        if path then
+            b.tex:SetTexture(path)
+            b.tex:Show()
+            b.tlRank:SetText(""); b.tlSuit:SetText("")
+            b.brRank:SetText(""); b.brSuit:SetText("")
+            b.center:SetText("")
+        else
+            b.tex:Hide()
+            local rankStr, suitStr = rankSuitFor(card)
+            b.tlRank:SetText(rankStr); b.tlSuit:SetText(suitStr)
+            b.brRank:SetText(rankStr); b.brSuit:SetText(suitStr)
+            b.center:SetText(rankStr .. suitStr)
+        end
 
         local labels = { b.center, b.tlRank, b.tlSuit, b.brRank, b.brSuit }
         for _, fs in ipairs(labels) do fs:SetAlpha(1) end
@@ -850,6 +1075,17 @@ local function renderSeats()
             b.countText:SetText(("|c"..COL.txtSoft.."%d|r"):format(cnt))
             b.meldText:SetText(meldsDescForSeat(seat))
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
+            -- Avatar: bot seats get the bundled colored badge; humans
+            -- have no avatar so the seat reads "live player".
+            if b.avatar then
+                if info and info.isBot and seat >= 2 and seat <= 4 then
+                    b.avatar:SetTexture(
+                        "Interface\\AddOns\\WHEREDNGN\\cards\\avatar_" .. seat)
+                    b.avatar:Show()
+                else
+                    b.avatar:Hide()
+                end
+            end
             if S.s.turn == seat then
                 b.turnGlow:Show()
                 b.frame:SetBackdropBorderColor(unpack(COL.legalEdge))
@@ -886,25 +1122,55 @@ local centerOverride = nil
 -- without re-animating cards that were already in place.
 local prevTrickPlayCount = 0
 
--- Brief scale+fade animation when a fresh card lands in a center slot.
--- Cheap C_Timer ticker — 6 steps over CARD_ANIM_SEC.
-local function animateLand(slot)
+-- Slide-in animation: card flies from the seat edge toward the center.
+-- We animate the frame's anchor offset in steps via a C_Timer ticker
+-- (Blizzard's AnimationGroup / Translation only translates the visual
+-- position WITHOUT moving the anchor, which makes "land at the anchor"
+-- awkward to express. A few re-anchors per second is cheap and keeps
+-- the math obvious.)
+local SLIDE_FROM = {
+    top    = { dx =    0, dy =  140 },
+    bottom = { dx =    0, dy = -140 },
+    left   = { dx = -180, dy =    0 },
+    right  = { dx =  180, dy =    0 },
+}
+
+local function animateLand(slot, fromPos)
     if not slot or not slot.frame then return end
+    local off = SLIDE_FROM[fromPos] or SLIDE_FROM.bottom
     local frame = slot.frame
-    local steps = 6
-    local stepDur = (K.CARD_ANIM_SEC or 0.18) / steps
+    -- Capture the slot's anchored position once. SetPoint with the
+    -- same args restores it to the canonical "landing spot".
+    if not slot._origPoint then
+        slot._origPoint = { frame:GetPoint(1) }
+    end
+    local pt, rel, relPt, ox, oy = unpack(slot._origPoint)
+
+    -- Swish on the slide. Lands as a card_play slap from S.ApplyPlay.
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CARD_SWISH) end
+
+    local steps = 8
+    local stepDur = (K.CARD_ANIM_SEC or 0.22) / steps
     local i = 0
-    frame:SetScale(0.45)
-    frame:SetAlpha(0.35)
+    frame:ClearAllPoints()
+    frame:SetPoint(pt, rel, relPt, ox + off.dx, oy + off.dy)
+    frame:SetAlpha(0.5)
+
     local ticker
     ticker = C_Timer.NewTicker(stepDur, function()
         i = i + 1
         local t = i / steps
-        frame:SetScale(0.45 + 0.55 * t)
-        frame:SetAlpha(0.35 + 0.65 * t)
+        -- Ease-out: 1 - (1-t)^2 — fast at start, soft landing.
+        local eased = 1 - (1 - t) * (1 - t)
+        frame:ClearAllPoints()
+        frame:SetPoint(pt, rel, relPt,
+            ox + off.dx * (1 - eased),
+            oy + off.dy * (1 - eased))
+        frame:SetAlpha(0.5 + 0.5 * eased)
         if i >= steps then
             ticker:Cancel()
-            frame:SetScale(1)
+            frame:ClearAllPoints()
+            frame:SetPoint(pt, rel, relPt, ox, oy)
             frame:SetAlpha(1)
         end
     end, steps)
@@ -913,8 +1179,9 @@ end
 local function renderCenter()
     for _, slot in pairs(centerCards) do
         slot.frame:Hide()
-        slot.label:SetText("")
+        setCardSlot(slot, nil)   -- clears tex + label together
         slot.frame:SetBackdropBorderColor(unpack(COL.cardEdge))
+        if slot.glow then slot.glow:Hide() end
     end
     -- Last-trick peek override: show the previous trick exactly where
     -- the live one would appear, with the winning card glowing gold.
@@ -924,9 +1191,10 @@ local function renderCenter()
             local slot = centerCards[pos]
             if slot then
                 slot.frame:Show()
-                slot.label:SetText(C.PrettyOnCard(p.card))
+                setCardSlot(slot, p.card)
                 if p.seat == centerOverride.winner then
                     slot.frame:SetBackdropBorderColor(unpack(COL.legalEdge))
+                    if slot.glow then slot.glow:Show() end
                 end
             end
         end
@@ -937,7 +1205,7 @@ local function renderCenter()
         if S.s.bidCard then
             local slot = centerCards.bid
             slot.frame:Show()
-            slot.label:SetText(C.PrettyOnCard(S.s.bidCard))
+            setCardSlot(slot, S.s.bidCard)
         end
         return
     end
@@ -962,12 +1230,14 @@ local function renderCenter()
         local slot = centerCards[pos]
         if slot then
             slot.frame:Show()
-            slot.label:SetText(C.PrettyOnCard(p.card))
+            setCardSlot(slot, p.card)
             if highlight and p.seat == highlight then
                 slot.frame:SetBackdropBorderColor(unpack(COL.legalEdge))
+                if slot.glow then slot.glow:Show() end
             end
             if newFromIdx and i >= newFromIdx then
-                animateLand(slot)
+                -- Card slides in from whichever edge the player sits at.
+                animateLand(slot, pos)
             end
         end
     end
@@ -1177,6 +1447,29 @@ local function renderPeekButton()
     btn:SetShown(can)
 end
 
+-- The Pause toggle is host-only and meaningful only during the
+-- "active" phases (bidding through play). Outside that range we hide
+-- the button entirely. Label flips between II and ▶ to reflect state.
+local function renderPauseControls()
+    local btn = tablePanel and tablePanel.pauseBtn
+    local overlay = tablePanel and tablePanel.pauseOverlay
+    if not btn or not overlay then return end
+
+    local activePhase =
+        S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
+        or S.s.phase == K.PHASE_DOUBLE or S.s.phase == K.PHASE_REDOUBLE
+        or S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY
+    btn:SetShown(S.s.isHost and activePhase)
+    btn:SetText(S.s.paused and ">" or "II")
+
+    overlay:SetShown(S.s.paused and activePhase)
+    if S.s.paused and overlay.sub then
+        overlay.sub:SetText(S.s.isHost
+            and "Click |cffffd055>|r to resume."
+            or  "Waiting for host to resume.")
+    end
+end
+
 local function renderStatus()
     statusText:SetText(statusFor(S.s.phase))
 
@@ -1222,9 +1515,38 @@ function U.Refresh()
         renderHand()
         renderBanner()
         renderPeekButton()
+        renderPauseControls()
     end
     renderActions()
     renderStatus()
+end
+
+-- AFK pre-warn pulse: flash the local-player bar's border between
+-- alert-red and the normal gold a few times. Driven by Net.lua's local
+-- warn timer when a turn / bel decision has 10s remaining. Uses a
+-- ticker rather than a Blizzard AnimationGroup so the inner color
+-- swap is trivially predictable.
+function U.PulseTurn()
+    if not tablePanel or not tablePanel.localBar then return end
+    local lb = tablePanel.localBar
+    if not lb.SetBackdropBorderColor then return end
+    local ticks, every = 8, 0.18
+    local i = 0
+    local on = false
+    C_Timer.NewTicker(every, function()
+        i = i + 1
+        on = not on
+        if on then
+            lb:SetBackdropBorderColor(1.0, 0.20, 0.20, 1)  -- red
+        else
+            lb:SetBackdropBorderColor(unpack(COL.legalEdge))
+        end
+        if i >= ticks then
+            -- Final state: leave it on the legal-edge gold; the next
+            -- Refresh re-derives the right color from S.s.turn anyway.
+            lb:SetBackdropBorderColor(unpack(COL.legalEdge))
+        end
+    end, ticks)
 end
 
 function U.Show()
@@ -1238,6 +1560,11 @@ function U.Show()
         local p, rp, x, y = unpack(WHEREDNGNDB.framePos)
         f:ClearAllPoints()
         f:SetPoint(p or "CENTER", UIParent, rp or "CENTER", x or 0, y or 0)
+    end
+    -- restore saved scale (defaults to 1.0; SetScale propagates to all
+    -- child frames so the window grows/shrinks as a single unit).
+    if WHEREDNGNDB and WHEREDNGNDB.scale then
+        f:SetScale(WHEREDNGNDB.scale)
     end
     f:Show()
     U.Refresh()

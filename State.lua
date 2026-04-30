@@ -57,6 +57,95 @@ local function reset()
     -- scores
     s.cumulative  = { A = 0, B = 0 }
     s.target      = 152
+    -- pause: host-driven freeze that suspends bot scheduling and AFK
+    -- timers without dropping any in-flight state. Network-mirrored.
+    s.paused      = false
+    -- Clear persisted resync hint so we don't re-request a finished
+    -- game after the next /reload.
+    if WHEREDNGNDB then WHEREDNGNDB.lastGameID = nil end
+end
+
+function S.ApplyPause(paused)
+    s.paused = (paused and true) or false
+end
+
+-- Rehydrate session state from a host-built snapshot. Wire format
+-- (top-level fields separated by '|', see N.SendResyncRes):
+--   gameID | phase | dealer | round | turn | turnKind |
+--   ctype | ctrump | cbidder | cdbl | crdbl |
+--   cumA | cumB | paused |
+--   seat1Name | seat2Name | seat3Name | seat4Name |
+--   bid1 | bid2 | bid3 | bid4
+-- Anything not in the snapshot (private hand, in-flight trick plays,
+-- meld declarations, full trick history) is filled in by subsequent
+-- broadcasts/whispers — the host re-whispers MSG_HAND right after
+-- SendResyncRes so the receiver's own cards arrive promptly.
+function S.ApplyResyncSnapshot(gameID, payload)
+    if not gameID or gameID == "" then return end
+    if not payload or payload == "" then return end
+    local f = {}
+    local i = 1
+    for chunk in payload:gmatch("([^|]*)|?") do
+        f[i] = chunk; i = i + 1
+        if i > 22 then break end
+    end
+    if (f[1] or "") ~= gameID then return end
+
+    s.gameID      = gameID
+    s.phase       = (f[2] ~= "" and f[2]) or s.phase
+    s.dealer      = tonumber(f[3]) or s.dealer
+    s.roundNumber = tonumber(f[4]) or s.roundNumber
+
+    local turnNum = tonumber(f[5]) or 0
+    s.turn        = (turnNum > 0) and turnNum or nil
+    s.turnKind    = (f[6] ~= "" and f[6]) or nil
+
+    local ctype = f[7]
+    if ctype and ctype ~= "" then
+        s.contract = {
+            type      = ctype,
+            trump     = (f[8] ~= "" and f[8]) or nil,
+            bidder    = tonumber(f[9]) or 0,
+            doubled   = f[10] == "1",
+            redoubled = f[11] == "1",
+        }
+    else
+        s.contract = nil
+    end
+
+    s.cumulative = s.cumulative or { A = 0, B = 0 }
+    s.cumulative.A = tonumber(f[12]) or 0
+    s.cumulative.B = tonumber(f[13]) or 0
+    s.paused       = (f[14] == "1")
+
+    -- Seats: rebuild minimal info; isBot defaults to false here, the
+    -- next SendLobby from the host will overwrite with full info.
+    s.seats = s.seats or {}
+    for seat = 1, 4 do
+        local nm = f[14 + seat] or ""
+        if nm ~= "" then
+            s.seats[seat] = s.seats[seat] or {}
+            s.seats[seat].name = nm
+            -- Re-derive our own seat number now that we know the names.
+            if s.localName and nm == s.localName then
+                s.localSeat = seat
+                s.isHost = false  -- we're definitely not host (we asked).
+            end
+        else
+            s.seats[seat] = nil
+        end
+    end
+
+    s.bids = {}
+    for seat = 1, 4 do
+        local b = f[18 + seat]
+        if b and b ~= "" then s.bids[seat] = b end
+    end
+
+    -- Trick / hand are not snapshotted; they'll arrive via the next
+    -- play broadcast and the re-whispered MSG_HAND respectively.
+    s.trick = nil
+    s.hand  = s.hand or {}
 end
 reset()
 S.Reset = reset
@@ -122,6 +211,8 @@ function S.HostBeginLobby()
     s.gameID    = newGameID()
     s.localSeat = 1
     s.seats[1]  = { name = s.localName }
+    -- Persist for resync-on-reload. Cleared in S.Reset.
+    if WHEREDNGNDB then WHEREDNGNDB.lastGameID = s.gameID end
     log("HostBeginLobby gameID=%s", s.gameID)
     return s.gameID
 end
@@ -192,6 +283,9 @@ function S.ApplyLobby(gameID, seatNames)
     -- find ourselves
     if s.localName then s.localSeat = S.SeatOf(s.localName) end
     if s.seats[1] then s.hostName = s.seats[1].name end
+    -- Persist on the joining side too — this is the first time a
+    -- non-host learns the gameID, so capture it for /reload resync.
+    if WHEREDNGNDB and s.localSeat then WHEREDNGNDB.lastGameID = gameID end
 end
 
 function S.ApplyStart(roundNumber, dealer)
@@ -219,6 +313,8 @@ function S.ApplyStart(roundNumber, dealer)
     s.meldsByTeam  = { A = {}, B = {} }
     s.meldsDeclared= {}
     s.phase        = K.PHASE_DEAL1
+    -- Round-start "Awal" announcement.
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_AWAL) end
 end
 
 function S.ApplyHand(cards, forRound)
@@ -238,6 +334,7 @@ function S.ApplyBidCard(card)
 end
 
 function S.ApplyTurn(seat, kind)
+    local prevTurn = s.turn
     s.turn = seat
     s.turnKind = kind
     -- Clear the local "I just played this trick" guard whenever turn
@@ -245,11 +342,39 @@ function S.ApplyTurn(seat, kind)
     -- flag has been reset and they can act normally.
     s.localPlayedThisTrick = nil
     log("turn: seat=%d kind=%s", seat or -1, tostring(kind))
+    -- Audio: ping when our turn arrives (transition into our seat).
+    if seat == s.localSeat and prevTurn ~= seat then
+        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_TURN_PING) end
+        -- Schedule the AFK pre-warn (T-10s) for our turn.
+        if B.Net and B.Net.StartLocalWarn then
+            B.Net.StartLocalWarn(kind)
+        end
+    elseif seat ~= s.localSeat and B.Net and B.Net.CancelLocalWarn then
+        B.Net.CancelLocalWarn()
+    end
 end
 
 function S.ApplyBid(seat, bid)
+    -- Idempotence at the apply layer. Even though every wire-side
+    -- handler dedupes on `s.bids[seat] ~= nil` already, the AUDIO cue
+    -- below previously fired any time ApplyBid was invoked — so a
+    -- harmless re-apply (e.g. AFK-timeout firing right as the player
+    -- clicks Pass, or a delayed loopback that bypassed fromSelf) would
+    -- play "بَسْ" twice. Skip same-bid replays here.
+    if s.bids[seat] == bid then return end
     s.bids[seat] = bid
     log("bid seat=%d bid=%s", seat, bid)
+    -- Voice cue per bid type, using the bundled ElevenLabs OGGs.
+    if B.Sound and B.Sound.Cue and bid then
+        local snd
+        if bid == K.BID_PASS then        snd = K.SND_VOICE_PASS
+        elseif bid == K.BID_SUN then     snd = K.SND_VOICE_SUN
+        elseif bid == K.BID_ASHKAL then  snd = K.SND_VOICE_ASHKAL
+        elseif bid:sub(1, #K.BID_HOKM) == K.BID_HOKM then
+            snd = K.SND_VOICE_HOKM
+        end
+        if snd then B.Sound.Cue(snd) end
+    end
 end
 
 function S.ApplyContract(bidder, btype, trump)
@@ -271,6 +396,10 @@ function S.ApplyContract(bidder, btype, trump)
     local oppA = bidder == 1 or bidder == 3
     if oppA then s.belPending = { 2, 4 } else s.belPending = { 1, 3 } end
     log("contract bidder=%d type=%s trump=%s", bidder, btype, tostring(trump))
+    -- Audio: contract finalized.
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CONTRACT) end
+    -- AFK pre-warn for the bel decision (defender at NextSeat(bidder)).
+    if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("bel") end
 end
 
 function S.ApplyDouble(seat)
@@ -284,6 +413,8 @@ function S.ApplyDouble(seat)
     -- bidder team gets Bel-Re option
     local b = s.contract.bidder
     if b == 1 or b == 3 then s.belrePending = { 1, 3 } else s.belrePending = { 2, 4 } end
+    -- AFK pre-warn for the bel-re decision (the original bidder).
+    if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("belre") end
 end
 
 function S.ApplyRedouble(seat)
@@ -363,6 +494,10 @@ function S.ApplyPlay(seat, card)
     if #s.trick.plays == 0 then s.trick.leadSuit = C.Suit(card) end
     table.insert(s.trick.plays, { seat = seat, card = card, illegal = illegal or nil })
 
+    -- Audio: card-rustle on every play. Fires on every client because
+    -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CARD_PLAY) end
+
     if seat == s.localSeat then
         for i, c in ipairs(s.hand) do
             if c == card then table.remove(s.hand, i); break end
@@ -390,6 +525,14 @@ function S.ApplyTrickEnd(winner, points)
         s.lastTrick.plays[#s.lastTrick.plays + 1] = { seat = p.seat, card = p.card }
     end
     s.trick = { leadSuit = nil, plays = {} }
+    -- Audio: only ping when OUR team won the trick. Saves the cue for
+    -- moments that feel rewarding to the local player.
+    if R and R.TeamOf and s.localSeat then
+        if R.TeamOf(winner) == R.TeamOf(s.localSeat)
+           and B.Sound and B.Sound.Cue then
+            B.Sound.Cue(K.SND_TRICK_WON)
+        end
+    end
 end
 
 function S.ApplyRoundEnd(addA, addB, totA, totB)
@@ -410,6 +553,14 @@ end
 -- The wire still only carries the four totals via MSG_ROUND.
 function S.ApplyRoundResult(result)
     s.lastRoundResult = result
+    -- Audio fanfare for AL-KABOOT (sweep) or contract failure (BALOOT).
+    -- Only the host has lastRoundResult; non-hosts get the cue via the
+    -- regular trick-won pings during the hand.
+    if result and B.Sound and B.Sound.Cue then
+        if result.sweep or result.bidderMade == false then
+            B.Sound.Cue(K.SND_BALOOT)
+        end
+    end
 end
 
 function S.ApplyGameEnd(winnerTeam)

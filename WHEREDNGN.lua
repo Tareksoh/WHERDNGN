@@ -32,6 +32,22 @@ local function init()
     L.Info("init", "local name: %s", tostring(B.State.s.localName))
 end
 
+-- After the world finishes loading we may discover we were in a game
+-- before the /reload (gameID persisted in WHEREDNGNDB). Broadcast a
+-- resync request; the host (if still in the party with the same game)
+-- will whisper back a state snapshot + our hand.
+local function maybeRequestResync()
+    if not WHEREDNGNDB then return end
+    local id = WHEREDNGNDB.lastGameID
+    if not id or id == "" then return end
+    if not IsInGroup() then return end
+    if B.State.s.phase ~= K.PHASE_IDLE then return end
+    L.Info("resync", "requesting state for game %s", id)
+    if B.Net and B.Net.SendResyncReq then
+        B.Net.SendResyncReq(id)
+    end
+end
+
 -- ---------------------------------------------------------------------
 
 local f = CreateFrame("Frame", "WHEREDNGNCore")
@@ -59,6 +75,9 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
         -- Re-set even if non-nil — realm info may not have been ready
         -- at PLAYER_LOGIN, leaving the name without its realm suffix.
         B.State.SetLocalName(GetUnitName("player", true))
+        -- One-shot resync attempt after world load. Delayed slightly so
+        -- the addon prefix registration and party state have settled.
+        C_Timer.After(2.0, maybeRequestResync)
         return
     end
     if event == "CHAT_MSG_ADDON" then

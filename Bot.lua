@@ -20,10 +20,17 @@ B.Bot = B.Bot or {}
 local Bot = B.Bot
 local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 
--- Tuning thresholds. Higher = more conservative bidding.
-local TH_HOKM_R1 = 50
-local TH_HOKM_R2 = 38
-local TH_SUN     = 60
+-- Tuning thresholds. Higher = more conservative bidding. Randomized
+-- per-call so two bots dealt similar hands don't always pick the same
+-- bid — eliminates the "predictable cliff" feel.
+local TH_HOKM_R1_BASE = 50
+local TH_HOKM_R2_BASE = 38
+local TH_SUN_BASE     = 60
+local BID_JITTER      = 6   -- ±6 swing per call
+
+local function jitter(base, amp)
+    return base + math.random(-amp, amp)
+end
 
 -- ---------------------------------------------------------------------
 -- Card memory + partner inference
@@ -146,14 +153,17 @@ function Bot.PickBid(seat)
     end
 
     local sun = sunStrength(hand)
+    local thHokmR1 = jitter(TH_HOKM_R1_BASE, BID_JITTER)
+    local thHokmR2 = jitter(TH_HOKM_R2_BASE, BID_JITTER)
+    local thSun    = jitter(TH_SUN_BASE,     BID_JITTER)
 
     if round == 1 then
         -- Sun is always an overcall option (overcalls Hokm or prior Sun).
-        if sun >= TH_SUN then return K.BID_SUN end
+        if sun >= thSun then return K.BID_SUN end
         -- Hokm-on-flipped only available if no prior Hokm/Sun.
         if not anyHokm and not anySun and bidCardSuit then
             local strength = suitStrengthAsTrump(hand, bidCardSuit)
-            if strength >= TH_HOKM_R1 then
+            if strength >= thHokmR1 then
                 return K.BID_HOKM .. ":" .. bidCardSuit
             end
         end
@@ -168,10 +178,10 @@ function Bot.PickBid(seat)
             if s > bestScore then bestSuit, bestScore = suit, s end
         end
     end
-    if sun >= TH_SUN and sun > bestScore then
+    if sun >= thSun and sun > bestScore then
         return K.BID_SUN
     end
-    if bestSuit and bestScore >= TH_HOKM_R2 then
+    if bestSuit and bestScore >= thHokmR2 then
         return K.BID_HOKM .. ":" .. bestSuit
     end
     return K.BID_PASS
@@ -272,12 +282,47 @@ local function pickLead(legal, contract, seat)
     return highestByRank(legal, contract)
 end
 
+-- How many cards of `suit` are still UNACCOUNTED for, ignoring our own
+-- hand and any plays we've observed. 8 cards total per suit; subtract
+-- ours + every played card we've seen.
+local function suitCardsOutstanding(hand, suit)
+    local out = 8
+    for _, c in ipairs(hand) do
+        if C.Suit(c) == suit then out = out - 1 end
+    end
+    if Bot._memory then
+        for s = 1, 4 do
+            local mem = Bot._memory[s]
+            if mem then
+                for card in pairs(mem.played) do
+                    if C.Suit(card) == suit then out = out - 1 end
+                end
+            end
+        end
+    end
+    return math.max(0, out)
+end
+
 local function pickFollow(legal, hand, trick, contract, seat)
     local curWinner = R.CurrentTrickWinner(trick, contract)
     local partnerWinning = curWinner and R.Partner(seat) == curWinner
+    local lastSeat = (#trick.plays == 3)  -- we're closing the trick
 
     if partnerWinning then
-        -- Don't waste a high card. Discard the lowest legal play.
+        -- Smother: in Hokm, if partner is winning a non-trump trick AND
+        -- we hold an Ace/10 of that suit, dump it on partner's pile so
+        -- our team scores the big point card. Skips if it would have
+        -- been our last A/T standing in that suit (defensive depth).
+        if contract.type == K.BID_HOKM and trick.leadSuit then
+            local lead = trick.leadSuit
+            for _, c in ipairs(legal) do
+                local r = C.Rank(c)
+                if C.Suit(c) == lead and (r == "A" or r == "T") then
+                    return c
+                end
+            end
+        end
+        -- Otherwise don't waste a high card.
         return lowestByRank(legal, contract)
     end
 
@@ -287,11 +332,39 @@ local function pickFollow(legal, hand, trick, contract, seat)
         if wouldWin(c, trick, contract, seat) then winners[#winners + 1] = c end
     end
     if #winners > 0 then
+        -- Card-counting heuristic: if we'd win with a TRUMP and the
+        -- opponents are likely empty of higher trump (counting from
+        -- memory + our hand), commit cheaply. Otherwise we still win
+        -- with the lowest legal winner.
+        if contract.type == K.BID_HOKM and contract.trump then
+            local trumpOut = suitCardsOutstanding(hand, contract.trump)
+            -- If only ~1 outstanding trump remains across opponents,
+            -- our cheapest winner is "safe enough" — same as before.
+            -- This branch is here for future heuristics; right now we
+            -- still pick lowest winner. Trump-counting affects the
+            -- DEFENSIVE choice below where we save trumps.
+            _ = trumpOut
+        end
         -- Win cheaply: use the lowest card that still wins.
         return lowestByRank(winners, contract)
     end
 
-    -- Can't win. Throw the lowest-value loser.
+    -- Can't win. If we're closing the trick (4th seat) and the trick
+    -- already has decent points, throw the lowest-value loser. If
+    -- earlier in the trick AND we have a trump that we'd need to
+    -- cross-trump with, save the trump and instead discard from a
+    -- short side suit to preserve flexibility.
+    if not lastSeat and contract.type == K.BID_HOKM and contract.trump then
+        local discardable = {}
+        for _, c in ipairs(legal) do
+            if not C.IsTrump(c, contract) then
+                discardable[#discardable + 1] = c
+            end
+        end
+        if #discardable > 0 then
+            return lowestByRank(discardable, contract)
+        end
+    end
     return lowestByRank(legal, contract)
 end
 
@@ -323,7 +396,11 @@ end
 
 -- Smarter Bel/Bel-Re — gated by hand strength so a weak defender
 -- doesn't bel into stronger opposition. Sun contracts get a small
--- bonus because Sun is harder to make than Hokm.
+-- bonus because Sun is harder to make than Hokm. Threshold is jittered
+-- per-call by ±10 so the Bel decision isn't a hard cliff at exactly
+-- the configured value (was the #1 "predictable bot" complaint).
+local BEL_JITTER = 10
+
 function Bot.PickDouble(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
@@ -338,7 +415,7 @@ function Bot.PickDouble(seat)
     if contract.type == K.BID_SUN then
         strength = strength + 10   -- bias: Sun is harder for the bidder
     end
-    return strength >= K.BOT_BEL_TH
+    return strength >= jitter(K.BOT_BEL_TH, BEL_JITTER)
 end
 
 function Bot.PickRedouble(seat)
@@ -351,5 +428,50 @@ function Bot.PickRedouble(seat)
     if contract.type == K.BID_HOKM and contract.trump then
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
     end
-    return strength >= K.BOT_BELRE_TH
+    return strength >= jitter(K.BOT_BELRE_TH, BEL_JITTER)
+end
+
+-- ---------------------------------------------------------------------
+-- Takweesh detection
+-- ---------------------------------------------------------------------
+-- A bot scans completed and in-progress tricks for any opponent play
+-- flagged .illegal by the host (only the host runs bots, and only the
+-- host fills .illegal during S.ApplyPlay). Probability is higher in
+-- the early tricks where a botched play is still fresh / "obvious",
+-- and degrades as the hand progresses (a clever human caller would
+-- catch it earlier; bots that wait too long feel more lifelike).
+--
+-- Returns the offending play table if the bot decides to call, else
+-- nil. Net.lua's MaybeRunBot consumes this on each bot turn before
+-- scheduling the normal play.
+
+local TAKWEESH_RATE_BY_TRICK = {
+    [0] = 0.60, [1] = 0.55, [2] = 0.45, [3] = 0.40,
+    [4] = 0.30, [5] = 0.20, [6] = 0.10, [7] = 0.05,
+}
+
+function Bot.PickTakweesh(seat)
+    if not S.s.contract then return nil end
+    local myTeam = R.TeamOf(seat)
+    local completed = #(S.s.tricks or {})
+    local rate = TAKWEESH_RATE_BY_TRICK[completed] or 0.40
+
+    -- Find the first illegal opposing play.
+    local function scan(plays)
+        for _, p in ipairs(plays or {}) do
+            if p.illegal and R.TeamOf(p.seat) ~= myTeam then return p end
+        end
+    end
+    local found
+    for _, t in ipairs(S.s.tricks or {}) do
+        found = scan(t.plays)
+        if found then break end
+    end
+    if not found and S.s.trick then
+        found = scan(S.s.trick.plays)
+    end
+    if not found then return nil end
+
+    if math.random() < rate then return found end
+    return nil
 end

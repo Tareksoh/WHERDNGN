@@ -133,12 +133,13 @@ function M.Pretty(card)
     return ("|c%s%s%s|r"):format(K.SUIT_COLOR[s], M.RankGlyph(r), K.SUIT_GLYPH[s])
 end
 
--- Variant for rendering on a cream / white card face. Uses classic
--- French-deck colors: red for hearts/diamonds, black for spades/clubs.
+-- Variant for rendering on a cream / white card face. Uses the
+-- four-color-deck convention so same-shape suits (♠/♣, ♥/♦) are
+-- unambiguous at a glance.
 function M.PrettyOnCard(card)
     if not M.IsValid(card) then return tostring(card) end
     local r, s = M.Rank(card), M.Suit(card)
-    local color = (s == "H" or s == "D") and "ffcc1f1f" or "ff0a0a0a"
+    local color = K.SUIT_COLOR_ONCARD[s] or "ff0a0a0a"
     return ("|c%s%s%s|r"):format(color, M.RankGlyph(r), K.SUIT_GLYPH[s])
 end
 

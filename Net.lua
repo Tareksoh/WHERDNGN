@@ -22,6 +22,16 @@ local L = B.Log
 
 local function log(level, ...) L[level]("net", ...) end
 
+-- Forward declarations. The Local* action functions below reference
+-- `cancelLocalWarn` in their closures, but the AFK pre-warn helpers
+-- aren't defined until later in the file (next to the host-side turn
+-- timer). Without these, the closures would bind to a global of the
+-- same name and crash when the action fires (`attempt to call a nil
+-- value (global 'cancelLocalWarn')`). With the local declared here,
+-- the closures bind to this upvalue and resolve correctly at runtime
+-- once the assignments below populate it.
+local cancelLocalWarn
+
 -- -- Send -----------------------------------------------------------
 
 local function broadcast(msg)
@@ -137,6 +147,56 @@ function N.SendGameEnd(winner)
     broadcast(("%s;%s"):format(K.MSG_GAMEEND, winner))
 end
 
+function N.SendPause(paused)
+    broadcast(("%s;%s"):format(K.MSG_PAUSE, paused and "1" or "0"))
+end
+
+-- Resync senders. Request is a broadcast (we don't know the host's
+-- name until they reply); response is a private whisper.
+function N.SendResyncReq(gameID)
+    broadcast(("%s;%s"):format(K.MSG_RESYNC_REQ, gameID or ""))
+end
+
+-- Pack a compact snapshot of the host's gameplay state and whisper it
+-- back to the requester. ApplyResyncSnapshot on the receiver side
+-- decodes the same wire format.
+local function packSnapshot()
+    local s = S.s
+    local function nz(x) return x or "" end
+    local c = s.contract or {}
+    local seats = {}
+    for i = 1, 4 do
+        local info = s.seats[i]
+        seats[i] = (info and info.name) or ""
+    end
+    local bids = {}
+    for i = 1, 4 do bids[i] = nz(s.bids and s.bids[i]) end
+    return table.concat({
+        nz(s.gameID),
+        nz(s.phase),
+        tostring(s.dealer or 0),
+        tostring(s.roundNumber or 0),
+        tostring(s.turn or 0),
+        nz(s.turnKind),
+        nz(c.type),                              -- HOKM | SUN | ""
+        nz(c.trump),
+        tostring(c.bidder or 0),
+        c.doubled and "1" or "0",
+        c.redoubled and "1" or "0",
+        tostring(s.cumulative and s.cumulative.A or 0),
+        tostring(s.cumulative and s.cumulative.B or 0),
+        s.paused and "1" or "0",
+        seats[1], seats[2], seats[3], seats[4],
+        bids[1], bids[2], bids[3], bids[4],
+    }, "|")
+end
+
+function N.SendResyncRes(target, gameID)
+    if not target then return end
+    local payload = packSnapshot()
+    whisper(target, ("%s;%s;%s"):format(K.MSG_RESYNC_RES, gameID or "", payload))
+end
+
 -- -- Receive -----------------------------------------------------
 
 -- Split helper: lua's gmatch is fine but empty-trailing fields lose.
@@ -214,6 +274,16 @@ function N.HandleMessage(prefix, message, channel, sender)
                          fields[3] == "1", tonumber(fields[4]))
     elseif tag == K.MSG_KAWESH then
         N._OnKawesh(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_PAUSE then
+        N._OnPause(sender, fields[2])
+    elseif tag == K.MSG_RESYNC_REQ then
+        N._OnResyncReq(sender, fields[2])
+    elseif tag == K.MSG_RESYNC_RES then
+        -- The packed snapshot uses '|' for inner field separation so
+        -- top-level ';' doesn't get chewed up. Reassemble fields[3..].
+        local rest = {}
+        for i = 3, #fields do rest[#rest + 1] = fields[i] end
+        N._OnResyncRes(sender, fields[2], table.concat(rest, ";"))
     end
 
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -227,6 +297,21 @@ end
 
 local function fromSelf(sender)
     return S.s.localName and sender == S.s.localName
+end
+
+-- Authority helper: a per-seat action message is valid if
+-- (a) the seat is a human and `sender` matches that seat's owner, OR
+-- (b) the seat is a bot, in which case only the host signs on its behalf.
+-- Used by every _On* handler that accepts a `seat` field — without it,
+-- a malformed or replayed addon message could apply state for an
+-- arbitrary seat as long as the phase/dispatch layer let it through.
+local function authorizeSeat(seat, sender)
+    local info = S.s.seats[seat]
+    if not info then return false end
+    if info.isBot then
+        return S.s.hostName and sender == S.s.hostName
+    end
+    return info.name and info.name == sender
 end
 
 -- Loopback policy: SendAddonMessage delivers a copy back to the sender
@@ -303,6 +388,14 @@ end
 function N._OnBid(sender, seat, bid)
     if fromSelf(sender) then return end
     if not seat or not bid then return end
+    -- Phase: bidding only.
+    if S.s.phase ~= K.PHASE_DEAL1 and S.s.phase ~= K.PHASE_DEAL2BID then return end
+    -- Turn: only the seat whose turn it is may bid.
+    if S.s.turn ~= seat or S.s.turnKind ~= "bid" then return end
+    -- Idempotence: each seat bids at most once per round.
+    if S.s.bids and S.s.bids[seat] ~= nil then return end
+    -- Authority: sender must be the seat owner (or host for bots).
+    if not authorizeSeat(seat, sender) then return end
     S.ApplyBid(seat, bid)
     N.CancelTurnTimer()
     if S.s.isHost then N._HostStepBid() end
@@ -313,18 +406,6 @@ function N._OnContract(sender, bidder, btype, trump)
     if not fromHost(sender) then return end
     if not bidder or not btype then return end
     S.ApplyContract(bidder, btype, trump)
-end
-
--- Authority helper: a Bel/Bel-Re/skip message about `seat` is valid if
--- (a) the seat is a human and `sender` matches that seat's owner, OR
--- (b) the seat is a bot, in which case only the host signs on its behalf.
-local function authorizeSeat(seat, sender)
-    local info = S.s.seats[seat]
-    if not info then return false end
-    if info.isBot then
-        return S.s.hostName and sender == S.s.hostName
-    end
-    return info.name and info.name == sender
 end
 
 function N._OnDouble(sender, seat)
@@ -363,6 +444,8 @@ function N._OnSkipDouble(sender, seat)
     local eligibleSeat = (S.s.contract.bidder % 4) + 1
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
+    -- Skipping the Bel window is "passing the contract" — voice it.
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
     if S.s.isHost then N.HostFinishDeal() end
 end
 
@@ -372,18 +455,37 @@ function N._OnSkipRedouble(sender, seat)
     if not seat or not S.s.contract then return end
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
     if S.s.isHost then N.HostFinishDeal() end
 end
 
 function N._OnMeld(sender, seat, kind, suit, top, encodedCards)
     if fromSelf(sender) then return end
     if not seat or not kind then return end
+    -- Phase: melds are declarable in DEAL3 / PLAY only. ApplyMeld already
+    -- dedupes by (seat, kind, top, suit), but we still gate phase + author
+    -- here so a stale message from a previous round can't poison the
+    -- meldsByTeam table.
+    if S.s.phase ~= K.PHASE_PLAY and S.s.phase ~= K.PHASE_DEAL3 then return end
+    if not authorizeSeat(seat, sender) then return end
     S.ApplyMeld(seat, kind, suit, top, encodedCards)
 end
 
 function N._OnPlay(sender, seat, card)
     if fromSelf(sender) then return end
     if not seat or not card then return end
+    -- Phase: plays only land during PLAY.
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    -- Turn: only the seat whose turn it is may play.
+    if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+    -- Idempotence: that seat must not have already played this trick.
+    if S.s.trick and S.s.trick.plays then
+        for _, p in ipairs(S.s.trick.plays) do
+            if p.seat == seat then return end
+        end
+    end
+    -- Authority: sender must own the seat (or host if it's a bot).
+    if not authorizeSeat(seat, sender) then return end
     -- Capture lead suit BEFORE ApplyPlay so the bot memory observer
     -- knows whether `card` followed suit or was off-suit (a void tell).
     local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
@@ -551,30 +653,36 @@ function N.HostStartRound()
 end
 
 function N.LocalBid(bid)
+    if S.s.paused then return end
     if not S.IsMyTurn() then return end
     if S.s.turnKind ~= "bid" then return end
     -- Dedupe: if we've already bid this round, ignore (e.g. double-click).
     if S.s.bids[S.s.localSeat] ~= nil then return end
     N.CancelTurnTimer()
+    cancelLocalWarn()
     S.ApplyBid(S.s.localSeat, bid)
     N.SendBid(S.s.localSeat, bid)
     if S.s.isHost then N._HostStepBid() end
 end
 
 function N.LocalDouble()
+    if S.s.paused then return end
     if not S.s.contract or S.s.contract.doubled then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
     local b = S.s.contract.bidder
     if S.s.localSeat ~= (b % 4) + 1 then return end
+    cancelLocalWarn()
     S.ApplyDouble(S.s.localSeat)
     N.SendDouble(S.s.localSeat)
     if S.s.isHost then N.MaybeRunBot() end
 end
 
 function N.LocalRedouble()
+    if S.s.paused then return end
     if not S.s.contract or not S.s.contract.doubled or S.s.contract.redoubled then return end
     if S.s.phase ~= K.PHASE_REDOUBLE then return end
     if S.s.localSeat ~= S.s.contract.bidder then return end
+    cancelLocalWarn()
     S.ApplyRedouble(S.s.localSeat)
     N.SendRedouble(S.s.localSeat)
     if S.s.isHost then N.HostFinishDeal() end
@@ -583,15 +691,19 @@ end
 -- Skip vote. Anyone with the eligible seat can broadcast; the host
 -- (or anyone receiving) acts on it via _OnSkipDouble / _OnSkipRedouble.
 function N.LocalSkipDouble()
+    if S.s.paused then return end
     if not S.s.contract or not S.s.localSeat then return end
+    cancelLocalWarn()
     if S.s.phase == K.PHASE_DOUBLE then
         local b = S.s.contract.bidder
         if S.s.localSeat ~= (b % 4) + 1 then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, S.s.localSeat))
+        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_REDOUBLE then
         if S.s.localSeat ~= S.s.contract.bidder then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, S.s.localSeat))
+        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
         if S.s.isHost then N.HostFinishDeal() end
     end
 end
@@ -623,8 +735,10 @@ function N.HostFinishDeal()
 end
 
 function N.LocalPlay(card)
+    if S.s.paused then return end
     if not S.IsMyTurn() then return end
     if S.s.turnKind ~= "play" then return end
+    cancelLocalWarn()
     -- Local guard against double-click: until the host echoes the
     -- turn change via SendTurn, IsMyTurn() stays true, so a second
     -- click would otherwise send a second card. ApplyTurn clears
@@ -666,6 +780,7 @@ end
 -- ---------------------------------------------------------------------
 
 function N.LocalTakweesh()
+    if S.s.paused then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
     if not S.s.localSeat or not S.s.contract then return end
     broadcast(("%s;%d"):format(K.MSG_TAKWEESH, S.s.localSeat))
@@ -675,6 +790,12 @@ end
 function N._OnTakweesh(sender, callerSeat)
     if fromSelf(sender) then return end
     if not callerSeat then return end
+    -- Phase: Takweesh is a PLAY-only action.
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    -- Authority: sender must own the seat raising the call. (Note: the
+    -- host's HostResolveTakweesh does its own phase check + scan, so this
+    -- is purely about preventing forged calls on someone else's behalf.)
+    if not authorizeSeat(callerSeat, sender) then return end
     if S.s.isHost then N.HostResolveTakweesh(callerSeat) end
 end
 
@@ -694,6 +815,11 @@ end
 function N.HostResolveTakweesh(callerSeat)
     if not S.s.isHost or not S.s.contract then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
+    -- Idempotence: a rapid double-click on the Takweesh button could
+    -- reach here twice. The phase guard above handles re-entry from the
+    -- second call (since the first sets phase=SCORE), but only after the
+    -- first one finishes. Cancel any pending turn timer up front.
+    N.CancelTurnTimer()
 
     local callerTeam = R.TeamOf(callerSeat)
     local oppTeam = (callerTeam == "A") and "B" or "A"
@@ -730,6 +856,13 @@ function N.HostResolveTakweesh(callerSeat)
     local totB = S.s.cumulative.B + addB
 
     S.ApplyRoundEnd(addA, addB, totA, totB)
+    -- Takweesh bypasses the normal scoring path, so lastRoundResult and
+    -- the in-progress trick aren't cleaned up by anything else. Without
+    -- this, the score banner shows the *previous* round's breakdown and
+    -- the table still displays the half-played trick — which makes the
+    -- transition to PHASE_SCORE invisible to the user (looks frozen).
+    S.s.lastRoundResult = nil
+    S.s.trick = nil
     N.SendRound(addA, addB, totA, totB)
 
     -- Print the outcome locally on host. Other clients receive
@@ -756,9 +889,14 @@ function N.HostResolveTakweesh(callerSeat)
         S.ApplyGameEnd(winner)
         N.SendGameEnd(winner)
     end
+    -- Force an immediate UI repaint on host. Otherwise the player has
+    -- to wait for the addon-message loopback (or close+reopen the frame)
+    -- before the score panel becomes visible.
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
 function N.LocalDeclareMeld(meld)
+    if S.s.paused then return end
     if not meld then return end
     S.ApplyMeld(S.s.localSeat, meld.kind, meld.suit, meld.top, B.Cards.EncodeHand(meld.cards or {}))
     N.SendMeld(S.s.localSeat, meld)
@@ -774,7 +912,94 @@ end
 -- redeal with the next dealer (rotation advances).
 -- ---------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------
+-- Pause / resume.
+-- Host-only entry point. Mirrors a paused flag to all clients via
+-- MSG_PAUSE. While paused:
+--   • MaybeRunBot returns immediately (bot scheduling suspended).
+--   • The AFK turn timer is cancelled; resume re-arms it.
+--   • UI disables hand-card clicks and bid/play buttons (UI side).
+-- The in-flight state (turn pointer, trick, contract, hand) is left
+-- intact, so resume picks up exactly where we paused.
+-- ---------------------------------------------------------------------
+function N.LocalPause(paused)
+    if not S.s.isHost then return end
+    paused = (paused and true) or false
+    if S.s.paused == paused then return end  -- idempotent
+    S.ApplyPause(paused)
+    N.SendPause(paused)
+    if paused then
+        N.CancelTurnTimer()
+    else
+        -- Resume: re-arm timers and re-dispatch any pending bot turn.
+        N.MaybeRunBot()
+        if S.s.turn and S.s.turnKind then
+            N.StartTurnTimer(S.s.turn, S.s.turnKind)
+        end
+    end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
+function N._OnPause(sender, payload)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    local paused = (payload == "1")
+    if S.s.paused == paused then return end
+    S.ApplyPause(paused)
+end
+
+-- Resync request (broadcast). Only the host responds, and only if the
+-- requester is in our seat roster — otherwise spurious requests from
+-- unrelated party members would leak game state.
+function N._OnResyncReq(sender, gameID)
+    if fromSelf(sender) then return end
+    if not S.s.isHost then return end
+    if not gameID or gameID == "" then return end
+    if S.s.gameID ~= gameID then return end
+    local found = false
+    for i = 1, 4 do
+        local info = S.s.seats[i]
+        if info and info.name == sender then found = true; break end
+    end
+    if not found then
+        log("Warn", "resync from %s rejected (not in roster)", tostring(sender))
+        return
+    end
+    log("Info", "resync to %s for game %s", sender, gameID)
+    N.SendResyncRes(sender, gameID)
+    -- Also re-whisper their hand. The host knows it from hostHands.
+    local seat
+    for i = 1, 4 do
+        if S.s.seats[i] and S.s.seats[i].name == sender then seat = i; break end
+    end
+    if seat and S.s.hostHands and S.s.hostHands[seat] then
+        N.SendHand(sender, S.s.hostHands[seat])
+    end
+end
+
+-- Resync response (private whisper from host). Decode the snapshot and
+-- hand it to State.ApplyResyncSnapshot which rehydrates the local state
+-- without disturbing already-applied later messages.
+function N._OnResyncRes(sender, gameID, payload)
+    if fromSelf(sender) then return end
+    if not gameID or not payload then return end
+    -- Reject snapshots that don't match the gameID we asked about. A
+    -- stale response from a slow host (or a snapshot for a different
+    -- game we happened to overhear) shouldn't clobber state if we've
+    -- since joined a fresh lobby.
+    if WHEREDNGNDB and WHEREDNGNDB.lastGameID
+       and WHEREDNGNDB.lastGameID ~= gameID then
+        return
+    end
+    -- We don't yet know who the host is on a fresh /reload, so we trust
+    -- that the sender claims to be host. A subsequent SendLobby (which
+    -- the host broadcasts on lobby/seat changes) will reconfirm.
+    S.s.hostName = sender
+    S.ApplyResyncSnapshot(gameID, payload)
+end
+
 function N.LocalKawesh()
+    if S.s.paused then return end
     if S.s.phase ~= K.PHASE_DEAL1 then return end
     if not S.s.localSeat then return end
     if not C.IsKaweshHand(S.s.hand) then return end  -- can't fake
@@ -785,6 +1010,12 @@ end
 function N._OnKawesh(sender, seat)
     if fromSelf(sender) then return end
     if not seat then return end
+    -- Phase: Kawesh is only available during round-1 bidding.
+    if S.s.phase ~= K.PHASE_DEAL1 then return end
+    -- Authority: sender must own the seat. (Host's HostHandleKawesh
+    -- additionally validates the hand from hostHands, so even a passing
+    -- authority check here can't fake a Kawesh on a non-qualifying hand.)
+    if not authorizeSeat(seat, sender) then return end
     -- Print announcement on every client.
     local info = S.s.seats[seat]
     local nm = (info and info.name and (info.name:match("^([^%-]+)") or info.name)) or "?"
@@ -813,9 +1044,57 @@ function N.CancelTurnTimer()
     end
 end
 
+-- Local-side AFK pre-warning. Runs on every client (not just the host)
+-- so that a real player feels the prompt even though only the host's
+-- authoritative timer can actually auto-act for them. Fires 10s before
+-- the host would auto-pass / auto-play, with a soft ping + a UI pulse.
+local localWarnTimer
+
+-- NOTE: declared up top (forward-decl) so closures in N.LocalBid /
+-- N.LocalPlay / N.LocalDouble / N.LocalRedouble / N.LocalSkipDouble
+-- all bind to the SAME upvalue and see this assignment at runtime.
+cancelLocalWarn = function()
+    if localWarnTimer then
+        localWarnTimer:Cancel()
+        localWarnTimer = nil
+    end
+end
+N.CancelLocalWarn = cancelLocalWarn
+
+local function fireLocalWarn()
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_TURN_PING) end
+    if B.UI and B.UI.PulseTurn then B.UI.PulseTurn() end
+end
+
+-- Arm only if the local player is the one we're actually waiting on.
+-- `kind` is "bid" / "play" for normal turns, or "bel" / "belre" for the
+-- contract decision windows.
+function N.StartLocalWarn(kind)
+    cancelLocalWarn()
+    if S.s.paused then return end
+    local timeout = K.TURN_TIMEOUT_SEC or 60
+    local warnAt = timeout - 10
+    if warnAt < 1 then return end
+
+    local mine = false
+    if kind == "bid" or kind == "play" then
+        mine = (S.s.turn == S.s.localSeat) and (S.s.turnKind == kind)
+    elseif kind == "bel" then
+        mine = S.s.contract and S.s.localSeat
+               and S.s.localSeat == ((S.s.contract.bidder % 4) + 1)
+    elseif kind == "belre" then
+        mine = S.s.contract and S.s.localSeat
+               and S.s.localSeat == S.s.contract.bidder
+    end
+    if not mine then return end
+
+    localWarnTimer = C_Timer.NewTimer(warnAt, fireLocalWarn)
+end
+
 function N.StartTurnTimer(seat, kind)
     N.CancelTurnTimer()
     if not S.s.isHost then return end
+    if S.s.paused then return end
     if not seat then return end
     local info = S.s.seats[seat]
     if not info or info.isBot then return end
@@ -862,6 +1141,7 @@ end
 function N.StartBelTimer(seat, kind)
     N.CancelTurnTimer()
     if not S.s.isHost then return end
+    if S.s.paused then return end
     if not seat then return end
     local info = S.s.seats[seat]
     if not info or info.isBot then return end
@@ -875,10 +1155,12 @@ function N._HostBelTimeout(seat, kind)
     if kind == "double" and S.s.phase == K.PHASE_DOUBLE then
         log("Info", "AFK timeout: bel skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
         N.HostFinishDeal()
     elseif kind == "redouble" and S.s.phase == K.PHASE_REDOUBLE then
         log("Info", "AFK timeout: bel-re skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, seat))
+        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_PASS) end
         N.HostFinishDeal()
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -924,6 +1206,7 @@ end
 function N.MaybeRunBot()
     if not S.s.isHost then return end
     if not B.Bot then return end
+    if S.s.paused then return end
 
     -- Phase-driven dispatch first. After ApplyContract, s.turn still
     -- points at the last bidder (and turnKind is still "bid"), so the
@@ -950,6 +1233,9 @@ function N.MaybeRunBot()
                         N.MaybeRunBot()
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
+                        if B.Sound and B.Sound.Cue then
+                            B.Sound.Cue(K.SND_VOICE_PASS)
+                        end
                         N.HostFinishDeal()
                     end
                 end)
@@ -985,6 +1271,9 @@ function N.MaybeRunBot()
                     N.SendRedouble(bidder)
                 else
                     broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, bidder))
+                    if B.Sound and B.Sound.Cue then
+                        B.Sound.Cue(K.SND_VOICE_PASS)
+                    end
                 end
                 N.HostFinishDeal()
                 if B.UI then B.UI.Refresh() end
@@ -1026,6 +1315,16 @@ function N.MaybeRunBot()
             if not S.s.isHost then return end
             if S.s.phase ~= K.PHASE_PLAY then return end
             if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+            -- Takweesh check before the play. A bot scans for an
+            -- opponent illegal play and rolls per-trick probability.
+            -- If it decides to call, the round resolves immediately
+            -- and we never schedule the play.
+            if B.Bot.PickTakweesh and B.Bot.PickTakweesh(seat) then
+                broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
+                N.HostResolveTakweesh(seat)
+                if B.UI then B.UI.Refresh() end
+                return
+            end
             if not S.s.meldsDeclared[seat] then
                 local melds = B.Bot.PickMelds(seat)
                 for _, m in ipairs(melds) do
