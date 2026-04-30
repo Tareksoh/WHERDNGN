@@ -518,7 +518,21 @@ function S.ApplyBid(seat, bid)
     if B.Sound and B.Sound.Cue and bid then
         local snd
         if bid == K.BID_PASS then
-            snd = (s.bidRound == 2) and K.SND_VOICE_WLA or K.SND_VOICE_PASS
+            -- Round 1 has a Sun-overcall window: every seat bids even
+            -- after someone has already called Hokm/Sun. Those late
+            -- passes are confirming an existing contract, not opening
+            -- the bidding — playing "بَسْ" for each one creates noisy
+            -- repetition right after the contract voice. Suppress the
+            -- pass voice once a non-pass bid is already on the table.
+            local anyNonPass = false
+            for seat2, b in pairs(s.bids) do
+                if seat2 ~= seat and b and b ~= K.BID_PASS then
+                    anyNonPass = true; break
+                end
+            end
+            if not anyNonPass then
+                snd = (s.bidRound == 2) and K.SND_VOICE_WLA or K.SND_VOICE_PASS
+            end
         elseif bid == K.BID_SUN then     snd = K.SND_VOICE_SUN
         elseif bid == K.BID_ASHKAL then  snd = K.SND_VOICE_ASHKAL
         elseif bid:sub(1, #K.BID_HOKM) == K.BID_HOKM then
