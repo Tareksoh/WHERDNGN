@@ -66,9 +66,18 @@ function N.SendJoin(gameID)
 end
 
 function N.SendLobby(seats, gameID)
-    local names = {}
-    for i = 1, 4 do names[i] = (seats[i] and seats[i].name) or "" end
-    broadcast(("%s;%s;%s"):format(K.MSG_LOBBY, gameID, table.concat(names, ";")))
+    -- Wire format extended: trailing 4-char bot mask after the names so
+    -- non-host clients can tell bots from humans. Without this they'd
+    -- treat bot seats as human-owned and reject any host-signed bot
+    -- bid/play/meld via authorizeSeat (sender == host != "Bot 3").
+    local names, bots = {}, {}
+    for i = 1, 4 do
+        local s = seats[i]
+        names[i] = (s and s.name) or ""
+        bots[i] = (s and s.isBot) and "1" or "0"
+    end
+    broadcast(("%s;%s;%s;%s"):format(K.MSG_LOBBY, gameID,
+        table.concat(names, ";"), table.concat(bots, "")))
 end
 
 function N.SendStart(roundNumber, dealer)
@@ -244,7 +253,9 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_JOIN then
         N._OnJoin(sender, fields[2])
     elseif tag == K.MSG_LOBBY then
-        N._OnLobby(sender, fields[2], { fields[3] or "", fields[4] or "", fields[5] or "", fields[6] or "" })
+        N._OnLobby(sender, fields[2],
+            { fields[3] or "", fields[4] or "", fields[5] or "", fields[6] or "" },
+            fields[7])
     elseif tag == K.MSG_START then
         N._OnStart(sender, tonumber(fields[2]), tonumber(fields[3]))
     elseif tag == K.MSG_DEAL then
@@ -367,12 +378,12 @@ function N._OnJoin(sender, gameID)
     end
 end
 
-function N._OnLobby(sender, gameID, names)
+function N._OnLobby(sender, gameID, names, botMask)
     if fromSelf(sender) then return end
     if not fromHost(sender) and not S.s.pendingHost then
         S.s.hostName = sender
     end
-    S.ApplyLobby(gameID, names)
+    S.ApplyLobby(gameID, names, botMask)
 end
 
 function N._OnStart(sender, roundNumber, dealer)

@@ -394,6 +394,22 @@ function S.HostAddBots()
     return added
 end
 
+-- Swap two seats so the host can re-team players. Teams are derived
+-- from seat parity (seats 1+3 = Team A, seats 2+4 = Team B), so moving
+-- a player one seat over flips their team. Host-only; lobby-only.
+-- localSeat is updated for whichever swapped seat hosts the local
+-- player so the UI keeps tracking the right cards.
+function S.HostSwapSeats(seatA, seatB)
+    if not s.isHost or s.phase ~= K.PHASE_LOBBY then return false end
+    if not seatA or not seatB or seatA == seatB then return false end
+    if seatA < 1 or seatA > 4 or seatB < 1 or seatB > 4 then return false end
+    s.seats[seatA], s.seats[seatB] = s.seats[seatB], s.seats[seatA]
+    -- Re-derive localSeat in case we moved ourselves (or a bot/peer
+    -- who's the local player) into a different seat.
+    if s.localName then s.localSeat = S.SeatOf(s.localName) end
+    return true
+end
+
 function S.IsSeatBot(seat)
     return s.seats[seat] and s.seats[seat].isBot or false
 end
@@ -404,8 +420,12 @@ end
 
 -- -- Apply* (idempotent state updates from network) -------------------
 
-function S.ApplyLobby(gameID, seatNames)
-    -- seatNames: array of 4 names, possibly empty strings
+function S.ApplyLobby(gameID, seatNames, botMask)
+    -- seatNames: array of 4 names, possibly empty strings.
+    -- botMask: optional 4-char string of "0"/"1" indicating which
+    -- seats are bots. Without this, non-host clients couldn't tell
+    -- bots from humans, and authorizeSeat would reject any
+    -- host-signed bot bid/play.
     if s.phase ~= K.PHASE_LOBBY and s.phase ~= K.PHASE_IDLE then
         -- mid-game lobby update is ignored
         return
@@ -414,7 +434,12 @@ function S.ApplyLobby(gameID, seatNames)
     s.gameID = gameID
     for i = 1, 4 do
         local n = seatNames[i]
-        if n and n ~= "" then s.seats[i] = { name = n } else s.seats[i] = nil end
+        if n and n ~= "" then
+            local isBot = botMask and botMask:sub(i, i) == "1"
+            s.seats[i] = { name = n, isBot = isBot or nil }
+        else
+            s.seats[i] = nil
+        end
     end
     -- find ourselves
     if s.localName then s.localSeat = S.SeatOf(s.localName) end

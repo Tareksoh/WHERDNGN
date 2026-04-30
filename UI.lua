@@ -479,6 +479,7 @@ local function buildLobby()
     -- 4 seat slots
     local seatLabels = { "Seat 1 (Host)", "Seat 2", "Seat 3 (Host's partner)", "Seat 4" }
     lobbyPanel.seatTexts = {}
+    lobbyPanel.swapBtns  = {}
     for i = 1, 4 do
         local row = CreateFrame("Frame", nil, lobbyPanel, "BackdropTemplate")
         row:SetSize(380, 28)
@@ -491,6 +492,33 @@ local function buildLobby()
         nm:SetPoint("RIGHT", -8, 0)
         nm:SetText("|cff666666(empty)|r")
         lobbyPanel.seatTexts[i] = nm
+        -- Swap-down button on seats 1-3 only (last seat has nobody to
+        -- swap with). Host-only; visible only while in lobby. Used to
+        -- re-team — e.g. move a friend from seat 2 (Team B) to seat 3
+        -- (Team A) so the two humans share a side against the bots.
+        if i <= 3 then
+            local sw = makeButton(row, "↕", 22, 22)
+            sw:SetPoint("LEFT", lbl, "RIGHT", 8, 0)
+            local fromSeat, toSeat = i, i + 1
+            sw:SetScript("OnClick", function()
+                if not S.s.isHost then return end
+                if S.HostSwapSeats(fromSeat, toSeat) then
+                    net().SendLobby(S.s.seats, S.s.gameID)
+                    U.Refresh()
+                end
+            end)
+            sw:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(
+                    ("Swap seat %d ↔ seat %d"):format(fromSeat, toSeat), 1, 1, 1)
+                GameTooltip:AddLine("Teams are seat-parity (1+3 vs 2+4); use these"
+                    .. " to put the right players on the right team.",
+                    0.85, 0.85, 0.85, true)
+                GameTooltip:Show()
+            end)
+            sw:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            lobbyPanel.swapBtns[i] = sw
+        end
     end
 
     -- Host or Join buttons
@@ -1194,7 +1222,9 @@ local function cardCountForSeat(seat)
     -- else 5 if mid-bidding. Simplest: deduce from phase.
     local total = 0
     if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
-       or S.s.phase == K.PHASE_DOUBLE or S.s.phase == K.PHASE_REDOUBLE then
+       or S.s.phase == K.PHASE_DOUBLE or S.s.phase == K.PHASE_REDOUBLE
+       or S.s.phase == K.PHASE_TRIPLE or S.s.phase == K.PHASE_FOUR
+       or S.s.phase == K.PHASE_GAHWA then
         total = 5
     elseif S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY
        or S.s.phase == K.PHASE_SCORE or S.s.phase == K.PHASE_GAME_END then
@@ -1472,6 +1502,13 @@ local function renderLobby()
     local hasEmpty = S.s.isHost and S.s.phase == K.PHASE_LOBBY and not S.LobbyFull()
     if lobbyPanel.fillBotsBtn then
         lobbyPanel.fillBotsBtn:SetShown(hasEmpty)
+    end
+    -- Swap buttons only visible to the host while in lobby phase
+    local canSwap = S.s.isHost and S.s.phase == K.PHASE_LOBBY
+    if lobbyPanel.swapBtns then
+        for _, sw in pairs(lobbyPanel.swapBtns) do
+            sw:SetShown(canSwap)
+        end
     end
     local canJoin = S.s.pendingHost and not S.s.isHost
     for _, info in pairs(S.s.seats) do
