@@ -476,6 +476,28 @@ local function buildLobby()
     lobbyPanel.teamA = makeTeamEdit("A", 16)
     lobbyPanel.teamB = makeTeamEdit("B", 230)
 
+    -- Party-members sidebar. Lists the current WoW party so the host
+    -- can see who's around to invite without alt-tabbing to the unit
+    -- frames. Each row shows the short name + seat status (in seat N
+    -- / available). Refreshed on GROUP_ROSTER_UPDATE plus every UI
+    -- refresh so an unfilled seat updates immediately.
+    local partyPanel = CreateFrame("Frame", nil, lobbyPanel, "BackdropTemplate")
+    partyPanel:SetSize(180, 200)
+    partyPanel:SetPoint("TOPRIGHT", -8, -76)
+    setBackdrop(partyPanel, true, COL.feltLight, COL.woodEdge)
+    local pHeader = makeText(partyPanel, 12, "CENTER")
+    pHeader:SetPoint("TOP", 0, -6)
+    pHeader:SetText("|cffaaaaaaParty|r")
+    partyPanel.rows = {}
+    for i = 1, 5 do
+        local row = makeText(partyPanel, 11, "LEFT")
+        row:SetPoint("TOPLEFT", 10, -24 - (i - 1) * 18)
+        row:SetWidth(160)
+        row:SetText("")
+        partyPanel.rows[i] = row
+    end
+    lobbyPanel.partyPanel = partyPanel
+
     -- 4 seat slots
     local seatLabels = { "Seat 1 (Host)", "Seat 2", "Seat 3 (Host's partner)", "Seat 4" }
     lobbyPanel.seatTexts = {}
@@ -1515,6 +1537,79 @@ local function renderLobby()
         if info and info.name == S.s.localName then canJoin = false end
     end
     joinBtn:SetShown(canJoin)
+    -- Party-members sidebar. List the WoW party so the host knows who's
+    -- around to invite, and surface each peer's WHEREDNGN version so
+    -- mismatches are visible before anyone starts a game.
+    if lobbyPanel.partyPanel and lobbyPanel.partyPanel.rows then
+        local rows = lobbyPanel.partyPanel.rows
+        local myVersion = K.GetAddonVersion()
+        -- Helper: find which (if any) seat a name occupies. Match is on
+        -- the short name because UnitName() returns no realm for same-
+        -- realm party members.
+        local function seatOf(short)
+            for seat = 1, 4 do
+                local info = S.s.seats[seat]
+                if info and info.name then
+                    local infoShort = info.name:match("^([^%-]+)") or info.name
+                    if infoShort == short then return seat end
+                end
+            end
+        end
+        local members = {}
+        if UnitExists("player") then
+            local n = UnitName("player")
+            members[#members + 1] = {
+                name  = n,
+                short = n,
+                full  = S.s.localName or n,
+                you   = true,
+            }
+        end
+        for i = 1, 4 do
+            local u = "party" .. i
+            if UnitExists(u) then
+                local n = UnitName(u)
+                local realm = select(2, UnitName(u))
+                members[#members + 1] = {
+                    name  = n,
+                    short = n,
+                    full  = (realm and realm ~= "") and (n .. "-" .. realm) or n,
+                }
+            end
+        end
+        for i = 1, 5 do
+            local m = members[i]
+            if m then
+                local seat = seatOf(m.short)
+                local seatStr
+                if seat then
+                    seatStr = ("|cff66ff88seat %d|r"):format(seat)
+                else
+                    seatStr = "|cffaaaaaaavailable|r"
+                end
+                local ver = S.s.peerVersions and S.s.peerVersions[m.full]
+                local verStr
+                if m.you then
+                    verStr = ("|cff66ddff%s|r"):format(myVersion)
+                elseif ver then
+                    if ver == myVersion then
+                        verStr = ("|cff66ff88%s|r"):format(ver)
+                    else
+                        verStr = ("|cffff5555%s|r"):format(ver)
+                    end
+                else
+                    verStr = "|cff666666?|r"
+                end
+                local you = m.you and "*" or " "
+                -- One-line layout: " name(*)  seat-or-available  ver"
+                rows[i]:SetText(("|cffffd055%s%s|r %s %s"):format(
+                    you, m.short, seatStr, verStr))
+            else
+                rows[i]:SetText("")
+            end
+        end
+    end
+
     -- Team-name boxes: pre-fill from current state, host-only editable.
     if lobbyPanel.teamA and lobbyPanel.teamB and S.s.teamNames then
         if not lobbyPanel.teamA:HasFocus() then

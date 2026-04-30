@@ -131,6 +131,10 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
         return
     end
     if event == "GROUP_ROSTER_UPDATE" then
+        -- Refresh the lobby UI's party sidebar regardless of host
+        -- status — the list of party members shifts when anyone joins
+        -- or leaves the WoW group, even when no game is active yet.
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
         -- If we were in a lobby/game and a seated HUMAN player has dropped
         -- from the party, kick that seat. Bots are local-only (no party
         -- presence) so we skip them — otherwise any roster change would

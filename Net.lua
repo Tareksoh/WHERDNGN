@@ -58,26 +58,30 @@ N.Whisper   = whisper
 -- broadcast or whisper. Most are host-only invocations.
 
 function N.SendHostAnnounce(gameID)
-    broadcast(("%s;%s"):format(K.MSG_HOST, gameID))
+    -- Trailing field is the host's addon version so peers can flag
+    -- mismatches before joining. Old clients just ignore the extra
+    -- field — backward compatible.
+    broadcast(("%s;%s;%s"):format(K.MSG_HOST, gameID, K.GetAddonVersion()))
 end
 
 function N.SendJoin(gameID)
-    broadcast(("%s;%s"):format(K.MSG_JOIN, gameID))
+    broadcast(("%s;%s;%s"):format(K.MSG_JOIN, gameID, K.GetAddonVersion()))
 end
 
 function N.SendLobby(seats, gameID)
-    -- Wire format extended: trailing 4-char bot mask after the names so
-    -- non-host clients can tell bots from humans. Without this they'd
-    -- treat bot seats as human-owned and reject any host-signed bot
-    -- bid/play/meld via authorizeSeat (sender == host != "Bot 3").
+    -- Wire format: L;<gameID>;<n1>;<n2>;<n3>;<n4>;<botMask4>;<hostVersion>
+    -- The bot mask lets non-hosts tell bots from humans (otherwise
+    -- authorizeSeat rejects host-signed bot bids). Trailing version
+    -- field surfaces on peers as the host's addon version.
     local names, bots = {}, {}
     for i = 1, 4 do
         local s = seats[i]
         names[i] = (s and s.name) or ""
         bots[i] = (s and s.isBot) and "1" or "0"
     end
-    broadcast(("%s;%s;%s;%s"):format(K.MSG_LOBBY, gameID,
-        table.concat(names, ";"), table.concat(bots, "")))
+    broadcast(("%s;%s;%s;%s;%s"):format(K.MSG_LOBBY, gameID,
+        table.concat(names, ";"), table.concat(bots, ""),
+        K.GetAddonVersion()))
 end
 
 function N.SendStart(roundNumber, dealer)
@@ -249,13 +253,13 @@ function N.HandleMessage(prefix, message, channel, sender)
     log("Debug", "<- [%s] from %s: %s", channel, tostring(sender), message)
 
     if tag == K.MSG_HOST then
-        N._OnHost(sender, fields[2])
+        N._OnHost(sender, fields[2], fields[3])
     elseif tag == K.MSG_JOIN then
-        N._OnJoin(sender, fields[2])
+        N._OnJoin(sender, fields[2], fields[3])
     elseif tag == K.MSG_LOBBY then
         N._OnLobby(sender, fields[2],
             { fields[3] or "", fields[4] or "", fields[5] or "", fields[6] or "" },
-            fields[7])
+            fields[7], fields[8])
     elseif tag == K.MSG_START then
         N._OnStart(sender, tonumber(fields[2]), tonumber(fields[3]))
     elseif tag == K.MSG_DEAL then
@@ -360,16 +364,24 @@ end
 -- via CHAT_MSG_ADDON. Local actions (Local* / Host*) already apply state
 -- directly, so handlers SKIP self-loopbacks to avoid double-apply.
 
-function N._OnHost(sender, gameID)
+function N._OnHost(sender, gameID, version)
     if fromSelf(sender) then return end
+    -- Track the host's addon version so the lobby can flag mismatches.
+    if version and version ~= "" then
+        S.s.peerVersions[sender] = version
+    end
     if S.s.phase ~= K.PHASE_IDLE and S.s.phase ~= K.PHASE_LOBBY then return end
     if S.s.isHost then return end
     S.s.pendingHost = { name = sender, gameID = gameID }
-    log("Info", "host announce from %s gameID=%s", sender, tostring(gameID))
+    log("Info", "host announce from %s gameID=%s ver=%s",
+        sender, tostring(gameID), tostring(version))
 end
 
-function N._OnJoin(sender, gameID)
+function N._OnJoin(sender, gameID, version)
     if fromSelf(sender) then return end
+    if version and version ~= "" then
+        S.s.peerVersions[sender] = version
+    end
     if not S.s.isHost or S.s.phase ~= K.PHASE_LOBBY then return end
     if gameID ~= S.s.gameID then return end
     local seat = S.HostHandleJoin(sender)
@@ -378,10 +390,13 @@ function N._OnJoin(sender, gameID)
     end
 end
 
-function N._OnLobby(sender, gameID, names, botMask)
+function N._OnLobby(sender, gameID, names, botMask, hostVersion)
     if fromSelf(sender) then return end
     if not fromHost(sender) and not S.s.pendingHost then
         S.s.hostName = sender
+    end
+    if hostVersion and hostVersion ~= "" then
+        S.s.peerVersions[sender] = hostVersion
     end
     S.ApplyLobby(gameID, names, botMask)
 end

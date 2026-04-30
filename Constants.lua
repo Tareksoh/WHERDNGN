@@ -120,6 +120,24 @@ K.PHASE_GAME_END = "gameend"
 
 K.PREFIX = "BLT"   -- C_ChatInfo prefix; max 16 chars
 
+-- Addon version, read from the .toc Version line. After CurseForge
+-- packaging the @project-version@ token gets substituted; in dev it
+-- stays literal so we surface that as "dev" to peers. Used in
+-- handshake messages so every player can see if anyone in the party
+-- is on a mismatched version.
+function K.GetAddonVersion()
+    local meta
+    if C_AddOns and C_AddOns.GetAddOnMetadata then
+        meta = C_AddOns.GetAddOnMetadata("WHEREDNGN", "Version")
+    elseif GetAddOnMetadata then
+        meta = GetAddOnMetadata("WHEREDNGN", "Version")
+    end
+    if not meta or meta == "" or meta == "@project-version@" then
+        return "dev"
+    end
+    return meta
+end
+
 -- Message tags - keep short to fit 255-byte limit.
 -- See Net.lua for the wire grammar.
 K.MSG_HOST     = "H"   -- host announces lobby; payload: gameID

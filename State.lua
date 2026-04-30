@@ -61,6 +61,10 @@ local function reset()
     -- can rename via the lobby inputs (broadcast on MSG_TEAMS so all
     -- clients see the same labels). 20-char max enforced UI-side.
     s.teamNames   = { A = "Team A", B = "Team B" }
+    -- Per-name version map, populated as host/join/lobby broadcasts
+    -- arrive carrying the sender's addon version. Lets the lobby UI
+    -- flag mismatched versions before someone starts a game.
+    s.peerVersions = {}
     -- pause: host-driven freeze that suspends bot scheduling and AFK
     -- timers without dropping any in-flight state. Network-mirrored.
     s.paused      = false
