@@ -445,9 +445,13 @@ function S.ApplyBid(seat, bid)
     s.bids[seat] = bid
     log("bid seat=%d bid=%s", seat, bid)
     -- Voice cue per bid type, using the bundled ElevenLabs OGGs.
+    -- Saudi convention: round-1 pass is "بَسْ", round-2 pass is "ولا"
+    -- ("nothing / no preference" — the player has no Hokm-suit choice
+    -- they want to commit to either).
     if B.Sound and B.Sound.Cue and bid then
         local snd
-        if bid == K.BID_PASS then        snd = K.SND_VOICE_PASS
+        if bid == K.BID_PASS then
+            snd = (s.bidRound == 2) and K.SND_VOICE_WLA or K.SND_VOICE_PASS
         elseif bid == K.BID_SUN then     snd = K.SND_VOICE_SUN
         elseif bid == K.BID_ASHKAL then  snd = K.SND_VOICE_ASHKAL
         elseif bid:sub(1, #K.BID_HOKM) == K.BID_HOKM then

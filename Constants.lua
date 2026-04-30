@@ -161,7 +161,8 @@ K.SND_BALOOT    = SND_BASE .. "baloot.ogg"        -- four-note fanfare
 K.SND_VOICE_HOKM   = SND_BASE .. "hokm.ogg"       -- "حكم"
 K.SND_VOICE_SUN    = SND_BASE .. "sun.ogg"        -- "صن"
 K.SND_VOICE_ASHKAL = SND_BASE .. "ashkal.ogg"     -- "أشكال"
-K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "باس"
+K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "بَسْ" — round-1 pass
+K.SND_VOICE_WLA    = SND_BASE .. "wla.ogg"        -- "ولا" — round-2 pass
 K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوّل" (round start)
 
 -- -- Tunables ---------------------------------------------------------
