@@ -53,6 +53,7 @@ end
 local f = CreateFrame("Frame", "WHEREDNGNCore")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
+f:RegisterEvent("PLAYER_LOGOUT")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("CHAT_MSG_ADDON")
 f:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -69,6 +70,37 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
             L.Warn("init", "failed to register addon prefix %s", K.PREFIX)
         end
         if B.MinimapIcon and B.MinimapIcon.Show then B.MinimapIcon.Show() end
+        -- Restore an in-progress session that was persisted on the
+        -- previous /reload or logout. If no session is present (or it's
+        -- too old / from a finished game) RestoreSession returns false
+        -- and we keep the fresh IDLE state init() left us in.
+        if B.State.RestoreSession and B.State.RestoreSession() then
+            L.Info("init", "session restored from save (phase=%s)",
+                tostring(B.State.s.phase))
+            -- Re-derive localName in case the realm suffix changed.
+            B.State.SetLocalName(GetUnitName("player", true))
+            -- The saved snapshot includes whatever target was active at
+            -- save time, which clobbers any /baloot target change made
+            -- between sessions. Re-read from the per-account DB so the
+            -- newer setting wins.
+            B.State.s.target = WHEREDNGNDB.target or B.State.s.target or 152
+            -- Host needs to resume bot scheduling and re-broadcast the
+            -- lobby so reconnected peers see the same seat list.
+            if B.State.s.isHost then
+                if B.Net and B.Net.SendLobby then
+                    B.Net.SendLobby(B.State.s.seats, B.State.s.gameID)
+                end
+                if B.Net and B.Net.MaybeRunBot then B.Net.MaybeRunBot() end
+            end
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        end
+        return
+    end
+    if event == "PLAYER_LOGOUT" then
+        -- WoW persists SavedVariables right after this fires (also
+        -- triggered by /reload). Snapshot the current state so the
+        -- next session can pick up where we left off.
+        if B.State and B.State.SaveSession then B.State.SaveSession() end
         return
     end
     if event == "PLAYER_ENTERING_WORLD" then

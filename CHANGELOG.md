@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.3 — session persistence
+
+- Game state survives `/reload` and logout. The host's snapshot
+  (phase, contract, scores, seats, hands, current trick, melds) is
+  saved on `PLAYER_LOGOUT` and restored on the next `PLAYER_LOGIN`.
+- Per-character guard so an account's saved session can't surface on
+  a different character.
+- Sessions older than an hour or finished games are discarded.
+- Reset clears the saved session.
+
+## v0.1.2 — title overlap fix
+
+- Move +/- scale buttons off the centered title (they were covering
+  the "WH" of "WHEREDNGN").
+
 ## v0.1.1 — visuals, sound, scoring fixes, hardening
 
 **Visuals**

@@ -60,13 +60,93 @@ local function reset()
     -- pause: host-driven freeze that suspends bot scheduling and AFK
     -- timers without dropping any in-flight state. Network-mirrored.
     s.paused      = false
-    -- Clear persisted resync hint so we don't re-request a finished
-    -- game after the next /reload.
-    if WHEREDNGNDB then WHEREDNGNDB.lastGameID = nil end
+    -- Clear persisted resync hint and session so we don't re-request
+    -- or restore a finished game after the next /reload.
+    if WHEREDNGNDB then
+        WHEREDNGNDB.lastGameID = nil
+        WHEREDNGNDB.session    = nil
+    end
 end
 
 function S.ApplyPause(paused)
     s.paused = (paused and true) or false
+end
+
+-- ---------------------------------------------------------------------
+-- Session persistence (survives /reload and game logout).
+--
+-- The full in-memory state lives in `s`; SavedVariables persist any
+-- table assigned to WHEREDNGNDB. SaveSession is called on
+-- PLAYER_LOGOUT (which fires on /reload) and writes a shallow copy of
+-- `s` into WHEREDNGNDB.session. RestoreSession runs on PLAYER_LOGIN
+-- and copies the fields back into the fresh `s` table.
+--
+-- We skip persistence when the game is in IDLE / LOBBY / GAME_END
+-- phases so a stale session doesn't pop up after a finished hand.
+-- Sessions older than 1 hour are also discarded — a player who logs
+-- back in days later doesn't want to resume an abandoned hand.
+-- ---------------------------------------------------------------------
+local TRANSIENT_FIELDS = {
+    pendingHost = true,   -- ephemeral host announce we may have heard
+    hostDeckRemainder = true,  -- only meaningful between deal-1 and deal-3
+    -- Per-trick double-click guard: cleared by ApplyTurn whenever the
+    -- turn advances. If we /reload AFTER the local player just played,
+    -- a persisted true would stay true until the next ApplyTurn fires
+    -- — and if turn already lands on us in the saved state, the host's
+    -- own LocalPlay would be locked out until something else triggers
+    -- a turn change. Treat it as a fresh-session local-only flag.
+    localPlayedThisTrick = true,
+}
+
+function S.SaveSession()
+    WHEREDNGNDB = WHEREDNGNDB or {}
+    if s.phase == K.PHASE_IDLE or s.phase == K.PHASE_LOBBY
+       or s.phase == K.PHASE_GAME_END then
+        WHEREDNGNDB.session = nil
+        return
+    end
+    local snap = {}
+    for k, v in pairs(s) do
+        if not TRANSIENT_FIELDS[k] then snap[k] = v end
+    end
+    -- Tag with the saving character's name. WHEREDNGNDB is per-account,
+    -- so on a different character the restore must reject this session
+    -- — otherwise we'd resurface character A's hand for character B.
+    WHEREDNGNDB.session = {
+        ts    = time(),
+        owner = s.localName,
+        state = snap,
+    }
+end
+
+function S.RestoreSession()
+    if not WHEREDNGNDB or not WHEREDNGNDB.session then return false end
+    local sess = WHEREDNGNDB.session
+    if not sess.ts or (time() - sess.ts) > 3600 then
+        WHEREDNGNDB.session = nil
+        return false
+    end
+    -- Cross-character guard. WHEREDNGNDB is per-account; a session
+    -- saved by character A must not restore on character B.
+    if sess.owner and s.localName and sess.owner ~= s.localName then
+        return false
+    end
+    if not sess.state then return false end
+    -- Hard-reset s, then overlay the saved fields. Without the wipe a
+    -- field that was nil at save time would carry over from reset()'s
+    -- defaults instead of being explicitly absent.
+    for k in pairs(s) do s[k] = nil end
+    for k, v in pairs(sess.state) do s[k] = v end
+    -- A few field defaults need to be non-nil so the rest of the code
+    -- can index them without nil-check noise.
+    s.hand         = s.hand         or {}
+    s.bids         = s.bids         or {}
+    s.tricks       = s.tricks       or {}
+    s.meldsByTeam  = s.meldsByTeam  or { A = {}, B = {} }
+    s.meldsDeclared= s.meldsDeclared or {}
+    s.cumulative   = s.cumulative   or { A = 0, B = 0 }
+    s.seats        = s.seats        or { [1]=nil, [2]=nil, [3]=nil, [4]=nil }
+    return true
 end
 
 -- Rehydrate session state from a host-built snapshot. Wire format
