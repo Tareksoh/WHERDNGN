@@ -242,6 +242,11 @@ local function buildMain()
     title:SetPoint("TOP", 0, -10)
     title:SetText("|cff66ddffWHEREDNGN|r")
 
+    -- Subtitle next to the title (host's tagline / branding).
+    local subtitle = makeText(f, 12, "LEFT")
+    subtitle:SetPoint("LEFT", title, "RIGHT", 8, 0)
+    subtitle:SetText("|cffaaaaaa(KZKZ will come)|r")
+
     -- Scale controls. The whole window scales as a single unit (the
     -- main frame is the parent of every child; SetScale propagates).
     -- Persisted to WHEREDNGNDB.scale and restored on Show. Placed on
@@ -317,6 +322,95 @@ local function buildMain()
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 0, 0)
     close:SetScript("OnClick", function() U.Hide() end)
+
+    -- Reset button under the game-code line. Uses a Blizzard
+    -- StaticPopup so the confirmation is unmissable (a single click
+    -- on the button alone does NOT reset the game).
+    StaticPopupDialogs["WHEREDNGN_RESET_CONFIRM"] = {
+        text         = "Reset WHEREDNGN to idle? Current game state will be lost.",
+        button1      = "Reset",
+        button2      = "Cancel",
+        OnAccept     = function()
+            if B._lobbyTicker then
+                B._lobbyTicker:Cancel()
+                B._lobbyTicker = nil
+            end
+            S.Reset()
+            S.SetLocalName(GetUnitName("player", true))
+            U.Refresh()
+            print("|cff66ddffWHEREDNGN|r reset.")
+        end,
+        timeout       = 0,
+        whileDead     = true,
+        hideOnEscape  = true,
+        preferredIndex = 3,
+    }
+    local resetBtn = makeButton(f, "Reset", 70, 22)
+    resetBtn:SetPoint("TOPRIGHT", gameIDText, "BOTTOMRIGHT", 0, -4)
+    resetBtn:SetScript("OnClick", function()
+        StaticPopup_Show("WHEREDNGN_RESET_CONFIRM")
+    end)
+    resetBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine("Reset WHEREDNGN", 1, 1, 1)
+        GameTooltip:AddLine("Same as |cffaaaaaa/baloot reset|r — clears the game"
+            .. " state and returns to idle.", 0.85, 0.85, 0.85, true)
+        GameTooltip:Show()
+    end)
+    resetBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- Minimal-background toggle (bottom-left). Hides the outer green
+    -- backdrop, seat-badge backgrounds and the local player bar
+    -- background so only the cards + the middle felt square ("the
+    -- green") remain visible. Useful for streaming or cluttered views.
+    local minBgBtn = makeButton(f, "Min", 60, 22)
+    minBgBtn:SetPoint("BOTTOMLEFT", 12, 30)
+    local function applyMinimalBg(on)
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.minimalBg = on and true or false
+        local outerA = on and 0 or 1.0
+        if f and f.SetBackdropColor and COL.feltDark then
+            local r, g, b = COL.feltDark[1], COL.feltDark[2], COL.feltDark[3]
+            f:SetBackdropColor(r, g, b, outerA)
+            -- Edge softens too: keep the fine border at low alpha so a
+            -- moved window is still grabbable but not visually heavy.
+            local er, eg, eb = (COL.woodEdge or {0.2,0.2,0.2,1})[1],
+                               (COL.woodEdge or {0.2,0.2,0.2,1})[2],
+                               (COL.woodEdge or {0.2,0.2,0.2,1})[3]
+            f:SetBackdropBorderColor(er, eg, eb, on and 0.15 or 1.0)
+        end
+        for _, sb in pairs(seatBadges) do
+            local fr = sb and sb.frame
+            if fr and fr.SetBackdropColor then
+                local r, g, b = (COL.feltLight or {0,0,0,1})[1],
+                                (COL.feltLight or {0,0,0,1})[2],
+                                (COL.feltLight or {0,0,0,1})[3]
+                fr:SetBackdropColor(r, g, b, outerA)
+                fr:SetBackdropBorderColor(0.3, 0.3, 0.3, on and 0.25 or 1.0)
+            end
+        end
+        if tablePanel and tablePanel.localBar
+           and tablePanel.localBar.SetBackdropColor then
+            local r, g, b = (COL.feltLight or {0,0,0,1})[1],
+                            (COL.feltLight or {0,0,0,1})[2],
+                            (COL.feltLight or {0,0,0,1})[3]
+            tablePanel.localBar:SetBackdropColor(r, g, b, outerA)
+        end
+    end
+    minBgBtn:SetScript("OnClick", function()
+        local now = WHEREDNGNDB and WHEREDNGNDB.minimalBg
+        applyMinimalBg(not now)
+    end)
+    minBgBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Toggle minimal background", 1, 1, 1)
+        GameTooltip:AddLine("Hides the outer green frame so only the"
+            .. " felt trick area stays visible.", 0.85, 0.85, 0.85, true)
+        GameTooltip:Show()
+    end)
+    minBgBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- Stash for U.Show to re-apply on first display.
+    f._applyMinimalBg = applyMinimalBg
 
     -- Status line at top
     statusText = makeText(f, 12, "CENTER")
@@ -1498,6 +1592,36 @@ local function renderBanner()
         banner.title:SetText(("|cffffd055GAME OVER|r"))
         banner.final:SetText(("Team %s wins  —  %d / %d"):format(
             S.s.winner or "?", S.s.cumulative.A or 0, S.s.cumulative.B or 0))
+        return
+    end
+
+    -- Takweesh result (caught-or-false-call) takes priority over the
+    -- normal score breakdown, with the offending card + reason called
+    -- out so the player learns WHY the call succeeded.
+    if S.s.takweeshResult then
+        local tk = S.s.takweeshResult
+        local d = S.s.lastRoundDelta or { A = 0, B = 0 }
+        local cName = (tk.caller and S.s.seats[tk.caller]
+                       and shortName(S.s.seats[tk.caller].name)) or "?"
+        banner:Show()
+        if tk.caught then
+            local oName = (tk.offender and S.s.seats[tk.offender]
+                           and shortName(S.s.seats[tk.offender].name)) or "?"
+            local rankG, glyph = "?", "?"
+            if tk.card and #tk.card >= 2 then
+                rankG = C.RankGlyph(C.Rank(tk.card)) or C.Rank(tk.card)
+                glyph = K.SUIT_GLYPH[C.Suit(tk.card)] or C.Suit(tk.card)
+            end
+            banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
+            banner.title:SetText(("|cffff5544TAKWEESH!|r %s caught %s"):format(cName, oName))
+            banner.bidder:SetText(("Played |cffffd055%s%s|r — %s"):format(
+                rankG, glyph, tk.reason or "illegal"))
+        else
+            banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
+            banner.title:SetText(("|cffff5544TAKWEESH!|r %s called incorrectly"):format(cName))
+            banner.bidder:SetText("No illegal play found — penalty applied.")
+        end
+        banner.final:SetText(("A +%d   B +%d"):format(d.A or 0, d.B or 0))
         return
     end
 

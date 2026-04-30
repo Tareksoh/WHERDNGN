@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.1.7 — visuals, takweesh detail, reset button, audit fixes
+
+**New UI**
+- Reset button (top-right under game code) with a Blizzard popup
+  confirmation. Equivalent to `/baloot reset`.
+- "(KZKZ will come)" branding next to the title.
+- Minimal-bg toggle (bottom-left): hides the outer green frame so
+  only the felt trick area + cards remain visible. Useful for
+  streaming or low-clutter views. Persists per-account.
+
+**Takweesh feedback**
+- A successful Takweesh now displays the offending card (rank + suit
+  glyph) and the rule reason in chat: "K♠ — must follow suit",
+  "T♥ — must overcut", etc.
+- Score banner shows the same details for the rest of the round.
+
+**Card art**
+- All 32 card-face TGAs re-baked composited against the cream
+  backdrop so anti-aliased edges blend cleanly. Fixes the "glow"
+  visible on Ace of Diamonds (and minor halos on other cards).
+
+**Agent-audit fixes**
+- `redealing` and `takweeshResult` added to TRANSIENT_FIELDS so
+  timer-backed banners don't persist across /reload.
+- `maybeRequestResync` no longer gated on PHASE_IDLE — RestoreSession
+  brings us into a non-IDLE phase and we still want the host's
+  authoritative state, not a possibly-stale local snapshot. Added
+  a host-skip so a solo-bot host doesn't broadcast to nobody.
+
 ## v0.1.6 — escalation chain, redeal pause, polish
 
 **New gameplay**

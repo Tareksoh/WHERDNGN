@@ -145,6 +145,13 @@ local TRANSIENT_FIELDS = {
     -- own LocalPlay would be locked out until something else triggers
     -- a turn change. Treat it as a fresh-session local-only flag.
     localPlayedThisTrick = true,
+    -- Timer-backed banner ("Next dealer: NAME"). The C_Timer.After
+    -- that clears it doesn't survive /reload, so persisting the field
+    -- would leave a stale banner that never auto-dismisses.
+    redealing = true,
+    -- Takweesh result banner is also transient — its display lifetime
+    -- ends when the next round starts (handled by ApplyStart).
+    takweeshResult = true,
 }
 
 function S.SaveSession()
@@ -445,6 +452,8 @@ function S.ApplyStart(roundNumber, dealer)
     -- A redeal announcement banner (all-pass) is dismissed by the
     -- arrival of a real ApplyStart for the new round.
     s.redealing    = nil
+    -- Last hand's takweesh banner cleared at next round.
+    s.takweeshResult = nil
     -- Round-start "Awal" announcement. Delayed half a second so the
     -- new hand + bid card finish landing visually before the voice
     -- fires — without the delay, clicking "Next Round" plays Awal
@@ -658,17 +667,23 @@ function S.ApplyPlay(seat, card)
     -- Takweesh resolution. Other clients leave .illegal nil since they
     -- don't have hostHands to validate.
     local illegal = false
+    local illegalWhy
     if s.isHost and s.hostHands and s.hostHands[seat] and s.contract then
         local trickBefore = { leadSuit = s.trick.leadSuit, plays = {} }
         for _, p in ipairs(s.trick.plays) do
             trickBefore.plays[#trickBefore.plays + 1] = p
         end
-        local ok = R.IsLegalPlay(card, s.hostHands[seat], trickBefore, s.contract, seat)
+        local ok, why = R.IsLegalPlay(card, s.hostHands[seat], trickBefore, s.contract, seat)
         illegal = not ok
+        illegalWhy = why
     end
 
     if #s.trick.plays == 0 then s.trick.leadSuit = C.Suit(card) end
-    table.insert(s.trick.plays, { seat = seat, card = card, illegal = illegal or nil })
+    table.insert(s.trick.plays, {
+        seat = seat, card = card,
+        illegal = illegal or nil,
+        illegalReason = (illegal and illegalWhy) or nil,
+    })
 
     -- Audio: card-rustle on every play. Fires on every client because
     -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.

@@ -299,7 +299,8 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnTakweesh(sender, tonumber(fields[2]))
     elseif tag == K.MSG_TAKWEESH_OUT then
         N._OnTakweeshOut(sender, tonumber(fields[2]),
-                         fields[3] == "1", tonumber(fields[4]))
+                         fields[3] == "1", tonumber(fields[4]),
+                         fields[5], fields[6])
     elseif tag == K.MSG_KAWESH then
         N._OnKawesh(sender, tonumber(fields[2]))
     elseif tag == K.MSG_PAUSE then
@@ -976,16 +977,38 @@ function N._OnTakweesh(sender, callerSeat)
     if S.s.isHost then N.HostResolveTakweesh(callerSeat) end
 end
 
-function N._OnTakweeshOut(sender, callerSeat, caught, illegalSeat)
+function N._OnTakweeshOut(sender, callerSeat, caught, illegalSeat, card, reason)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     -- Display only — score change rides through the parallel SendRound.
     local cName = S.s.seats[callerSeat] and (S.s.seats[callerSeat].name:match("^([^%-]+)") or S.s.seats[callerSeat].name) or "?"
     if caught then
         local iName = illegalSeat and S.s.seats[illegalSeat] and (S.s.seats[illegalSeat].name:match("^([^%-]+)") or S.s.seats[illegalSeat].name) or "?"
-        print(("|cffff0000TAKWEESH!|r %s caught %s playing illegally."):format(cName, iName))
+        local rankG, glyph = "?", "?"
+        if card and #card >= 2 then
+            rankG = C.RankGlyph(C.Rank(card)) or C.Rank(card)
+            glyph = K.SUIT_GLYPH[C.Suit(card)] or C.Suit(card)
+        end
+        local rsn = (reason ~= nil and reason ~= "") and reason or "illegal play"
+        print(("|cffff0000TAKWEESH!|r %s caught %s playing %s%s — %s."):format(
+            cName, iName, rankG, glyph, rsn))
+        -- Mirror onto receivers' takweeshResult so the banner shows
+        -- the same details on every client.
+        S.s.takweeshResult = {
+            caller   = callerSeat,
+            offender = illegalSeat,
+            card     = card,
+            reason   = rsn,
+            caught   = true,
+            ts       = (GetTime and GetTime()) or 0,
+        }
     else
         print(("|cffff0000TAKWEESH!|r %s called incorrectly. Penalty applied."):format(cName))
+        S.s.takweeshResult = {
+            caller = callerSeat,
+            caught = false,
+            ts     = (GetTime and GetTime()) or 0,
+        }
     end
 end
 
@@ -1038,28 +1061,59 @@ function N.HostResolveTakweesh(callerSeat)
     -- this, the score banner shows the *previous* round's breakdown and
     -- the table still displays the half-played trick — which makes the
     -- transition to PHASE_SCORE invisible to the user (looks frozen).
+    -- Stash a takweesh-result struct so the score banner can render
+    -- the catch reason / card / suit instead of the generic "round done"
+    -- fallback.
     S.s.lastRoundResult = nil
     S.s.trick = nil
+    if foundIllegal then
+        S.s.takweeshResult = {
+            caller    = callerSeat,
+            offender  = foundIllegal.seat,
+            card      = foundIllegal.card,
+            reason    = foundIllegal.illegalReason or "illegal play",
+            caught    = true,
+            ts        = (GetTime and GetTime()) or 0,
+        }
+    else
+        S.s.takweeshResult = {
+            caller    = callerSeat,
+            caught    = false,
+            ts        = (GetTime and GetTime()) or 0,
+        }
+    end
     N.SendRound(addA, addB, totA, totB)
 
     -- Print the outcome locally on host. Other clients receive
-    -- _OnTakweeshOut from the broadcast below and print the same.
+    -- _OnTakweeshOut from the broadcast below and print the same with
+    -- the card + reason details too.
     local function shortN(seat)
         local info = S.s.seats[seat]
         if not info or not info.name then return "?" end
         return info.name:match("^([^%-]+)") or info.name
     end
     if foundIllegal then
-        print(("|cffff0000TAKWEESH!|r %s caught %s playing illegally."):format(
-            shortN(callerSeat), shortN(foundIllegal.seat)))
+        local card = foundIllegal.card or ""
+        local r = (#card >= 1) and C.Rank(card) or "?"
+        local s = (#card >= 2) and C.Suit(card) or "?"
+        local glyph = K.SUIT_GLYPH[s] or s
+        local rankG = C.RankGlyph(r) or r
+        local reason = foundIllegal.illegalReason or "illegal play"
+        print(("|cffff0000TAKWEESH!|r %s caught %s playing %s%s — %s."):format(
+            shortN(callerSeat), shortN(foundIllegal.seat),
+            rankG, glyph, reason))
     else
         print(("|cffff0000TAKWEESH!|r %s called incorrectly. Penalty applied."):format(
             shortN(callerSeat)))
     end
-    broadcast(("%s;%d;%s;%d"):format(K.MSG_TAKWEESH_OUT,
+    -- Wire format extended: caught/illegalSeat/card/reason.
+    -- "{tag};{caller};{caught};{offender};{card};{reason}"
+    broadcast(("%s;%d;%s;%d;%s;%s"):format(K.MSG_TAKWEESH_OUT,
         callerSeat,
         foundIllegal and "1" or "0",
-        foundIllegal and foundIllegal.seat or 0))
+        foundIllegal and foundIllegal.seat or 0,
+        foundIllegal and foundIllegal.card or "",
+        foundIllegal and (foundIllegal.illegalReason or "") or ""))
 
     if totA >= S.s.target or totB >= S.s.target then
         local winner = (totA >= totB) and "A" or "B"

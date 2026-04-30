@@ -40,13 +40,21 @@ end
 -- After the world finishes loading we may discover we were in a game
 -- before the /reload (gameID persisted in WHEREDNGNDB). Broadcast a
 -- resync request; the host (if still in the party with the same game)
--- will whisper back a state snapshot + our hand.
+-- will whisper back an authoritative state snapshot + our hand.
+--
+-- Note: we DO send the request even if RestoreSession already brought
+-- us back into a non-IDLE phase. The local snapshot may be stale by
+-- several turns — the host's authoritative reply will overwrite our
+-- view with the live state.
 local function maybeRequestResync()
     if not WHEREDNGNDB then return end
     local id = WHEREDNGNDB.lastGameID
     if not id or id == "" then return end
     if not IsInGroup() then return end
-    if B.State.s.phase ~= K.PHASE_IDLE then return end
+    -- The host of a solo-bot game (no other party members) won't have
+    -- anyone to receive the request — skip there too. (Remote hosts
+    -- include the local player in the same party, so IsInGroup passes.)
+    if B.State.s.isHost then return end
     L.Info("resync", "requesting state for game %s", id)
     if B.Net and B.Net.SendResyncReq then
         B.Net.SendResyncReq(id)
