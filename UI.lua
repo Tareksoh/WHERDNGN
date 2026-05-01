@@ -504,8 +504,13 @@ local function buildLobby()
     lobbyPanel.swapBtns  = {}
     for i = 1, 4 do
         local row = CreateFrame("Frame", nil, lobbyPanel, "BackdropTemplate")
-        row:SetSize(380, 28)
-        row:SetPoint("TOP", 0, -76 - (i - 1) * 34)
+        -- Anchor each row to the lobby's left edge and the party panel's
+        -- left edge so the rows auto-fit and don't overlap the sidebar.
+        -- Vertical offset is the same on both anchors so the row stays
+        -- horizontal regardless of how wide the lobby panel is.
+        row:SetHeight(28)
+        row:SetPoint("TOPLEFT",  lobbyPanel, "TOPLEFT",  12, -76 - (i - 1) * 34)
+        row:SetPoint("TOPRIGHT", partyPanel, "TOPLEFT",  -8,      -(i - 1) * 34)
         setBackdrop(row, true)
         local lbl = makeText(row, 12, "LEFT")
         lbl:SetPoint("LEFT", 8, 0)

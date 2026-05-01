@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.13 — lobby seat-row layout fix
+
+**UI fix**
+- Lobby seat rows now auto-fit between the lobby's left edge and the
+  party-members sidebar's left edge instead of overhanging it. The old
+  fixed 380-px-wide centred rows clipped under the sidebar by ~22 px
+  on the right; new rows use anchored TOPLEFT/TOPRIGHT pairs so the
+  layout stays tidy regardless of the main frame width.
+
 ## v0.1.7 — visuals, takweesh detail, reset button, audit fixes
 
 **New UI**
