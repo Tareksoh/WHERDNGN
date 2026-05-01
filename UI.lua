@@ -358,6 +358,7 @@ local function buildMain()
         GameTooltip:Show()
     end)
     resetBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    f.resetBtn = resetBtn
 
     -- Minimal-background toggle (bottom-left). Hides the outer green
     -- backdrop, seat-badge backgrounds and the local player bar
@@ -709,10 +710,13 @@ local function buildTable()
     feltTex:SetPoint("TOPLEFT", 4, -4)
     feltTex:SetPoint("BOTTOMRIGHT", -4, 4)
 
-    -- Last-trick peek button: small "?" button anchored to centerPad.
-    -- Disabled once used per hand (S.s.peekedThisRound).
-    local peekBtn = makeButton(centerPad, "?", 22, 22)
-    peekBtn:SetPoint("TOPRIGHT", -4, -4)
+    -- Last-trick peek button: small "?" button parented to the main
+    -- frame and anchored at the top-right edge, between the Reset
+    -- button (which sits under the game-code line) and the right
+    -- opponent's seat badge (bot 2 in a host POV). Disabled once used
+    -- per hand (S.s.peekedThisRound).
+    local peekBtn = makeButton(f, "?", 22, 22)
+    peekBtn:SetPoint("TOPRIGHT", f.resetBtn, "BOTTOMRIGHT", 0, -8)
     peekBtn:SetScript("OnClick", function() peekLastTrick() end)
     peekBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
@@ -727,7 +731,7 @@ local function buildTable()
     -- without dropping any in-flight state. The label flips to "Resume"
     -- while paused.
     local pauseBtn = makeButton(centerPad, "II", 22, 22)
-    pauseBtn:SetPoint("TOPRIGHT", peekBtn, "TOPLEFT", -4, 0)
+    pauseBtn:SetPoint("TOPRIGHT", -4, -4)
     pauseBtn:SetScript("OnClick", function()
         if not S.s.isHost then return end
         net().LocalPause(not S.s.paused)
@@ -759,12 +763,13 @@ local function buildTable()
     pauseOverlay.sub:SetTextColor(0.9, 0.9, 0.9)
     tablePanel.pauseOverlay = pauseOverlay
 
-    -- Re-stack the peek + pause buttons ABOVE the pause overlay so
-    -- they remain clickable when the game is paused. Both were created
-    -- earlier inside centerPad with default strata (MEDIUM); bumping
-    -- them to FULLSCREEN_DIALOG puts them on top of the DIALOG
-    -- overlay regardless of creation order.
-    peekBtn:SetFrameStrata("FULLSCREEN_DIALOG")
+    -- Re-stack the pause button ABOVE the pause overlay so it remains
+    -- clickable while the game is paused. The button was created
+    -- inside centerPad with default strata (MEDIUM); bumping it to
+    -- FULLSCREEN_DIALOG puts it on top of the DIALOG overlay
+    -- regardless of creation order. The peek button lives in the
+    -- main frame (top-right corner) so it's unaffected by the
+    -- centerPad overlay.
     pauseBtn:SetFrameStrata("FULLSCREEN_DIALOG")
 
     -- BALOOT! / contract result banner with full breakdown (shown
@@ -1777,7 +1782,7 @@ local function renderBanner()
         banner.title:SetText("|cffff5544BALOOT!|r contract failed")
     else
         banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
-        banner.title:SetText("|cff66ff88Contract made|r")
+        banner.title:SetText("|cff66ff88ALLY B3DO|r")
     end
 
     -- Per-team breakdown lines: cards + melds raw

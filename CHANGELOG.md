@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.14 — peek button relocated, banner re-labelled
+
+**UI**
+- The last-trick peek "?" button moved out of the felt's top-right
+  corner and into the main frame's top-right gutter, just below the
+  Reset button. It now sits between Bot 2's seat badge and Reset, so
+  the trick area stays uncluttered.
+- The pause "II" button takes the freed-up corner inside the felt
+  (top-right of the centre pad).
+- Round-result banner: "Contract made" → "ALLY B3DO" to match the
+  Saudi-Arabish wording players use at the table.
+
 ## v0.1.13 — lobby seat-row layout fix
 
 **UI fix**
