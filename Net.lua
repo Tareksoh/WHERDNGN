@@ -210,11 +210,15 @@ local function packSnapshot()
         nz(c.type),                              -- HOKM | SUN | ""
         nz(c.trump),
         tostring(c.bidder or 0),
-        c.doubled and "1" or "0",
+        c.doubled   and "1" or "0",
         c.redoubled and "1" or "0",
+        c.tripled   and "1" or "0",              -- Triple (×8)
+        c.foured    and "1" or "0",              -- Four (×16)
+        c.gahwa     and "1" or "0",              -- Gahwa (×32)
         tostring(s.cumulative and s.cumulative.A or 0),
         tostring(s.cumulative and s.cumulative.B or 0),
         s.paused and "1" or "0",
+        tostring(s.bidRound or 1),               -- 1 / 2
         seats[1], seats[2], seats[3], seats[4],
         bids[1], bids[2], bids[3], bids[4],
     }, "|")
@@ -387,6 +391,13 @@ function N._OnJoin(sender, gameID, version)
     local seat = S.HostHandleJoin(sender)
     if seat then
         N.SendLobby(S.s.seats, S.s.gameID)
+        -- Re-broadcast custom team labels so the late joiner doesn't
+        -- see the default "Team A"/"Team B" — SendLobby's payload
+        -- doesn't carry team names (kept compact), and the lobby
+        -- ticker only re-broadcasts SendHostAnnounce.
+        if S.s.teamNames and N.SendTeams then
+            N.SendTeams(S.s.teamNames.A or "", S.s.teamNames.B or "")
+        end
     end
 end
 
@@ -1498,6 +1509,7 @@ function N.MaybeRunBot()
             log("Info", "schedule bel-decision for bot seat=%d", belSeat)
             C_Timer.After(BOT_DELAY_BEL, function()
                 local ok, err = pcall(function()
+                    if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_DOUBLE then
                         log("Info", "bel-decision skipped: phase=%s", tostring(S.s.phase))
                         return
@@ -1539,6 +1551,7 @@ function N.MaybeRunBot()
         if isBotSeat(bidder) then
             log("Info", "schedule belre-decision for bot seat=%d", bidder)
             C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_REDOUBLE then return end
                 if B.Bot.PickRedouble(bidder) then
                     S.ApplyRedouble(bidder)
@@ -1566,6 +1579,7 @@ function N.MaybeRunBot()
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_TRIPLE then return end
                 if escalateChance(defSeat) then
                     S.ApplyTriple(defSeat)
@@ -1589,6 +1603,7 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_FOUR then return end
                 if escalateChance(bidder) then
                     S.ApplyFour(bidder)
@@ -1612,6 +1627,7 @@ function N.MaybeRunBot()
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_GAHWA then return end
                 if escalateChance(defSeat) then
                     S.ApplyGahwa(defSeat)
@@ -1639,6 +1655,7 @@ function N.MaybeRunBot()
         local seat = S.s.turn
         C_Timer.After(BOT_DELAY_BID, function()
             if not S.s.isHost then return end
+            if S.s.paused then return end
             if S.s.phase ~= K.PHASE_DEAL1 and S.s.phase ~= K.PHASE_DEAL2BID then return end
             if S.s.turn ~= seat or S.s.turnKind ~= "bid" then return end
             if S.s.bids[seat] ~= nil then return end
@@ -1657,6 +1674,7 @@ function N.MaybeRunBot()
         local seat = S.s.turn
         C_Timer.After(BOT_DELAY_PLAY, function()
             if not S.s.isHost then return end
+            if S.s.paused then return end
             if S.s.phase ~= K.PHASE_PLAY then return end
             if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
             -- Takweesh check before the play. A bot scans for an

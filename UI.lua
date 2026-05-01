@@ -936,24 +936,14 @@ local function renderActions()
                     end)
                 end
 
-                -- Ashkal: only the 3rd or 4th bidder, only if all prior
-                -- bidders passed. Hands Hokm-on-flipped to your partner.
-                local order = { (S.s.dealer % 4) + 1, ((S.s.dealer + 1) % 4) + 1,
-                                ((S.s.dealer + 2) % 4) + 1, S.s.dealer }
-                local myPos
-                for i, seat in ipairs(order) do
-                    if seat == S.s.localSeat then myPos = i; break end
-                end
-                if myPos and myPos >= 3 and not anyBidYet then
-                    local allPriorPassed = true
-                    for i = 1, myPos - 1 do
-                        if S.s.bids[order[i]] ~= K.BID_PASS then
-                            allPriorPassed = false; break
-                        end
-                    end
-                    if allPriorPassed then
-                        addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end)
-                    end
+                -- Ashkal (Saudi rule): converts the contract to Sun
+                -- with the caller's PARTNER as declarer. Available
+                -- throughout round 1 — including as an OVERCALL of an
+                -- opponent's prior Hokm bid (player is saying "my
+                -- partner can do better with Sun"). Not allowed once
+                -- a direct Sun has already been bid.
+                if not anySun then
+                    addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end)
                 end
 
                 addAction("Sun", function() net().LocalBid(K.BID_SUN) end)

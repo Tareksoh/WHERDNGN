@@ -223,11 +223,32 @@ end
 function S.ApplyResyncSnapshot(gameID, payload)
     if not gameID or gameID == "" then return end
     if not payload or payload == "" then return end
+    -- Wire layout (matches packSnapshot in Net.lua):
+    --   1  gameID
+    --   2  phase
+    --   3  dealer
+    --   4  roundNumber
+    --   5  turn
+    --   6  turnKind
+    --   7  contract.type
+    --   8  contract.trump
+    --   9  contract.bidder
+    --  10  doubled         (×2)
+    --  11  redoubled       (×4)
+    --  12  tripled         (×8)
+    --  13  foured          (×16)
+    --  14  gahwa           (×32)
+    --  15  cumulative.A
+    --  16  cumulative.B
+    --  17  paused
+    --  18  bidRound
+    --  19..22  seat names
+    --  23..26  bids
     local f = {}
     local i = 1
     for chunk in payload:gmatch("([^|]*)|?") do
         f[i] = chunk; i = i + 1
-        if i > 22 then break end
+        if i > 26 then break end
     end
     if (f[1] or "") ~= gameID then return end
 
@@ -248,21 +269,25 @@ function S.ApplyResyncSnapshot(gameID, payload)
             bidder    = tonumber(f[9]) or 0,
             doubled   = f[10] == "1",
             redoubled = f[11] == "1",
+            tripled   = f[12] == "1",
+            foured    = f[13] == "1",
+            gahwa     = f[14] == "1",
         }
     else
         s.contract = nil
     end
 
     s.cumulative = s.cumulative or { A = 0, B = 0 }
-    s.cumulative.A = tonumber(f[12]) or 0
-    s.cumulative.B = tonumber(f[13]) or 0
-    s.paused       = (f[14] == "1")
+    s.cumulative.A = tonumber(f[15]) or 0
+    s.cumulative.B = tonumber(f[16]) or 0
+    s.paused       = (f[17] == "1")
+    s.bidRound     = tonumber(f[18]) or s.bidRound or 1
 
     -- Seats: rebuild minimal info; isBot defaults to false here, the
     -- next SendLobby from the host will overwrite with full info.
     s.seats = s.seats or {}
     for seat = 1, 4 do
-        local nm = f[14 + seat] or ""
+        local nm = f[18 + seat] or ""
         if nm ~= "" then
             s.seats[seat] = s.seats[seat] or {}
             s.seats[seat].name = nm
@@ -278,7 +303,7 @@ function S.ApplyResyncSnapshot(gameID, payload)
 
     s.bids = {}
     for seat = 1, 4 do
-        local b = f[18 + seat]
+        local b = f[22 + seat]
         if b and b ~= "" then s.bids[seat] = b end
     end
 
@@ -898,29 +923,25 @@ function S.HostAdvanceBidding()
                 if s.bidRound == 1 then
                     if btype == K.BID_SUN then
                         winning = { seat = seat, type = btype, trump = trump }
-                    elseif btype == K.BID_ASHKAL and not winning then
-                        -- Ashkal (Pagat-strict Saudi): "It is the same
-                        -- as a bid of Sun, except that it is not the
-                        -- bidder but the bidder's PARTNER who takes the
-                        -- exposed card from the table and becomes the
-                        -- declarer." So contract type = SUN (no trump).
-                        --
-                        -- Host-side authority check: caller must be the
-                        -- 3rd or 4th bidder in turn order AND all prior
-                        -- bidders must have passed. Otherwise reject.
-                        local pos
-                        for idx, ord in ipairs(order) do
-                            if ord == seat then pos = idx; break end
-                        end
-                        local priorAllPass = true
-                        if pos then
-                            for i = 1, pos - 1 do
-                                if s.bids[order[i]] ~= K.BID_PASS then
-                                    priorAllPass = false; break
-                                end
+                    elseif btype == K.BID_ASHKAL then
+                        -- Ashkal (Saudi): converts the contract to Sun
+                        -- with the caller's PARTNER as declarer.
+                        -- Available throughout round 1. May OVERCALL a
+                        -- prior Hokm bid (player thinks their partner
+                        -- can do better with Sun) but cannot overcall
+                        -- a prior Sun (a direct Sun bid already locked
+                        -- the same contract type at the same multi).
+                        -- A subsequent direct Sun bid still overcalls
+                        -- this Ashkal (since the higher-ranked direct
+                        -- Sun reassigns declarer to the actual bidder).
+                        local priorSun = false
+                        for _, ord in ipairs(order) do
+                            if ord == seat then break end
+                            if s.bids[ord] == K.BID_SUN then
+                                priorSun = true; break
                             end
                         end
-                        if pos and pos >= 3 and priorAllPass then
+                        if not priorSun then
                             winning = {
                                 seat  = R.Partner(seat),
                                 type  = K.BID_SUN,
