@@ -374,8 +374,18 @@ function N._OnHost(sender, gameID, version)
     if version and version ~= "" then
         S.s.peerVersions[sender] = version
     end
-    if S.s.phase ~= K.PHASE_IDLE and S.s.phase ~= K.PHASE_LOBBY then return end
     if S.s.isHost then return end
+    -- Accept host announcements during any "passive" phase: IDLE, LOBBY,
+    -- SCORE (round-end banner) and GAME_END. Crucially this includes
+    -- GAME_END so a peer who finished the previous game with us can
+    -- pick up the next lobby instead of being stuck on the score
+    -- screen with no Join button. Mid-active-play (DEAL/BID/PLAY/etc.)
+    -- still ignores stranger announcements to avoid griefing.
+    local p = S.s.phase
+    if p ~= K.PHASE_IDLE and p ~= K.PHASE_LOBBY
+       and p ~= K.PHASE_SCORE and p ~= K.PHASE_GAME_END then
+        return
+    end
     S.s.pendingHost = { name = sender, gameID = gameID }
     log("Info", "host announce from %s gameID=%s ver=%s",
         sender, tostring(gameID), tostring(version))

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.15 — multiplayer rejoin after game-end
+
+**Bug fix**
+- After a game ended and the host clicked Reset + Host Game, joiners
+  who were still showing the score banner (PHASE_SCORE / GAME_END)
+  silently dropped the new lobby announcement. Symptoms: the Join
+  button never appeared on the joiner's side, OR the joiner's Join
+  click went out with the previous game's stale gameID and the host
+  silently rejected it — leaving only some of the players visible
+  in the host's seat list.
+- `Net._OnHost` and `State.ApplyLobby` now accept lobby announcements
+  in any "passive" phase (IDLE, LOBBY, SCORE, GAME_END). Mid-active-
+  play phases still ignore stranger announcements (anti-grief).
+- When a new gameID arrives, ApplyLobby soft-resets leftover round
+  artifacts (contract, hand, tricks, score banner, winner) while
+  preserving session identity (localName, target, team-name labels,
+  peer versions).
+- `pendingHost` is now cleared once the joiner is successfully
+  seated, so a stale entry from a finished game can't mask a future
+  host announcement.
+
 ## v0.1.14 — peek button relocated, banner re-labelled
 
 **UI**

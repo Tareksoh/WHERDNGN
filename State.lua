@@ -455,10 +455,39 @@ function S.ApplyLobby(gameID, seatNames, botMask)
     -- seats are bots. Without this, non-host clients couldn't tell
     -- bots from humans, and authorizeSeat would reject any
     -- host-signed bot bid/play.
-    if s.phase ~= K.PHASE_LOBBY and s.phase ~= K.PHASE_IDLE then
-        -- mid-game lobby update is ignored
-        return
+    --
+    -- We accept lobby updates during any "passive" phase: IDLE, LOBBY,
+    -- SCORE and GAME_END. Mid-active-play (DEAL/BID/PLAY/etc.) we
+    -- ignore the update — a stale broadcast can't tear down a live hand.
+    local p = s.phase
+    local passive = (p == K.PHASE_IDLE or p == K.PHASE_LOBBY
+                  or p == K.PHASE_SCORE or p == K.PHASE_GAME_END)
+    if not passive then return end
+
+    -- New game (different gameID and we have one) means the previous
+    -- game is over and the host has started fresh. Wipe leftover round
+    -- artifacts (contract, hand, tricks, score banner, winner) so the
+    -- new lobby UI doesn't bleed through. Preserve session-level
+    -- identity (localName, target, persisted team-name labels) — the
+    -- usual reset() clears those, so we save and restore.
+    local newGame = (s.gameID and s.gameID ~= "" and s.gameID ~= gameID)
+                 or (p == K.PHASE_SCORE or p == K.PHASE_GAME_END)
+    if newGame then
+        local savedName   = s.localName
+        local savedTarget = s.target
+        local savedNames  = s.teamNames
+        local savedPeers  = s.peerVersions
+        local savedHost   = s.hostName
+        local savedPend   = s.pendingHost
+        S.Reset()
+        s.localName     = savedName
+        s.target        = savedTarget or s.target
+        s.teamNames     = savedNames or s.teamNames
+        s.peerVersions  = savedPeers or {}
+        s.hostName      = savedHost
+        s.pendingHost   = savedPend
     end
+
     s.phase  = K.PHASE_LOBBY
     s.gameID = gameID
     for i = 1, 4 do
@@ -476,6 +505,10 @@ function S.ApplyLobby(gameID, seatNames, botMask)
     -- Persist on the joining side too — this is the first time a
     -- non-host learns the gameID, so capture it for /reload resync.
     if WHEREDNGNDB and s.localSeat then WHEREDNGNDB.lastGameID = gameID end
+    -- Once we're seated in the announced lobby, the pendingHost record
+    -- has done its job. Clearing it prevents a stale entry from masking
+    -- a future host announcement that arrives before any lobby update.
+    if s.localSeat then s.pendingHost = nil end
 end
 
 function S.ApplyStart(roundNumber, dealer)
