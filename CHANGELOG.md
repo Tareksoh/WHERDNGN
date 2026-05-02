@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.1.30 — SWA scoring rebuilt, takweesh simplified
+
+**SWA scoring fix (HIGH severity)**
+- `HostResolveSWA` was awarding `handTotal × mult` to the winning
+  side and 0 to the other regardless of how many tricks were
+  played. Already-earned trick points evaporated, the kaboot
+  bonus never applied, the last-trick +10 was missing.
+- Now: VALID SWA synthesizes the remaining tricks (each won by
+  caller seat), appends to played-trick history, and routes
+  through `R.ScoreRound`. ScoreRound handles sweep / made /
+  failed / meld winner / last-trick bonus / belote correctly
+  by construction.
+- INVALID SWA still applies the flat penalty: opp takes
+  handTotal × mult + ALL melds × mult + belote.
+- Sweep is now detected when caller's team has won every played
+  trick AND wins all remaining via SWA → kaboot bonus
+  (250 / 220 raw) applies via the same ScoreRound path.
+
+**Takweesh scoring simplified**
+- Dropped the made/failed mapping introduced in v0.1.28 — both
+  branches of takweesh are punitive penalties to the same shape.
+- Now: caught → caller's team takes handTotal × mult + ALL
+  melds × mult + belote. Not-caught → opp-of-caller takes the
+  same. Single code path, no contract-result inversion.
+
 ## v0.1.29 — belote tightened to "K+Q played", SWA/takweesh docs
 
 **Fix (Saudi rule, rb3haa)**

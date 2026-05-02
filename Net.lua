@@ -1175,18 +1175,19 @@ function N.HostResolveTakweesh(callerSeat)
         foundIllegal = scanIllegal(S.s.trick.plays)
     end
 
-    -- Outcome → contract made/failed mapping (same shape as SWA):
-    --   caught + caller is bidder team    → MADE  (caller's team wins)
-    --   caught + caller is defender team  → FAILED
-    --   not caught + caller is bidder team→ FAILED (false call penalty)
-    --   not caught + caller is defender   → MADE  (false call hands it back)
-    local c          = S.s.contract
-    local bidderTeam = R.TeamOf(c.bidder)
-    local oppToBidder = (bidderTeam == "A") and "B" or "A"
+    -- Takweesh is a punitive mechanic. BOTH branches apply the same
+    -- "failed-contract penalty" formula — the only difference is
+    -- WHICH team eats the penalty:
+    --   caught (offender's illegal play confirmed) → caller's team
+    --     takes handTotal × mult + ALL melds × mult + belote.
+    --   not caught (false call)                     → opp-of-caller
+    --     takes the same.
+    -- handTotal × mult here is the canonical "set" amount per Saudi
+    -- failed-contract rule. Already-earned trick points are NOT
+    -- carried over — that's the punitive nature of the rule.
+    local c = S.s.contract
     local winnerTeam = foundIllegal and callerTeam or oppTeam
-    local contractMade = (winnerTeam == bidderTeam)
 
-    -- Multiplier chain (mirrors Rules.ScoreRound).
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
     local mult = K.MULT_BASE
     if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
@@ -1196,30 +1197,15 @@ function N.HostResolveTakweesh(callerSeat)
     elseif c.redoubled then mult = mult * K.MULT_BELRE
     elseif c.doubled   then mult = mult * K.MULT_BEL end
 
-    -- Meld + belote scoring routed through made/failed branches —
-    -- previously takweesh awarded only handTotal × mult and dropped
-    -- meld/belote points entirely (same bug as SWA pre-v0.1.27).
     local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
-    local cardA, cardB, mpA, mpB = 0, 0, 0, 0
-    if contractMade then
-        cardA = (bidderTeam == "A") and handTotal or 0
-        cardB = (bidderTeam == "B") and handTotal or 0
-        local mv = R.CompareMelds(S.s.meldsByTeam.A, S.s.meldsByTeam.B, c)
-        if mv == "A" then mpA = meldA
-        elseif mv == "B" then mpB = meldB end
-    else
-        cardA = (oppToBidder == "A") and handTotal or 0
-        cardB = (oppToBidder == "B") and handTotal or 0
-        if oppToBidder == "A" then mpA = meldA + meldB
-        else                       mpB = meldA + meldB end
-    end
+    local cardA = (winnerTeam == "A") and handTotal or 0
+    local cardB = (winnerTeam == "B") and handTotal or 0
+    local mpA = (winnerTeam == "A") and (meldA + meldB) or 0
+    local mpB = (winnerTeam == "B") and (meldA + meldB) or 0
 
-    -- Belote (Hokm only): K+Q of trump in same hand. Per Saudi rule
-    -- (rb3haa), belote must be played out — if both K and Q haven't
-    -- surfaced before takweesh ended the round, no bonus. Scan
-    -- played cards only.
-    local belote = nil
+    -- Belote (Hokm only, played cards only — Saudi rule rb3haa).
+    local belote
     if c.type == K.BID_HOKM and c.trump then
         local kWho, qWho
         local function scan(plays_)
@@ -1448,35 +1434,20 @@ function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB)
     S.ApplyRoundEnd(addA or 0, addB or 0, totA or 0, totB or 0)
 end
 
--- Host-only: resolve an SWA claim. Validates via R.IsValidSWA, then
--- scores the round routed through the standard made / failed branches
--- so MELDS and BELOTE are awarded correctly.
+-- Host-only: resolve an SWA claim.
 --
--- HOUSE-RULE NORMALIZATION: published Saudi sources (Pagat, Jawaker,
--- Saudi Federation gameplay refs) describe SWA procedurally — caller
--- takes value of remaining tricks if valid, full score to opponent
--- if invalid — without a fully-specified meld/belote formula. This
--- addon normalizes by mapping (valid, callerTeam) onto the same
--- made/failed contract resolution used by Rules.ScoreRound. It's a
--- defensible synthesis but explicitly a house-rule choice, not an
--- attested verbatim rule.
+-- Saudi rule (per arabic-Baloot sources): a VALID SWA awards all
+-- remaining trick points to the caller's team, who keep what they
+-- already earned in played tricks. The contract still resolves
+-- normally on the resulting team totals — sweep, made, or failed
+-- as the math dictates. An INVALID SWA is a flat punitive penalty:
+-- opponent takes handTotal × mult + all melds × mult.
 --
--- Outcome model:
---   valid + caller is bidder team    → contract MADE (caller swept)
---   valid + caller is defender team  → contract FAILED (defender stops)
---   invalid + caller is bidder team  → contract FAILED (false claim)
---   invalid + caller is defender team→ contract MADE (defender's
---                                       false claim hands it back)
---
--- Made branch: bidder team takes handTotal × mult. Meld winner
--- (per R.CompareMelds) gets their melds × mult. Belote +20 raw
--- to whoever holds K+Q of trump (only if both played out — Saudi
--- rule, rb3haa).
---
--- Failed branch: opp team takes handTotal × mult AND ALL melds
--- (both teams' values combined) × mult. Same rule the regular
--- ScoreRound uses for a busted contract. Belote still flows to
--- its holder if K+Q both played out.
+-- Implementation: for valid SWA, we synthesize the remaining tricks
+-- (each won by the caller seat) and reuse R.ScoreRound for the
+-- actual scoring math. ScoreRound handles sweep / made / failed /
+-- meld winner / last-trick bonus / belote correctly, so we get
+-- everything right by construction.
 function N.HostResolveSWA(callerSeat, callerHand)
     if not S.s.isHost or not S.s.contract then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
@@ -1484,12 +1455,10 @@ function N.HostResolveSWA(callerSeat, callerHand)
 
     local callerTeam = R.TeamOf(callerSeat)
     local c          = S.s.contract
-    local bidderTeam = R.TeamOf(c.bidder)
-    local oppTeam    = (bidderTeam == "A") and "B" or "A"
+    local oppOfCaller = (callerTeam == "A") and "B" or "A"
 
-    -- Snapshot all four hands for the minimax. Caller's hand comes
-    -- in via the message (so non-host bots can call), but the host
-    -- has the source of truth for the other three via hostHands.
+    -- Snapshot all four hands. Caller's hand arrives via the wire;
+    -- the host has the source of truth for the other three.
     local hands = { [callerSeat] = callerHand }
     for s2 = 1, 4 do
         if s2 ~= callerSeat then
@@ -1497,93 +1466,129 @@ function N.HostResolveSWA(callerSeat, callerHand)
         end
     end
 
-    -- Reconstruct the current trick state for the simulation.
-    local plays = (S.s.trick and S.s.trick.plays) or {}
-    local leadSuit = S.s.trick and S.s.trick.leadSuit
-    local leader
-    if #plays > 0 then
-        leader = plays[1].seat
+    -- Reconstruct the current trick state for the minimax validator.
+    local trickPlays = (S.s.trick and S.s.trick.plays) or {}
+    local trickLead = S.s.trick and S.s.trick.leadSuit
+    local trickLeader
+    if #trickPlays > 0 then
+        trickLeader = trickPlays[1].seat
     else
-        leader = callerSeat
+        trickLeader = callerSeat
     end
     local trickState = {
-        leadSuit = leadSuit, leader = leader, plays = plays,
+        leadSuit = trickLead, leader = trickLeader, plays = trickPlays,
     }
 
     local valid = R.IsValidSWA(callerSeat, hands, c, trickState)
 
-    -- Map (valid, callerTeam) → contract outcome.
-    local contractMade
-    if valid then
-        contractMade = (callerTeam == bidderTeam)
-    else
-        contractMade = (callerTeam ~= bidderTeam)
-    end
+    local addA, addB, sweepTeam, contractMade
 
-    -- Multiplier chain (mirrors Rules.ScoreRound).
-    local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-    local mult = K.MULT_BASE
-    if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if     c.gahwa     then mult = mult * K.MULT_GAHWA
-    elseif c.foured    then mult = mult * K.MULT_FOUR
-    elseif c.tripled   then mult = mult * K.MULT_TRIPLE
-    elseif c.redoubled then mult = mult * K.MULT_BELRE
-    elseif c.doubled   then mult = mult * K.MULT_BEL end
-
-    -- Meld totals (raw points each team declared).
-    local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
-    local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
-
-    local cardA, cardB, mpA, mpB = 0, 0, 0, 0
-    if contractMade then
-        cardA = (bidderTeam == "A") and handTotal or 0
-        cardB = (bidderTeam == "B") and handTotal or 0
-        local mv = R.CompareMelds(S.s.meldsByTeam.A, S.s.meldsByTeam.B, c)
-        if mv == "A" then mpA = meldA
-        elseif mv == "B" then mpB = meldB end
-    else
-        cardA = (oppTeam == "A") and handTotal or 0
-        cardB = (oppTeam == "B") and handTotal or 0
-        if oppTeam == "A" then mpA = meldA + meldB
-        else                   mpB = meldA + meldB end
-    end
-
-    -- Belote (Hokm only): K+Q of trump in same hand. Per Saudi rule
-    -- (rb3haa, Arabic-Baloot guides), belote must be ANNOUNCED when
-    -- the K and Q are PLAYED — if both haven't surfaced before the
-    -- round ends, no points. So we scan only played cards (completed
-    -- tricks + the in-progress trick), NOT unplayed hands.
-    local belote = nil
-    if c.type == K.BID_HOKM and c.trump then
-        local kWho, qWho
-        local function scan(plays_)
-            for _, p in ipairs(plays_ or {}) do
-                if C.Suit(p.card) == c.trump then
-                    if C.Rank(p.card) == "K" then kWho = kWho or p.seat end
-                    if C.Rank(p.card) == "Q" then qWho = qWho or p.seat end
+    if not valid then
+        -- INVALID SWA → flat penalty: opp takes handTotal × mult +
+        -- ALL melds × mult, belote +20 raw to its played-out holder.
+        local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
+        local mult = K.MULT_BASE
+        if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
+        if     c.gahwa     then mult = mult * K.MULT_GAHWA
+        elseif c.foured    then mult = mult * K.MULT_FOUR
+        elseif c.tripled   then mult = mult * K.MULT_TRIPLE
+        elseif c.redoubled then mult = mult * K.MULT_BELRE
+        elseif c.doubled   then mult = mult * K.MULT_BEL end
+        local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
+        local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
+        local cardA = (oppOfCaller == "A") and handTotal or 0
+        local cardB = (oppOfCaller == "B") and handTotal or 0
+        local mpA = (oppOfCaller == "A") and (meldA + meldB) or 0
+        local mpB = (oppOfCaller == "B") and (meldA + meldB) or 0
+        -- Belote scan (played cards only — Saudi rule rb3haa).
+        local beloteOwner
+        if c.type == K.BID_HOKM and c.trump then
+            local kWho, qWho
+            local function scan(p_)
+                for _, p in ipairs(p_ or {}) do
+                    if C.Suit(p.card) == c.trump then
+                        if C.Rank(p.card) == "K" then kWho = kWho or p.seat end
+                        if C.Rank(p.card) == "Q" then qWho = qWho or p.seat end
+                    end
                 end
             end
+            for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
+            if S.s.trick then scan(S.s.trick.plays) end
+            if kWho and qWho and kWho == qWho then
+                beloteOwner = R.TeamOf(kWho)
+            end
         end
-        for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
-        if S.s.trick then scan(S.s.trick.plays) end
-        if kWho and qWho and kWho == qWho then
-            belote = R.TeamOf(kWho)
+        local rawA = (cardA + mpA) * mult
+        local rawB = (cardB + mpB) * mult
+        if beloteOwner == "A" then rawA = rawA + K.MELD_BELOTE
+        elseif beloteOwner == "B" then rawB = rawB + K.MELD_BELOTE end
+        addA = math.floor((rawA + 4) / 10)
+        addB = math.floor((rawB + 4) / 10)
+        contractMade = false
+    else
+        -- VALID SWA → caller's team takes all remaining trick points.
+        -- Build a complete 8-trick history and let R.ScoreRound do
+        -- the rest. Synthetic tricks pack remaining cards 4 at a
+        -- time; .winner is set to callerSeat for each (ScoreRound
+        -- uses .winner directly, not a recomputation).
+        local synth = {}
+        for _, t in ipairs(S.s.tricks or {}) do
+            synth[#synth + 1] = t
         end
+
+        -- Collect "remaining" plays: in-progress trick + every
+        -- unplayed card from every hand.
+        local remaining = {}
+        for _, p in ipairs(trickPlays) do
+            remaining[#remaining + 1] = { seat = p.seat, card = p.card }
+        end
+        for seat = 1, 4 do
+            for _, card in ipairs(hands[seat] or {}) do
+                remaining[#remaining + 1] = { seat = seat, card = card }
+            end
+        end
+
+        -- Pack into 4-play tricks, all won by callerSeat. ScoreRound
+        -- only reads .leadSuit, .plays, .winner — we don't have to
+        -- reproduce the actual play order, just the cards' point
+        -- values and the winning team.
+        while #synth < 8 and #remaining > 0 do
+            local plays = {}
+            for j = 1, 4 do
+                if #remaining > 0 then
+                    plays[j] = table.remove(remaining, 1)
+                end
+            end
+            synth[#synth + 1] = {
+                leadSuit = (plays[1] and C.Suit(plays[1].card)) or "S",
+                plays = plays,
+                winner = callerSeat,
+            }
+        end
+        -- Extreme edge: leftover cards (would only happen in a buggy
+        -- state). Append to last trick so they're at least counted
+        -- toward caller's team.
+        if #remaining > 0 and #synth > 0 then
+            local last = synth[#synth]
+            for _, p in ipairs(remaining) do
+                last.plays[#last.plays + 1] = p
+            end
+        end
+
+        local result = R.ScoreRound(synth, c, S.s.meldsByTeam)
+        addA = result.final.A
+        addB = result.final.B
+        sweepTeam = result.sweep
+        contractMade = result.bidderMade
     end
 
-    local rawA = (cardA + mpA) * mult
-    local rawB = (cardB + mpB) * mult
-    if belote == "A" then rawA = rawA + K.MELD_BELOTE
-    elseif belote == "B" then rawB = rawB + K.MELD_BELOTE end
-
-    local addA = math.floor((rawA + 4) / 10)
-    local addB = math.floor((rawB + 4) / 10)
     local totA = (S.s.cumulative.A or 0) + addA
     local totB = (S.s.cumulative.B or 0) + addB
 
     S.s.swaResult = {
         caller = callerSeat, valid = valid,
         contractMade = contractMade,
+        sweep = sweepTeam,
     }
     S.s.lastRoundResult = nil
     S.s.trick = nil
