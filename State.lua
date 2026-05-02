@@ -1212,10 +1212,13 @@ function S.HostAdvanceBidding()
 
     -- Walk the bidding history in turn order, picking the winning bid
     -- according to round rules.
-    --   Round 1: anyone can overcall Hokm with Sun; later Sun overcalls
-    --            earlier Sun. Wait for all 4 before deciding.
-    --   Round 2: first non-pass wins (no overcall). Hokm cannot reuse
-    --            the originally-flipped suit (UI enforces that).
+    --   Round 1: anyone can overcall Hokm with Sun, but the FIRST direct
+    --            Sun locks the declarer chair (later direct Sun does not
+    --            reassign). Direct Sun can still overcall an Ashkal-Sun.
+    --            Wait for all 4 before deciding.
+    --   Round 2: same Sun-overcalls-Hokm rule, but Hokm cannot reuse
+    --            the originally-flipped suit. Wait for all 4 so a later
+    --            seat can Sun-overcall an earlier Hokm.
     local count = 0
     local winning = nil   -- {seat, type, trump}
     for _, seat in ipairs(order) do

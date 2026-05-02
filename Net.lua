@@ -739,8 +739,15 @@ function N._OnPreemptPass(sender, seat)
     if not S.s.preemptEligible then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyPreemptPass(seat)
-    if not S.s.preemptEligible and S.s.isHost then
-        N._FinalizePreempt()
+    if S.s.isHost then
+        if not S.s.preemptEligible then
+            -- All eligible seats waived → finalize original buyer.
+            N._FinalizePreempt()
+        else
+            -- Non-final pass: dispatch the next eligible seat. Without
+            -- this, the chain stalls until 60s AFK fires (Codex #2).
+            N.MaybeRunBot()
+        end
     end
 end
 
@@ -2237,13 +2244,16 @@ function N._HostBelTimeout(seat, kind)
         N.HostFinishDeal()
     elseif kind == "preempt_pass" and S.s.phase == K.PHASE_PREEMPT then
         -- Pre-emption window timed out for an eligible seat — auto-pass
-        -- on their behalf. This may close the window and finalize the
-        -- original buyer's contract.
+        -- on their behalf. May either close the window (if last seat)
+        -- or hand off to the next eligible seat.
         log("Info", "AFK timeout: preempt waive seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_PREEMPT_PASS, seat))
         S.ApplyPreemptPass(seat)
         if not S.s.preemptEligible then
             N._FinalizePreempt()
+        else
+            -- Non-final timeout: redispatch next eligible seat.
+            N.MaybeRunBot()
         end
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -2460,7 +2470,15 @@ function N.MaybeRunBot()
                         N.SendPreemptPass(seat)
                         S.ApplyPreemptPass(seat)
                         if not S.s.preemptEligible then
+                            -- All eligible seats waived → finalize the
+                            -- original buyer's contract.
                             N._FinalizePreempt()
+                        else
+                            -- Non-final pass: redispatch the next
+                            -- eligible seat. Without this, the chain
+                            -- stalls until something else calls
+                            -- MaybeRunBot (Codex #2 audit catch).
+                            N.MaybeRunBot()
                         end
                     end
                     if B.UI then B.UI.Refresh() end

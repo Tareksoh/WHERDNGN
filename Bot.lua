@@ -465,7 +465,11 @@ function Bot.PickBid(seat)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
 
     if round == 1 then
-        -- Sun is always an overcall option (overcalls Hokm or prior Sun).
+        -- Sun overcalls Hokm. Note: a LATER direct Sun does NOT
+        -- overcall an earlier direct Sun — host's HostAdvanceBidding
+        -- locks on the first direct Sun. Bot bids Sun whenever its
+        -- threshold passes; if another seat already won the Sun chair
+        -- earlier, the host silently treats this as a no-op.
         if sun >= thSun then return K.BID_SUN end
 
         -- Ashkal: if our PARTNER bid Hokm earlier in this round and
