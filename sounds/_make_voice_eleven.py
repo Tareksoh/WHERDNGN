@@ -8,17 +8,25 @@ keys are sensitive credentials and should stay in the user's env / a
 
 Usage (PowerShell):
     $env:ELEVENLABS_API_KEY = "<your-key>"
-    python sounds/_make_voice_eleven.py
+    python sounds/_make_voice_eleven.py                # regenerate ALL
+    python sounds/_make_voice_eleven.py pass wla awal  # specific cues
 
 Voice ID is provided as VOICE_ID below — change it to swap the voice.
-The default points at the user-selected voice from the chat.
+The default points at the Saudi voice from the chat. Override per-run
+via ELEVENLABS_VOICE_ID env var.
 
 Output (in sounds/, overwrites previous attempts):
-    hokm.ogg     "حكم"
-    sun.ogg      "صن"
-    ashkal.ogg   "أشكال"
-    awal.ogg     "أوّل"
-    pass.ogg     "باس"
+    hokm.ogg     "حكم"   — someone bid Hokm
+    sun.ogg      "صَنْ"   — someone bid Sun
+    ashkal.ogg   "أشكَل"  — someone bid Ashkal
+    pass.ogg     "بَسْ"   — round-1 pass
+    wla.ogg      "ولا"    — round-2 pass
+    awal.ogg     "أوَل"    — round-1 bidding start
+    thany.ogg    "ثآني"   — round-2 bidding start
+    triple.ogg   "ثري"    — Triple (×3) escalation
+    four.ogg     "فور"    — Four (×4) escalation
+    gahwa.ogg    "قهوة"   — Gahwa (match-win) escalation
+    aka.ogg      "إكَهْ"   — AKA partner-coordination signal
 """
 import os
 import subprocess
