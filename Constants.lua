@@ -218,3 +218,7 @@ K.CARD_ANIM_SEC       = 0.18  -- duration of the card-land scale+fade animation
 -- per-suit and Sun strength formulas).
 K.BOT_BEL_TH          = 70    -- defender bels with own strength >= TH
 K.BOT_BELRE_TH        = 90    -- bidder redoubles with own strength >= TH
+K.BOT_TRIPLE_TH       = 95    -- defender triples (×8) — needs strong hand
+K.BOT_FOUR_TH         = 115   -- bidder fours (×16) — very strong hand
+K.BOT_GAHWA_TH        = 130   -- defender gahwas (×32) — terminal, near-certain
+K.BOT_ASHKAL_TH       = 65    -- partner-of-Hokm-bidder calls Ashkal with Sun-strong hand

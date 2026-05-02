@@ -164,11 +164,11 @@ function M.IsKaweshHand(hand)
 end
 
 -- Sort a hand visually: by display-suit order, then by trick rank
--- descending. Display order groups by colour so black suits sit next
--- to each other and red suits sit next to each other, instead of the
--- interleaved B R R B layout that K.SUIT_INDEX (used for trick logic)
--- would produce. Stable for display only — doesn't affect game state.
-local SUIT_DISPLAY = { C = 1, S = 2, H = 3, D = 4 }  -- ♣ ♠ ♥ ♦  (B B R R)
+-- descending. Display order *strictly alternates* colours so no two
+-- adjacent suits share a colour — every boundary in the hand goes
+-- black-red-black-red. Easier to scan than the BBRR group-by-colour
+-- layout. Stable for display only — doesn't affect game state.
+local SUIT_DISPLAY = { S = 1, H = 2, C = 3, D = 4 }  -- ♠ ♥ ♣ ♦  (B R B R)
 
 function M.SortHand(cards, contract)
     contract = contract or { type = K.BID_SUN }

@@ -1098,12 +1098,21 @@ function N.HostResolveTakweesh(callerSeat)
 
     local winnerTeam = foundIllegal and callerTeam or oppTeam
 
-    -- Penalty score: full handTotal x multiplier to the winner.
-    local handTotal = (S.s.contract.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
+    -- Penalty score: full handTotal × the WHOLE escalation multiplier
+    -- chain. Previously this only respected Bel and Bel-Re — so a
+    -- Triple/Four/Gahwa-doubled hand would still resolve a takweesh
+    -- catch at base or ×4 instead of ×8 / ×16 / ×32. Mirrors the
+    -- escalation chain in Rules.ScoreRound so takweesh wins/losses
+    -- swing the same as a normal made/failed contract.
+    local c = S.s.contract
+    local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
     local mult = K.MULT_BASE
-    if S.s.contract.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if S.s.contract.redoubled then mult = mult * K.MULT_BELRE
-    elseif S.s.contract.doubled then mult = mult * K.MULT_BEL end
+    if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
+    if     c.gahwa     then mult = mult * K.MULT_GAHWA
+    elseif c.foured    then mult = mult * K.MULT_FOUR
+    elseif c.tripled   then mult = mult * K.MULT_TRIPLE
+    elseif c.redoubled then mult = mult * K.MULT_BELRE
+    elseif c.doubled   then mult = mult * K.MULT_BEL end
     local raw = handTotal * mult
     local final = math.floor((raw + 4) / 10)
 
@@ -1629,15 +1638,18 @@ function N.MaybeRunBot()
     end
 
     -- Triple decision: defender. Bots default to skip with a small
-    -- chance to escalate so they're not perfectly predictable.
-    local function escalateChance(_seat) return math.random() < 0.10 end
+    -- Triple/Four/Gahwa: bots now use Bot.PickTriple / PickFour /
+    -- PickGahwa heuristics (strength-gated, threshold-based) instead
+    -- of a flat 10% random escalation. Old code used a `escalateChance`
+    -- coin-flip; that's been replaced so a strong defensive hand
+    -- actually triples, and a weak one passes.
     if S.s.phase == K.PHASE_TRIPLE and S.s.contract then
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
                 if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_TRIPLE then return end
-                if escalateChance(defSeat) then
+                if B.Bot.PickTriple and B.Bot.PickTriple(defSeat) then
                     S.ApplyTriple(defSeat)
                     N.SendTriple(defSeat)
                     N.MaybeRunBot()
@@ -1661,7 +1673,7 @@ function N.MaybeRunBot()
             C_Timer.After(BOT_DELAY_BEL, function()
                 if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_FOUR then return end
-                if escalateChance(bidder) then
+                if B.Bot.PickFour and B.Bot.PickFour(bidder) then
                     S.ApplyFour(bidder)
                     N.SendFour(bidder)
                     N.MaybeRunBot()
@@ -1685,7 +1697,7 @@ function N.MaybeRunBot()
             C_Timer.After(BOT_DELAY_BEL, function()
                 if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_GAHWA then return end
-                if escalateChance(defSeat) then
+                if B.Bot.PickGahwa and B.Bot.PickGahwa(defSeat) then
                     S.ApplyGahwa(defSeat)
                     N.SendGahwa(defSeat)
                 else

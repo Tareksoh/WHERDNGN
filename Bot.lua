@@ -26,10 +26,13 @@ local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 --
 -- Originally these were tuned for "professional" bot bidding (J+9 of
 -- trump + length), which produced too-quiet rounds where 3-of-4 bots
--- pass on most deals. Lowered so a bot with one strong card in the
--- bid-card suit (J alone, or A+T+K of trump) commits in round 1.
-local TH_HOKM_R1_BASE = 35
-local TH_HOKM_R2_BASE = 28
+-- pass on most deals. Then lowered too far so bots with marginal
+-- hands committed too often (looked like they were bidding on bad
+-- cards). Raised again to a sensible middle: bot needs J+kicker, or
+-- 9+Ace, or A+T+K with length. Round-2 stricter so bots stop
+-- bidding mediocre 3-card suits in the second window.
+local TH_HOKM_R1_BASE = 42
+local TH_HOKM_R2_BASE = 36
 local TH_SUN_BASE     = 50
 local BID_JITTER      = 6   -- ±6 swing per call
 
@@ -165,6 +168,20 @@ function Bot.PickBid(seat)
     if round == 1 then
         -- Sun is always an overcall option (overcalls Hokm or prior Sun).
         if sun >= thSun then return K.BID_SUN end
+
+        -- Ashkal: if our PARTNER bid Hokm earlier in this round and
+        -- we hold a Sun-strong hand, call Ashkal so partner is forced
+        -- into Sun (higher multiplier). Only overcalls Hokm — once a
+        -- direct Sun bid is on the table, it already locks the same
+        -- contract type, no point in Ashkal.
+        local partner = R.Partner(seat)
+        local partnerBid = S.s.bids and S.s.bids[partner]
+        if partnerBid and partnerBid:sub(1, #K.BID_HOKM) == K.BID_HOKM
+           and not anySun then
+            local thAshkal = jitter(K.BOT_ASHKAL_TH or 65, BID_JITTER)
+            if sun >= thAshkal then return K.BID_ASHKAL end
+        end
+
         -- Hokm-on-flipped only available if no prior Hokm/Sun.
         if not anyHokm and not anySun and bidCardSuit then
             local strength = suitStrengthAsTrump(hand, bidCardSuit)
@@ -261,30 +278,70 @@ local function pickLead(legal, contract, seat)
         local t = highestTrump(legal, contract)
         if t then return t end
     end
-    -- Otherwise prefer leading non-trump from a suit where opponents are
-    -- known void (free Ace) or partner is NOT void (more chance partner
-    -- can win it). Skip suits the partner is known void in.
+
+    -- Defenders / Sun lead: don't burn high cards on round 1.
+    -- Heuristics, in priority order:
+    --   1. If opponents are known void in some non-trump suit, lead
+    --      our HIGHEST card of that suit (free trick — they can't
+    --      stop it).
+    --   2. Lead a singleton low non-trump (we can't lead it later).
+    --   3. Lead LOW from our LONGEST non-trump suit (preserve high
+    --      cards for capture, give partner room to win).
+    --   4. Otherwise: lowest non-trump.
+    --   5. No non-trump option: lowest legal trump.
     local nonTrumps = {}
+    local suitCount = { S = 0, H = 0, D = 0, C = 0 }
     for _, c in ipairs(legal) do
-        if not C.IsTrump(c, contract) then nonTrumps[#nonTrumps + 1] = c end
-    end
-    -- Sort by (opp-all-void boost, partner-not-void preferred, then trick rank desc)
-    local function leadScore(c)
-        local s = C.Suit(c)
-        local r = C.TrickRank(c, contract)
-        local oppAllVoid = opponentsVoidInAll(seat, s) and 100 or 0
-        local partnerVoid = partnerVoidIn(seat, s) and -50 or 0
-        return r + oppAllVoid + partnerVoid
-    end
-    if #nonTrumps > 0 then
-        local best, bestS = nonTrumps[1], leadScore(nonTrumps[1])
-        for _, c in ipairs(nonTrumps) do
-            local s = leadScore(c)
-            if s > bestS then best, bestS = c, s end
+        if not C.IsTrump(c, contract) then
+            nonTrumps[#nonTrumps + 1] = c
+            suitCount[C.Suit(c)] = suitCount[C.Suit(c)] + 1
         end
-        return best
     end
-    return highestByRank(legal, contract)
+
+    -- 1: any free-trick suit?
+    for _, c in ipairs(nonTrumps) do
+        if opponentsVoidInAll(seat, C.Suit(c)) then
+            -- Take the HIGHEST card we have in that suit — opponents
+            -- can't trump (can't follow either), and partner won't
+            -- be able to take from us.
+            local best, bestR = c, C.TrickRank(c, contract)
+            for _, c2 in ipairs(nonTrumps) do
+                if C.Suit(c2) == C.Suit(c) then
+                    local r = C.TrickRank(c2, contract)
+                    if r > bestR then best, bestR = c2, r end
+                end
+            end
+            return best
+        end
+    end
+
+    -- 2: singleton low? Pick the lowest singleton if we have any.
+    local singletons = {}
+    for _, c in ipairs(nonTrumps) do
+        if suitCount[C.Suit(c)] == 1 then singletons[#singletons + 1] = c end
+    end
+    if #singletons > 0 then
+        return lowestByRank(singletons, contract)
+    end
+
+    -- 3: lead low from longest non-trump suit.
+    if #nonTrumps > 0 then
+        local longest, longestN = nil, 0
+        for suit, n in pairs(suitCount) do
+            if n > longestN then longest, longestN = suit, n end
+        end
+        local fromLongest = {}
+        for _, c in ipairs(nonTrumps) do
+            if C.Suit(c) == longest then fromLongest[#fromLongest + 1] = c end
+        end
+        if #fromLongest > 0 then
+            return lowestByRank(fromLongest, contract)
+        end
+        return lowestByRank(nonTrumps, contract)
+    end
+
+    -- 5: no non-trump — lowest trump.
+    return lowestByRank(legal, contract)
 end
 
 -- How many cards of `suit` are still UNACCOUNTED for, ignoring our own
@@ -314,17 +371,35 @@ local function pickFollow(legal, hand, trick, contract, seat)
     local lastSeat = (#trick.plays == 3)  -- we're closing the trick
 
     if partnerWinning then
-        -- Smother: in Hokm, if partner is winning a non-trump trick AND
-        -- we hold an Ace/10 of that suit, dump it on partner's pile so
-        -- our team scores the big point card. Skips if it would have
-        -- been our last A/T standing in that suit (defensive depth).
-        if contract.type == K.BID_HOKM and trick.leadSuit then
+        -- Smother: in Hokm, dumping our Ace/10 of lead suit onto partner's
+        -- trick-pile feeds points to our team. But only do it when:
+        --   (a) we have a SECOND A or T in that suit (so we keep one
+        --       for defensive depth), OR
+        --   (b) we're past the first 3 tricks (after trick 3, the suit
+        --       is likely played out enough that hoarding won't pay
+        --       off — Aces left long are vulnerable to trump).
+        -- Also skipped on the trump suit (smother only applies when
+        -- partner is winning a NON-trump trick).
+        if contract.type == K.BID_HOKM and trick.leadSuit
+           and trick.leadSuit ~= contract.trump then
             local lead = trick.leadSuit
+            local highInSuit = {}  -- list of A/T legal cards in lead suit
             for _, c in ipairs(legal) do
                 local r = C.Rank(c)
                 if C.Suit(c) == lead and (r == "A" or r == "T") then
-                    return c
+                    highInSuit[#highInSuit + 1] = c
                 end
+            end
+            local completed = #(S.s.tricks or {})
+            if #highInSuit >= 2 or completed >= 3 then
+                -- Throw the LOWER of A/T (10 before A, since 10 is 10
+                -- points and Ace is 11; both feed the trick, but
+                -- saving the ace is marginally better for late-hand
+                -- standing). table.sort by rank ascending.
+                table.sort(highInSuit, function(a, b)
+                    return C.TrickRank(a, contract) < C.TrickRank(b, contract)
+                end)
+                return highInSuit[1]
             end
         end
         -- Otherwise don't waste a high card.
@@ -434,6 +509,56 @@ function Bot.PickRedouble(seat)
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
     end
     return strength >= jitter(K.BOT_BELRE_TH, BEL_JITTER)
+end
+
+-- ---------------------------------------------------------------------
+-- Triple / Four / Gahwa escalation
+-- ---------------------------------------------------------------------
+-- Each rung up the escalation chain doubles the multiplier and inverts
+-- the tie threshold. Bots only escalate on a HAND that materially
+-- exceeds the previous rung's threshold — no random pulls. Strength
+-- model matches the Bel pickers: Sun rank-strength + half/full of
+-- the trump-as-trump score in Hokm contracts.
+
+local function escalationStrength(hand, contract)
+    local strength = sunStrength(hand)
+    if contract.type == K.BID_HOKM and contract.trump then
+        strength = strength + suitStrengthAsTrump(hand, contract.trump)
+    end
+    return strength
+end
+
+function Bot.PickTriple(seat)
+    -- Triple is the defender's response to Bel-Re. They've already
+    -- evaluated for Bel; tripling means "I think I can break this
+    -- with even more confidence". Threshold is markedly higher than
+    -- BOT_BEL_TH so a bot that beled doesn't auto-triple too.
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    local contract = S.s.contract
+    if not hand or not contract then return false end
+    local strength = escalationStrength(hand, contract)
+    return strength >= jitter(K.BOT_TRIPLE_TH, BEL_JITTER)
+end
+
+function Bot.PickFour(seat)
+    -- Bidder's response to Triple. Bidder must be VERY confident — a
+    -- failed ×16 round is a hand-killer.
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    local contract = S.s.contract
+    if not hand or not contract then return false end
+    local strength = escalationStrength(hand, contract)
+    return strength >= jitter(K.BOT_FOUR_TH, BEL_JITTER)
+end
+
+function Bot.PickGahwa(seat)
+    -- Defender's terminal escalation. Only fires when the defender's
+    -- hand reads as near-certain to break the contract — the ×32
+    -- multiplier is brutal in either direction.
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    local contract = S.s.contract
+    if not hand or not contract then return false end
+    local strength = escalationStrength(hand, contract)
+    return strength >= jitter(K.BOT_GAHWA_TH, BEL_JITTER)
 end
 
 -- ---------------------------------------------------------------------

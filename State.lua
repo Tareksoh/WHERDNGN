@@ -161,6 +161,10 @@ local TRANSIENT_FIELDS = {
     -- both fields are transient w.r.t. SaveSession.
     akaCalled = true,
     playedCardsThisRound = true,
+    -- Meld-display hold timer is wall-clock-based; restoring it after
+    -- a /reload would either fire stale or expire instantly. UI cue
+    -- only, drop on save.
+    meldHoldUntil = true,
 }
 
 function S.SaveSession()
@@ -561,6 +565,11 @@ function S.ApplyStart(roundNumber, dealer)
     -- effect (banner shown). Cleared at the start of the next trick so
     -- the visual cue doesn't linger past its tactical relevance.
     s.akaCalled    = nil
+    -- Per-seat meld-display hold timer. Trick 2 normally shows each
+    -- seat's melds only while it's that seat's turn — but the LAST
+    -- player in trick 2 has no "next turn" to clip them, so we hold
+    -- their strip visible for 4 seconds via a GetTime() timestamp.
+    s.meldHoldUntil = {}
     s.phase        = K.PHASE_DEAL1
     -- A redeal announcement banner (all-pass) is dismissed by the
     -- arrival of a real ApplyStart for the new round.
@@ -817,6 +826,25 @@ function S.ApplyPlay(seat, card)
     s.playedCardsThisRound = s.playedCardsThisRound or {}
     s.playedCardsThisRound[card] = true
 
+    -- Meld-display "last-to-act in trick 2" hold. During trick 2 each
+    -- seat's melds are visible only while it's their turn (handled UI
+    -- side). The 4th player has no "next turn in trick 2" to clip
+    -- them — we set a 4-second wall-clock hold so the partner+
+    -- opponents get a final look. Triggered on the 4th play of the
+    -- 2nd trick; only when the playing seat actually has melds.
+    if #s.trick.plays == 4 and #(s.tricks or {}) == 1 then
+        if S.SeatHasDeclaredMelds and S.SeatHasDeclaredMelds(seat) then
+            s.meldHoldUntil = s.meldHoldUntil or {}
+            local now = (GetTime and GetTime()) or 0
+            s.meldHoldUntil[seat] = now + 4
+            if C_Timer and C_Timer.After then
+                C_Timer.After(4.05, function()
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end)
+            end
+        end
+    end
+
     -- Audio: card-rustle on every play. Fires on every client because
     -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.
     if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CARD_PLAY) end
@@ -910,6 +938,17 @@ function S.LocalAKAcandidate()
         end
     end
     return nil
+end
+
+function S.SeatHasDeclaredMelds(seat)
+    if not seat then return false end
+    local team = R.TeamOf(seat)
+    local list = s.meldsByTeam and s.meldsByTeam[team]
+    if not list then return false end
+    for _, m in ipairs(list) do
+        if m.declaredBy == seat then return true end
+    end
+    return false
 end
 
 function S.ApplyAKA(seat, suit)
@@ -1060,7 +1099,24 @@ function S.HostAdvanceBidding()
             if btype and btype ~= K.BID_PASS then
                 if s.bidRound == 1 then
                     if btype == K.BID_SUN then
-                        winning = { seat = seat, type = btype, trump = trump }
+                        -- Strict Saudi: first DIRECT Sun bid locks.
+                        -- A later direct Sun in the same round does
+                        -- NOT re-claim the declarer chair from an
+                        -- earlier direct Sun. (Sun overcalls Hokm,
+                        -- but Sun does not overcall Sun.) A direct
+                        -- Sun CAN still overcall an Ashkal-derived
+                        -- Sun (where the winner.viaAshkal flag is
+                        -- set), since direct Sun reassigns declarer
+                        -- to the actual bidder per Saudi convention.
+                        local priorDirectSun = winning
+                            and winning.type == K.BID_SUN
+                            and not winning.viaAshkal
+                        if not priorDirectSun then
+                            winning = {
+                                seat = seat, type = btype, trump = trump,
+                                viaAshkal = false,
+                            }
+                        end
                     elseif btype == K.BID_ASHKAL then
                         -- Ashkal (Saudi): converts the contract to Sun
                         -- with the caller's PARTNER as declarer.
@@ -1084,6 +1140,7 @@ function S.HostAdvanceBidding()
                                 seat  = R.Partner(seat),
                                 type  = K.BID_SUN,
                                 trump = nil,
+                                viaAshkal = true,
                             }
                         end
                         -- else: silently drop the Ashkal
@@ -1092,8 +1149,21 @@ function S.HostAdvanceBidding()
                     end
                 else
                     -- Round 2: no Ashkal; first non-pass wins.
+                    -- Round-2 Hokm cannot reuse the originally-flipped
+                    -- suit — that suit had its window in round 1, and
+                    -- letting a player re-bid it here would side-step
+                    -- the round-1 Sun overcall. Drop the invalid bid
+                    -- silently (bid records as a non-winner; if all 4
+                    -- end up passing or invalid, we redeal). This is
+                    -- the host-side enforcement to back up the UI gate.
                     if not winning and btype ~= K.BID_ASHKAL then
-                        winning = { seat = seat, type = btype, trump = trump }
+                        local flippedSuit = s.bidCard and C.Suit(s.bidCard) or nil
+                        if btype == K.BID_HOKM and flippedSuit
+                           and trump == flippedSuit then
+                            -- silently dropped — same as a pass
+                        else
+                            winning = { seat = seat, type = btype, trump = trump }
+                        end
                     end
                 end
             end

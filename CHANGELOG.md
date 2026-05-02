@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.1.19 — Saudi rules sweep, smarter bots, meld timing
+
+**Saudi rules**
+- `Rules.IsLegalPlay` — when trump is led and your partner is currently
+  winning the trick, you no longer have to overcut. Matches the
+  off-lead-trump partner-winning exception that was already in place.
+- `Rules.ScoreRound` — in a sweep (Al-Kaboot), the +20 belote bonus
+  now follows the sweep winner instead of staying with the K+Q
+  holder. "Winner takes all" applies to belote too.
+- `State.HostAdvanceBidding` — round-2 Hokm cannot reuse the bid
+  card's flipped suit (host-side enforcement, backing up the UI gate).
+- `State.HostAdvanceBidding` — first direct Sun bid in round 1 locks
+  the declarer chair; later direct Sun bids no longer overcall it.
+  An Ashkal-derived Sun can still be overcalled by a later direct
+  Sun (the direct bid reassigns declarer to the actual bidder per
+  Saudi convention). Tracked via a `viaAshkal` flag on the winning
+  record.
+- `Net.HostResolveTakweesh` — takweesh penalty multiplier now respects
+  the full escalation chain (Triple ×8, Four ×16, Gahwa ×32). Was
+  previously stuck at base / Bel ×2 / Bel-Re ×4.
+
+**Bots**
+- Bidding thresholds raised: `TH_HOKM_R1_BASE 35→42`,
+  `TH_HOKM_R2_BASE 28→36`. Bots stop committing to Hokm on weak
+  hands.
+- `pickLead` rewritten for non-bidder team — 5-tier priority:
+  opponent-void high lead, low singleton, low from longest non-trump,
+  fallback lowest non-trump, lowest trump. No more blind Ace leads.
+- `pickFollow` smother gated — bots only dump A/T onto a partner-
+  winning trick if (a) holding ≥2 of A/T in lead suit, OR (b) past
+  trick 3. Trump-led smother skipped entirely. Stops the trick-1
+  Ace burn.
+- New `Bot.PickTriple` / `PickFour` / `PickGahwa` — strength-gated
+  escalation (`BOT_TRIPLE_TH 95`, `BOT_FOUR_TH 115`,
+  `BOT_GAHWA_TH 130`) replaces the previous flat 10% coin-flip.
+- New Ashkal heuristic — when partner has bid Hokm in round 1 and
+  the bot's Sun-strength clears `BOT_ASHKAL_TH (65)`, bot calls
+  Ashkal to push partner into Sun (higher multiplier).
+
+**Hand display**
+- Sort order now strictly alternates colour: ♠ ♥ ♣ ♦
+  (B R B R). Replaces the previous BBRR group-by-colour layout.
+  Easier to scan — every adjacent pair is opposite colour.
+
+**Meld display timing**
+- Meld card strip now follows a three-window model per Saudi rule:
+  - Trick 1: every declarer's strip is visible the whole time.
+  - Trick 2: a seat's strip appears only while it's that seat's
+    turn, and hides as soon as the next seat is up.
+  - Trick 2 last player: held visible 4 seconds after their final
+    play (no "next turn" to clip them).
+  - Trick 3 onwards: never visible.
+
 ## v0.1.18 — meld backdrop fix, hand sort, contract banner
 
 **Fixes**

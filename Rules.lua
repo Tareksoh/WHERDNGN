@@ -108,8 +108,17 @@ function R.IsLegalPlay(card, hand, trick, contract, seat)
     if hasLead then
         if cardSuit ~= leadSuit then return false, "must follow suit" end
         -- Strict Saudi/Belote: when trump is led, you must overcut if
-        -- you have a higher trump than what's been played so far.
+        -- you have a higher trump than what's been played so far —
+        -- UNLESS your partner is the one currently winning the trick.
+        -- Saudi rule: you never have to over-trump your own partner.
+        -- This matches the analogous off-lead-trump case below
+        -- (partner-winning shortcut) and is what players expect at the
+        -- table.
         if contract.type == K.BID_HOKM and leadSuit == contract.trump then
+            local curWinner = R.CurrentTrickWinner(trick, contract)
+            if curWinner and seat and R.Partner(seat) == curWinner then
+                return true
+            end
             local highest = -1
             for _, p in ipairs(trick.plays) do
                 if C.IsTrump(p.card, contract) then
@@ -358,6 +367,15 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     local sweepTeam
     if trickCount.A == 8 then sweepTeam = "A"
     elseif trickCount.B == 8 then sweepTeam = "B" end
+
+    -- Saudi sweep convention: the sweeping team takes EVERYTHING,
+    -- including the +20 belote bonus. Pagat-strict would keep belote
+    -- with the K+Q holder regardless, but the Saudi "winner takes all"
+    -- reading covers belote too. Override here so the belote-add-to-raw
+    -- below routes the bonus to the sweep winner.
+    if sweepTeam and belote and belote ~= sweepTeam then
+        belote = sweepTeam
+    end
 
     -- Saudi rule 4-2/4-3: bidder must STRICTLY beat defender's total.
     -- Equal totals = tie; tie default goes to defenders. Bidder's total
