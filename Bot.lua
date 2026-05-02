@@ -105,6 +105,11 @@ local function emptyMemory()
             -- low = "don't lead this". Reset per round with the rest
             -- of memory.
             firstDiscard = nil,  -- {suit, rank}
+            -- Per-suit AKA-already-signaled flag. Once a bot has
+            -- announced "I hold the boss of X" by AKA, the partner
+            -- knows. Re-announcing on subsequent leads of the same
+            -- suit is noise. Reset per round.
+            akaSent = { S = false, H = false, D = false, C = false },
         }
     end
     return m
@@ -909,27 +914,43 @@ local function pickFollow(legal, hand, trick, contract, seat)
     return lowestByRank(legal, contract)
 end
 
--- Bot AKA (إكَهْ) self-call. Advanced-only. Returns a non-trump suit
--- if the bot is about to LEAD and holds the AKA (highest unplayed
--- card) of that suit; nil otherwise. Net.MaybeRunBot calls this
--- before sending the bot's lead so the partner-coordination signal
--- fires the same way a human's would.
-function Bot.PickAKA(seat)
+-- Bot AKA (إكَهْ) self-call. Advanced-only. Returns the non-trump suit
+-- of `leadCard` if it's the AKA (highest unplayed card) of that suit
+-- AND meaningful to signal; nil otherwise. Net.MaybeRunBot calls this
+-- with the chosen lead card so the bot only announces AKA on the
+-- card it's actually leading — not on some unrelated suit it happens
+-- to hold the boss of. Per-suit dedup prevents re-announcing the
+-- same suit on later leads in the same round.
+function Bot.PickAKA(seat, leadCard)
     if not Bot.IsAdvanced() then return nil end
     if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then return nil end
     if not S.s.trick or #S.s.trick.plays > 0 then return nil end  -- lead only
-    local hand = S.s.hostHands and S.s.hostHands[seat]
-    if not hand or #hand == 0 then return nil end
+    if not leadCard then return nil end
     if not S.HighestUnplayedRank then return nil end
     local trump = S.s.contract.trump
-    for _, c in ipairs(hand) do
-        local r = C.Rank(c)
-        local su = C.Suit(c)
-        if su ~= trump and S.HighestUnplayedRank(su) == r then
-            return su
-        end
-    end
-    return nil
+    if not trump then return nil end
+    local r = C.Rank(leadCard)
+    local su = C.Suit(leadCard)
+    -- AKA is non-trump only.
+    if su == trump then return nil end
+    -- The lead card must be the highest UNPLAYED rank of its suit.
+    -- Otherwise the signal is false (we don't actually hold the boss).
+    if S.HighestUnplayedRank(su) ~= r then return nil end
+    -- Per-round, per-suit dedup. Once announced, partner knows we
+    -- hold the boss until it falls. Re-announcing on the same suit
+    -- is noise — the spam complaint.
+    Bot._memory = Bot._memory or emptyMemory()
+    local mem = Bot._memory[seat]
+    if mem and mem.akaSent and mem.akaSent[su] then return nil end
+    -- Skip on the very first trick lead: at that point no opponent has
+    -- shown a void yet, so the signal isn't actionable for partner —
+    -- they have no reason to over-trump a fresh suit yet anyway.
+    -- AKA is most useful in the mid/late hand once voids are showing.
+    local trickNum = #(S.s.tricks or {}) + 1
+    if trickNum <= 1 then return nil end
+    -- Mark sent and return.
+    if mem and mem.akaSent then mem.akaSent[su] = true end
+    return su
 end
 
 function Bot.PickPlay(seat)

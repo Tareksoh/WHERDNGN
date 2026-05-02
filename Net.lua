@@ -2534,12 +2534,16 @@ function N.MaybeRunBot()
             end
             if not card then card = B.Bot.PickPlay(seat) end
             if not card then return end
-            -- Advanced bot: if we're leading and we hold the AKA of a
-            -- non-trump suit, broadcast the partner-coordination
-            -- signal BEFORE the actual card so the banner and voice
-            -- cue land first (matching human play order).
+            -- Advanced bot: if we're leading and the chosen lead card
+            -- IS the AKA (highest unplayed) of a non-trump suit, fire
+            -- the partner-coordination signal BEFORE the actual card.
+            -- PickAKA is now passed the chosen card so it only signals
+            -- on the suit being led (was iterating the whole hand and
+            -- announcing whichever AKA-suit it found first, regardless
+            -- of the lead). Per-suit dedup inside PickAKA prevents
+            -- repeating on the same suit later in the round.
             if B.Bot.PickAKA then
-                local akaSuit = B.Bot.PickAKA(seat)
+                local akaSuit = B.Bot.PickAKA(seat, card)
                 if akaSuit then
                     S.ApplyAKA(seat, akaSuit)
                     N.SendAKA(seat, akaSuit)
