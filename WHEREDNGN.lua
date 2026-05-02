@@ -16,6 +16,18 @@ local DEFAULTS = {
     debug    = false,
     target   = 152,            -- game-end cumulative target
     framePos = nil,
+    -- Advanced bots: enables the human-style heuristics described in
+    -- Bot.lua (partner-bid awareness, score-position adjustments, AKA
+    -- self-call, position-aware following, J-of-trump gating, etc.).
+    -- Off by default so existing behaviour is preserved on upgrade;
+    -- turn on per-host via /baloot advanced or the lobby checkbox.
+    advancedBots = false,
+    -- M3lm (معلم — "master") tier. Reserved for a future, deeper
+    -- heuristic layer (multi-trick lookahead, signal interpretation,
+    -- etc.). Selectable in the lobby UI (greyed) but currently a no-op
+    -- — Bot.IsM3lm always returns false until the implementation
+    -- lands.
+    m3lmBots = false,
 }
 
 local function ensureDB()

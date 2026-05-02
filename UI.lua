@@ -606,6 +606,57 @@ local function buildLobby()
     end)
     lobbyPanel.fillBotsBtn = fillBotsBtn
 
+    -- Bot difficulty selector. Two checkboxes stacked just above the
+    -- Fill Bots button: "Advanced" (functional) and "M3lm" (greyed —
+    -- reserved for the deeper heuristic tier still in design). Both
+    -- are host-side toggles since bots only run on the host. The
+    -- saved-variable flags live in WHEREDNGNDB.advancedBots /
+    -- WHEREDNGNDB.m3lmBots; Bot.IsAdvanced / IsM3lm read them.
+    local function makeBotDifficultyCheck(label, anchorY, enabled, getter, setter, tooltip)
+        local cb = CreateFrame("CheckButton", nil, lobbyPanel,
+                               "UICheckButtonTemplate")
+        cb:SetSize(20, 20)
+        cb:SetPoint("BOTTOM", -90, anchorY)
+        local txt = makeText(cb, 11, "LEFT")
+        txt:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+        txt:SetText(label)
+        cb:SetChecked(getter() and true or false)
+        if not enabled then
+            cb:Disable()
+            txt:SetTextColor(0.55, 0.55, 0.55)
+        end
+        cb:SetScript("OnClick", function(self)
+            if not enabled then return end
+            setter(self:GetChecked() and true or false)
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        end)
+        if tooltip then
+            cb:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(label, 1, 1, 1)
+                GameTooltip:AddLine(tooltip, 0.85, 0.85, 0.85, true)
+                GameTooltip:Show()
+            end)
+            cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        end
+        return cb
+    end
+    lobbyPanel.advancedCheck = makeBotDifficultyCheck(
+        "Advanced", 78, true,
+        function() return WHEREDNGNDB and WHEREDNGNDB.advancedBots end,
+        function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.advancedBots = v end,
+        "Bots use human-style heuristics: partner-bid reads, "
+            .. "AKA self-call, position-aware play, score-position "
+            .. "threshold modifiers. Host only — affects bots in "
+            .. "this game.")
+    lobbyPanel.m3lmCheck = makeBotDifficultyCheck(
+        "M3lm (coming soon)", 56, false,
+        function() return WHEREDNGNDB and WHEREDNGNDB.m3lmBots end,
+        function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.m3lmBots = v end,
+        "Master tier. Multi-trick lookahead, signal interpretation, "
+            .. "and meta-game reads. Reserved for a future update — "
+            .. "selectable in addition to Advanced once it ships.")
+
     joinBtn = makeButton(lobbyPanel, "Join", 100, 26)
     joinBtn:SetPoint("BOTTOM", 0, 44)
     joinBtn:SetScript("OnClick", function()
@@ -1723,6 +1774,20 @@ local function renderLobby()
     local hasEmpty = S.s.isHost and S.s.phase == K.PHASE_LOBBY and not S.LobbyFull()
     if lobbyPanel.fillBotsBtn then
         lobbyPanel.fillBotsBtn:SetShown(hasEmpty)
+    end
+    -- Bot difficulty checkboxes: host-only, lobby-only. Re-sync the
+    -- checkbox state with WHEREDNGNDB on every render so toggling via
+    -- /baloot advanced (slash) reflects in the UI without a click.
+    local hostInLobby = S.s.isHost and S.s.phase == K.PHASE_LOBBY
+    if lobbyPanel.advancedCheck then
+        lobbyPanel.advancedCheck:SetShown(hostInLobby)
+        lobbyPanel.advancedCheck:SetChecked(
+            WHEREDNGNDB and WHEREDNGNDB.advancedBots or false)
+    end
+    if lobbyPanel.m3lmCheck then
+        lobbyPanel.m3lmCheck:SetShown(hostInLobby)
+        lobbyPanel.m3lmCheck:SetChecked(
+            WHEREDNGNDB and WHEREDNGNDB.m3lmBots or false)
     end
     -- Swap buttons only visible to the host while in lobby phase
     local canSwap = S.s.isHost and S.s.phase == K.PHASE_LOBBY

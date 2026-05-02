@@ -1765,6 +1765,17 @@ function N.MaybeRunBot()
             end
             local card = B.Bot.PickPlay(seat)
             if not card then return end
+            -- Advanced bot: if we're leading and we hold the AKA of a
+            -- non-trump suit, broadcast the partner-coordination
+            -- signal BEFORE the actual card so the banner and voice
+            -- cue land first (matching human play order).
+            if B.Bot.PickAKA then
+                local akaSuit = B.Bot.PickAKA(seat)
+                if akaSuit then
+                    S.ApplyAKA(seat, akaSuit)
+                    N.SendAKA(seat, akaSuit)
+                end
+            end
             S.ApplyPlay(seat, card)
             N.SendPlay(seat, card)
             N._HostStepPlay()

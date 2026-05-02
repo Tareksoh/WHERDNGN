@@ -36,6 +36,27 @@ local TH_HOKM_R2_BASE = 36
 local TH_SUN_BASE     = 50
 local BID_JITTER      = 6   -- ±6 swing per call
 
+-- Advanced-bots feature flag. Off by default; toggle via
+-- /baloot advanced or the lobby checkbox. When ON, the bots layer
+-- in human-style heuristics: partner-bid awareness, score-position
+-- modifiers, AKA self-call on lead, position-aware following,
+-- J-of-trump step-function, side-suit-ace bonus, distribution-aware
+-- Sun bidding, bidder/partner lead asymmetry, and opponent-bid
+-- play hints. Each is gated individually so we can A/B compare in
+-- play and partial fall-throughs are safe.
+function Bot.IsAdvanced()
+    return WHEREDNGNDB and WHEREDNGNDB.advancedBots == true
+end
+
+-- M3lm (master) tier — currently a placeholder that always returns
+-- false. The lobby exposes the option as greyed-out so its eventual
+-- arrival is visible in the UI; the saved value (m3lmBots) is set to
+-- false and never checked here. When the deeper heuristics ship, this
+-- function flips to: `WHEREDNGNDB and WHEREDNGNDB.m3lmBots == true`.
+function Bot.IsM3lm()
+    return false
+end
+
 local function jitter(base, amp)
     return base + math.random(-amp, amp)
 end
@@ -105,17 +126,25 @@ end
 
 -- Score how strong `suit` would be if it were trump.
 -- Includes length bonus and the J+9 synergy.
+--
+-- Advanced (host opt-in) layers two more heuristics on top:
+--   • J of trump is a step-function. A trump-bid hand with no J,
+--     no 9+A pair, and fewer than 5 cards in the suit gets its
+--     score multiplied by 0.4 — it's structurally un-biddable
+--     even if the raw point sum looks OK.
+--   • J+9 synergy bonus bumped from +10 to +18. Coinche convention
+--     treats J+9 as a step jump, not a linear continuation.
 local function suitStrengthAsTrump(hand, suit)
     local strength = 0
     local count = 0
-    local hasJ, has9 = false, false
+    local hasJ, has9, hasA = false, false, false
     for _, card in ipairs(hand) do
         if C.Suit(card) == suit then
             count = count + 1
             local r = C.Rank(card)
             if     r == "J" then hasJ = true; strength = strength + 20
             elseif r == "9" then has9 = true; strength = strength + 14
-            elseif r == "A" then strength = strength + 11
+            elseif r == "A" then hasA = true; strength = strength + 11
             elseif r == "T" then strength = strength + 10
             elseif r == "K" then strength = strength + 4
             elseif r == "Q" then strength = strength + 3
@@ -123,15 +152,48 @@ local function suitStrengthAsTrump(hand, suit)
         end
     end
     strength = strength + math.max(0, count - 2) * 5
-    if hasJ and has9 then strength = strength + 10 end
+    if hasJ and has9 then
+        strength = strength + (Bot.IsAdvanced() and 18 or 10)
+    end
+    if Bot.IsAdvanced()
+       and not hasJ and count < 5 and not (has9 and hasA) then
+        -- No J, no 9+A pair, and short — structurally weak as trump.
+        -- Damp rather than zero so a J-led overcall by a bid-card
+        -- coincidence still falls through naturally.
+        strength = math.floor(strength * 0.4)
+    end
     return strength, count
 end
 
+-- Outside-trump aces are tricks the bidder can typically capture
+-- before being trumped out. Returns the bonus to add when advanced
+-- mode is on; 0 otherwise. Cap at 3 aces (the 4th would be in trump).
+local function sideSuitAceBonus(hand, trumpSuit)
+    if not Bot.IsAdvanced() then return 0 end
+    local n = 0
+    for _, card in ipairs(hand) do
+        if C.Rank(card) == "A" and C.Suit(card) ~= trumpSuit then
+            n = n + 1
+        end
+    end
+    return math.min(n, 3) * 8
+end
+
 -- Score for a Sun bid: high cards across all suits, length is irrelevant.
+--
+-- Advanced layer: penalize lopsided distributions. A Sun hand with a
+-- void or singleton (or no honors) in any suit is dangerous — opponents
+-- lead the weak suit and you bleed. -10 per offending suit, capped at
+-- the +25 range so a very lopsided hand still has *some* score floor.
 local function sunStrength(hand)
     local s = 0
+    local count = { S = 0, H = 0, D = 0, C = 0 }
+    local honors = { S = false, H = false, D = false, C = false }
     for _, card in ipairs(hand) do
         local r = C.Rank(card)
+        local su = C.Suit(card)
+        count[su] = count[su] + 1
+        if r == "A" or r == "T" or r == "K" then honors[su] = true end
         if     r == "A" then s = s + 11
         elseif r == "T" then s = s + 10
         elseif r == "K" then s = s + 4
@@ -139,7 +201,61 @@ local function sunStrength(hand)
         elseif r == "J" then s = s + 2
         end
     end
+    if Bot.IsAdvanced() then
+        local penalty = 0
+        for _, su in ipairs({ "S", "H", "D", "C" }) do
+            if count[su] < 2 or not honors[su] then penalty = penalty + 10 end
+        end
+        s = s - math.min(penalty, 25)
+    end
     return s
+end
+
+-- Read partner's bid as info for escalation decisions. Returns a
+-- numeric bonus to add to the bot's own evaluated strength. Off
+-- (returns 0) when advanced is disabled. Convention:
+--   • partner HOKM matching our trump → +20 (J/9 in trump)
+--   • partner HOKM other suit         → +10 (general strong hand)
+--   • partner SUN                     → +15 (lots of A/T)
+--   • partner ASHKAL (forced Sun)     → +15 (similar to SUN above)
+--   • partner PASS both rounds        → -10 (weak)
+--   • no info / unknown               →  0
+local function partnerBidBonus(seat, contract)
+    if not Bot.IsAdvanced() then return 0 end
+    if not S.s.bids then return 0 end
+    local partner = R.Partner(seat)
+    local b = S.s.bids[partner]
+    if not b then return 0 end
+    if b == K.BID_SUN then return 15 end
+    if b == K.BID_ASHKAL then return 15 end
+    if b == K.BID_PASS then return -10 end
+    if b:sub(1, #K.BID_HOKM) == K.BID_HOKM then
+        local bidTrump = b:sub(#K.BID_HOKM + 2, #K.BID_HOKM + 2)
+        if contract and contract.trump and bidTrump == contract.trump then
+            return 20
+        end
+        return 10
+    end
+    return 0
+end
+
+-- Score-position urgency. Returns a threshold MODIFIER (subtract
+-- from threshold to lower it / be more aggressive). Off (returns 0)
+-- when advanced is disabled.
+--   • near win (cumulative >= target-25): +8 (more conservative)
+--   • near loss (opp cumulative >= target-25): -12 (desperate)
+--   • behind by 80+: -6 (take risks)
+--   • else: 0
+local function scoreUrgency(myTeam)
+    if not Bot.IsAdvanced() then return 0 end
+    if not S.s.cumulative or not myTeam then return 0 end
+    local me  = S.s.cumulative[myTeam] or 0
+    local opp = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
+    local target = (S.s.target or 152)
+    if me  >= target - 25 then return  8  end
+    if opp >= target - 25 then return -12 end
+    if opp - me > 80      then return -6  end
+    return 0
 end
 
 -- ---------------------------------------------------------------------
@@ -161,9 +277,16 @@ function Bot.PickBid(seat)
     end
 
     local sun = sunStrength(hand)
-    local thHokmR1 = jitter(TH_HOKM_R1_BASE, BID_JITTER)
-    local thHokmR2 = jitter(TH_HOKM_R2_BASE, BID_JITTER)
-    local thSun    = jitter(TH_SUN_BASE,     BID_JITTER)
+    local urgency = scoreUrgency(R.TeamOf(seat))
+    -- Round-2 threshold ought to be ≥ round-1: in R2 the bidder picks
+    -- the suit, so fewer hands are forced to commit. Advanced layer
+    -- enforces this; basic mode keeps the existing R2<R1 split.
+    local r1Base = TH_HOKM_R1_BASE
+    local r2Base = TH_HOKM_R2_BASE
+    if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base + 6) end
+    local thHokmR1 = jitter(r1Base    - urgency, BID_JITTER)
+    local thHokmR2 = jitter(r2Base    - urgency, BID_JITTER)
+    local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
 
     if round == 1 then
         -- Sun is always an overcall option (overcalls Hokm or prior Sun).
@@ -178,13 +301,31 @@ function Bot.PickBid(seat)
         local partnerBid = S.s.bids and S.s.bids[partner]
         if partnerBid and partnerBid:sub(1, #K.BID_HOKM) == K.BID_HOKM
            and not anySun then
-            local thAshkal = jitter(K.BOT_ASHKAL_TH or 65, BID_JITTER)
-            if sun >= thAshkal then return K.BID_ASHKAL end
+            -- Advanced: only Ashkal if WE'RE weak in the flipped suit
+            -- (so partner's J of that suit is doing the work, not ours).
+            -- If we hold the J of the flipped suit, partner's bid is
+            -- bluff/marginal and Ashkal is risky — skip.
+            local ok = true
+            if Bot.IsAdvanced() and bidCardSuit then
+                local sStr, sCnt = suitStrengthAsTrump(hand, bidCardSuit)
+                local hasJflip = false
+                for _, c in ipairs(hand) do
+                    if C.Rank(c) == "J" and C.Suit(c) == bidCardSuit then
+                        hasJflip = true; break
+                    end
+                end
+                if hasJflip or sCnt > 2 then ok = false end
+            end
+            if ok then
+                local thAshkal = jitter(K.BOT_ASHKAL_TH or 65, BID_JITTER)
+                if sun >= thAshkal then return K.BID_ASHKAL end
+            end
         end
 
         -- Hokm-on-flipped only available if no prior Hokm/Sun.
         if not anyHokm and not anySun and bidCardSuit then
             local strength = suitStrengthAsTrump(hand, bidCardSuit)
+            strength = strength + sideSuitAceBonus(hand, bidCardSuit)
             if strength >= thHokmR1 then
                 return K.BID_HOKM .. ":" .. bidCardSuit
             end
@@ -197,6 +338,7 @@ function Bot.PickBid(seat)
     for _, suit in ipairs(K.SUITS) do
         if suit ~= bidCardSuit then
             local s = suitStrengthAsTrump(hand, suit)
+            s = s + sideSuitAceBonus(hand, suit)
             if s > bestScore then bestSuit, bestScore = suit, s end
         end
     end
@@ -273,13 +415,55 @@ end
 
 local function pickLead(legal, contract, seat)
     local myTeam = R.TeamOf(seat)
-    -- Bidder team in Hokm: lead high trump to draw out opponents' trumps.
-    if contract.type == K.BID_HOKM and myTeam == R.TeamOf(contract.bidder) then
+    local isBidderTeam = (contract.type == K.BID_HOKM
+                          and myTeam == R.TeamOf(contract.bidder))
+    local isBidder = (seat == contract.bidder)
+
+    -- Advanced (Tier 3 #11): if we hold a card that's currently the
+    -- HIGHEST UNPLAYED in its non-trump suit, leading that card is
+    -- a guaranteed trick. Reuses State.HighestUnplayedRank, which is
+    -- maintained by ApplyPlay across all clients.
+    if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+       and S.HighestUnplayedRank then
+        for _, c in ipairs(legal) do
+            local r = C.Rank(c)
+            local su = C.Suit(c)
+            if su ~= contract.trump and S.HighestUnplayedRank(su) == r then
+                return c
+            end
+        end
+    end
+
+    -- Bidder team in Hokm: typical play is "draw trump" (lead high
+    -- trump). But not always:
+    --   • If we ARE the bidder: stick with high-trump lead (clears
+    --     opponent trumps so our side suits run).
+    --   • If we are bidder's PARTNER: leading trump WITH the bidder's
+    --     own hand still concentrated in trump is wasteful — we cash
+    --     side winners through, then partner ruffs. Fall through to
+    --     the defender-style logic.
+    --   • Trump-poor bidder hand (<4 trump) with a side-suit boss
+    --     (we already covered that above via HighestUnplayedRank).
+    if isBidderTeam and isBidder then
+        -- Count own trump.
+        local trumpCount = 0
+        for _, c in ipairs(legal) do
+            if C.IsTrump(c, contract) then trumpCount = trumpCount + 1 end
+        end
+        -- Advanced: trump-poor (<4) AND we have a non-trump A → cash
+        -- the Ace first; trump-pull on the next round.
+        if Bot.IsAdvanced() and trumpCount < 4 then
+            for _, c in ipairs(legal) do
+                if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
+                    return c
+                end
+            end
+        end
         local t = highestTrump(legal, contract)
         if t then return t end
     end
 
-    -- Defenders / Sun lead: don't burn high cards on round 1.
+    -- Defenders / bidder's partner / Sun lead: don't burn high cards.
     -- Heuristics, in priority order:
     --   1. If opponents are known void in some non-trump suit, lead
     --      our HIGHEST card of that suit (free trick — they can't
@@ -368,18 +552,22 @@ end
 local function pickFollow(legal, hand, trick, contract, seat)
     local curWinner = R.CurrentTrickWinner(trick, contract)
     local partnerWinning = curWinner and R.Partner(seat) == curWinner
-    local lastSeat = (#trick.plays == 3)  -- we're closing the trick
+    -- Position in this trick (1 = first/lead, 4 = last/closing).
+    -- Used by advanced position-aware play; kept consistent with the
+    -- existing `lastSeat` flag.
+    local pos = #trick.plays + 1
+    local lastSeat = (pos == 4)
 
     if partnerWinning then
         -- Smother: in Hokm, dumping our Ace/10 of lead suit onto partner's
-        -- trick-pile feeds points to our team. But only do it when:
+        -- trick-pile feeds points to our team. Gate:
         --   (a) we have a SECOND A or T in that suit (so we keep one
         --       for defensive depth), OR
-        --   (b) we're past the first 3 tricks (after trick 3, the suit
-        --       is likely played out enough that hoarding won't pay
-        --       off — Aces left long are vulnerable to trump).
-        -- Also skipped on the trump suit (smother only applies when
-        -- partner is winning a NON-trump trick).
+        --   (b) we're past the first 3 tricks, OR
+        --   (c) [ANY MODE] we're 4th to act — the trick is going on
+        --       partner's pile no matter what, free points.
+        -- Trump-led: smother is skipped (trump tricks don't reward
+        -- feeding A/T).
         if contract.type == K.BID_HOKM and trick.leadSuit
            and trick.leadSuit ~= contract.trump then
             local lead = trick.leadSuit
@@ -391,15 +579,11 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
             local completed = #(S.s.tricks or {})
-            if #highInSuit >= 2 or completed >= 3 then
-                -- Throw the LOWER of A/T (10 before A, since 10 is 10
-                -- points and Ace is 11; both feed the trick, but
-                -- saving the ace is marginally better for late-hand
-                -- standing). table.sort by rank ascending.
+            if #highInSuit >= 2 or completed >= 3 or lastSeat then
                 table.sort(highInSuit, function(a, b)
                     return C.TrickRank(a, contract) < C.TrickRank(b, contract)
                 end)
-                return highInSuit[1]
+                if highInSuit[1] then return highInSuit[1] end
             end
         end
         -- Otherwise don't waste a high card.
@@ -412,20 +596,53 @@ local function pickFollow(legal, hand, trick, contract, seat)
         if wouldWin(c, trick, contract, seat) then winners[#winners + 1] = c end
     end
     if #winners > 0 then
-        -- Card-counting heuristic: if we'd win with a TRUMP and the
-        -- opponents are likely empty of higher trump (counting from
-        -- memory + our hand), commit cheaply. Otherwise we still win
-        -- with the lowest legal winner.
-        if contract.type == K.BID_HOKM and contract.trump then
-            local trumpOut = suitCardsOutstanding(hand, contract.trump)
-            -- If only ~1 outstanding trump remains across opponents,
-            -- our cheapest winner is "safe enough" — same as before.
-            -- This branch is here for future heuristics; right now we
-            -- still pick lowest winner. Trump-counting affects the
-            -- DEFENSIVE choice below where we save trumps.
-            _ = trumpOut
+        -- Position-aware (advanced):
+        --   pos 2: "second hand low" — partner hasn't played yet.
+        --     Don't commit our highest unless the card we'd win with
+        --     is unbeatable (sure stopper). Otherwise duck and let
+        --     partner cover. We approximate "sure stopper" as
+        --     trump-when-only-one-trump-outstanding.
+        --   pos 3: "third hand high" — partner already played, lost.
+        --     Commit a card that survives the 4th seat's likely
+        --     overcut (highest winner, not lowest).
+        --   pos 4: cheapest winner (current behavior).
+        if Bot.IsAdvanced() then
+            if pos == 2 then
+                local sureStopper = nil
+                if contract.type == K.BID_HOKM and contract.trump then
+                    local trumpOut = suitCardsOutstanding(hand, contract.trump)
+                    if trumpOut <= 1 then
+                        -- Use the highest trump winner as "sure".
+                        for _, c in ipairs(winners) do
+                            if C.IsTrump(c, contract)
+                               and (not sureStopper
+                                    or C.TrickRank(c, contract)
+                                       > C.TrickRank(sureStopper, contract)) then
+                                sureStopper = c
+                            end
+                        end
+                    end
+                end
+                if sureStopper then return sureStopper end
+                -- Duck: throw the lowest legal that ISN'T a winner.
+                local nonWinners = {}
+                for _, c in ipairs(legal) do
+                    local isWin = false
+                    for _, w in ipairs(winners) do
+                        if w == c then isWin = true; break end
+                    end
+                    if not isWin then nonWinners[#nonWinners + 1] = c end
+                end
+                if #nonWinners > 0 then
+                    return lowestByRank(nonWinners, contract)
+                end
+                -- All legal cards are winners — fall through.
+            elseif pos == 3 then
+                -- Highest winner so the 4th seat can't easily overcut.
+                return highestByRank(winners, contract)
+            end
         end
-        -- Win cheaply: use the lowest card that still wins.
+        -- Default / pos 4 / no advanced: cheapest winner.
         return lowestByRank(winners, contract)
     end
 
@@ -446,6 +663,29 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
     end
     return lowestByRank(legal, contract)
+end
+
+-- Bot AKA (إكَهْ) self-call. Advanced-only. Returns a non-trump suit
+-- if the bot is about to LEAD and holds the AKA (highest unplayed
+-- card) of that suit; nil otherwise. Net.MaybeRunBot calls this
+-- before sending the bot's lead so the partner-coordination signal
+-- fires the same way a human's would.
+function Bot.PickAKA(seat)
+    if not Bot.IsAdvanced() then return nil end
+    if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then return nil end
+    if not S.s.trick or #S.s.trick.plays > 0 then return nil end  -- lead only
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    if not hand or #hand == 0 then return nil end
+    if not S.HighestUnplayedRank then return nil end
+    local trump = S.s.contract.trump
+    for _, c in ipairs(hand) do
+        local r = C.Rank(c)
+        local su = C.Suit(c)
+        if su ~= trump and S.HighestUnplayedRank(su) == r then
+            return su
+        end
+    end
+    return nil
 end
 
 function Bot.PickPlay(seat)
@@ -495,7 +735,11 @@ function Bot.PickDouble(seat)
     if contract.type == K.BID_SUN then
         strength = strength + 10   -- bias: Sun is harder for the bidder
     end
-    return strength >= jitter(K.BOT_BEL_TH, BEL_JITTER)
+    -- Advanced: partner's bid is a strong signal of combined-team
+    -- strength; score urgency adjusts threshold for desperation/safety.
+    strength = strength + partnerBidBonus(seat, contract)
+    local th = K.BOT_BEL_TH - scoreUrgency(R.TeamOf(seat))
+    return strength >= jitter(th, BEL_JITTER)
 end
 
 function Bot.PickRedouble(seat)
@@ -508,7 +752,9 @@ function Bot.PickRedouble(seat)
     if contract.type == K.BID_HOKM and contract.trump then
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
     end
-    return strength >= jitter(K.BOT_BELRE_TH, BEL_JITTER)
+    strength = strength + partnerBidBonus(seat, contract)
+    local th = K.BOT_BELRE_TH - scoreUrgency(R.TeamOf(seat))
+    return strength >= jitter(th, BEL_JITTER)
 end
 
 -- ---------------------------------------------------------------------
@@ -520,11 +766,14 @@ end
 -- model matches the Bel pickers: Sun rank-strength + half/full of
 -- the trump-as-trump score in Hokm contracts.
 
-local function escalationStrength(hand, contract)
+local function escalationStrength(seat, hand, contract)
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
     end
+    -- Advanced: factor in partner's bid as combined-team strength
+    -- info. PASS both rounds → -10; HOKM matching trump → +20; etc.
+    strength = strength + partnerBidBonus(seat, contract)
     return strength
 end
 
@@ -536,8 +785,9 @@ function Bot.PickTriple(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false end
-    local strength = escalationStrength(hand, contract)
-    return strength >= jitter(K.BOT_TRIPLE_TH, BEL_JITTER)
+    local strength = escalationStrength(seat, hand, contract)
+    local th = K.BOT_TRIPLE_TH - scoreUrgency(R.TeamOf(seat))
+    return strength >= jitter(th, BEL_JITTER)
 end
 
 function Bot.PickFour(seat)
@@ -546,8 +796,9 @@ function Bot.PickFour(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false end
-    local strength = escalationStrength(hand, contract)
-    return strength >= jitter(K.BOT_FOUR_TH, BEL_JITTER)
+    local strength = escalationStrength(seat, hand, contract)
+    local th = K.BOT_FOUR_TH - scoreUrgency(R.TeamOf(seat))
+    return strength >= jitter(th, BEL_JITTER)
 end
 
 function Bot.PickGahwa(seat)
@@ -557,8 +808,9 @@ function Bot.PickGahwa(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false end
-    local strength = escalationStrength(hand, contract)
-    return strength >= jitter(K.BOT_GAHWA_TH, BEL_JITTER)
+    local strength = escalationStrength(seat, hand, contract)
+    local th = K.BOT_GAHWA_TH - scoreUrgency(R.TeamOf(seat))
+    return strength >= jitter(th, BEL_JITTER)
 end
 
 -- ---------------------------------------------------------------------

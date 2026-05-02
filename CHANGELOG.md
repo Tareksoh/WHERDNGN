@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.1.20 — Advanced bot heuristics (host opt-in)
+
+**New**
+- Lobby checkboxes: **Advanced** (functional) and **M3lm**
+  ("master", greyed out — reserved for a future deeper-heuristic
+  layer with multi-trick lookahead and signal interpretation).
+- Slash command: `/baloot advanced` toggles the host's advanced-bot
+  flag.
+- Default is OFF on upgrade — existing bot behaviour is unchanged
+  unless the host explicitly turns Advanced on.
+
+**Advanced-mode heuristics (Tier 1 + 2 + 3 from the bot research
+agents):**
+
+*Bidding*
+- Hand evaluation: J+9 synergy bumped from +10 to +18 (Coinche
+  step-jump). J-of-trump step-function damp — no-J + no 9+A pair
+  + count<5 trump suit gets 0.4× score (structurally weak).
+- Side-suit aces fold into Hokm strength (+8 each, capped at 3).
+- Sun bid distribution penalty: −10 per suit with count<2 or no
+  honors (capped at −25).
+- Round-2 threshold raised to ≥ Round-1 + 6 (R2 picker has more
+  optionality, so the bar should be higher, not lower).
+- Ashkal additional check: only call if our own holding in the
+  flipped suit is weak (no J of flipped, count ≤ 2).
+
+*Escalation (Bel / Bel-Re / Triple / Four / Gahwa)*
+- Partner's bid feeds escalation strength directly:
+  HOKM-trump-match +20, HOKM-other +10, SUN +15, ASHKAL +15,
+  PASS-both-rounds −10.
+- Score-urgency threshold modifier: behind 80+ → −6 (more
+  aggressive); near loss → −12; near win → +8 (conservative).
+
+*Play*
+- Position-aware following: 2nd-hand-low (duck unless sure
+  stopper) / 3rd-hand-high (commit a card that survives 4th-seat
+  overcut). 4th still cheapest-winner.
+- `pickLead` boss-card scan: lead the highest unplayed card in
+  any non-trump suit when we hold it (free trick).
+- Bidder lead asymmetry: trump-poor bidder (<4 trump) with a
+  side-suit Ace cashes the Ace before the trump pull. Bidder's
+  partner falls through to defender-style logic instead of
+  blindly leading high trump.
+- Bot AKA self-call: when leading the boss of a non-trump suit,
+  bot fires the AKA banner + voice cue first so partner doesn't
+  over-trump (matches the human signal).
+- Smother gate (basic + advanced): now relaxes when 4th-to-act
+  with partner winning — the trick is going on partner's pile
+  no matter what, free points.
+
+**Internals**
+- `Bot.IsAdvanced()` / `Bot.IsM3lm()` (the latter always returns
+  false until the M3lm tier is implemented).
+- All advanced helpers return 0/nil in basic mode so non-advanced
+  hosts get the v0.1.19 behaviour bit-for-bit.
+
 ## v0.1.19 — Saudi rules sweep, smarter bots, meld timing
 
 **Saudi rules**

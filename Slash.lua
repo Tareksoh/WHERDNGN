@@ -14,6 +14,7 @@ local function help()
     print("  /baloot join         - accept a pending host invite")
     print("  /baloot bots         - fill all empty seats with bots (host only)")
     print("  /baloot reset        - reset to idle (clears your local game state)")
+    print("  /baloot advanced     - toggle Advanced bot heuristics (host only)")
     print("  /baloot start        - host: start the round once lobby is full")
     print("  /baloot debug        - toggle debug logging")
     print("  /baloot log [N]      - dump last N log lines (default 50)")
@@ -96,6 +97,14 @@ local function dispatch(msg)
         WHEREDNGNDB = WHEREDNGNDB or {}
         WHEREDNGNDB.debug = not WHEREDNGNDB.debug
         say("debug = " .. tostring(WHEREDNGNDB.debug))
+        return
+    end
+
+    if msg == "advanced" or msg == "advbots" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.advancedBots = not WHEREDNGNDB.advancedBots
+        say("advanced bots = " .. tostring(WHEREDNGNDB.advancedBots))
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end
 
