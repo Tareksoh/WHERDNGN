@@ -22,11 +22,13 @@ local DEFAULTS = {
     -- Off by default so existing behaviour is preserved on upgrade;
     -- turn on per-host via /baloot advanced or the lobby checkbox.
     advancedBots = false,
-    -- M3lm (معلم — "master") tier. Reserved for a future, deeper
-    -- heuristic layer (multi-trick lookahead, signal interpretation,
-    -- etc.). Selectable in the lobby UI (greyed) but currently a no-op
-    -- — Bot.IsM3lm always returns false until the implementation
-    -- lands.
+    -- M3lm (معلم — "master") tier. Pro-level heuristics layered on
+    -- top of Advanced: partner / opponent play-style ledger across
+    -- the full game, match-point urgency for finer score-position
+    -- calls, and coordinated escalation that ramps faster when
+    -- partner has already escalated. Off by default; turn on per-
+    -- host via /baloot m3lm or the lobby checkbox. Strictly extends
+    -- Advanced — checking M3lm activates both layers.
     m3lmBots = false,
 }
 
