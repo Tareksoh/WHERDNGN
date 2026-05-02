@@ -1448,6 +1448,11 @@ local function cardCountForSeat(seat)
 end
 
 local function meldsDescForSeat(seat)
+    -- Trick-1 announcement format: type + length + top rank + value.
+    -- The SUIT is deliberately omitted — Saudi convention announces
+    -- "Tartib of 3, top King" without naming the suit, since suits
+    -- don't matter for meld comparison. The actual cards (and thus
+    -- suit) are revealed only in trick 2 during the owner's turn.
     local team = R.TeamOf(seat)
     local list = S.s.meldsByTeam[team] or {}
     local mine = {}
@@ -1457,7 +1462,7 @@ local function meldsDescForSeat(seat)
             if m.kind == "carre" then
                 s = ("Carré %s"):format(C.RankGlyph(m.top))
             else
-                s = ("S%d %s%s"):format(m.len or 3, C.RankGlyph(m.top), K.SUIT_GLYPH[m.suit] or "")
+                s = ("Seq%d %s"):format(m.len or 3, C.RankGlyph(m.top))
             end
             mine[#mine + 1] = s .. (" (%d)"):format(m.value or 0)
         end
@@ -1487,32 +1492,33 @@ local function meldCardsForSeat(seat)
     return out
 end
 
--- Per Saudi rule the meld cards live in three windows:
---   • Trick 1 (any seat's melds visible the whole time once declared):
---     melds are public during the "showcase" trick.
---   • Trick 2 (per-seat, turn-scoped): a seat's melds re-appear ONLY
---     while it's that seat's turn; they hide as soon as the next seat
---     is up. The 4th player in trick 2 has no "next turn" to clip
---     them — for them we hold the strip 4 seconds via meldHoldUntil
---     (set in State.ApplyPlay).
---   • Trick 3+: never visible.
+-- Per Saudi rule the meld CARDS are only visible briefly in trick 2:
+--   • Trick 1: announcement only — text label shows the kind, length
+--     and top rank ("Seq3 K (20)"), no cards, no suit.
+--   • Trick 2: when a declarer's turn starts, their actual cards are
+--     revealed for 5 seconds (set via S.ApplyTurn -> meldHoldUntil),
+--     then hidden permanently for the rest of the hand.
+--   • Trick 3+: cards never visible. Text label also hidden — at this
+--     point only the score the meld earned matters, shown in the
+--     round-end banner.
 local function meldStripVisibleFor(seat)
+    if S.s.phase ~= K.PHASE_PLAY then return false end
+    if not S.s.meldHoldUntil or not S.s.meldHoldUntil[seat] then
+        return false
+    end
+    local now = (GetTime and GetTime()) or 0
+    return now < S.s.meldHoldUntil[seat]
+end
+
+-- Trick-1 text-announcement window. Visible from the moment the
+-- meld is declared (PHASE_DEAL3 onwards) through the end of trick 1
+-- (when #s.tricks transitions from 0 to 1). After that the cards
+-- take over (trick 2 reveal) and the text label hides.
+local function meldTextVisible()
     if S.s.phase ~= K.PHASE_DEAL3 and S.s.phase ~= K.PHASE_PLAY then
         return false
     end
-    local nTricks = #(S.s.tricks or {})
-    -- Trick 1 in progress (no completed trick yet) → always visible.
-    if nTricks == 0 then return true end
-    -- Trick 2: turn-gated, with a post-play 4-sec hold for the last
-    -- player of the trick (recorded in S.s.meldHoldUntil[seat]).
-    if nTricks == 1 then
-        if S.s.turn == seat then return true end
-    end
-    if S.s.meldHoldUntil and S.s.meldHoldUntil[seat] then
-        local now = (GetTime and GetTime()) or 0
-        if now < S.s.meldHoldUntil[seat] then return true end
-    end
-    return false
+    return (#(S.s.tricks or {}) == 0)
 end
 
 local function renderSeats()
@@ -1535,16 +1541,22 @@ local function renderSeats()
                 if i <= cnt then b.backs[i]:Show() else b.backs[i]:Hide() end
             end
             b.countText:SetText(("|c"..COL.txtSoft.."%d|r"):format(cnt))
-            -- Meld card strip: per-seat, per-turn visibility per Saudi
-            -- rule (see meldStripVisibleFor for the three-window
-            -- model). Text label is always cleared — the strip is
-            -- the source of truth.
+            -- Meld display follows two independent windows:
+            --   • text label: visible during trick 1 only (announcement)
+            --   • card strip: visible only during the seat's 5-second
+            --     hold in trick 2 (S.s.meldHoldUntil[seat])
+            -- They never overlap.
             if meldStripVisibleFor(seat) then
                 setMeldStripCards(b.meldStrip, meldCardsForSeat(seat), 1.0)
-            elseif b.meldStrip then
-                b.meldStrip:Hide()
+                b.meldText:SetText("")
+            else
+                if b.meldStrip then b.meldStrip:Hide() end
+                if meldTextVisible() then
+                    b.meldText:SetText(meldsDescForSeat(seat))
+                else
+                    b.meldText:SetText("")
+                end
             end
-            b.meldText:SetText("")
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
             -- Avatar: bot seats get the bundled colored badge; humans
             -- have no avatar so the seat reads "live player".
@@ -1576,15 +1588,19 @@ local function renderSeats()
     local nm = rawName and shortName(rawName) or "you"
     local prefix = me == S.s.dealer and "D " or ""
     lb.nameText:SetText(prefix .. "|c" .. COL.txtGold .. nm .. "|r")
-    -- Local meld strip mirrors the seat-badge rule: per-seat, per-turn
-    -- visibility (trick 1 always, trick 2 only on our turn, plus the
-    -- 4-second last-player hold).
+    -- Same two-window split for the local player. Strip during the
+    -- 5-sec trick-2 reveal; text label during trick 1 announcement.
     if meldStripVisibleFor(me) then
         setMeldStripCards(lb.meldStrip, meldCardsForSeat(me), 1.0)
-    elseif lb.meldStrip then
-        lb.meldStrip:Hide()
+        lb.meldText:SetText("")
+    else
+        if lb.meldStrip then lb.meldStrip:Hide() end
+        if meldTextVisible() then
+            lb.meldText:SetText(meldsDescForSeat(me))
+        else
+            lb.meldText:SetText("")
+        end
     end
-    lb.meldText:SetText("")
     if S.s.turn == me then
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
         if lb.turnGlow then lb.turnGlow:Show() end

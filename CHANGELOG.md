@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.21 — meld display rule corrected
+
+**Fix**
+- Trick 1 now shows only an announcement text — type, length and top
+  rank, *no suit and no cards* ("Seq3 K (20)", "Carré J (100)"). The
+  full mini-card strip is no longer flashed during trick 1.
+- Trick 2: each declarer's actual cards become visible for exactly
+  5 seconds when their PLAY turn starts, then hide for the rest of
+  the hand. Hooked into `S.ApplyTurn` rather than `S.ApplyPlay` —
+  so the timer starts with the turn, not after the play.
+- Trick 3 onwards: nothing is shown. Earlier trick-1-always-visible
+  behaviour was an over-broad reading of the Saudi rule; this
+  release matches the table convention (announce in trick 1, brief
+  reveal in trick 2, gone after).
+
 ## v0.1.20 — Advanced bot heuristics (host opt-in)
 
 **New**

@@ -611,6 +611,25 @@ function S.ApplyTurn(seat, kind)
     -- flag has been reset and they can act normally.
     s.localPlayedThisTrick = nil
     log("turn: seat=%d kind=%s", seat or -1, tostring(kind))
+
+    -- Saudi meld-display rule (trick 2 only): when a seat's PLAY turn
+    -- starts in the second trick AND that seat declared a meld earlier,
+    -- their cards become public for exactly 5 seconds — then disappear
+    -- for the rest of the hand. Trick 1 shows only the announcement
+    -- text; tricks 3+ show nothing. The hold is set per-seat so two
+    -- consecutive seats with melds get their own 5-second windows.
+    if kind == "play" and #(s.tricks or {}) == 1
+       and prevTurn ~= seat
+       and S.SeatHasDeclaredMelds and S.SeatHasDeclaredMelds(seat) then
+        s.meldHoldUntil = s.meldHoldUntil or {}
+        local now = (GetTime and GetTime()) or 0
+        s.meldHoldUntil[seat] = now + 5
+        if C_Timer and C_Timer.After then
+            C_Timer.After(5.05, function()
+                if B.UI and B.UI.Refresh then B.UI.Refresh() end
+            end)
+        end
+    end
     -- Audio: ping when our turn arrives (transition into our seat).
     if seat == s.localSeat and prevTurn ~= seat then
         if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_TURN_PING) end
@@ -826,24 +845,10 @@ function S.ApplyPlay(seat, card)
     s.playedCardsThisRound = s.playedCardsThisRound or {}
     s.playedCardsThisRound[card] = true
 
-    -- Meld-display "last-to-act in trick 2" hold. During trick 2 each
-    -- seat's melds are visible only while it's their turn (handled UI
-    -- side). The 4th player has no "next turn in trick 2" to clip
-    -- them — we set a 4-second wall-clock hold so the partner+
-    -- opponents get a final look. Triggered on the 4th play of the
-    -- 2nd trick; only when the playing seat actually has melds.
-    if #s.trick.plays == 4 and #(s.tricks or {}) == 1 then
-        if S.SeatHasDeclaredMelds and S.SeatHasDeclaredMelds(seat) then
-            s.meldHoldUntil = s.meldHoldUntil or {}
-            local now = (GetTime and GetTime()) or 0
-            s.meldHoldUntil[seat] = now + 4
-            if C_Timer and C_Timer.After then
-                C_Timer.After(4.05, function()
-                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
-                end)
-            end
-        end
-    end
+    -- (Meld card reveal is now handled in S.ApplyTurn — see the
+    -- 5-second per-turn hold there. ApplyPlay no longer needs to
+    -- arm a special last-player timer because every seat in trick 2
+    -- gets the same 5-second window when their turn starts.)
 
     -- Audio: card-rustle on every play. Fires on every client because
     -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.
