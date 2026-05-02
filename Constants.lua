@@ -89,7 +89,7 @@ K.MELD_SEQ3        = 20
 K.MELD_SEQ4        = 50
 K.MELD_SEQ5        = 100
 K.MELD_CARRE_OTHER = 100   -- T, K, Q, J (any contract type)
-K.MELD_CARRE_A_SUN = 200   -- "Four Hundred" — Sun only
+K.MELD_CARRE_A_SUN = 400   -- "Four Hundred" (الأربع مئة) — four Aces in Sun
 K.MELD_BELOTE      = 20    -- K+Q of trump in same hand, Hokm only
 
 K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped
@@ -184,6 +184,14 @@ K.MSG_SWA          = "Q"  -- "SWA" (سوا) claim: caller asserts they will
                           -- MSG_SWA_OUT.
 K.MSG_SWA_OUT      = "Z"  -- host's outcome of an SWA claim. Payload:
                           -- caller;valid;addA;addB;totA;totB.
+K.MSG_SWA_REQ      = "I"  -- caller asks opponents for permission to
+                          -- claim SWA with 4+ cards remaining (Saudi
+                          -- "Allow me to Sawa"). Payload: seat;
+                          -- encodedHand. Opponents respond via
+                          -- MSG_SWA_RESP. Host arbitrates the result.
+K.MSG_SWA_RESP     = "O"  -- opponent's accept/deny vote on a pending
+                          -- SWA permission request. Payload:
+                          -- responderSeat;accept(0/1);callerSeat.
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:

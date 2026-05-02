@@ -465,12 +465,25 @@ function Bot.PickBid(seat)
 
         -- Ashkal: if our PARTNER bid Hokm earlier in this round and
         -- we hold a Sun-strong hand, call Ashkal so partner is forced
-        -- into Sun (higher multiplier). Only overcalls Hokm — once a
-        -- direct Sun bid is on the table, it already locks the same
-        -- contract type, no point in Ashkal.
+        -- into Sun (higher multiplier). RESTRICTIONS per Saudi rule:
+        --   • Only the 3rd and 4th seats in turn order can Ashkal.
+        --     1st and 2nd bidders never get the option.
+        --   • A prior direct Sun bid blocks Ashkal.
         local partner = R.Partner(seat)
         local partnerBid = S.s.bids and S.s.bids[partner]
-        if partnerBid and partnerBid:sub(1, #K.BID_HOKM) == K.BID_HOKM
+        local bidPos = 0
+        if S.s.dealer then
+            local d = S.s.dealer
+            local order = {
+                (d % 4) + 1, ((d + 1) % 4) + 1,
+                ((d + 2) % 4) + 1, d,
+            }
+            for i, st in ipairs(order) do
+                if st == seat then bidPos = i; break end
+            end
+        end
+        if bidPos >= 3
+           and partnerBid and partnerBid:sub(1, #K.BID_HOKM) == K.BID_HOKM
            and not anySun then
             -- Advanced: only Ashkal if WE'RE weak in the flipped suit
             -- (so partner's J of that suit is doing the work, not ours).

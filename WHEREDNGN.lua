@@ -40,6 +40,18 @@ local DEFAULTS = {
     -- and picks the card with the best aggregate outcome across
     -- worlds. Strictly extends Fzloky / M3lm / Advanced.
     saudiMasterBots = false,
+    -- SWA (سوا) "claim-the-rest" mechanic. Confirmed Saudi-table
+    -- convention even though English-language references (Pagat,
+    -- Saudi Federation gameplay refs) don't document it — Arabic
+    -- video sources cover the full rule shape. Default ON; toggle
+    -- via /baloot swa.
+    allowSWA = true,
+    -- Permission gate: per Saudi convention, calling SWA with ≥4
+    -- cards remaining is "polite to ask" and "in many house rules
+    -- strictly required" — opponents can decline. Calls with ≤3
+    -- cards are instant (no permission). Toggle via /baloot swaperm
+    -- if your group always allows without asking.
+    swaRequiresPermission = true,
 }
 
 local function ensureDB()

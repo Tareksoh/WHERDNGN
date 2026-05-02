@@ -1144,12 +1144,28 @@ local function renderActions()
                 end
 
                 -- Ashkal (Saudi rule): converts the contract to Sun
-                -- with the caller's PARTNER as declarer. Available
-                -- throughout round 1 — including as an OVERCALL of an
-                -- opponent's prior Hokm bid (player is saying "my
-                -- partner can do better with Sun"). Not allowed once
-                -- a direct Sun has already been bid.
-                if not anySun then
+                -- with the caller's PARTNER as declarer. RESTRICTED
+                -- to the 3rd and 4th bidders in turn order — 1st
+                -- and 2nd seats can't call it (per "نظام لعبة البلوت
+                -- الأساسي" rule 3). Also blocked once a direct Sun
+                -- has been bid.
+                local bidPos = 0
+                if S.s.dealer and S.s.localSeat then
+                    -- Bid order: dealer's left first, dealer last.
+                    --   pos 1 = (dealer % 4) + 1
+                    --   pos 2 = ((dealer + 1) % 4) + 1
+                    --   pos 3 = ((dealer + 2) % 4) + 1
+                    --   pos 4 = dealer
+                    local d = S.s.dealer
+                    local order = {
+                        (d % 4) + 1, ((d + 1) % 4) + 1,
+                        ((d + 2) % 4) + 1, d,
+                    }
+                    for i, st in ipairs(order) do
+                        if st == S.s.localSeat then bidPos = i; break end
+                    end
+                end
+                if not anySun and bidPos >= 3 then
                     addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end)
                 end
 
@@ -1261,14 +1277,36 @@ local function renderActions()
             addConfirmAction("|cffff5555TAKWEESH|r",
                 "|cffff5555TAKWEESH? again to confirm|r",
                 function() net().LocalTakweesh() end)
-            -- SWA (سوا) — claim that all remaining tricks are ours.
-            -- Confirm once before sending: if invalid, the penalty is
-            -- the full hand × multiplier in the opponent's direction
-            -- (same shape as a failed takweesh), so the button is
-            -- gated identically.
-            addConfirmAction("|cffffd055SWA|r",
-                "|cffffd055SWA? again to confirm|r",
-                function() net().LocalSWA() end)
+            -- SWA (سوا) — claim-the-rest. Saudi-table convention:
+            -- ≤3 cards = instant, 4+ cards requires opponent
+            -- permission (handled by N.LocalSWA branch). Toggle the
+            -- mechanic via /baloot swa, the permission gate via
+            -- /baloot swaperm.
+            local swaEnabled = (WHEREDNGNDB == nil)
+                or (WHEREDNGNDB.allowSWA ~= false)
+            -- Hide the SWA button if a request is already in flight
+            -- (caller waiting on opponents) so it doesn't double-fire.
+            local swaPending = S.s.swaRequest ~= nil
+            if swaEnabled and not swaPending then
+                addConfirmAction("|cffffd055SWA|r",
+                    "|cffffd055SWA? again to confirm|r",
+                    function() net().LocalSWA() end)
+            end
+            -- If we're a non-caller opponent of a pending SWA request,
+            -- show Accept/Deny vote buttons. Caller's team and the
+            -- caller themselves don't vote.
+            if S.s.swaRequest and S.s.swaRequest.caller
+               and S.s.localSeat ~= S.s.swaRequest.caller
+               and R.TeamOf(S.s.localSeat) ~= R.TeamOf(S.s.swaRequest.caller) then
+                local already = S.s.swaRequest.responses
+                                and S.s.swaRequest.responses[S.s.localSeat]
+                if already == nil then
+                    addAction("|cff66ff88Accept SWA|r",
+                        function() net().LocalSWAResp(true) end)
+                    addAction("|cffff5544Deny SWA|r",
+                        function() net().LocalSWAResp(false) end)
+                end
+            end
             -- AKA (إكَهْ) — partner-coordination call. Visible only when
             -- the local player holds the highest unplayed card in some
             -- non-trump suit (Hokm contracts only). Soft signal: it

@@ -177,6 +177,15 @@ function N.SendSWAOut(caller, valid, addA, addB, totA, totB)
         addA, addB, totA, totB))
 end
 
+function N.SendSWAReq(seat, encodedHand)
+    broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, encodedHand or ""))
+end
+
+function N.SendSWAResp(responder, accept, caller)
+    broadcast(("%s;%d;%s;%d"):format(
+        K.MSG_SWA_RESP, responder, accept and "1" or "0", caller))
+end
+
 function N.SendPlay(seat, card)
     broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
 end
@@ -405,6 +414,11 @@ function N.HandleMessage(prefix, message, channel, sender)
                     fields[3] == "1",
                     tonumber(fields[4]), tonumber(fields[5]),
                     tonumber(fields[6]), tonumber(fields[7]))
+    elseif tag == K.MSG_SWA_REQ then
+        N._OnSWAReq(sender, tonumber(fields[2]), fields[3])
+    elseif tag == K.MSG_SWA_RESP then
+        N._OnSWAResp(sender, tonumber(fields[2]),
+                     fields[3] == "1", tonumber(fields[4]))
     elseif tag == K.MSG_RESYNC_REQ then
         N._OnResyncReq(sender, fields[2])
     elseif tag == K.MSG_RESYNC_RES then
@@ -605,12 +619,20 @@ function N._OnRedouble(sender, seat)
     if S.s.phase ~= K.PHASE_REDOUBLE then return end
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
+    local wasSun = S.s.contract.type == K.BID_SUN
     S.ApplyRedouble(seat)
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
-    -- After Bel-Re the phase is TRIPLE (defender's escalation window).
-    -- MaybeRunBot dispatches the bot triple decision OR arms the AFK
-    -- timer for a human defender.
-    if S.s.isHost then N.MaybeRunBot() end
+    -- After Bel-Re in Hokm: phase is TRIPLE (defender's window).
+    -- After Bel-Re in Sun: terminal — go straight to PLAY (no
+    -- Triple/Four/Gahwa per the Saudi rule). The host triggers
+    -- HostFinishDeal directly so we don't sit in REDOUBLE.
+    if S.s.isHost then
+        if wasSun then
+            N.HostFinishDeal()
+        else
+            N.MaybeRunBot()
+        end
+    end
 end
 
 function N._OnTriple(sender, seat)
@@ -794,6 +816,22 @@ function N._HostStepBid()
     elseif action == "contract" then
         S.ApplyContract(payload.bidder, payload.type, payload.trump)
         N.SendContract(payload.bidder, payload.type, payload.trump or "")
+        -- Saudi Sun rule: contract Sun can be Beled only after one
+        -- team's cumulative game score has exceeded 100 (i.e. ≥101).
+        -- If Sun and neither team is past 100, skip the DOUBLE phase
+        -- entirely and go straight to play. Triple/Four/Gahwa never
+        -- exist for Sun (handled in the Bel cascade).
+        if payload.type == K.BID_SUN then
+            local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+            local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+            if cumA < 101 and cumB < 101 then
+                -- Skip Bel window; clear belPending the contract
+                -- setup populated and finish dealing.
+                S.s.belPending = nil
+                N.HostFinishDeal()
+                return
+            end
+        end
         N.MaybeRunBot()
     elseif action == "round2" then
         S.HostBeginRound2()
@@ -1218,16 +1256,16 @@ function N.HostResolveTakweesh(callerSeat)
         foundIllegal = scanIllegal(S.s.trick.plays)
     end
 
-    -- Takweesh is a punitive mechanic. BOTH branches apply the same
-    -- "failed-contract penalty" formula — the only difference is
-    -- WHICH team eats the penalty:
-    --   caught (offender's illegal play confirmed) → caller's team
-    --     takes handTotal × mult + ALL melds × mult + belote.
-    --   not caught (false call)                     → opp-of-caller
-    --     takes the same.
-    -- handTotal × mult here is the canonical "set" amount per Saudi
-    -- failed-contract rule. Already-earned trick points are NOT
-    -- carried over — that's the punitive nature of the rule.
+    -- Takweesh is the canonical Saudi "Qayd" (قيد) early-termination
+    -- penalty. Per the Saudi scoring system document:
+    --   • Winner takes handTotal × mult (= 26 Sun / 16 Hokm in game
+    --     points after div10).
+    --   • "المشروع لصاحبه" — MELDS STAY WITH THEIR OWNERS. The
+    --     loser's melds do NOT transfer. The winner only adds THEIR
+    --     OWN declared melds × mult to their pile.
+    --   • Belote independent +20 raw to its played-out K+Q holder.
+    -- Same for both branches; the only thing that flips is which
+    -- team is the winner (caught → caller's; not caught → opp).
     local c = S.s.contract
     local winnerTeam = foundIllegal and callerTeam or oppTeam
 
@@ -1244,8 +1282,10 @@ function N.HostResolveTakweesh(callerSeat)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
     local cardA = (winnerTeam == "A") and handTotal or 0
     local cardB = (winnerTeam == "B") and handTotal or 0
-    local mpA = (winnerTeam == "A") and (meldA + meldB) or 0
-    local mpB = (winnerTeam == "B") and (meldA + meldB) or 0
+    -- Per the Saudi Qayd rule: winner takes ONLY their own melds.
+    -- The loser's melds STAY WITH THEM (don't transfer to winner).
+    local mpA = (winnerTeam == "A") and meldA or 0
+    local mpB = (winnerTeam == "B") and meldB or 0
 
     -- Belote (Hokm only, played cards only — Saudi rule rb3haa).
     local belote
@@ -1440,16 +1480,127 @@ function N.LocalSWA()
     if S.s.paused then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
     if not S.s.localSeat or not S.s.contract then return end
+    if WHEREDNGNDB and WHEREDNGNDB.allowSWA == false then return end
+    -- Saudi rule (per video tutorial): calls with 4+ cards remaining
+    -- require opponent permission. Calls with ≤3 cards are instant.
+    -- Toggle the permission requirement via WHEREDNGNDB.swaRequiresPermission.
+    local handCount = #(S.s.hand or {})
+    local needPerm = (WHEREDNGNDB == nil)
+                  or (WHEREDNGNDB.swaRequiresPermission ~= false)
     -- Defensive: clear any stale SWA banner from earlier in the round
     -- before we send the new claim so no flicker / wrong-state UI.
     S.s.swaResult = nil
-    -- Reveal our remaining hand to everyone — that's the "lay it out"
-    -- gesture players make at the table.
+    if needPerm and handCount >= 4 then
+        -- Permission flow: broadcast a request, wait for opponents.
+        local enc = C.EncodeHand(S.s.hand or {})
+        S.s.swaRequest = {
+            caller    = S.s.localSeat,
+            handCount = handCount,
+            responses = {},  -- [seat] = true (accept) / false (deny)
+        }
+        N.SendSWAReq(S.s.localSeat, enc)
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
+    -- Direct claim (≤3 cards or permission disabled): send the actual
+    -- SWA wire and let the host resolve immediately.
     local enc = C.EncodeHand(S.s.hand or {})
     N.SendSWA(S.s.localSeat, enc)
-    -- Host immediately resolves; non-host clients wait for the
-    -- broadcast SWA_OUT to apply scoring.
     if S.s.isHost then N.HostResolveSWA(S.s.localSeat, S.s.hand or {}) end
+end
+
+-- Local response to an in-flight SWA permission request. Called from
+-- the UI's Accept / Deny buttons.
+function N.LocalSWAResp(accept)
+    if S.s.paused then return end
+    local req = S.s.swaRequest
+    if not req or not req.caller then return end
+    -- Caller doesn't vote on their own request.
+    if S.s.localSeat == req.caller then return end
+    -- Only opponents (cross-team) vote; teammates of caller don't
+    -- gate the request.
+    if R.TeamOf(S.s.localSeat) == R.TeamOf(req.caller) then return end
+    -- Idempotence: if we've already voted, ignore.
+    if req.responses and req.responses[S.s.localSeat] ~= nil then return end
+    N.SendSWAResp(S.s.localSeat, accept, req.caller)
+    -- Host: also process locally for the host's own apply.
+    if S.s.isHost then
+        N._OnSWAResp("__host__", S.s.localSeat, accept, req.caller)
+    end
+end
+
+function N._OnSWAReq(sender, seat, encodedHand)
+    if fromSelf(sender) then return end
+    if not seat or seat < 1 or seat > 4 then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    if not authorizeSeat(seat, sender) then return end
+    if WHEREDNGNDB and WHEREDNGNDB.allowSWA == false then return end
+    -- Stash the pending request so the UI can render Accept/Deny
+    -- buttons for opponents and the host can collate responses.
+    S.s.swaRequest = {
+        caller    = seat,
+        handCount = (encodedHand and (#encodedHand / 2)) or 0,
+        responses = {},
+        encodedHand = encodedHand,
+    }
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
+function N._OnSWAResp(sender, responder, accept, caller)
+    -- "__host__" is a synthetic in-process call from N.LocalSWAResp on
+    -- the host; treat it like a remote message but skip fromSelf.
+    if sender ~= "__host__" then
+        if fromSelf(sender) then return end
+        if not authorizeSeat(responder, sender) then return end
+    end
+    local req = S.s.swaRequest
+    if not req or req.caller ~= caller then return end
+    if not responder or R.TeamOf(responder) == R.TeamOf(caller) then return end
+    req.responses = req.responses or {}
+    if req.responses[responder] ~= nil then return end
+    req.responses[responder] = accept
+
+    -- Any deny cancels the request EVERYWHERE — every receiver clears
+    -- the pending request and the round resumes from where it left
+    -- off. No scoring change. We track the denier for a brief UI
+    -- toast so the caller sees who blocked them.
+    if not accept then
+        S.s.swaRequest = nil
+        S.s.swaDenied = {
+            caller   = caller,
+            denier   = responder,
+            ts       = (GetTime and GetTime()) or 0,
+        }
+        if C_Timer and C_Timer.After then
+            C_Timer.After(3.0, function()
+                if S.s.swaDenied
+                   and S.s.swaDenied.caller == caller then
+                    S.s.swaDenied = nil
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end
+            end)
+        end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
+
+    -- Accept counted. Check whether BOTH opponents have now accepted.
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+    if not S.s.isHost then return end
+    local oppTeam = (R.TeamOf(caller) == "A") and "B" or "A"
+    local accepts = 0
+    for s2 = 1, 4 do
+        if R.TeamOf(s2) == oppTeam and req.responses[s2] == true then
+            accepts = accepts + 1
+        end
+    end
+    if accepts >= 2 then
+        -- Both opponents granted permission. Resolve the claim using
+        -- the encoded hand stashed in the request.
+        local hand = C.DecodeHand(req.encodedHand or "")
+        S.s.swaRequest = nil
+        N.HostResolveSWA(caller, hand)
+    end
 end
 
 function N._OnSWA(sender, seat, encodedHand)
@@ -1458,6 +1609,13 @@ function N._OnSWA(sender, seat, encodedHand)
     if S.s.phase ~= K.PHASE_PLAY then return end
     -- Authority: only the seat itself can call SWA on their behalf.
     if not authorizeSeat(seat, sender) then return end
+    -- Host opt-out: in tournament mode (allowSWA = false), drop the
+    -- claim. Hosts who disable SWA mid-round avoid awarding it on a
+    -- late-arriving wire from a peer who hadn't seen the toggle yet.
+    if S.s.isHost and WHEREDNGNDB
+       and WHEREDNGNDB.allowSWA == false then
+        return
+    end
     -- Host is the source of truth. Decode and resolve.
     if S.s.isHost then
         local hand = C.DecodeHand(encodedHand or "")
@@ -1527,8 +1685,11 @@ function N.HostResolveSWA(callerSeat, callerHand)
     local addA, addB, sweepTeam, contractMade
 
     if not valid then
-        -- INVALID SWA → flat penalty: opp takes handTotal × mult +
-        -- ALL melds × mult, belote +20 raw to its played-out holder.
+        -- INVALID SWA → Qayd penalty (Saudi rule): opp takes
+        -- handTotal × mult (= 26 Sun / 16 Hokm in final game
+        -- points). Per "المشروع لصاحبه" the offender's meld STAYS
+        -- WITH THEM — does NOT transfer to opp. Opp only adds
+        -- THEIR OWN melds × mult. Belote independent.
         local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
         local mult = K.MULT_BASE
         if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
@@ -1541,8 +1702,10 @@ function N.HostResolveSWA(callerSeat, callerHand)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         local cardA = (oppOfCaller == "A") and handTotal or 0
         local cardB = (oppOfCaller == "B") and handTotal or 0
-        local mpA = (oppOfCaller == "A") and (meldA + meldB) or 0
-        local mpB = (oppOfCaller == "B") and (meldA + meldB) or 0
+        -- Saudi Qayd: opp takes only their OWN melds. Offender's
+        -- melds don't transfer.
+        local mpA = (oppOfCaller == "A") and meldA or 0
+        local mpB = (oppOfCaller == "B") and meldB or 0
         -- Belote scan (played cards only — Saudi rule rb3haa).
         local beloteOwner
         if c.type == K.BID_HOKM and c.trump then

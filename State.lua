@@ -168,6 +168,13 @@ local TRANSIENT_FIELDS = {
     -- SWA outcome is a per-round banner struct; cleared at next
     -- ApplyStart, no need to persist.
     swaResult = true,
+    -- Pending SWA permission request — ephemeral state alive only
+    -- while opponents are voting. Cleared on accept/deny resolution
+    -- or round transition. Don't persist.
+    swaRequest = true,
+    -- Brief "SWA denied" toast struct, cleared by C_Timer 3 seconds
+    -- after the deny. UI cue only.
+    swaDenied = true,
     -- Round-end display state: only meaningful within the round
     -- they describe. After /reload they'd be stale and could
     -- surface a previous round's banner unintentionally.
@@ -745,8 +752,15 @@ function S.ApplyRedouble(seat)
     if not s.contract then return end
     s.contract.redoubled = true
     s.belrePending = nil
-    -- After Bel-Re, defenders (opp of bidder) get the Triple window.
-    s.phase = K.PHASE_TRIPLE
+    -- After Bel-Re, defenders (opp of bidder) get the Triple window —
+    -- but ONLY in Hokm. Saudi rule: "في الصن لايوجد الثري والفور
+    -- والقهوة" (Sun has no Triple/Four/Gahwa). For Sun, Bel-Re is
+    -- the terminal escalation and we go straight to PLAY.
+    if s.contract.type == K.BID_SUN then
+        s.phase = K.PHASE_PLAY
+    else
+        s.phase = K.PHASE_TRIPLE
+    end
     s.turn = nil
     s.turnKind = nil
 end
@@ -1183,30 +1197,41 @@ function S.HostAdvanceBidding()
                     elseif btype == K.BID_ASHKAL then
                         -- Ashkal (Saudi): converts the contract to Sun
                         -- with the caller's PARTNER as declarer.
-                        -- Available throughout round 1. May OVERCALL a
-                        -- prior Hokm bid (player thinks their partner
-                        -- can do better with Sun) but cannot overcall
-                        -- a prior Sun (a direct Sun bid already locked
-                        -- the same contract type at the same multi).
-                        -- A subsequent direct Sun bid still overcalls
-                        -- this Ashkal (since the higher-ranked direct
-                        -- Sun reassigns declarer to the actual bidder).
-                        local priorSun = false
-                        for _, ord in ipairs(order) do
-                            if ord == seat then break end
-                            if s.bids[ord] == K.BID_SUN then
-                                priorSun = true; break
+                        -- RESTRICTIONS:
+                        --   • Only the 3rd and 4th players in turn
+                        --     order may call Ashkal (per "نظام لعبة
+                        --     البلوت الأساسي" rule 3 — only seats 3
+                        --     & 4 can Ashkal). 1st and 2nd bidders
+                        --     can't.
+                        --   • A prior direct Sun blocks Ashkal —
+                        --     direct Sun already locked the contract
+                        --     type, no point in Ashkal.
+                        --   • A later direct Sun can still overcall
+                        --     Ashkal (reassigns declarer).
+                        local bidPosition = 0
+                        for i, ord in ipairs(order) do
+                            if ord == seat then bidPosition = i; break end
+                        end
+                        if bidPosition < 3 then
+                            -- Silently drop — 1st and 2nd bidders
+                            -- can't legally call Ashkal.
+                        else
+                            local priorSun = false
+                            for _, ord in ipairs(order) do
+                                if ord == seat then break end
+                                if s.bids[ord] == K.BID_SUN then
+                                    priorSun = true; break
+                                end
+                            end
+                            if not priorSun then
+                                winning = {
+                                    seat  = R.Partner(seat),
+                                    type  = K.BID_SUN,
+                                    trump = nil,
+                                    viaAshkal = true,
+                                }
                             end
                         end
-                        if not priorSun then
-                            winning = {
-                                seat  = R.Partner(seat),
-                                type  = K.BID_SUN,
-                                trump = nil,
-                                viaAshkal = true,
-                            }
-                        end
-                        -- else: silently drop the Ashkal
                     elseif btype == K.BID_HOKM and not winning then
                         winning = { seat = seat, type = btype, trump = trump }
                     end

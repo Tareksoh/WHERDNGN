@@ -1,5 +1,108 @@
 # Changelog
 
+## v0.1.33 — Saudi rules sweep (canonical doc-driven fixes)
+
+This release applies the canonical Saudi rules from the
+official scoring + play documents ("نظام التسجيل في البلوت" /
+"نظام لعبة البلوت الأساسي") that the user provided.
+
+**SWA permission flow + canonical Qayd meld rule**
+(see prior notes — same as the earlier draft of this version).
+
+**Ashkal seat restriction (R3)**
+- Per the play-system doc: only the **3rd and 4th players in
+  bidding order** can call Ashkal. The 1st and 2nd bidders
+  cannot.
+- `State.HostAdvanceBidding` now silently drops Ashkal from
+  seats with bid-position < 3.
+- UI hides the Ashkal button for the same seats.
+- `Bot.PickBid` Ashkal heuristic gated on the same condition.
+
+**Sun escalation gate (R5/R7)**
+- Per the doc: *"في الصن لايوجد الثري والفور والقهوة وإنما
+  يلعب دبلاً فقط. ولايحق للاعب أن يدبل خصمه إلا بعد أن يتجاوز
+  المئة أي 101"* — Sun has no Triple/Four/Gahwa; only Bel,
+  and Bel is locked until at least one team's cumulative game
+  score has exceeded 100 (≥101).
+- `Net._HostStepBid` "contract" branch: when contract is Sun
+  and both teams' cumulative <101, skip `PHASE_DOUBLE`
+  entirely and go straight to play via `HostFinishDeal`.
+- `State.ApplyRedouble`: Sun contracts skip `PHASE_TRIPLE` —
+  set phase to PLAY directly so Triple/Four/Gahwa never fire
+  in Sun.
+- `Net._OnRedouble`: Sun contracts call `HostFinishDeal`
+  immediately after Bel-Re instead of dispatching the Triple
+  decision.
+
+**Aces carré value (R8)**
+- `K.MELD_CARRE_A_SUN`: 200 → **400** raw. The doc explicitly
+  says *"الأربع مئة فهي الأربع أكك"* — the four-hundred meld
+  is the four-Aces carré.
+
+## v0.1.33-pre — SWA permission flow + canonical Qayd meld rule
+
+**Saudi-rule fix (HIGH)**
+
+- **Qayd / Tasjeel meld rule**: per the Saudi scoring document
+  ("نظام التسجيل في البلوت"), in any early-termination penalty
+  (takweesh, invalid SWA), the OFFENDER'S MELDS STAY WITH THEM —
+  they don't transfer to the winning side. Previously we were
+  awarding all melds (both teams' values combined) to the winner,
+  which doesn't match the canonical Saudi rule:
+
+  > "المشروع لصاحبه" — *"the meld stays with its owner"*
+
+  Now: winner takes `handTotal × mult` + their OWN melds × mult
+  + belote (independent). The offender keeps their melds (held
+  out from scoring this round). Applies to both
+  `HostResolveTakweesh` and the invalid-SWA branch in
+  `HostResolveSWA`. Math produces exactly **26 (Sun) / 16
+  (Hokm)** game points for the bare penalty as specified by the
+  document.
+
+**SWA permission flow (NEW)**
+
+Per the Saudi-rules video: SWA called with 4+ cards remaining
+requires opponent permission. Implemented as a host-toggleable
+gate.
+
+- New host settings:
+  - `WHEREDNGNDB.allowSWA` (default true) — disables SWA
+    entirely for tournament-mode play.
+  - `WHEREDNGNDB.swaRequiresPermission` (default true) — gates
+    4+-card claims behind opponent vote.
+- New slash commands: `/baloot swa` (toggle SWA on/off),
+  `/baloot swaperm` (toggle the permission gate — same flag
+  via `/baloot swa` if you don't need the second control;
+  see help).
+- New wire tags: `MSG_SWA_REQ` ("I"), `MSG_SWA_RESP` ("O").
+- Flow:
+  - ≤3 cards: instant resolution (current behavior).
+  - 4+ cards: caller broadcasts a request. Both opponents see
+    Accept / Deny buttons in the action panel.
+  - Either opponent denies → request cancelled, 3-second toast
+    shows the denier name, round resumes from where it was.
+  - Both opponents accept → host runs the actual minimax
+    validator and proceeds with normal SWA scoring (now using
+    the Qayd meld rule).
+- The caller's SWA button is hidden while a request is in
+  flight to prevent double-clicks.
+
+**Documentation**
+
+- `WHEREDNGN.lua` flag comment for `allowSWA` updated: SWA is
+  now confirmed Saudi convention (per video tutorial), not just
+  a digital-app shortcut. The English-language references
+  (Pagat, Saudi Federation page) just don't cover it.
+
+**Deferred**
+
+- "Sequence specification" (شرح السوا): caller laying out the
+  exact play order to satisfy the claim. The current minimax
+  validator implicitly handles sequencing (it finds ANY winning
+  order), so this is a UX nicety not a correctness issue. Still
+  on the future-work list.
+
 ## v0.1.32 — five-agent audit sweep
 
 **HIGH-severity fixes**
