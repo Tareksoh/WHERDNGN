@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.1.27 — SWA scoring respects melds + belote
+
+**Fix**
+- SWA was awarding only `handTotal × multiplier` to the winning
+  side, ignoring meld points and belote. A team with 400 worth of
+  melds could lose because the opposing team called SWA — wrong
+  per Saudi rules.
+- `HostResolveSWA` now routes through the same made/failed
+  scoring branches as a regular round:
+  - **Made** (caller's claim valid AND caller is on bidder team):
+    bidder team takes `handTotal × mult`. Meld winner (per
+    `R.CompareMelds`) gets their melds × mult.
+  - **Made** (caller's claim invalid AND caller is on defender
+    team): same — defender's false claim hands the contract back
+    to the bidder.
+  - **Failed** (caller valid + defender, OR caller invalid +
+    bidder): opposing team takes `handTotal × mult` AND ALL
+    declared melds combined × mult — same rule the regular
+    `ScoreRound` uses for a busted contract.
+- Belote (+20 raw, Hokm only) flows to the K+Q-of-trump holder
+  regardless of SWA outcome. SWA can end the round before K+Q
+  are played; we scan unplayed hands so the holder still gets
+  the bonus per Saudi convention.
+
 ## v0.1.26 — round-2 Sun overcall, "wla" pass label
 
 **Saudi rule fix: round 2 has a Sun overcall window**
