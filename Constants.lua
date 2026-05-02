@@ -173,6 +173,10 @@ K.MSG_TAKWEESH_OUT = "z"  -- host's outcome: caught or false-call
 K.MSG_KAWESH       = "a"  -- player calls Kawesh/Saneen (5-card 7/8/9 annul)
 K.MSG_PAUSE        = "p"  -- host pauses/unpauses; payload "1" or "0"
 K.MSG_TEAMS        = "t"  -- host broadcasts custom team names; payload teamA;teamB
+K.MSG_AKA          = "e"  -- partner-coordination signal in Hokm: caller
+                          -- holds the highest unplayed card in a non-trump
+                          -- suit. Tells teammate not to over-trump.
+                          -- Payload: seat;suit (e.g. "e;3;H").
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:
@@ -199,6 +203,7 @@ K.SND_VOICE_THANY  = SND_BASE .. "thany.ogg"      -- "ثآني" (round-2 bidding
 K.SND_VOICE_TRIPLE = SND_BASE .. "triple.ogg"     -- "ثري" (×8 escalation)
 K.SND_VOICE_FOUR   = SND_BASE .. "four.ogg"       -- "فور" (×16 escalation)
 K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.ogg"      -- "قهوة" (×32 escalation, Coffee)
+K.SND_VOICE_AKA    = SND_BASE .. "aka.ogg"        -- "إكَهْ" (AKA signal)
 
 -- -- Tunables ---------------------------------------------------------
 

@@ -156,6 +156,11 @@ local TRANSIENT_FIELDS = {
     -- Takweesh result banner is also transient — its display lifetime
     -- ends when the next round starts (handled by ApplyStart).
     takweeshResult = true,
+    -- AKA call banner is per-trick; its lifetime ends with the trick.
+    -- We rebuild s.playedCardsThisRound from s.tricks on resync, so
+    -- both fields are transient w.r.t. SaveSession.
+    akaCalled = true,
+    playedCardsThisRound = true,
 }
 
 function S.SaveSession()
@@ -206,6 +211,20 @@ function S.RestoreSession()
     s.meldsDeclared= s.meldsDeclared or {}
     s.cumulative   = s.cumulative   or { A = 0, B = 0 }
     s.seats        = s.seats        or { [1]=nil, [2]=nil, [3]=nil, [4]=nil }
+    -- Rebuild the played-cards set from the restored trick history so
+    -- the AKA helper sees the correct unplayed-card frontier after a
+    -- /reload. Includes the partial in-flight trick (s.trick.plays).
+    s.playedCardsThisRound = {}
+    for _, tr in ipairs(s.tricks or {}) do
+        for _, p in ipairs(tr.plays or {}) do
+            s.playedCardsThisRound[p.card] = true
+        end
+    end
+    if s.trick and s.trick.plays then
+        for _, p in ipairs(s.trick.plays) do
+            s.playedCardsThisRound[p.card] = true
+        end
+    end
     return true
 end
 
@@ -535,6 +554,13 @@ function S.ApplyStart(roundNumber, dealer)
     s.tricks       = {}
     s.meldsByTeam  = { A = {}, B = {} }
     s.meldsDeclared= {}
+    -- Per-hand played-cards set used by the AKA helper to compute the
+    -- highest unplayed card in any non-trump suit. Reset every round.
+    s.playedCardsThisRound = {}
+    -- Latest AKA call display state. {seat, suit} while a call is in
+    -- effect (banner shown). Cleared at the start of the next trick so
+    -- the visual cue doesn't linger past its tactical relevance.
+    s.akaCalled    = nil
     s.phase        = K.PHASE_DEAL1
     -- A redeal announcement banner (all-pass) is dismissed by the
     -- arrival of a real ApplyStart for the new round.
@@ -785,6 +811,11 @@ function S.ApplyPlay(seat, card)
         illegal = illegal or nil,
         illegalReason = (illegal and illegalWhy) or nil,
     })
+    -- Track every played card for the AKA helper. We key by the 2-char
+    -- card string (e.g. "AS"). The set is rebuilt on resync from
+    -- s.tricks + s.trick.plays so this purely-additive write is safe.
+    s.playedCardsThisRound = s.playedCardsThisRound or {}
+    s.playedCardsThisRound[card] = true
 
     -- Audio: card-rustle on every play. Fires on every client because
     -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.
@@ -817,6 +848,9 @@ function S.ApplyTrickEnd(winner, points)
         s.lastTrick.plays[#s.lastTrick.plays + 1] = { seat = p.seat, card = p.card }
     end
     s.trick = { leadSuit = nil, plays = {} }
+    -- AKA banner only persists for the trick it was called on; clear it
+    -- so the next trick starts visually clean.
+    s.akaCalled = nil
     -- Audio: only ping when OUR team won the trick. Saves the cue for
     -- moments that feel rewarding to the local player.
     if R and R.TeamOf and s.localSeat then
@@ -825,6 +859,77 @@ function S.ApplyTrickEnd(winner, points)
             B.Sound.Cue(K.SND_TRICK_WON)
         end
     end
+end
+
+-- ---------------------------------------------------------------------
+-- AKA (إكَهْ) — partner-coordination signal in Hokm contracts.
+-- The caller holds the highest unplayed card in a non-trump suit
+-- (Sun ranking: A > 10 > K > Q > J > 9 > 8 > 7). Calling AKA tells
+-- their teammate not to over-trump, since the trick is already won.
+--
+-- This is a SOFT signal — it doesn't constrain anyone's legal plays.
+-- It just plays a voice cue and shows a banner so the partner can
+-- adjust their play.
+-- ---------------------------------------------------------------------
+
+-- Sun ranking order (highest first). Used to walk down the AKA ladder
+-- as cards fall. The trump-only ranking (RANK_TRUMP_HOKM) doesn't
+-- apply here — AKA is by definition called on NON-trump suits.
+local AKA_ORDER = { "A", "T", "K", "Q", "J", "9", "8", "7" }
+
+-- Returns the rank string of the highest unplayed card in `suit`,
+-- ignoring any cards already in s.playedCardsThisRound. Returns nil
+-- if every card in the suit has been played (shouldn't happen mid-hand).
+function S.HighestUnplayedRank(suit)
+    if not suit or suit == "" then return nil end
+    s.playedCardsThisRound = s.playedCardsThisRound or {}
+    for _, r in ipairs(AKA_ORDER) do
+        if not s.playedCardsThisRound[r .. suit] then
+            return r
+        end
+    end
+    return nil
+end
+
+-- Walks the local hand and returns {suit, card} for any non-trump suit
+-- where the local player holds the current AKA, or nil if the local
+-- player doesn't have any AKA available. AKA is only meaningful in
+-- HOKM contracts; non-HOKM contracts return nil.
+function S.LocalAKAcandidate()
+    if not s.contract or s.contract.type ~= K.BID_HOKM then return nil end
+    if not s.hand or #s.hand == 0 then return nil end
+    local trump = s.contract.trump
+    for _, c in ipairs(s.hand) do
+        local r = c:sub(1, 1)
+        local su = c:sub(2, 2)
+        if su ~= trump then
+            local top = S.HighestUnplayedRank(su)
+            if top and top == r then
+                return { suit = su, card = c }
+            end
+        end
+    end
+    return nil
+end
+
+function S.ApplyAKA(seat, suit)
+    if not seat or not suit or suit == "" then return end
+    -- Display state for the rest of the current trick.
+    s.akaCalled = { seat = seat, suit = suit }
+    -- Voice cue fires on every client. The Sound.Cue path is shared
+    -- with the existing escalation cues so timing/ducking matches.
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_AKA) end
+end
+
+-- Meld verdict ("A"/"B"/"tie") is fully recomputable from
+-- s.meldsByTeam + s.contract via R.CompareMelds, so we don't track it
+-- in state or broadcast it. The UI calls this once trick 1 has closed
+-- (#s.tricks >= 1) to drive the strip styling.
+function S.MeldVerdict()
+    if not s.contract then return nil end
+    if not s.tricks or #s.tricks < 1 then return nil end
+    if not R or not R.CompareMelds then return nil end
+    return R.CompareMelds(s.meldsByTeam.A, s.meldsByTeam.B, s.contract)
 end
 
 function S.ApplyRoundEnd(addA, addB, totA, totB)

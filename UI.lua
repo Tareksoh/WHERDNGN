@@ -608,6 +608,46 @@ end
 -- Build: table panel
 -- ----------------------------------------------------------------------
 
+-- Mini-card strip for meld display. 5 slots wide (max meld size), each
+-- slot is a textured card-shape using the existing cards/<rank><suit>
+-- TGAs. Hidden by default; populate via setMeldStripCards(strip, cards,
+-- alpha). Cards array can be 0..5 entries; extra slots stay hidden.
+local function buildMeldStrip(parent)
+    local strip = CreateFrame("Frame", nil, parent)
+    strip:SetSize(110, 26)
+    strip.slots = {}
+    for i = 1, 5 do
+        local slot = strip:CreateTexture(nil, "OVERLAY")
+        slot:SetSize(18, 24)
+        -- 13-px stride so 5 cards (5×18 = 90 raw) overlap into ~78 px,
+        -- giving a tight fan look. Stride keeps each rank visible at
+        -- the top-left corner of the card.
+        slot:SetPoint("LEFT", strip, "LEFT", (i - 1) * 13, 0)
+        slot:Hide()
+        strip.slots[i] = slot
+    end
+    strip:Hide()
+    return strip
+end
+
+local function setMeldStripCards(strip, cards, alpha)
+    if not strip then return end
+    local n = (cards and #cards) or 0
+    if n == 0 then strip:Hide(); return end
+    for i = 1, 5 do
+        local slot = strip.slots[i]
+        if i <= n then
+            local card = cards[i]
+            slot:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\" .. card)
+            slot:SetAlpha(alpha or 1.0)
+            slot:Show()
+        else
+            slot:Hide()
+        end
+    end
+    strip:Show()
+end
+
 local function buildSeatBadge(parent, anchorCb)
     local b = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     b:SetSize(220, 100)
@@ -647,6 +687,13 @@ local function buildSeatBadge(parent, anchorCb)
     meldTx:SetPoint("BOTTOM", 0, 4)
     meldTx:SetTextColor(1, 0.84, 0.30)
 
+    -- Meld card strip: face-up mini cards showing the actual cards in
+    -- this seat's declared melds (per Saudi rule — melds are public the
+    -- moment they're declared during trick 1). Anchored just above the
+    -- text label. Hidden until the seat declares.
+    local meldStrip = buildMeldStrip(b)
+    meldStrip:SetPoint("BOTTOM", b, "BOTTOM", 0, 16)
+
     local dealerTx = makeText(b, 12, "LEFT")
     dealerTx:SetPoint("TOPLEFT", 6, -6)
     dealerTx:SetTextColor(1, 0.84, 0.30)
@@ -658,6 +705,7 @@ local function buildSeatBadge(parent, anchorCb)
 
     return { frame = b, nameText = nameTx, backs = backs,
              countText = countTx, meldText = meldTx,
+             meldStrip = meldStrip,
              dealerText = dealerTx, turnGlow = turnGlow,
              avatar = avatar }
 end
@@ -772,6 +820,21 @@ local function buildTable()
     -- centerPad overlay.
     pauseBtn:SetFrameStrata("FULLSCREEN_DIALOG")
 
+    -- AKA toast: small short-lived banner anchored just ABOVE the
+    -- centre pad's top edge, so it doesn't fight the trick cards for
+    -- space. Hidden by default; renderAKABanner shows it for the
+    -- lifetime of the trick (cleared in ApplyTrickEnd).
+    local akaBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
+    akaBanner:SetSize(180, 26)
+    akaBanner:SetPoint("BOTTOM", centerPad, "TOP", 0, 6)
+    setBackdrop(akaBanner, true,
+        { 0.05, 0.10, 0.05, 0.90 }, COL.legalEdge, 8, "solid")
+    akaBanner:Hide()
+    akaBanner.text = makeText(akaBanner, 13, "CENTER")
+    akaBanner.text:SetPoint("CENTER", 0, 0)
+    akaBanner.text:SetTextColor(0.40, 1.00, 0.55)
+    tablePanel.akaBanner = akaBanner
+
     -- BALOOT! / contract result banner with full breakdown (shown
     -- during PHASE_SCORE / PHASE_GAME_END). Title at top, then per-team
     -- breakdown lines, multiplier, Belote, and final delta.
@@ -831,6 +894,11 @@ local function buildTable()
     localBar.meldText = makeText(localBar, 11, "RIGHT")
     localBar.meldText:SetPoint("RIGHT", -10, 0)
     localBar.meldText:SetTextColor(1, 0.84, 0.30)
+    -- Local meld strip sits ABOVE the local bar so it doesn't fight
+    -- the name label for horizontal space. Same 5-card layout as the
+    -- seat badges, hidden until melds are declared.
+    localBar.meldStrip = buildMeldStrip(localBar)
+    localBar.meldStrip:SetPoint("BOTTOM", localBar, "TOP", 0, 4)
     -- Turn glow overlay matching the other seat badges. Shown only
     -- when it's our turn so the highlight reads as strongly as the
     -- other three seats' glow when they're up.
@@ -1056,6 +1124,20 @@ local function renderActions()
             addConfirmAction("|cffff5555TAKWEESH|r",
                 "|cffff5555TAKWEESH? again to confirm|r",
                 function() net().LocalTakweesh() end)
+            -- AKA (إكَهْ) — partner-coordination call. Visible only when
+            -- the local player holds the highest unplayed card in some
+            -- non-trump suit (Hokm contracts only). Soft signal: it
+            -- broadcasts a voice cue + banner so the partner can avoid
+            -- over-trumping, but the player still has to actually play
+            -- the card themselves.
+            if S.s.contract and S.s.contract.type == K.BID_HOKM then
+                local cand = S.LocalAKAcandidate and S.LocalAKAcandidate()
+                if cand then
+                    local glyph = K.SUIT_GLYPH[cand.suit] or cand.suit
+                    addAction(("|cff66ff88إكَهْ|r %s"):format(glyph),
+                        function() net().LocalAKA(cand.suit) end)
+                end
+            end
         end
     elseif S.s.phase == K.PHASE_SCORE then
         if S.s.isHost then
@@ -1282,6 +1364,40 @@ local function meldsDescForSeat(seat)
     return table.concat(mine, ", ")
 end
 
+-- Concatenate every card across every meld this seat has declared,
+-- ordered by declaration order. Caller (renderSeats) feeds the result
+-- into setMeldStripCards. Caps at 5 cards (the strip's slot count) so
+-- a player declaring 2 melds of 3 cards each has the second meld
+-- partially hidden — by Saudi rule that's fine, the comparison only
+-- cares about the BEST meld each side declared.
+local function meldCardsForSeat(seat)
+    local team = R.TeamOf(seat)
+    local list = S.s.meldsByTeam[team] or {}
+    local out = {}
+    for _, m in ipairs(list) do
+        if m.declaredBy == seat and m.cards then
+            for _, c in ipairs(m.cards) do
+                out[#out + 1] = c
+                if #out >= 5 then return out end
+            end
+        end
+    end
+    return out
+end
+
+-- Visual alpha for a seat's meld strip given the current verdict.
+-- Verdict is computed once trick 1 closes (see S.MeldVerdict). Until
+-- then both teams' strips show at full opacity (declared but not yet
+-- resolved). After resolution: winning team full opacity, losing team
+-- dimmed so the player can still see what was declared but it visibly
+-- "doesn't count".
+local function meldStripAlphaFor(seat)
+    local v = S.MeldVerdict and S.MeldVerdict() or nil
+    if not v then return 1.0 end
+    if v == "tie" then return 0.85 end
+    return (R.TeamOf(seat) == v) and 1.0 or 0.45
+end
+
 local function renderSeats()
     if not S.s.localSeat then return end
 
@@ -1303,6 +1419,10 @@ local function renderSeats()
             end
             b.countText:SetText(("|c"..COL.txtSoft.."%d|r"):format(cnt))
             b.meldText:SetText(meldsDescForSeat(seat))
+            -- Meld card strip: the actual face-up cards for any melds
+            -- this seat declared. Empty list hides the strip.
+            setMeldStripCards(b.meldStrip, meldCardsForSeat(seat),
+                              meldStripAlphaFor(seat))
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
             -- Avatar: bot seats get the bundled colored badge; humans
             -- have no avatar so the seat reads "live player".
@@ -1335,6 +1455,8 @@ local function renderSeats()
     local prefix = me == S.s.dealer and "D " or ""
     lb.nameText:SetText(prefix .. "|c" .. COL.txtGold .. nm .. "|r")
     lb.meldText:SetText(meldsDescForSeat(me))
+    setMeldStripCards(lb.meldStrip, meldCardsForSeat(me),
+                      meldStripAlphaFor(me))
     if S.s.turn == me then
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
         if lb.turnGlow then lb.turnGlow:Show() end
@@ -1814,6 +1936,32 @@ local function renderBanner()
 end
 
 -- Peek-button visibility: only meaningful when there's a previous
+-- AKA banner: small toast above the trick area showing who called
+-- إكَهْ on which suit. Persists until the trick closes (cleared in
+-- State.ApplyTrickEnd).
+local function renderAKABanner()
+    local b = tablePanel and tablePanel.akaBanner
+    if not b then return end
+    local call = S.s.akaCalled
+    if not call or not call.seat or not call.suit
+       or S.s.phase ~= K.PHASE_PLAY then
+        b:Hide(); return
+    end
+    local info = S.s.seats and S.s.seats[call.seat]
+    local nm = (info and info.name) and shortName(info.name) or ("seat " .. call.seat)
+    local glyph = K.SUIT_GLYPH[call.suit] or call.suit
+    -- Recolour based on whether the caller is on our team.
+    local me = S.s.localSeat
+    local teamCol
+    if me and R.TeamOf(call.seat) == R.TeamOf(me) then
+        teamCol = COL.txtUs       -- partner / self call → green
+    else
+        teamCol = COL.txtThem     -- opponent call → red
+    end
+    b.text:SetText(("|c%sإكَهْ|r %s — %s"):format(teamCol, glyph, nm))
+    b:Show()
+end
+
 -- trick to show, the local player hasn't peeked yet this hand, and
 -- we're in the play phase (can't peek during bidding).
 local function renderPeekButton()
@@ -1898,6 +2046,7 @@ function U.Refresh()
         renderCenter()
         renderHand()
         renderBanner()
+        renderAKABanner()
         renderPeekButton()
         renderPauseControls()
     end

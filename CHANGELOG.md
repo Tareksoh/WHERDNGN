@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.1.16 — AKA call (إكَهْ) + meld card display
+
+**New gameplay**
+- AKA (إكَهْ) partner-coordination signal in Hokm contracts. When the
+  local player holds the highest unplayed card in any non-trump suit
+  (Sun ranking: A → 10 → K → Q → J → 9 → 8 → 7), an "إكَهْ" button
+  appears in the action row. Pressing it broadcasts a soft signal:
+  voice cue plays for everyone, banner appears above the trick area
+  showing the suit + caller. The teammate uses this to avoid
+  over-trumping. No legal-play enforcement — purely informational,
+  matching the social signal used at the table.
+- Voice asset (sounds/aka.ogg) — placeholder generated via gTTS;
+  re-bake with `_make_voice_eleven.py aka` on a paid ElevenLabs
+  plan to swap in the Saud voice (consistent with the rest of the
+  Arabic cues).
+
+**New visual**
+- Declared melds now show as face-up mini cards next to each player
+  in addition to the existing text label. Per Saudi rule, melds are
+  public the moment they're declared during trick 1.
+- Once trick 1 closes, the meld-comparison verdict drives strip
+  styling: the winning team's melds stay at full opacity, the losing
+  team's melds dim to 0.45 alpha so the player can see what was
+  declared but it visibly "doesn't count". Ties stay neutral (0.85).
+- Strips appear under the seat-badge card-back fan for opponents and
+  above the local bar for the local player.
+
+**Internals**
+- `s.playedCardsThisRound` set tracks cards played this hand; rebuilt
+  from s.tricks on /reload, marked TRANSIENT for SaveSession.
+- `s.akaCalled` is per-trick ephemeral, cleared by ApplyTrickEnd.
+- Wire: `MSG_AKA = "e"`, payload `seat;suit`. Soft signal — host
+  doesn't need to validate or arbitrate; receivers gate on PHASE_PLAY
+  + HOKM contract.
+
 ## v0.1.15 — multiplayer rejoin after game-end
 
 **Bug fix**

@@ -156,6 +156,14 @@ function N.SendMeld(seat, meld)
         C.EncodeHand(meld.cards or {})))
 end
 
+-- AKA (إكَهْ) signal. The caller's seat tells everyone they hold the
+-- highest unplayed card in `suit`; teammate is supposed to NOT
+-- over-trump. Soft signal — no rule enforcement, just a banner +
+-- voice cue.
+function N.SendAKA(seat, suit)
+    broadcast(("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""))
+end
+
 function N.SendPlay(seat, card)
     broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
 end
@@ -326,6 +334,8 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnPause(sender, fields[2])
     elseif tag == K.MSG_TEAMS then
         N._OnTeams(sender, fields[2], fields[3])
+    elseif tag == K.MSG_AKA then
+        N._OnAKA(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_RESYNC_REQ then
         N._OnResyncReq(sender, fields[2])
     elseif tag == K.MSG_RESYNC_RES then
@@ -1173,6 +1183,25 @@ function N.HostResolveTakweesh(callerSeat)
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
+-- Local AKA call. Validates that the local player actually holds the
+-- highest unplayed card of `suit`, applies + broadcasts the cue.
+-- Soft signal — does not change any legal-play constraints.
+function N.LocalAKA(suit)
+    if S.s.paused then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then return end
+    if not S.s.localSeat then return end
+    if not suit or suit == "" then return end
+    -- Sanity-check: the caller really does hold the AKA in this suit.
+    -- (Anti-misclick + light anti-cheat — UI would have hidden the
+    -- button otherwise, but the network handler shouldn't trust UI.)
+    local cand = S.LocalAKAcandidate()
+    if not cand or cand.suit ~= suit then return end
+    S.ApplyAKA(S.s.localSeat, suit)
+    N.SendAKA(S.s.localSeat, suit)
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
 function N.LocalDeclareMeld(meld)
     if S.s.paused then return end
     if not meld then return end
@@ -1230,6 +1259,23 @@ function N._OnTeams(sender, teamA, teamB)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     S.ApplyTeamNames(teamA, teamB)
+end
+
+-- AKA call from the wire. Soft signal — we apply locally regardless of
+-- whether the caller actually has the AKA (the sender already validated
+-- on their side, and false-claims aren't worth the bandwidth to police).
+function N._OnAKA(sender, seat, suit)
+    if fromSelf(sender) then return end
+    if not seat or seat < 1 or seat > 4 then return end
+    if not suit or suit == "" then return end
+    -- Only meaningful during play; ignore stragglers from a previous
+    -- hand that arrive after PHASE_SCORE.
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    -- AKA is HOKM-only: in Sun there's no trump to over-trump with,
+    -- so the call has no tactical meaning. Drop the message rather
+    -- than display a confusing banner.
+    if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then return end
+    S.ApplyAKA(seat, suit)
 end
 
 -- Resync request (broadcast). Only the host responds, and only if the

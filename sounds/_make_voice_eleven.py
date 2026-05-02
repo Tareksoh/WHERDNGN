@@ -51,7 +51,19 @@ CUES = {
     "triple": "ثري",         # ×8 escalation (defender)
     "four":   "فور",         # ×16 escalation (bidder)
     "gahwa":  "قهوة",        # ×32 escalation (defender, "coffee")
+    "aka":    "إكَهْ",       # AKA call: partner has the highest unplayed
+                             # card in a non-trump suit; teammate should
+                             # not over-trump.
 }
+
+
+def _selected_cues():
+    """If the script is invoked with positional args, only generate
+    those names — handy for adding a single new cue without burning
+    paid-tier credits on the cues that are already baked."""
+    if len(sys.argv) > 1:
+        return {k: v for k, v in CUES.items() if k in sys.argv[1:]}
+    return CUES
 
 
 def to_ogg(mp3_path, ogg_path, quality=4):
@@ -74,7 +86,7 @@ def main():
 
     client = ElevenLabs(api_key=api_key)
 
-    for name, text in CUES.items():
+    for name, text in _selected_cues().items():
         with tempfile.NamedTemporaryFile(
                 suffix=".mp3", delete=False) as tmp:
             mp3 = tmp.name
