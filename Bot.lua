@@ -503,7 +503,8 @@ function Bot.PickBid(seat)
         return K.BID_PASS
     end
 
-    -- Round 2: pass / Hokm-non-flipped / Sun. First non-pass wins.
+    -- Round 2: pass / Hokm-non-flipped / Sun. Both rounds now wait
+    -- for all 4 bids and Sun overcalls Hokm in either round.
     local bestSuit, bestScore = nil, 0
     for _, suit in ipairs(K.SUITS) do
         if suit ~= bidCardSuit then

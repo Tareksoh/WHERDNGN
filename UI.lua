@@ -1103,7 +1103,12 @@ local function renderActions()
     clearActions()
     if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID then
         if S.IsMyTurn() and S.s.turnKind == "bid" then
-            addAction("Pass", function() net().LocalBid(K.BID_PASS) end)
+            -- Pass label: "Pass" in round 1, "wla" (ولا) in round 2 to
+            -- match the Saudi-table verbal convention. The round-2
+            -- pass is essentially "I have no preference / confirm
+            -- the existing bid".
+            local passLabel = (S.s.phase == K.PHASE_DEAL2BID) and "wla" or "Pass"
+            addAction(passLabel, function() net().LocalBid(K.BID_PASS) end)
             local flippedSuit = S.s.bidCard and C.Suit(S.s.bidCard) or nil
             if S.s.phase == K.PHASE_DEAL1 then
                 -- Round 1: scan prior bids to know which buttons apply.

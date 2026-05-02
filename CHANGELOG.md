@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.26 — round-2 Sun overcall, "wla" pass label
+
+**Saudi rule fix: round 2 has a Sun overcall window**
+- Previously round 2 was "first non-pass wins" — seat 3's Hokm bid
+  resolved bidding immediately, robbing seat 4 (and any later
+  seats) of their chance to bid Sun.
+- Now both rounds wait for all 4 bids, and Sun overcalls Hokm in
+  either round. Hokm-vs-Hokm in round 2 still uses first-non-pass
+  ordering. Sun-vs-Sun: first direct Sun locks (same as round 1).
+- Round-2 Hokm-on-flipped-suit drop and Ashkal silently-dropped
+  paths still apply.
+
+**UX**
+- Pass button in round 2 now labelled "wla" (ولا) to match the
+  Saudi verbal convention. Confirms an existing bid or opens a
+  redeal if all 4 say wla.
+
 ## v0.1.25 — SWA full minimax, last-trick visibility, Fzloky tier
 
 **SWA validation upgraded to full minimax**

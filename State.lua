@@ -1193,34 +1193,38 @@ function S.HostAdvanceBidding()
                         winning = { seat = seat, type = btype, trump = trump }
                     end
                 else
-                    -- Round 2: no Ashkal; first non-pass wins.
-                    -- Round-2 Hokm cannot reuse the originally-flipped
-                    -- suit — that suit had its window in round 1, and
-                    -- letting a player re-bid it here would side-step
-                    -- the round-1 Sun overcall. Drop the invalid bid
-                    -- silently (bid records as a non-winner; if all 4
-                    -- end up passing or invalid, we redeal). This is
-                    -- the host-side enforcement to back up the UI gate.
-                    if not winning and btype ~= K.BID_ASHKAL then
+                    -- Round 2: like round 1, Sun overcalls Hokm. Ashkal
+                    -- is NOT available in round 2. Hokm cannot reuse the
+                    -- originally-flipped suit (silently dropped if it
+                    -- comes through). Round 2 ALSO waits for all 4 bids
+                    -- so a later seat can Sun-overcall an earlier Hokm
+                    -- — the Saudi convention is "first non-pass wins"
+                    -- only for HOKM-vs-HOKM ordering, not for the
+                    -- Sun-vs-Hokm overcall window.
+                    if btype == K.BID_SUN then
+                        local priorDirectSun = winning
+                            and winning.type == K.BID_SUN
+                        if not priorDirectSun then
+                            winning = {
+                                seat = seat, type = btype, trump = trump,
+                            }
+                        end
+                    elseif btype == K.BID_HOKM and not winning then
                         local flippedSuit = s.bidCard and C.Suit(s.bidCard) or nil
-                        if btype == K.BID_HOKM and flippedSuit
-                           and trump == flippedSuit then
-                            -- silently dropped — same as a pass
-                        else
+                        if not (flippedSuit and trump == flippedSuit) then
                             winning = { seat = seat, type = btype, trump = trump }
                         end
+                        -- else: silently dropped — same as a pass
                     end
+                    -- Ashkal in round 2: silently dropped (also already
+                    -- gated upstream).
                 end
             end
         end
     end
 
-    -- Round 2 ends as soon as a non-pass appears.
-    if s.bidRound == 2 and winning then
-        return "contract", { bidder = winning.seat, type = winning.type, trump = winning.trump }
-    end
-
-    -- Round 1 must hear all 4 (Sun overcall window).
+    -- Round 1 / Round 2: both wait for all 4 bids before resolving.
+    -- Sun overcalls Hokm in either round.
     if count >= 4 then
         if winning then
             return "contract", { bidder = winning.seat, type = winning.type, trump = winning.trump }
