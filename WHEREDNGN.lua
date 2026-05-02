@@ -30,6 +30,11 @@ local DEFAULTS = {
     -- host via /baloot m3lm or the lobby checkbox. Strictly extends
     -- Advanced — checking M3lm activates both layers.
     m3lmBots = false,
+    -- Fzloky (فظلوكي — "veteran / they leave you no scraps"). Signal-
+    -- aware tier on top of M3lm. Reads partner's first-discard as a
+    -- suit-preference signal and biases lead choice accordingly.
+    -- Strictly extends M3lm (which strictly extends Advanced).
+    fzlokyBots = false,
 }
 
 local function ensureDB()

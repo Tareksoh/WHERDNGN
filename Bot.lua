@@ -45,26 +45,28 @@ local BID_JITTER      = 6   -- ±6 swing per call
 -- play hints. Each is gated individually so we can A/B compare in
 -- play and partial fall-throughs are safe.
 function Bot.IsAdvanced()
-    -- M3lm strictly extends Advanced — every Advanced heuristic also
-    -- runs when M3lm is on. So treat M3lm as implying Advanced.
+    -- All higher tiers strictly extend Advanced.
     return WHEREDNGNDB
        and (WHEREDNGNDB.advancedBots == true
-            or WHEREDNGNDB.m3lmBots == true)
+            or WHEREDNGNDB.m3lmBots == true
+            or WHEREDNGNDB.fzlokyBots == true)
 end
 
--- M3lm (معلم — "master") tier. Pro-level heuristics layered on top
--- of Advanced:
---   • Partner play-style modeling: track how partner plays across
---     the game (trump aggression, Bel frequency, smother tendency,
---     reliability of AKA response). Decisions calibrate to known
---     behaviour rather than averages.
---   • Match-point urgency: beyond Advanced's static "near win/loss"
---     thresholds, factor in distance-to-152 with finer granularity.
---   • Coordinated escalation: if partner Beled / Tripled / Foured
---     in the current contract, bot ramps escalation faster (combined-
---     team-strength signal); if partner held back, more cautious.
+-- M3lm (معلم — "master"). Pro-level heuristics layered on top of
+-- Advanced: partner / opponent play-style ledger, match-point
+-- urgency, and coordinated escalation. Strictly extends Advanced.
 function Bot.IsM3lm()
-    return WHEREDNGNDB and WHEREDNGNDB.m3lmBots == true
+    return WHEREDNGNDB
+       and (WHEREDNGNDB.m3lmBots == true
+            or WHEREDNGNDB.fzlokyBots == true)
+end
+
+-- Fzloky (فظلوكي). Signal-aware tier on top of M3lm. Reads partner's
+-- first-discard (the rank thrown when first failing to follow lead)
+-- as a high/low suit-preference signal and biases the bot's leading
+-- choice toward / away from that suit accordingly.
+function Bot.IsFzloky()
+    return WHEREDNGNDB and WHEREDNGNDB.fzlokyBots == true
 end
 
 local function jitter(base, amp)
@@ -89,6 +91,11 @@ local function emptyMemory()
         m[s] = {
             void   = { S = false, H = false, D = false, C = false },
             played = {},   -- [card] = true
+            -- Fzloky: rank+suit of the FIRST card this seat threw
+            -- when they failed to follow lead suit. High = "lead this",
+            -- low = "don't lead this". Reset per round with the rest
+            -- of memory.
+            firstDiscard = nil,  -- {suit, rank}
         }
     end
     return m
@@ -176,6 +183,12 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     local cardSuit = C.Suit(card)
     if leadSuit and cardSuit ~= leadSuit then
         mem.void[leadSuit] = true
+        -- Fzloky: stash the FIRST off-suit discard. It's the
+        -- moment a seat reveals what they care about — their
+        -- suit-preference signal.
+        if not mem.firstDiscard then
+            mem.firstDiscard = { suit = cardSuit, rank = C.Rank(card) }
+        end
     end
 
     -- M3lm: accumulate per-seat play-style stats across the full game.
@@ -591,6 +604,40 @@ local function pickLead(legal, contract, seat)
         end
     end
 
+    -- Fzloky (signal-aware): if our partner has shown a "lead this
+    -- suit" signal via a HIGH first-discard (A/T/K), prefer leading
+    -- that suit. If their first-discard was LOW (7/8), avoid that
+    -- suit. Operates on top of the Advanced lead heuristics: we
+    -- pick a suit, then fall through to the existing low-from-
+    -- longest logic to choose the actual card.
+    local fzlokyPrefSuit, fzlokyAvoidSuit = nil, nil
+    if Bot.IsFzloky() and Bot._memory then
+        local p = R.Partner(seat)
+        local sig = Bot._memory[p] and Bot._memory[p].firstDiscard
+        if sig and sig.suit then
+            local r = sig.rank
+            if r == "A" or r == "T" or r == "K" then
+                fzlokyPrefSuit = sig.suit
+            elseif r == "7" or r == "8" then
+                fzlokyAvoidSuit = sig.suit
+            end
+        end
+    end
+    if fzlokyPrefSuit then
+        -- Lead our LOWEST card in the preferred suit (partner has
+        -- the high cards there; we lead low for them to win).
+        local fromPref = {}
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == fzlokyPrefSuit
+               and not C.IsTrump(c, contract) then
+                fromPref[#fromPref + 1] = c
+            end
+        end
+        if #fromPref > 0 then
+            return lowestByRank(fromPref, contract)
+        end
+    end
+
     -- Bidder team in Hokm: typical play is "draw trump" (lead high
     -- trump). But not always:
     --   • If we ARE the bidder: stick with high-trump lead (clears
@@ -665,11 +712,24 @@ local function pickLead(legal, contract, seat)
         return lowestByRank(singletons, contract)
     end
 
-    -- 3: lead low from longest non-trump suit.
+    -- 3: lead low from longest non-trump suit. If Fzloky has flagged
+    -- a partner-avoid suit (their LOW first-discard), exclude that
+    -- suit from the longest-pick when an alternative exists.
     if #nonTrumps > 0 then
         local longest, longestN = nil, 0
         for suit, n in pairs(suitCount) do
-            if n > longestN then longest, longestN = suit, n end
+            if suit == fzlokyAvoidSuit and n < (longestN + 2) then
+                -- Skip avoid-suit unless it's overwhelmingly longest
+                -- (≥2 more cards than alternatives).
+            else
+                if n > longestN then longest, longestN = suit, n end
+            end
+        end
+        if not longest then
+            -- Fall back: avoid-suit is the only non-trump we have.
+            for suit, n in pairs(suitCount) do
+                if n > longestN then longest, longestN = suit, n end
+            end
         end
         local fromLongest = {}
         for _, c in ipairs(nonTrumps) do

@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.1.25 — SWA full minimax, last-trick visibility, Fzloky tier
+
+**SWA validation upgraded to full minimax**
+- Previous "sufficient condition" check rejected valid claims like
+  `[A♠ A♦ T♦]` in Sun (lead A♠ → A♦ → T♦, all wins) because it
+  couldn't see that T♦ becomes the boss after A♦ is played.
+- Now `R.IsValidSWA` runs a recursive minimax over the remaining
+  game tree: caller's team picks plays cooperatively, opponents
+  pick adversarially, and the claim is valid iff caller can
+  guarantee winning every remaining trick. Bounded by hand size
+  so worst-case ~ thousands of nodes — fine for a one-time check.
+- "Caller wins" still means trick winner == caller seat (strict
+  reading; partner taking a trick doesn't satisfy the claim).
+
+**Last-trick peek now shows all 4 plays everywhere**
+- The peek button could show only 2–3 cards on non-host clients
+  because `MSG_TRICK` arrived before the 4th `MSG_PLAY` and the
+  trick-end snapshot captured a partial trick.
+- `MSG_TRICK` now carries the full trick payload (leadSuit + all
+  4 seat/card pairs). `_OnTrick` rebuilds `s.trick.plays` from
+  the snapshot before applying trick-end, so `s.lastTrick` is
+  always complete regardless of inter-sender ordering.
+
+**Fzloky tier (signal-aware bots)**
+- New checkbox below M3lm. Slash: `/baloot fzloky`.
+- Tier cascade: `Fzloky → M3lm → Advanced`. Each lower tier is
+  auto-checked-and-disabled when a higher one is on.
+- Fzloky reads partner's first off-suit discard as a high/low
+  suit-preference signal and biases lead choice accordingly:
+  - Partner discards A/T/K → bot prefers leading that suit
+    (lowest card from it; partner has the high cards).
+  - Partner discards 7/8 → bot avoids leading that suit unless
+    no alternative exists.
+- v1 covers first-discard signaling only. Echo / petite-grand
+  peter / "throw the king" are still future work.
+
 ## v0.1.24 — SWA claim, carré tie-break, M3lm UX polish
 
 **New: SWA (سوا) claim mechanic**

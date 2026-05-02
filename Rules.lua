@@ -318,58 +318,130 @@ function R.CompareMelds(meldsA, meldsB, contract)
     else return "tie" end
 end
 
--- SWA (سوا) claim validation. The caller asserts they can win every
--- remaining trick. Returns true if the claim is supportable, false if
--- the host can immediately rule it false.
+-- SWA (سوا) claim validation. The caller asserts they personally
+-- will win EVERY remaining trick. Returns true if the claim is
+-- guaranteed against any opponent strategy.
 --
--- Sufficient (not necessary) condition we check:
---   • For each card in the caller's hand, that card is currently the
---     HIGHEST unplayed card of its suit in the global frontier.
---   • In Hokm: the caller's trump count is ≥ the highest opponent's
---     trump count, so the caller can over-cut any forced rough.
--- This rejects obviously-false claims (e.g. caller has the 7 of a
--- suit nobody else has played) without trying to do a full minimax.
--- Edge cases that "pass" but aren't truly winning are rare and the
--- caller bears the responsibility — same as a Saudi-table SWA.
+-- Implementation: full minimax over remaining plays. Caller's team
+-- (caller + partner) is cooperative — partner picks plays to support
+-- caller; opponents pick plays to break the claim. The claim is
+-- valid iff there's a strategy for caller's team that wins every
+-- remaining trick regardless of what opponents do.
 --
--- callerHand: array of card strings (caller's REMAINING hand)
--- otherHands: { [seat] = array } for the three other seats (also
---             remaining cards only)
--- contract:   {type, trump, ...}
--- highestUnplayed: function(suit) → rank string of highest unplayed
---             card across all hands (caller's hand counted)
-function R.IsValidSWA(callerHand, otherHands, contract, highestUnplayed)
-    if not callerHand or #callerHand == 0 then return false end
-    -- (a) Every caller card must currently be the highest unplayed
-    -- of its suit. We use the supplied frontier function (built by
-    -- the host using S.HighestUnplayedRank or equivalent).
-    if highestUnplayed then
-        for _, c in ipairs(callerHand) do
-            local r = c:sub(1, 1)
-            local su = c:sub(2, 2)
-            if highestUnplayed(su) ~= r then return false end
-        end
+-- "Caller wins" means literally: trick winner is the caller seat.
+-- Partner taking a trick doesn't count — that's a stricter reading
+-- consistent with the Saudi "I claim the rest" gesture (caller plays
+-- their cards out and each one wins). It also rejects the easy
+-- abuse of partner "saving" the claim.
+--
+-- Bounded search: the remaining game tree has at most ~5 cards per
+-- seat × 4 seats with branching factor ≤ 4 (legal-play filter
+-- shrinks it further). Worst case ~ thousands of nodes — fine for
+-- a one-time host-side check at SWA call time.
+--
+-- Args:
+--   callerSeat   — 1..4
+--   hands        — { [1..4] = array of cards } current REMAINING
+--   contract     — { type, trump, ... }
+--   trickState   — { leadSuit, leader, plays } current trick state
+--                  (leader is the seat that started this trick;
+--                  plays may be empty or partial mid-trick)
+function R.IsValidSWA(callerSeat, hands, contract, trickState)
+    if not callerSeat or not hands or not contract then return false end
+    if not trickState then trickState = { plays = {}, leader = callerSeat } end
+
+    -- Done: caller emptied their hand, claim succeeded.
+    if (#(hands[callerSeat] or {})) == 0 then
+        -- Caller must have NO cards left. If anyone else still holds
+        -- cards, those tricks are uncontested by caller (no claim to
+        -- win them). For a "claim the rest" assertion the caller
+        -- must literally play their last card and the rest fall.
+        return true
     end
-    -- (b) Hokm trump check: caller must have at least as much trump
-    -- as the heaviest opponent in trump, so they can over-cut a
-    -- forced trump-in.
-    if contract and contract.type == K.BID_HOKM and contract.trump then
-        local trump = contract.trump
-        local mine = 0
-        for _, c in ipairs(callerHand) do
-            if c:sub(2, 2) == trump then mine = mine + 1 end
-        end
-        local maxOpp = 0
-        for _, hand in pairs(otherHands or {}) do
-            local n = 0
-            for _, c in ipairs(hand or {}) do
-                if c:sub(2, 2) == trump then n = n + 1 end
+
+    local plays = trickState.plays or {}
+    local leadSuit = trickState.leadSuit
+    local leader   = trickState.leader
+
+    -- Resolve a complete trick.
+    if #plays == 4 then
+        local winner = R.CurrentTrickWinner(
+            { leadSuit = leadSuit, plays = plays }, contract)
+        if winner ~= callerSeat then return false end
+        return R.IsValidSWA(callerSeat, hands, contract, {
+            leader = callerSeat, leadSuit = nil, plays = {}
+        })
+    end
+
+    -- Determine next seat to play.
+    local nextSeat
+    if #plays == 0 then
+        nextSeat = leader
+    else
+        nextSeat = (plays[#plays].seat % 4) + 1
+    end
+
+    -- Build legal-play set for this seat.
+    local trickProbe = { leadSuit = leadSuit, plays = plays }
+    local legal = {}
+    local hand = hands[nextSeat] or {}
+    for _, c in ipairs(hand) do
+        local ok = R.IsLegalPlay(c, hand, trickProbe, contract, nextSeat)
+        if ok then legal[#legal + 1] = c end
+    end
+    if #legal == 0 then return false end  -- shouldn't happen
+
+    local function applyMove(card)
+        -- Build new state with `card` removed from nextSeat's hand
+        -- and appended to plays. Shallow copies — recursion only
+        -- inspects, doesn't mutate further.
+        local newHands = {}
+        for s = 1, 4 do
+            local src = hands[s] or {}
+            if s == nextSeat then
+                local out = {}
+                local removed = false
+                for _, c in ipairs(src) do
+                    if not removed and c == card then
+                        removed = true
+                    else
+                        out[#out + 1] = c
+                    end
+                end
+                newHands[s] = out
+            else
+                newHands[s] = src
             end
-            if n > maxOpp then maxOpp = n end
         end
-        if mine < maxOpp then return false end
+        local newPlays = {}
+        for _, p in ipairs(plays) do newPlays[#newPlays + 1] = p end
+        newPlays[#newPlays + 1] = { seat = nextSeat, card = card }
+        local newLead = leadSuit or C.Suit(card)
+        return newHands, {
+            leadSuit = newLead, leader = leader, plays = newPlays,
+        }
     end
-    return true
+
+    local cooperative = (R.TeamOf(nextSeat) == R.TeamOf(callerSeat))
+    if cooperative then
+        -- Caller's team: claim is valid if SOME play leads to a win.
+        for _, card in ipairs(legal) do
+            local nh, ns = applyMove(card)
+            if R.IsValidSWA(callerSeat, nh, contract, ns) then
+                return true
+            end
+        end
+        return false
+    else
+        -- Opponent: claim is valid only if EVERY play leads to a win.
+        for _, card in ipairs(legal) do
+            local nh, ns = applyMove(card)
+            if not R.IsValidSWA(callerSeat, nh, contract, ns) then
+                return false
+            end
+        end
+        return true
+    end
 end
 
 function R.SumMeldValue(list)

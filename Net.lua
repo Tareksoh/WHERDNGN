@@ -182,7 +182,24 @@ function N.SendPlay(seat, card)
 end
 
 function N.SendTrick(winner, points)
-    broadcast(("%s;%d;%d"):format(K.MSG_TRICK, winner, points))
+    -- Snapshot the full trick into the message so non-host clients
+    -- always have the complete play set when ApplyTrickEnd fires —
+    -- network ordering between MSG_PLAY and MSG_TRICK across DIFFERENT
+    -- senders isn't guaranteed, so a non-host could otherwise apply
+    -- trick-end with only 2-3 plays, leaving s.lastTrick incomplete
+    -- and the peek button showing fewer cards than expected.
+    --
+    -- Wire format: leadSuit is one char; each play is 3 chars
+    -- (card[2] + seat[1]), 4 plays = 12 chars.
+    local enc = ""
+    if S.s.trick and S.s.trick.plays then
+        for _, p in ipairs(S.s.trick.plays) do
+            enc = enc .. (p.card or "??") .. tostring(p.seat or 0)
+        end
+    end
+    local leadSuit = (S.s.trick and S.s.trick.leadSuit) or ""
+    broadcast(("%s;%d;%d;%s;%s"):format(
+        K.MSG_TRICK, winner, points, leadSuit, enc))
 end
 
 function N.SendRound(addA, addB, totA, totB)
@@ -330,7 +347,8 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_PLAY then
         N._OnPlay(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_TRICK then
-        N._OnTrick(sender, tonumber(fields[2]), tonumber(fields[3]))
+        N._OnTrick(sender, tonumber(fields[2]), tonumber(fields[3]),
+                   fields[4], fields[5])
     elseif tag == K.MSG_ROUND then
         N._OnRound(sender, tonumber(fields[2]), tonumber(fields[3]), tonumber(fields[4]), tonumber(fields[5]))
     elseif tag == K.MSG_GAMEEND then
@@ -692,9 +710,30 @@ function N._OnPlay(sender, seat, card)
     if S.s.isHost then N._HostStepPlay() end
 end
 
-function N._OnTrick(sender, winner, points)
+function N._OnTrick(sender, winner, points, leadSuit, encPlays)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    -- Authoritative trick snapshot from host. We rebuild s.trick from
+    -- the encoded plays so ApplyTrickEnd's lastTrick stash is complete
+    -- regardless of MSG_PLAY arrival order. Older hosts (pre-v0.1.25)
+    -- send empty leadSuit/encPlays — fall back to the local view.
+    if encPlays and #encPlays >= 3 then
+        local plays = {}
+        for i = 1, #encPlays, 3 do
+            local card = encPlays:sub(i, i + 1)
+            local seat = tonumber(encPlays:sub(i + 2, i + 2))
+            if card and #card == 2 and seat and seat >= 1 and seat <= 4 then
+                plays[#plays + 1] = { seat = seat, card = card }
+            end
+        end
+        if #plays > 0 then
+            S.s.trick = S.s.trick or { plays = {} }
+            S.s.trick.plays = plays
+            if leadSuit and leadSuit ~= "" then
+                S.s.trick.leadSuit = leadSuit
+            end
+        end
+    end
     S.ApplyTrickEnd(winner, points)
     if S.s.isHost then N._HostStepAfterTrick() end
 end
@@ -1381,18 +1420,35 @@ function N.HostResolveSWA(callerSeat, callerHand)
     local callerTeam = R.TeamOf(callerSeat)
     local oppTeam = (callerTeam == "A") and "B" or "A"
 
-    -- Build the frontier helper from S.HighestUnplayedRank (already
-    -- maintained across the round).
-    local highest = function(suit) return S.HighestUnplayedRank(suit) end
-
-    -- Other-hands snapshot for trump-count check.
-    local others = {}
+    -- Snapshot all four hands for the minimax. Caller's hand comes
+    -- in via the message (so non-host bots can call), but the host
+    -- has the source of truth for the other three via hostHands.
+    local hands = { [callerSeat] = callerHand }
     for s2 = 1, 4 do
         if s2 ~= callerSeat then
-            others[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
+            hands[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
         end
     end
-    local valid = R.IsValidSWA(callerHand, others, S.s.contract, highest)
+
+    -- Reconstruct the current trick state for the simulation. If
+    -- the caller is mid-trick (some plays already in s.trick), the
+    -- minimax picks up from there. Otherwise the caller is the
+    -- leader of the next trick.
+    local plays = (S.s.trick and S.s.trick.plays) or {}
+    local leadSuit = S.s.trick and S.s.trick.leadSuit
+    local leader
+    if #plays > 0 then
+        -- Leader is whoever played first in the current trick.
+        leader = plays[1].seat
+    else
+        leader = callerSeat
+    end
+    local trickState = {
+        leadSuit = leadSuit, leader = leader,
+        plays = plays,
+    }
+
+    local valid = R.IsValidSWA(callerSeat, hands, S.s.contract, trickState)
 
     -- Score: full handTotal × multiplier in either direction.
     local c = S.s.contract
