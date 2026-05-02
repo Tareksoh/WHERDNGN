@@ -424,8 +424,22 @@ local function buildMain()
     roundText = makeText(f, 12, "RIGHT")
     roundText:SetPoint("BOTTOMRIGHT", -12, 8)
 
-    contractText = makeText(f, 12, "CENTER")
-    contractText:SetPoint("BOTTOM", 0, 8)
+    -- Contract banner at the bottom of the main frame. Larger / bolder
+    -- than the rest of the status text and sat in a wood-edged plate
+    -- so it reads at a glance ("am I attacking? what's trump?") without
+    -- having to hunt across the screen.
+    local contractBg = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    contractBg:SetSize(360, 24)
+    contractBg:SetPoint("BOTTOM", f, "BOTTOM", 0, 6)
+    setBackdrop(contractBg, true,
+        { 0.06, 0.10, 0.07, 0.92 }, COL.legalEdge, 8, "solid")
+    contractBg:Hide()  -- only shown once a contract exists
+    f.contractBg = contractBg
+
+    contractText = contractBg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    contractText:SetFont(K.CARD_FONT, 15, "OUTLINE")
+    contractText:SetPoint("CENTER", 0, 0)
+    contractText:SetJustifyH("CENTER")
 
     f:Hide()
 end
@@ -609,28 +623,49 @@ end
 -- ----------------------------------------------------------------------
 
 -- Mini-card strip for meld display. 5 slots wide (max meld size).
--- Each slot is a small card-shaped frame: cream body + dark edge
--- (matching makeCardFace) with the rank+suit pip texture inset on
--- top. The body is essential — the card art TGAs are transparent
--- outside the rank/pip artwork, so without a backdrop the cards
--- would look like floating glyphs. Hidden by default; populate
--- via setMeldStripCards(strip, cards, alpha).
+-- Each slot is a Frame with an explicit cream body texture + dark
+-- border textures behind the card-face TGA. We do this with manual
+-- Texture layers rather than BackdropTemplate because BackdropTemplate
+-- is unreliable at sizes this small — the edge file gets clipped and
+-- the bg sometimes fails to render at all. The solid-texture approach
+-- always shows.
 local function buildMeldStrip(parent)
     local strip = CreateFrame("Frame", nil, parent)
-    -- 5 slots × 26 width × 18 stride = 98 px wide. Stride < width so
-    -- the cards overlap slightly into a fan, like a held grip.
-    strip:SetSize(110, 36)
+    strip:SetSize(140, 32)
     strip.slots = {}
+    -- 22×30 cards on a 18-px stride gives a tight fan that fits below
+    -- the seat badge's card-back row without overlapping it. The
+    -- rank pip in the corner of each TGA stays clearly visible at
+    -- this size.
+    local W, H, STRIDE = 22, 30, 18
     for i = 1, 5 do
-        local sf = CreateFrame("Frame", nil, strip, "BackdropTemplate")
-        sf:SetSize(26, 36)
-        sf:SetPoint("LEFT", strip, "LEFT", (i - 1) * 18, 0)
-        setBackdrop(sf, true, COL.cardFace, COL.cardEdge, 4, "solid")
-        local tex = sf:CreateTexture(nil, "ARTWORK")
-        tex:SetPoint("TOPLEFT", 1, -1)
-        tex:SetPoint("BOTTOMRIGHT", -1, 1)
-        tex:Hide()
+        local sf = CreateFrame("Frame", nil, strip)
+        sf:SetSize(W, H)
+        sf:SetPoint("LEFT", strip, "LEFT", (i - 1) * STRIDE, 0)
         sf:SetFrameLevel(strip:GetFrameLevel() + i) -- later cards on top
+
+        -- Edge: a dark slab behind everything else.
+        local edge = sf:CreateTexture(nil, "BACKGROUND", nil, 0)
+        edge:SetAllPoints(sf)
+        edge:SetColorTexture(COL.cardEdge[1], COL.cardEdge[2],
+                             COL.cardEdge[3], 1.0)
+
+        -- Body: cream slab inset 1 px on each side, sitting on top of
+        -- the edge so it reads as a 1-px frame around the body.
+        local body = sf:CreateTexture(nil, "BACKGROUND", nil, 1)
+        body:SetPoint("TOPLEFT", sf, "TOPLEFT", 1, -1)
+        body:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", -1, 1)
+        body:SetColorTexture(COL.cardFace[1], COL.cardFace[2],
+                             COL.cardFace[3], 1.0)
+
+        -- Card-face artwork on top of the body. The art TGA is
+        -- transparent outside the pips, which is exactly why we need
+        -- the body slab beneath.
+        local tex = sf:CreateTexture(nil, "ARTWORK")
+        tex:SetPoint("TOPLEFT", sf, "TOPLEFT", 1, -1)
+        tex:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", -1, 1)
+        tex:Hide()
+
         sf:Hide()
         strip.slots[i] = { frame = sf, tex = tex }
     end
@@ -697,11 +732,13 @@ local function buildSeatBadge(parent, anchorCb)
     meldTx:SetTextColor(1, 0.84, 0.30)
 
     -- Meld card strip: face-up mini cards showing the actual cards in
-    -- this seat's declared melds (per Saudi rule — melds are public the
-    -- moment they're declared during trick 1). Anchored just above the
-    -- text label. Hidden until the seat declares.
+    -- this seat's declared melds. Per Saudi rule the cards are laid
+    -- on the table during trick 1 only, then rejoin the hand. The
+    -- strip sits at the bottom of the badge over the meldText slot —
+    -- once the strip becomes visible we hide the text label so the
+    -- two don't overlap.
     local meldStrip = buildMeldStrip(b)
-    meldStrip:SetPoint("BOTTOM", b, "BOTTOM", 0, 16)
+    meldStrip:SetPoint("BOTTOM", b, "BOTTOM", 0, 4)
 
     local dealerTx = makeText(b, 12, "LEFT")
     dealerTx:SetPoint("TOPLEFT", 6, -6)
@@ -1431,15 +1468,19 @@ local function renderSeats()
                 if i <= cnt then b.backs[i]:Show() else b.backs[i]:Hide() end
             end
             b.countText:SetText(("|c"..COL.txtSoft.."%d|r"):format(cnt))
-            b.meldText:SetText(meldsDescForSeat(seat))
-            -- Meld card strip: face-up cards for any melds this seat
-            -- declared. Per Saudi rule, only visible during trick 1
-            -- (meldStripVisible) — after that the cards rejoin the
-            -- hand and only the score they earned is remembered.
+            -- Meld card strip + text label: per Saudi rule, melds are
+            -- public during trick 1 only. After trick 1 closes, the
+            -- cards rejoin the hand and only the score they earned is
+            -- remembered (round-end banner shows the totals). Hide
+            -- BOTH the mini-card strip and the text label after
+            -- trick 1 so the seat badge doesn't keep advertising
+            -- declared melds for the rest of the round.
             if meldStripVisible() then
                 setMeldStripCards(b.meldStrip, meldCardsForSeat(seat), 1.0)
-            elseif b.meldStrip then
-                b.meldStrip:Hide()
+                b.meldText:SetText("")  -- strip carries the info; avoid overlap
+            else
+                if b.meldStrip then b.meldStrip:Hide() end
+                b.meldText:SetText("")
             end
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
             -- Avatar: bot seats get the bundled colored badge; humans
@@ -1472,11 +1513,14 @@ local function renderSeats()
     local nm = rawName and shortName(rawName) or "you"
     local prefix = me == S.s.dealer and "D " or ""
     lb.nameText:SetText(prefix .. "|c" .. COL.txtGold .. nm .. "|r")
-    lb.meldText:SetText(meldsDescForSeat(me))
+    -- Local meld strip + text mirror the seat-badge rule: visible only
+    -- during trick 1, hidden for the rest of the round.
     if meldStripVisible() then
         setMeldStripCards(lb.meldStrip, meldCardsForSeat(me), 1.0)
-    elseif lb.meldStrip then
-        lb.meldStrip:Hide()
+        lb.meldText:SetText("")
+    else
+        if lb.meldStrip then lb.meldStrip:Hide() end
+        lb.meldText:SetText("")
     end
     if S.s.turn == me then
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
@@ -2035,16 +2079,35 @@ local function renderStatus()
     -- contract
     if S.s.contract then
         local c = S.s.contract
-        local typeStr = c.type == K.BID_SUN and "SUN" or "HOKM"
-        local trumpStr = c.trump and (" " .. K.SUIT_GLYPH[c.trump]) or ""
+        -- Contract type — gold for HOKM, white for SUN.
+        local typeStr = (c.type == K.BID_SUN)
+            and "|cffeeeeeeSUN|r"
+            or  "|cffffd055HOKM|r"
+        local trumpStr = ""
+        if c.trump then
+            local glyph = K.SUIT_GLYPH[c.trump] or c.trump
+            -- Red for red-suit trumps, light grey for black.
+            local col = (c.trump == "H" or c.trump == "D")
+                and "|cffff5555" or "|cffeeeeee"
+            trumpStr = (" %s%s|r"):format(col, glyph)
+        end
         local mods = {}
-        if c.doubled then mods[#mods + 1] = "Bel" end
-        if c.redoubled then mods[#mods + 1] = "Bel-Re" end
-        local modStr = #mods > 0 and (" [" .. table.concat(mods, "+") .. "]") or ""
-        local bidder = c.bidder and S.s.seats[c.bidder] and shortName(S.s.seats[c.bidder].name) or "?"
-        contractText:SetText(("Contract: %s — %s%s%s"):format(bidder, typeStr, trumpStr, modStr))
+        if c.doubled    then mods[#mods + 1] = "Bel"    end
+        if c.redoubled  then mods[#mods + 1] = "Bel-Re" end
+        if c.tripled    then mods[#mods + 1] = "x8"     end
+        if c.foured     then mods[#mods + 1] = "x16"    end
+        if c.gahwa      then mods[#mods + 1] = "x32"    end
+        local modStr = #mods > 0
+            and (" |cffff7755[" .. table.concat(mods, "+") .. "]|r")
+            or ""
+        local bidder = (c.bidder and S.s.seats[c.bidder]
+                        and shortName(S.s.seats[c.bidder].name)) or "?"
+        contractText:SetText(("|cffaaaaaaContract:|r %s%s  by  |cff66ddff%s|r%s"):format(
+            typeStr, trumpStr, bidder, modStr))
+        if f.contractBg then f.contractBg:Show() end
     else
         contractText:SetText("")
+        if f.contractBg then f.contractBg:Hide() end
     end
 
     -- round

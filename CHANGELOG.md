@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.1.18 — meld backdrop fix, hand sort, contract banner
+
+**Fixes**
+- Meld mini-cards now render with a solid cream body + dark edge
+  drawn from explicit Texture layers (BACKGROUND/0 for the edge,
+  BACKGROUND/1 for the body, ARTWORK for the card face). The
+  previous BackdropTemplate approach didn't reliably render at
+  small sizes, leaving the cards transparent. Slot bumped to 22×30.
+- Meld strip and meldText label both hide once trick 1 closes,
+  matching the Saudi rule that melds are public during trick 1
+  only. Previously the text label persisted for the whole round
+  alongside the strip.
+
+**UX polish**
+- Hand sort now groups suits by colour (♣ ♠ ♥ ♦ → black, black,
+  red, red) instead of the interleaved black-red-red-black layout
+  that the old K.SUIT_INDEX produced. One colour boundary in the
+  middle of the hand instead of two — easier to scan.
+- Contract line at the bottom of the window upgraded to a wood-edged
+  plate with a 15-px outlined font: `Contract: HOKM ♥  by  Bidder
+  [Bel+x16]`. The plate auto-hides outside an active contract.
+  Modifier list now also shows Triple/Four/Gahwa multipliers.
+
 ## v0.1.17 — meld display polish + AKA label fix
 
 **Fixes**

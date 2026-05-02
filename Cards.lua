@@ -163,13 +163,18 @@ function M.IsKaweshHand(hand)
     return true
 end
 
--- Sort a hand visually: by suit, then by trick rank descending.
--- Stable for display only — doesn't affect game state.
+-- Sort a hand visually: by display-suit order, then by trick rank
+-- descending. Display order groups by colour so black suits sit next
+-- to each other and red suits sit next to each other, instead of the
+-- interleaved B R R B layout that K.SUIT_INDEX (used for trick logic)
+-- would produce. Stable for display only — doesn't affect game state.
+local SUIT_DISPLAY = { C = 1, S = 2, H = 3, D = 4 }  -- ♣ ♠ ♥ ♦  (B B R R)
+
 function M.SortHand(cards, contract)
     contract = contract or { type = K.BID_SUN }
     table.sort(cards, function(a, b)
         local sa, sb = M.Suit(a), M.Suit(b)
-        if sa ~= sb then return K.SUIT_INDEX[sa] < K.SUIT_INDEX[sb] end
+        if sa ~= sb then return SUIT_DISPLAY[sa] < SUIT_DISPLAY[sb] end
         return M.TrickRank(a, contract) > M.TrickRank(b, contract)
     end)
     return cards
