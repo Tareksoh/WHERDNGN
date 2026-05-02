@@ -49,7 +49,8 @@ function Bot.IsAdvanced()
     return WHEREDNGNDB
        and (WHEREDNGNDB.advancedBots == true
             or WHEREDNGNDB.m3lmBots == true
-            or WHEREDNGNDB.fzlokyBots == true)
+            or WHEREDNGNDB.fzlokyBots == true
+            or WHEREDNGNDB.saudiMasterBots == true)
 end
 
 -- M3lm (معلم — "master"). Pro-level heuristics layered on top of
@@ -58,7 +59,8 @@ end
 function Bot.IsM3lm()
     return WHEREDNGNDB
        and (WHEREDNGNDB.m3lmBots == true
-            or WHEREDNGNDB.fzlokyBots == true)
+            or WHEREDNGNDB.fzlokyBots == true
+            or WHEREDNGNDB.saudiMasterBots == true)
 end
 
 -- Fzloky (فظلوكي). Signal-aware tier on top of M3lm. Reads partner's
@@ -66,7 +68,13 @@ end
 -- as a high/low suit-preference signal and biases the bot's leading
 -- choice toward / away from that suit accordingly.
 function Bot.IsFzloky()
-    return WHEREDNGNDB and WHEREDNGNDB.fzlokyBots == true
+    return WHEREDNGNDB
+       and (WHEREDNGNDB.fzlokyBots == true
+            or WHEREDNGNDB.saudiMasterBots == true)
+end
+
+function Bot.IsSaudiMaster()
+    return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots == true
 end
 
 local function jitter(base, amp)

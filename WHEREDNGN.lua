@@ -35,6 +35,11 @@ local DEFAULTS = {
     -- suit-preference signal and biases lead choice accordingly.
     -- Strictly extends M3lm (which strictly extends Advanced).
     fzlokyBots = false,
+    -- Saudi Master tier (top): determinization-sampling MCTS-flavoured
+    -- decision engine. At each play, samples plausible opponent hands
+    -- and picks the card with the best aggregate outcome across
+    -- worlds. Strictly extends Fzloky / M3lm / Advanced.
+    saudiMasterBots = false,
 }
 
 local function ensureDB()

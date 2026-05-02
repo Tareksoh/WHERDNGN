@@ -2098,7 +2098,15 @@ function N.MaybeRunBot()
                 end
                 S.s.meldsDeclared[seat] = true
             end
-            local card = B.Bot.PickPlay(seat)
+            -- Saudi Master tier picks via determinization sampling
+            -- and falls through to Bot.PickPlay if it bails (e.g.,
+            -- single legal play). Lower tiers go straight to PickPlay.
+            local card = nil
+            if B.BotMaster and B.BotMaster.PickPlay
+               and B.Bot.IsSaudiMaster and B.Bot.IsSaudiMaster() then
+                card = B.BotMaster.PickPlay(seat)
+            end
+            if not card then card = B.Bot.PickPlay(seat) end
             if not card then return end
             -- Advanced bot: if we're leading and we hold the AKA of a
             -- non-trump suit, broadcast the partner-coordination

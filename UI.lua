@@ -668,6 +668,16 @@ local function buildLobby()
             .. "signal: a high discard (A/T/K) means \"lead this\", "
             .. "a low discard (7/8) means \"avoid this\". Bot biases "
             .. "lead choice accordingly.")
+    lobbyPanel.saudiMasterCheck = makeBotDifficultyCheck(
+        "Saudi Master", 12, true,
+        function() return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots end,
+        function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.saudiMasterBots = v end,
+        "Top tier (ISMCTS-flavoured). At each play decision, the "
+            .. "bot samples 30 plausible opponent hands consistent "
+            .. "with bidding history + observed plays + voids, then "
+            .. "for each candidate card simulates the rest of the "
+            .. "round across all worlds. Picks the card with the "
+            .. "best aggregate outcome. ~150 ms per move.")
 
     joinBtn = makeButton(lobbyPanel, "Join", 100, 26)
     joinBtn:SetPoint("BOTTOM", 0, 44)
@@ -1819,17 +1829,18 @@ local function renderLobby()
     -- Bot difficulty checkboxes: host-only, lobby-only. Re-sync state
     -- with WHEREDNGNDB on every render so slash-command toggles
     -- propagate without a click. The cascade is:
-    --   Fzloky → implies M3lm → implies Advanced
+    --   Saudi Master → Fzloky → M3lm → Advanced
     -- Lower-tier checkboxes auto-tick AND grey out when a higher
-    -- tier is on, so the player sees the inclusion at a glance.
+    -- tier is on.
     local hostInLobby = S.s.isHost and S.s.phase == K.PHASE_LOBBY
+    local masterOn = WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots == true
     local fzlokyOn = WHEREDNGNDB and WHEREDNGNDB.fzlokyBots == true
     local m3lmOn   = WHEREDNGNDB and WHEREDNGNDB.m3lmBots == true
     local advOn    = WHEREDNGNDB and WHEREDNGNDB.advancedBots == true
     if lobbyPanel.advancedCheck then
         lobbyPanel.advancedCheck:SetShown(hostInLobby)
-        lobbyPanel.advancedCheck:SetChecked(advOn or m3lmOn or fzlokyOn)
-        if m3lmOn or fzlokyOn then
+        lobbyPanel.advancedCheck:SetChecked(advOn or m3lmOn or fzlokyOn or masterOn)
+        if m3lmOn or fzlokyOn or masterOn then
             lobbyPanel.advancedCheck:Disable()
         else
             lobbyPanel.advancedCheck:Enable()
@@ -1837,8 +1848,8 @@ local function renderLobby()
     end
     if lobbyPanel.m3lmCheck then
         lobbyPanel.m3lmCheck:SetShown(hostInLobby)
-        lobbyPanel.m3lmCheck:SetChecked(m3lmOn or fzlokyOn)
-        if fzlokyOn then
+        lobbyPanel.m3lmCheck:SetChecked(m3lmOn or fzlokyOn or masterOn)
+        if fzlokyOn or masterOn then
             lobbyPanel.m3lmCheck:Disable()
         else
             lobbyPanel.m3lmCheck:Enable()
@@ -1846,7 +1857,16 @@ local function renderLobby()
     end
     if lobbyPanel.fzlokyCheck then
         lobbyPanel.fzlokyCheck:SetShown(hostInLobby)
-        lobbyPanel.fzlokyCheck:SetChecked(fzlokyOn)
+        lobbyPanel.fzlokyCheck:SetChecked(fzlokyOn or masterOn)
+        if masterOn then
+            lobbyPanel.fzlokyCheck:Disable()
+        else
+            lobbyPanel.fzlokyCheck:Enable()
+        end
+    end
+    if lobbyPanel.saudiMasterCheck then
+        lobbyPanel.saudiMasterCheck:SetShown(hostInLobby)
+        lobbyPanel.saudiMasterCheck:SetChecked(masterOn)
     end
     -- Swap buttons only visible to the host while in lobby phase
     local canSwap = S.s.isHost and S.s.phase == K.PHASE_LOBBY

@@ -20,6 +20,7 @@ Rules.lua
 # Game runtime
 State.lua
 Bot.lua
+BotMaster.lua
 Net.lua
 
 # UI

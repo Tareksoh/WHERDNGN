@@ -17,6 +17,7 @@ local function help()
     print("  /baloot advanced     - toggle Advanced bot heuristics (host only)")
     print("  /baloot m3lm         - toggle M3lm (pro) bot tier (host only)")
     print("  /baloot fzloky       - toggle Fzloky (signal-aware) tier (host only)")
+    print("  /baloot saudimaster  - toggle Saudi Master (ISMCTS) tier (host only)")
     print("  /baloot start        - host: start the round once lobby is full")
     print("  /baloot debug        - toggle debug logging")
     print("  /baloot log [N]      - dump last N log lines (default 50)")
@@ -122,6 +123,14 @@ local function dispatch(msg)
         WHEREDNGNDB = WHEREDNGNDB or {}
         WHEREDNGNDB.fzlokyBots = not WHEREDNGNDB.fzlokyBots
         say("Fzloky (signal-aware) bots = " .. tostring(WHEREDNGNDB.fzlokyBots))
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
+
+    if msg == "saudimaster" or msg == "master+" or msg == "ismcts" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.saudiMasterBots = not WHEREDNGNDB.saudiMasterBots
+        say("Saudi Master (ISMCTS) bots = " .. tostring(WHEREDNGNDB.saudiMasterBots))
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.1.31 — Saudi Master tier (ISMCTS-flavoured)
+
+**New tier: Saudi Master** — top of the cascade
+`Saudi Master → Fzloky → M3lm → Advanced`. New module
+`BotMaster.lua` (~280 lines) implements determinization-sampling
+play decisions:
+- At each play, sample 30 plausible opponent hands consistent
+  with our cards + observed plays + inferred voids.
+- For each candidate card, simulate the rest of the round across
+  all 30 worlds using existing pickFollow / pickLead heuristics
+  as the rollout policy.
+- Pick the card with the best aggregate team score.
+- Sampler honours per-seat void inference from `Bot._memory`.
+
+Bidding, melds, and escalations still flow through the
+M3lm/Fzloky paths since the bidding tree doesn't benefit from
+sampling at the same scale; only PLAY decisions get the ISMCTS
+treatment. Performance budget ~150 ms per move (30 worlds × ≤8
+candidate cards × ~25 cheap rollout plays).
+
+UI: new "Saudi Master" checkbox at the bottom of the lobby
+difficulty stack. Slash: `/baloot saudimaster` (also accepts
+`master+` and `ismcts`). Cascade rules: ticking Saudi Master
+auto-checks Fzloky / M3lm / Advanced (greyed). `Bot.IsSaudiMaster()`
+gates the new picker.
+
 ## v0.1.30 — SWA scoring rebuilt, takweesh simplified
 
 **SWA scoring fix (HIGH severity)**
