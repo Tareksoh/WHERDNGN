@@ -164,6 +164,19 @@ function N.SendAKA(seat, suit)
     broadcast(("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""))
 end
 
+-- SWA broadcast: caller declares they'll win all remaining tricks
+-- and reveals their remaining hand for verification. The host
+-- responds with an MSG_SWA_OUT result (valid + point delta).
+function N.SendSWA(seat, encodedHand)
+    broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, encodedHand or ""))
+end
+
+function N.SendSWAOut(caller, valid, addA, addB, totA, totB)
+    broadcast(("%s;%d;%s;%d;%d;%d;%d"):format(
+        K.MSG_SWA_OUT, caller, valid and "1" or "0",
+        addA, addB, totA, totB))
+end
+
 function N.SendPlay(seat, card)
     broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
 end
@@ -336,6 +349,13 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnTeams(sender, fields[2], fields[3])
     elseif tag == K.MSG_AKA then
         N._OnAKA(sender, tonumber(fields[2]), fields[3])
+    elseif tag == K.MSG_SWA then
+        N._OnSWA(sender, tonumber(fields[2]), fields[3])
+    elseif tag == K.MSG_SWA_OUT then
+        N._OnSWAOut(sender, tonumber(fields[2]),
+                    fields[3] == "1",
+                    tonumber(fields[4]), tonumber(fields[5]),
+                    tonumber(fields[6]), tonumber(fields[7]))
     elseif tag == K.MSG_RESYNC_REQ then
         N._OnResyncReq(sender, fields[2])
     elseif tag == K.MSG_RESYNC_RES then
@@ -1299,6 +1319,119 @@ end
 -- AKA call from the wire. Soft signal — we apply locally regardless of
 -- whether the caller actually has the AKA (the sender already validated
 -- on their side, and false-claims aren't worth the bandwidth to police).
+-- Local SWA call. Validates phase + sends the remaining hand. Host
+-- (which has all four hands) makes the final decision.
+function N.LocalSWA()
+    if S.s.paused then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    if not S.s.localSeat or not S.s.contract then return end
+    -- Defensive: clear any stale SWA banner from earlier in the round
+    -- before we send the new claim so no flicker / wrong-state UI.
+    S.s.swaResult = nil
+    -- Reveal our remaining hand to everyone — that's the "lay it out"
+    -- gesture players make at the table.
+    local enc = C.EncodeHand(S.s.hand or {})
+    N.SendSWA(S.s.localSeat, enc)
+    -- Host immediately resolves; non-host clients wait for the
+    -- broadcast SWA_OUT to apply scoring.
+    if S.s.isHost then N.HostResolveSWA(S.s.localSeat, S.s.hand or {}) end
+end
+
+function N._OnSWA(sender, seat, encodedHand)
+    if fromSelf(sender) then return end
+    if not seat or seat < 1 or seat > 4 then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    -- Authority: only the seat itself can call SWA on their behalf.
+    if not authorizeSeat(seat, sender) then return end
+    -- Host is the source of truth. Decode and resolve.
+    if S.s.isHost then
+        local hand = C.DecodeHand(encodedHand or "")
+        N.HostResolveSWA(seat, hand)
+    end
+end
+
+function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    if not caller then return end
+    -- Mirror the takweesh-result struct so the score banner can
+    -- render the SWA outcome with its own copy.
+    S.s.swaResult = { caller = caller, valid = valid }
+    S.s.lastRoundResult = nil
+    S.s.trick = nil
+    S.ApplyRoundEnd(addA or 0, addB or 0, totA or 0, totB or 0)
+end
+
+-- Host-only: resolve an SWA claim. Validates via R.IsValidSWA, then
+-- scores the round.
+--
+-- Penalty convention: SUCCESS and FAILURE are SYMMETRIC — full
+-- handTotal × multiplier in either direction. We don't add a
+-- premium for a successful claim. This matches the takweesh shape
+-- (where caller eats the same penalty they could have earned) and
+-- keeps the risk/reward calculus straightforward. Other Saudi
+-- variants apply a 1.5× / 2× premium for a successful SWA;
+-- if you want that, change the `valid` branch to use a higher
+-- multiplier.
+function N.HostResolveSWA(callerSeat, callerHand)
+    if not S.s.isHost or not S.s.contract then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    N.CancelTurnTimer()
+
+    local callerTeam = R.TeamOf(callerSeat)
+    local oppTeam = (callerTeam == "A") and "B" or "A"
+
+    -- Build the frontier helper from S.HighestUnplayedRank (already
+    -- maintained across the round).
+    local highest = function(suit) return S.HighestUnplayedRank(suit) end
+
+    -- Other-hands snapshot for trump-count check.
+    local others = {}
+    for s2 = 1, 4 do
+        if s2 ~= callerSeat then
+            others[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
+        end
+    end
+    local valid = R.IsValidSWA(callerHand, others, S.s.contract, highest)
+
+    -- Score: full handTotal × multiplier in either direction.
+    local c = S.s.contract
+    local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
+    local mult = K.MULT_BASE
+    if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
+    if     c.gahwa     then mult = mult * K.MULT_GAHWA
+    elseif c.foured    then mult = mult * K.MULT_FOUR
+    elseif c.tripled   then mult = mult * K.MULT_TRIPLE
+    elseif c.redoubled then mult = mult * K.MULT_BELRE
+    elseif c.doubled   then mult = mult * K.MULT_BEL end
+
+    local raw = handTotal * mult
+    local final = math.floor((raw + 4) / 10)
+    local winnerTeam = valid and callerTeam or oppTeam
+    local addA = (winnerTeam == "A") and final or 0
+    local addB = (winnerTeam == "B") and final or 0
+    local totA = (S.s.cumulative.A or 0) + addA
+    local totB = (S.s.cumulative.B or 0) + addB
+
+    S.s.swaResult = { caller = callerSeat, valid = valid }
+    S.s.lastRoundResult = nil
+    S.s.trick = nil
+    S.ApplyRoundEnd(addA, addB, totA, totB)
+    N.SendSWAOut(callerSeat, valid, addA, addB, totA, totB)
+
+    if totA >= S.s.target or totB >= S.s.target then
+        local winner
+        if totA == totB and S.s.contract and S.s.contract.bidder then
+            winner = R.TeamOf(S.s.contract.bidder)
+        elseif totA > totB then winner = "A"
+        elseif totB > totA then winner = "B"
+        else                    winner = "A" end
+        S.ApplyGameEnd(winner)
+        N.SendGameEnd(winner)
+    end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
 function N._OnAKA(sender, seat, suit)
     if fromSelf(sender) then return end
     if not seat or seat < 1 or seat > 4 then return end

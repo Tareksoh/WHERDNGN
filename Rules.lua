@@ -266,7 +266,25 @@ end
 --      Implemented as a small fractional bonus on meldRank.
 local function meldRank(m, contract)
     if m.kind == "carre" then
-        return 1000 + (m.value or 0)
+        -- Carré tie-break by trick rank of the top card: when two
+        -- carrés have equal raw value (e.g. K-carré vs J-carré, both
+        -- 100), the carré with the higher trick-rank top wins. Uses
+        -- the contract-aware TrickRank so a trump-J carré sits above
+        -- a non-trump-J carré in Hokm. Bonus is small enough not to
+        -- flip carré-vs-sequence comparisons.
+        local rankBonus = 0
+        if m.top and contract then
+            -- Synthesize a probe card: any suit works for plain rank;
+            -- when carré-of-trump is theoretically possible (4-of-suit)
+            -- we use the trump suit so trump ordering kicks in.
+            local probeSuit = (contract.type == K.BID_HOKM
+                               and contract.trump) or "S"
+            local rk = (B.Cards and B.Cards.TrickRank
+                       and B.Cards.TrickRank(m.top .. probeSuit, contract))
+                       or (K.RANK_INDEX[m.top] or 0)
+            rankBonus = rk * 0.01
+        end
+        return 1000 + (m.value or 0) + rankBonus
     end
     local lenScore = (m.len or 3) * 10
     local topIdx = K.RANK_INDEX[m.top] or 0
@@ -298,6 +316,60 @@ function R.CompareMelds(meldsA, meldsB, contract)
     if rA > rB then return "A"
     elseif rB > rA then return "B"
     else return "tie" end
+end
+
+-- SWA (سوا) claim validation. The caller asserts they can win every
+-- remaining trick. Returns true if the claim is supportable, false if
+-- the host can immediately rule it false.
+--
+-- Sufficient (not necessary) condition we check:
+--   • For each card in the caller's hand, that card is currently the
+--     HIGHEST unplayed card of its suit in the global frontier.
+--   • In Hokm: the caller's trump count is ≥ the highest opponent's
+--     trump count, so the caller can over-cut any forced rough.
+-- This rejects obviously-false claims (e.g. caller has the 7 of a
+-- suit nobody else has played) without trying to do a full minimax.
+-- Edge cases that "pass" but aren't truly winning are rare and the
+-- caller bears the responsibility — same as a Saudi-table SWA.
+--
+-- callerHand: array of card strings (caller's REMAINING hand)
+-- otherHands: { [seat] = array } for the three other seats (also
+--             remaining cards only)
+-- contract:   {type, trump, ...}
+-- highestUnplayed: function(suit) → rank string of highest unplayed
+--             card across all hands (caller's hand counted)
+function R.IsValidSWA(callerHand, otherHands, contract, highestUnplayed)
+    if not callerHand or #callerHand == 0 then return false end
+    -- (a) Every caller card must currently be the highest unplayed
+    -- of its suit. We use the supplied frontier function (built by
+    -- the host using S.HighestUnplayedRank or equivalent).
+    if highestUnplayed then
+        for _, c in ipairs(callerHand) do
+            local r = c:sub(1, 1)
+            local su = c:sub(2, 2)
+            if highestUnplayed(su) ~= r then return false end
+        end
+    end
+    -- (b) Hokm trump check: caller must have at least as much trump
+    -- as the heaviest opponent in trump, so they can over-cut a
+    -- forced trump-in.
+    if contract and contract.type == K.BID_HOKM and contract.trump then
+        local trump = contract.trump
+        local mine = 0
+        for _, c in ipairs(callerHand) do
+            if c:sub(2, 2) == trump then mine = mine + 1 end
+        end
+        local maxOpp = 0
+        for _, hand in pairs(otherHands or {}) do
+            local n = 0
+            for _, c in ipairs(hand or {}) do
+                if c:sub(2, 2) == trump then n = n + 1 end
+            end
+            if n > maxOpp then maxOpp = n end
+        end
+        if mine < maxOpp then return false end
+    end
+    return true
 end
 
 function R.SumMeldValue(list)

@@ -1224,6 +1224,14 @@ local function renderActions()
             addConfirmAction("|cffff5555TAKWEESH|r",
                 "|cffff5555TAKWEESH? again to confirm|r",
                 function() net().LocalTakweesh() end)
+            -- SWA (سوا) — claim that all remaining tricks are ours.
+            -- Confirm once before sending: if invalid, the penalty is
+            -- the full hand × multiplier in the opponent's direction
+            -- (same shape as a failed takweesh), so the button is
+            -- gated identically.
+            addConfirmAction("|cffffd055SWA|r",
+                "|cffffd055SWA? again to confirm|r",
+                function() net().LocalSWA() end)
             -- AKA (إكَهْ) — partner-coordination call. Visible only when
             -- the local player holds the highest unplayed card in some
             -- non-trump suit (Hokm contracts only). Soft signal: it
@@ -1797,16 +1805,24 @@ local function renderLobby()
     -- Bot difficulty checkboxes: host-only, lobby-only. Re-sync the
     -- checkbox state with WHEREDNGNDB on every render so toggling via
     -- /baloot advanced (slash) reflects in the UI without a click.
+    -- M3lm strictly extends Advanced, so when M3lm is on the
+    -- Advanced checkbox is shown checked-and-disabled to signal
+    -- "included automatically".
     local hostInLobby = S.s.isHost and S.s.phase == K.PHASE_LOBBY
+    local m3lmOn = WHEREDNGNDB and WHEREDNGNDB.m3lmBots == true
+    local advOn  = WHEREDNGNDB and WHEREDNGNDB.advancedBots == true
     if lobbyPanel.advancedCheck then
         lobbyPanel.advancedCheck:SetShown(hostInLobby)
-        lobbyPanel.advancedCheck:SetChecked(
-            WHEREDNGNDB and WHEREDNGNDB.advancedBots or false)
+        lobbyPanel.advancedCheck:SetChecked(advOn or m3lmOn)
+        if m3lmOn then
+            lobbyPanel.advancedCheck:Disable()
+        else
+            lobbyPanel.advancedCheck:Enable()
+        end
     end
     if lobbyPanel.m3lmCheck then
         lobbyPanel.m3lmCheck:SetShown(hostInLobby)
-        lobbyPanel.m3lmCheck:SetChecked(
-            WHEREDNGNDB and WHEREDNGNDB.m3lmBots or false)
+        lobbyPanel.m3lmCheck:SetChecked(m3lmOn)
     end
     -- Swap buttons only visible to the host while in lobby phase
     local canSwap = S.s.isHost and S.s.phase == K.PHASE_LOBBY
@@ -2013,6 +2029,27 @@ local function renderBanner()
     -- Takweesh result (caught-or-false-call) takes priority over the
     -- normal score breakdown, with the offending card + reason called
     -- out so the player learns WHY the call succeeded.
+    -- SWA result banner: same priority position as Takweesh — both
+    -- replace the normal score breakdown with the claim's outcome.
+    if S.s.swaResult then
+        local sw = S.s.swaResult
+        local d = S.s.lastRoundDelta or { A = 0, B = 0 }
+        local cName = (sw.caller and S.s.seats[sw.caller]
+                       and shortName(S.s.seats[sw.caller].name)) or "?"
+        banner:Show()
+        if sw.valid then
+            banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
+            banner.title:SetText(("|cffffd055SWA!|r %s claimed the rest"):format(cName))
+            banner.bidder:SetText("Claim verified — all remaining tricks awarded.")
+        else
+            banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
+            banner.title:SetText(("|cffff5544SWA failed|r — %s claimed wrongly"):format(cName))
+            banner.bidder:SetText("Penalty applied (full hand to opponents).")
+        end
+        banner.final:SetText(("A +%d   B +%d"):format(d.A or 0, d.B or 0))
+        return
+    end
+
     if S.s.takweeshResult then
         local tk = S.s.takweeshResult
         local d = S.s.lastRoundDelta or { A = 0, B = 0 }

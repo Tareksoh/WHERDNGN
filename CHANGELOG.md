@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.1.24 — SWA claim, carré tie-break, M3lm UX polish
+
+**New: SWA (سوا) claim mechanic**
+- New action button "SWA" next to TAKWEESH during play. Confirm
+  once before sending.
+- Caller reveals their remaining hand; host validates via
+  `R.IsValidSWA` (sufficient condition: every caller card is
+  the current "boss" of its suit, plus a Hokm trump-count
+  guarantee against forced ruffs).
+- Outcome:
+  - **Valid** → caller's team takes the full hand × multiplier
+    (same shape as a made contract — caller proved dominance).
+  - **Invalid** → opposing team takes the full hand × multiplier
+    (same penalty as a failed takweesh).
+- Wire: `MSG_SWA = "Q"` (caller→host with hand reveal),
+  `MSG_SWA_OUT = "Z"` (host→all with verdict + scoring).
+- Banner: green "SWA!" on success, red "SWA failed" on bust;
+  takes priority over the normal score breakdown.
+
+**Saudi rule fix: carré tie-break**
+- Equal-value carrés (e.g. K-carré vs J-carré, both 100 raw)
+  now break by the trick-rank of the top card. Trump-J carré
+  beats trump-Q carré in Hokm; Aces in Sun beat anything else
+  by raw value already. Bonus is small (×0.01) so it can't
+  flip carré-vs-sequence comparisons.
+
+**Saudi rule fix: bot meld lock**
+- `Bot.PickMelds` now respects the trick-1 declaration window
+  the same way `S.GetMeldsForLocal` does. Previously bots could
+  declare melds in trick 2+ via the bot-auto-meld loop in
+  Net.lua. Closes a rule-bypass.
+
+**M3lm UX polish**
+- Lobby Advanced checkbox auto-checks and disables when M3lm
+  is on, signalling visually that M3lm strictly extends Advanced.
+- Tooltip clarifies "stack with Advanced for full effect" was
+  redundant — now reads as a single-pick tier system.
+
+**Defensive cleanup**
+- `LocalSWA` clears any stale `swaResult` banner from earlier
+  in the round before broadcasting.
+
 ## v0.1.23 — M3lm tier, audit fixes, banner copy
 
 **M3lm (pro) bot tier — host opt-in, stacks with Advanced**

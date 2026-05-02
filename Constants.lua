@@ -177,6 +177,13 @@ K.MSG_AKA          = "e"  -- partner-coordination signal in Hokm: caller
                           -- holds the highest unplayed card in a non-trump
                           -- suit. Tells teammate not to over-trump.
                           -- Payload: seat;suit (e.g. "e;3;H").
+K.MSG_SWA          = "Q"  -- "SWA" (سوا) claim: caller asserts they will
+                          -- win every remaining trick and reveals their
+                          -- hand. Payload: seat;encodedHand. Host
+                          -- validates and broadcasts the outcome via
+                          -- MSG_SWA_OUT.
+K.MSG_SWA_OUT      = "Z"  -- host's outcome of an SWA claim. Payload:
+                          -- caller;valid;addA;addB;totA;totB.
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:

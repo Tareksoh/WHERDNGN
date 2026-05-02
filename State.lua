@@ -165,6 +165,9 @@ local TRANSIENT_FIELDS = {
     -- a /reload would either fire stale or expire instantly. UI cue
     -- only, drop on save.
     meldHoldUntil = true,
+    -- SWA outcome is a per-round banner struct; cleared at next
+    -- ApplyStart, no need to persist.
+    swaResult = true,
 }
 
 function S.SaveSession()
@@ -574,8 +577,9 @@ function S.ApplyStart(roundNumber, dealer)
     -- A redeal announcement banner (all-pass) is dismissed by the
     -- arrival of a real ApplyStart for the new round.
     s.redealing    = nil
-    -- Last hand's takweesh banner cleared at next round.
+    -- Last hand's takweesh / SWA banners cleared at next round.
     s.takweeshResult = nil
+    s.swaResult      = nil
     -- Round-start "Awal" announcement. Delayed half a second so the
     -- new hand + bid card finish landing visually before the voice
     -- fires — without the delay, clicking "Next Round" plays Awal
@@ -962,6 +966,34 @@ function S.SeatHasDeclaredMelds(seat)
         if m.declaredBy == seat then return true end
     end
     return false
+end
+
+-- SWA (سوا) "claim" helper. Returns the residual point value the
+-- caller's team would collect if every remaining trick was theirs.
+-- Computed as: sum of all remaining card values + last-trick bonus
+-- (the last unplayed trick contains the +10 bonus).
+-- Used by the host's SWA resolver to score the round.
+function S.SWARemainingPoints()
+    if not s.contract or not s.hostHands then return 0 end
+    local total = 0
+    for seat = 1, 4 do
+        for _, c in ipairs(s.hostHands[seat] or {}) do
+            total = total + (B.Cards.PointValue(c, s.contract) or 0)
+        end
+    end
+    -- Plus any uncollected card points already in the in-progress
+    -- trick — they belong to whoever wins THAT trick, which is part
+    -- of the caller's claim.
+    if s.trick and s.trick.plays then
+        for _, p in ipairs(s.trick.plays) do
+            total = total + (B.Cards.PointValue(p.card, s.contract) or 0)
+        end
+    end
+    -- Last-trick bonus: if there are still tricks to play, the +10
+    -- last-trick is part of the claim.
+    local tricksDone = #(s.tricks or {})
+    if tricksDone < 8 then total = total + K.LAST_TRICK_BONUS end
+    return total
 end
 
 function S.ApplyAKA(seat, suit)

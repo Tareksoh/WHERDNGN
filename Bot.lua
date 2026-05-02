@@ -868,6 +868,12 @@ end
 function Bot.PickMelds(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     if not hand then return {} end
+    -- Saudi rule: melds must be declared during trick 1 only. Once
+    -- trick 1 has closed (any completed trick), the declaration
+    -- window is shut even for bots that haven't yet committed their
+    -- first card of trick 2. Mirrors the gate in S.GetMeldsForLocal
+    -- so bots can't bypass it via the bot-auto-meld loop in Net.lua.
+    if (#(S.s.tricks or {})) >= 1 then return {} end
     return R.DetectMelds(hand, S.s.contract)
 end
 
