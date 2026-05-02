@@ -185,12 +185,14 @@ local TRANSIENT_FIELDS = {
     lastRoundResult = true,
     lastRoundDelta  = true,
     lastTrick       = true,
-    -- Pre-emption window state — short-lived (60s AFK timeout).
-    -- After a /reload the resync from host re-establishes phase but
-    -- the eligibility list and pending contract come from host's
-    -- live state, not from our save. Drop on save.
-    preemptEligible = true,
-    pendingPreemptContract = true,
+    -- NOTE: preemptEligible and pendingPreemptContract are NOT
+    -- transient. The HOST needs them to survive a /reload mid-
+    -- PHASE_PREEMPT — without persistence the host can't continue
+    -- the window and would soft-lock until the 60s AFK fires (and
+    -- even then, _FinalizePreempt wouldn't fire because pending-
+    -- PreemptContract is gone). Non-host clients overwrite their
+    -- copies on resync from the host (see N.SendResyncRes replay
+    -- block).
 }
 
 function S.SaveSession()
