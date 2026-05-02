@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.22 — only winning team reveals in trick 2
+
+**Fix**
+- Trick-2 card reveal is now gated to declarers on the **winning
+  team only**, per Saudi rule (Pagat-cited): "the opposing team are
+  not allowed to show or score for any projects." Losing team's
+  cards are never exposed, even though their trick-1 announcement
+  still happens.
+- Both teammates on the winning team can still reveal — each gets
+  their own 5-second window when their PLAY turn opens in trick 2.
+- Trick-1 announcement text remains unchanged: every declarer's
+  type/length/top-rank still posts (verbal declaration is public
+  by everyone), suit still hidden.
+- Ties (or no melds) → neither team reveals. Matches the scoring
+  side, which already awards 0 to both on a tie.
+
 ## v0.1.21 — meld display rule corrected
 
 **Fix**

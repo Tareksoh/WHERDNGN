@@ -612,22 +612,30 @@ function S.ApplyTurn(seat, kind)
     s.localPlayedThisTrick = nil
     log("turn: seat=%d kind=%s", seat or -1, tostring(kind))
 
-    -- Saudi meld-display rule (trick 2 only): when a seat's PLAY turn
-    -- starts in the second trick AND that seat declared a meld earlier,
-    -- their cards become public for exactly 5 seconds — then disappear
-    -- for the rest of the hand. Trick 1 shows only the announcement
-    -- text; tricks 3+ show nothing. The hold is set per-seat so two
-    -- consecutive seats with melds get their own 5-second windows.
+    -- Saudi meld-display rule (trick 2 only):
+    --   • When a declarer's PLAY turn starts in the SECOND trick,
+    --     their cards become public for 5 seconds, then hide.
+    --   • Only declarers on the WINNING team show — Pagat: "the
+    --     opposing team are not allowed to show or score for any
+    --     projects." A teammate of the winning declarer may also
+    --     show their meld; this is implicit in the team-membership
+    --     check below.
+    --   • In a tie or with no melds, no team reveals.
+    -- Trick 1 stays text-announcement-only; tricks 3+ never show.
     if kind == "play" and #(s.tricks or {}) == 1
        and prevTurn ~= seat
        and S.SeatHasDeclaredMelds and S.SeatHasDeclaredMelds(seat) then
-        s.meldHoldUntil = s.meldHoldUntil or {}
-        local now = (GetTime and GetTime()) or 0
-        s.meldHoldUntil[seat] = now + 5
-        if C_Timer and C_Timer.After then
-            C_Timer.After(5.05, function()
-                if B.UI and B.UI.Refresh then B.UI.Refresh() end
-            end)
+        local verdict = S.MeldVerdict and S.MeldVerdict() or nil
+        if verdict and verdict ~= "tie"
+           and R.TeamOf(seat) == verdict then
+            s.meldHoldUntil = s.meldHoldUntil or {}
+            local now = (GetTime and GetTime()) or 0
+            s.meldHoldUntil[seat] = now + 5
+            if C_Timer and C_Timer.After then
+                C_Timer.After(5.05, function()
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end)
+            end
         end
     end
     -- Audio: ping when our turn arrives (transition into our seat).
