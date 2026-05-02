@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.17 — meld display polish + AKA label fix
+
+**Fixes**
+- Meld mini-cards now have the cream card-body backdrop. Previously
+  the slot was a bare texture and the card art TGAs are transparent
+  outside the rank/pip glyphs, so cards looked like floating
+  fragments. Each slot is now a small frame with the same body +
+  edge backdrop as the table card faces, with the rank/pip texture
+  laid on top.
+- AKA button label and banner switched from "إكَهْ" to Latin "AKA".
+  WoW's bundled fonts (Arial Narrow / Frizz / Skurri) don't include
+  Arabic glyphs, so the original label rendered as empty boxes. The
+  voice cue still says إكَهْ, so the audio carries the Saudi feel.
+- Meld card strips now respect the Saudi-rule timing: face-up only
+  during trick 1 (PHASE_DEAL3 and the first trick of PHASE_PLAY).
+  After trick 1 closes the cards rejoin the hand and the strip
+  hides — only the score the meld earned is remembered (shown in
+  the round-end banner).
+- Slot size bumped 18×24 → 26×36 so the card art is actually
+  legible at table scale.
+
 ## v0.1.16 — AKA call (إكَهْ) + meld card display
 
 **New gameplay**

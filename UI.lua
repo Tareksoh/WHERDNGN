@@ -608,23 +608,31 @@ end
 -- Build: table panel
 -- ----------------------------------------------------------------------
 
--- Mini-card strip for meld display. 5 slots wide (max meld size), each
--- slot is a textured card-shape using the existing cards/<rank><suit>
--- TGAs. Hidden by default; populate via setMeldStripCards(strip, cards,
--- alpha). Cards array can be 0..5 entries; extra slots stay hidden.
+-- Mini-card strip for meld display. 5 slots wide (max meld size).
+-- Each slot is a small card-shaped frame: cream body + dark edge
+-- (matching makeCardFace) with the rank+suit pip texture inset on
+-- top. The body is essential — the card art TGAs are transparent
+-- outside the rank/pip artwork, so without a backdrop the cards
+-- would look like floating glyphs. Hidden by default; populate
+-- via setMeldStripCards(strip, cards, alpha).
 local function buildMeldStrip(parent)
     local strip = CreateFrame("Frame", nil, parent)
-    strip:SetSize(110, 26)
+    -- 5 slots × 26 width × 18 stride = 98 px wide. Stride < width so
+    -- the cards overlap slightly into a fan, like a held grip.
+    strip:SetSize(110, 36)
     strip.slots = {}
     for i = 1, 5 do
-        local slot = strip:CreateTexture(nil, "OVERLAY")
-        slot:SetSize(18, 24)
-        -- 13-px stride so 5 cards (5×18 = 90 raw) overlap into ~78 px,
-        -- giving a tight fan look. Stride keeps each rank visible at
-        -- the top-left corner of the card.
-        slot:SetPoint("LEFT", strip, "LEFT", (i - 1) * 13, 0)
-        slot:Hide()
-        strip.slots[i] = slot
+        local sf = CreateFrame("Frame", nil, strip, "BackdropTemplate")
+        sf:SetSize(26, 36)
+        sf:SetPoint("LEFT", strip, "LEFT", (i - 1) * 18, 0)
+        setBackdrop(sf, true, COL.cardFace, COL.cardEdge, 4, "solid")
+        local tex = sf:CreateTexture(nil, "ARTWORK")
+        tex:SetPoint("TOPLEFT", 1, -1)
+        tex:SetPoint("BOTTOMRIGHT", -1, 1)
+        tex:Hide()
+        sf:SetFrameLevel(strip:GetFrameLevel() + i) -- later cards on top
+        sf:Hide()
+        strip.slots[i] = { frame = sf, tex = tex }
     end
     strip:Hide()
     return strip
@@ -638,11 +646,12 @@ local function setMeldStripCards(strip, cards, alpha)
         local slot = strip.slots[i]
         if i <= n then
             local card = cards[i]
-            slot:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\" .. card)
-            slot:SetAlpha(alpha or 1.0)
-            slot:Show()
+            slot.tex:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\" .. card)
+            slot.tex:Show()
+            slot.frame:SetAlpha(alpha or 1.0)
+            slot.frame:Show()
         else
-            slot:Hide()
+            slot.frame:Hide()
         end
     end
     strip:Show()
@@ -1134,7 +1143,12 @@ local function renderActions()
                 local cand = S.LocalAKAcandidate and S.LocalAKAcandidate()
                 if cand then
                     local glyph = K.SUIT_GLYPH[cand.suit] or cand.suit
-                    addAction(("|cff66ff88إكَهْ|r %s"):format(glyph),
+                    -- Label uses Latin "AKA" because WoW's bundled fonts
+                    -- (Arial Narrow / Frizz / Skurri) don't include
+                    -- Arabic glyphs — Arabic chars in a button label
+                    -- render as empty boxes. The voice cue still says
+                    -- إكَهْ, so the audio carries the Saudi feel.
+                    addAction(("|cff66ff88AKA|r %s"):format(glyph),
                         function() net().LocalAKA(cand.suit) end)
                 end
             end
@@ -1385,17 +1399,16 @@ local function meldCardsForSeat(seat)
     return out
 end
 
--- Visual alpha for a seat's meld strip given the current verdict.
--- Verdict is computed once trick 1 closes (see S.MeldVerdict). Until
--- then both teams' strips show at full opacity (declared but not yet
--- resolved). After resolution: winning team full opacity, losing team
--- dimmed so the player can still see what was declared but it visibly
--- "doesn't count".
-local function meldStripAlphaFor(seat)
-    local v = S.MeldVerdict and S.MeldVerdict() or nil
-    if not v then return 1.0 end
-    if v == "tie" then return 0.85 end
-    return (R.TeamOf(seat) == v) and 1.0 or 0.45
+-- Per Saudi rule, meld cards are only laid face-up during trick 1.
+-- Once trick 1 closes (#s.tricks >= 1) the cards rejoin the hand and
+-- only the score they earn is remembered. So the strip is gated to
+-- trick-1 visibility: meld declarations during PHASE_DEAL3 / early
+-- PHASE_PLAY show, and from trick 2 onwards the strip hides.
+local function meldStripVisible()
+    if S.s.phase ~= K.PHASE_DEAL3 and S.s.phase ~= K.PHASE_PLAY then
+        return false
+    end
+    return (#(S.s.tricks or {}) == 0)
 end
 
 local function renderSeats()
@@ -1419,10 +1432,15 @@ local function renderSeats()
             end
             b.countText:SetText(("|c"..COL.txtSoft.."%d|r"):format(cnt))
             b.meldText:SetText(meldsDescForSeat(seat))
-            -- Meld card strip: the actual face-up cards for any melds
-            -- this seat declared. Empty list hides the strip.
-            setMeldStripCards(b.meldStrip, meldCardsForSeat(seat),
-                              meldStripAlphaFor(seat))
+            -- Meld card strip: face-up cards for any melds this seat
+            -- declared. Per Saudi rule, only visible during trick 1
+            -- (meldStripVisible) — after that the cards rejoin the
+            -- hand and only the score they earned is remembered.
+            if meldStripVisible() then
+                setMeldStripCards(b.meldStrip, meldCardsForSeat(seat), 1.0)
+            elseif b.meldStrip then
+                b.meldStrip:Hide()
+            end
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
             -- Avatar: bot seats get the bundled colored badge; humans
             -- have no avatar so the seat reads "live player".
@@ -1455,8 +1473,11 @@ local function renderSeats()
     local prefix = me == S.s.dealer and "D " or ""
     lb.nameText:SetText(prefix .. "|c" .. COL.txtGold .. nm .. "|r")
     lb.meldText:SetText(meldsDescForSeat(me))
-    setMeldStripCards(lb.meldStrip, meldCardsForSeat(me),
-                      meldStripAlphaFor(me))
+    if meldStripVisible() then
+        setMeldStripCards(lb.meldStrip, meldCardsForSeat(me), 1.0)
+    elseif lb.meldStrip then
+        lb.meldStrip:Hide()
+    end
     if S.s.turn == me then
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
         if lb.turnGlow then lb.turnGlow:Show() end
@@ -1936,9 +1957,11 @@ local function renderBanner()
 end
 
 -- Peek-button visibility: only meaningful when there's a previous
--- AKA banner: small toast above the trick area showing who called
--- إكَهْ on which suit. Persists until the trick closes (cleared in
--- State.ApplyTrickEnd).
+-- AKA banner: small toast above the trick area showing who called the
+-- AKA signal and on which suit. Persists until the trick closes
+-- (cleared in State.ApplyTrickEnd). Label uses Latin "AKA" because the
+-- bundled WoW fonts can't render Arabic glyphs — the voice cue handles
+-- the إكَهْ pronunciation.
 local function renderAKABanner()
     local b = tablePanel and tablePanel.akaBanner
     if not b then return end
@@ -1958,7 +1981,7 @@ local function renderAKABanner()
     else
         teamCol = COL.txtThem     -- opponent call → red
     end
-    b.text:SetText(("|c%sإكَهْ|r %s — %s"):format(teamCol, glyph, nm))
+    b.text:SetText(("|c%sAKA|r %s — %s"):format(teamCol, glyph, nm))
     b:Show()
 end
 
