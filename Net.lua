@@ -470,12 +470,24 @@ end
 
 -- -- Handlers ---------------------------------------------------
 
+-- Gemini #5 audit catch: WoW's CHAT_MSG_ADDON sender format isn't
+-- guaranteed to match the locally-stored "Name-Realm" form. Same-realm
+-- senders may arrive as just "Name". Normalize the sender via
+-- S.NormalizeName before any equality comparison so the host's own
+-- self-loopbacks AND same-realm peer messages match the stored names.
+local function normSender(sender)
+    if not sender then return sender end
+    return (S.NormalizeName and S.NormalizeName(sender)) or sender
+end
+
 local function fromHost(sender)
-    return S.s.hostName and sender == S.s.hostName
+    if not S.s.hostName then return false end
+    return normSender(sender) == S.s.hostName
 end
 
 local function fromSelf(sender)
-    return S.s.localName and sender == S.s.localName
+    if not S.s.localName then return false end
+    return normSender(sender) == S.s.localName
 end
 
 -- Authority helper: a per-seat action message is valid if
@@ -487,10 +499,11 @@ end
 local function authorizeSeat(seat, sender)
     local info = S.s.seats[seat]
     if not info then return false end
+    local nsender = normSender(sender)
     if info.isBot then
-        return S.s.hostName and sender == S.s.hostName
+        return S.s.hostName ~= nil and nsender == S.s.hostName
     end
-    return info.name and info.name == sender
+    return info.name ~= nil and info.name == nsender
 end
 
 -- Loopback policy: SendAddonMessage delivers a copy back to the sender
@@ -1627,9 +1640,20 @@ function N.LocalPause(paused)
         N.CancelTurnTimer()
     else
         -- Resume: re-arm timers and re-dispatch any pending bot turn.
-        N.MaybeRunBot()
-        if S.s.turn and S.s.turnKind then
-            N.StartTurnTimer(S.s.turn, S.s.turnKind)
+        -- Codex #4 audit catch: if a 4-card trick was already complete
+        -- when pause hit, the 2.2s resolution timer fired silently
+        -- (bailed on s.paused). After resume, NOTHING re-triggers
+        -- _HostStepPlay, so the trick stays stuck. Detect that case
+        -- here and re-schedule resolution.
+        if S.s.phase == K.PHASE_PLAY
+           and S.s.trick and S.s.trick.plays
+           and #S.s.trick.plays >= 4 then
+            N._HostStepPlay()
+        else
+            N.MaybeRunBot()
+            if S.s.turn and S.s.turnKind then
+                N.StartTurnTimer(S.s.turn, S.s.turnKind)
+            end
         end
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -1668,6 +1692,13 @@ function N.LocalSWA()
     -- Defensive: clear any stale SWA banner from earlier in the round
     -- before we send the new claim so no flicker / wrong-state UI.
     S.s.swaResult = nil
+    -- Sim 13 / Audit 19 catch: if a permission request is already
+    -- in flight, a rapid second click would clobber the existing
+    -- request and lose any opponent votes already collected. Reject
+    -- the second call until the first resolves or denies.
+    if S.s.swaRequest and S.s.swaRequest.caller == S.s.localSeat then
+        return
+    end
     if needPerm and handCount >= 4 then
         -- Permission flow: broadcast a request, wait for opponents.
         local enc = C.EncodeHand(S.s.hand or {})

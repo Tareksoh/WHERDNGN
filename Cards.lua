@@ -99,24 +99,31 @@ end
 
 -- Trick-resolution numeric rank: higher = stronger. Considers contract.
 --   contract: { type = "HOKM"|"SUN", trump = "S"|"H"|"D"|"C"|nil }
+-- Nil-contract guards (post-audit hardening): all three functions are
+-- called from many places in the codebase and most callers already
+-- check `contract` is non-nil first. But the absence of a defensive
+-- guard here means any future caller that drops the check would crash
+-- on `contract.type` indexing nil. Keep these branches forgiving.
 function M.TrickRank(card, contract)
     local r, s = M.Rank(card), M.Suit(card)
-    if contract.type == K.BID_HOKM and s == contract.trump then
-        return K.RANK_TRUMP_HOKM[r]
+    if contract and contract.type == K.BID_HOKM
+       and s == contract.trump then
+        return K.RANK_TRUMP_HOKM[r] or 0
     end
-    return K.RANK_PLAIN[r]
+    return K.RANK_PLAIN[r] or 0
 end
 
 function M.PointValue(card, contract)
     local r, s = M.Rank(card), M.Suit(card)
-    if contract.type == K.BID_HOKM and s == contract.trump then
-        return K.POINTS_TRUMP_HOKM[r]
+    if contract and contract.type == K.BID_HOKM
+       and s == contract.trump then
+        return K.POINTS_TRUMP_HOKM[r] or 0
     end
-    return K.POINTS_PLAIN[r]
+    return K.POINTS_PLAIN[r] or 0
 end
 
 function M.IsTrump(card, contract)
-    if contract.type ~= K.BID_HOKM then return false end
+    if not contract or contract.type ~= K.BID_HOKM then return false end
     return M.Suit(card) == contract.trump
 end
 

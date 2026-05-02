@@ -188,9 +188,19 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     local mem = Bot._memory[seat]
     if not mem then return end
     mem.played[card] = true
+    -- Gemini #5 audit catch: if the play was ILLEGAL (host marked it
+    -- p.illegal=true in S.ApplyPlay), the seat actually DID hold a
+    -- card of leadSuit but chose not to play it. Inferring void from
+    -- this poisons memory for the rest of the round. Skip void/discard
+    -- inference for illegal plays — the void inference only applies
+    -- when the off-suit play was legal (the seat truly was void).
+    local lastPlay = S.s.trick and S.s.trick.plays
+                     and S.s.trick.plays[#S.s.trick.plays]
+    local wasIllegal = lastPlay and lastPlay.seat == seat
+                       and lastPlay.card == card and lastPlay.illegal
     -- Void inference: a seat that didn't follow lead suit is void in it.
     local cardSuit = C.Suit(card)
-    if leadSuit and cardSuit ~= leadSuit then
+    if not wasIllegal and leadSuit and cardSuit ~= leadSuit then
         mem.void[leadSuit] = true
         -- Fzloky: stash the FIRST off-suit discard. It's the
         -- moment a seat reveals what they care about — their

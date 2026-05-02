@@ -498,8 +498,9 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- subsumes the belote — no double-counting. Sequences of 3/4 (≤50)
     -- and the bare belote stand on their own.
     local belote = nil
+    local kWho  -- expose to outer scope for cancellation below
     if contract.type == K.BID_HOKM and contract.trump then
-        local kWho, qWho
+        local qWho
         for _, t in ipairs(tricks) do
             for _, p in ipairs(t.plays) do
                 if C.Suit(p.card) == contract.trump then
@@ -510,15 +511,8 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         end
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
-            -- Cancel belote if the K+Q holder also declared a ≥100 meld.
-            local team = belote
-            local list = (meldsByTeam and meldsByTeam[team]) or {}
-            for _, m in ipairs(list) do
-                if m.declaredBy == kWho and (m.value or 0) >= 100 then
-                    belote = nil
-                    break
-                end
-            end
+        else
+            kWho = nil
         end
     end
 
@@ -534,6 +528,24 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- below routes the bonus to the sweep winner.
     if sweepTeam and belote and belote ~= sweepTeam then
         belote = sweepTeam
+    end
+
+    -- Belote cancellation (Gemini #8 audit fix): the 100-meld "subsumes"
+    -- the belote ONLY when the meld and the belote both score for the
+    -- same team. After the sweep override above moves belote to the
+    -- sweeping team, the holder's 100-meld may no longer be relevant
+    -- (sweeper discards loser's melds). Apply cancellation AFTER sweep
+    -- so the +20 follows the sweep winner correctly. Cancel only if
+    -- the team currently holding belote ALSO has a ≥100 meld declared
+    -- by kWho (i.e., the K+Q holder is on the side scoring the belote).
+    if belote and kWho and R.TeamOf(kWho) == belote then
+        local list = (meldsByTeam and meldsByTeam[belote]) or {}
+        for _, m in ipairs(list) do
+            if m.declaredBy == kWho and (m.value or 0) >= 100 then
+                belote = nil
+                break
+            end
+        end
     end
 
     -- Saudi rule 4-2/4-3: bidder must STRICTLY beat defender's total.
