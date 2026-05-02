@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.1.28 — takweesh scoring respects melds + belote
+
+**Fix (same shape as v0.1.27)**
+- `HostResolveTakweesh` had the identical bug as the pre-v0.1.27
+  SWA path: awarded only `handTotal × multiplier` and ignored
+  meld points + belote. A defender team could win a takweesh
+  while ALSO holding 100-point carrés and K+Q-of-trump and still
+  drop those points.
+- Now routes through the standard made/failed branches:
+  - Caught + caller is bidder team OR not caught + caller is
+    defender team → MADE: bidder team takes hand × mult, meld
+    winner gets their melds × mult.
+  - Caught + caller is defender team OR not caught + caller is
+    bidder team → FAILED: opp-of-bidder takes hand × mult AND
+    all declared melds combined × mult.
+- Belote +20 raw flows independently to its K+Q-of-trump holder.
+  Takweesh ends the round mid-trick, so we scan unplayed hands
+  too (same fix shape as SWA's belote scan).
+- Audit also confirmed: regular ScoreRound has no early-end path
+  to worry about (always runs at #tricks ≥ 8 when all cards are
+  played); Kawesh has no scoring path (annul + redeal); game-end
+  tie-rule is consistent across all three scoring paths;
+  Ashkal-shifted bidder is correctly read everywhere; bot meld
+  lock is enforced in both human and bot paths.
+
 ## v0.1.27 — SWA scoring respects melds + belote
 
 **Fix**

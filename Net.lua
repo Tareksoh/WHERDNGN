@@ -1175,15 +1175,18 @@ function N.HostResolveTakweesh(callerSeat)
         foundIllegal = scanIllegal(S.s.trick.plays)
     end
 
+    -- Outcome → contract made/failed mapping (same shape as SWA):
+    --   caught + caller is bidder team    → MADE  (caller's team wins)
+    --   caught + caller is defender team  → FAILED
+    --   not caught + caller is bidder team→ FAILED (false call penalty)
+    --   not caught + caller is defender   → MADE  (false call hands it back)
+    local c          = S.s.contract
+    local bidderTeam = R.TeamOf(c.bidder)
+    local oppToBidder = (bidderTeam == "A") and "B" or "A"
     local winnerTeam = foundIllegal and callerTeam or oppTeam
+    local contractMade = (winnerTeam == bidderTeam)
 
-    -- Penalty score: full handTotal × the WHOLE escalation multiplier
-    -- chain. Previously this only respected Bel and Bel-Re — so a
-    -- Triple/Four/Gahwa-doubled hand would still resolve a takweesh
-    -- catch at base or ×4 instead of ×8 / ×16 / ×32. Mirrors the
-    -- escalation chain in Rules.ScoreRound so takweesh wins/losses
-    -- swing the same as a normal made/failed contract.
-    local c = S.s.contract
+    -- Multiplier chain (mirrors Rules.ScoreRound).
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
     local mult = K.MULT_BASE
     if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
@@ -1192,11 +1195,65 @@ function N.HostResolveTakweesh(callerSeat)
     elseif c.tripled   then mult = mult * K.MULT_TRIPLE
     elseif c.redoubled then mult = mult * K.MULT_BELRE
     elseif c.doubled   then mult = mult * K.MULT_BEL end
-    local raw = handTotal * mult
-    local final = math.floor((raw + 4) / 10)
 
-    local addA = (winnerTeam == "A") and final or 0
-    local addB = (winnerTeam == "B") and final or 0
+    -- Meld + belote scoring routed through made/failed branches —
+    -- previously takweesh awarded only handTotal × mult and dropped
+    -- meld/belote points entirely (same bug as SWA pre-v0.1.27).
+    local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
+    local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
+    local cardA, cardB, mpA, mpB = 0, 0, 0, 0
+    if contractMade then
+        cardA = (bidderTeam == "A") and handTotal or 0
+        cardB = (bidderTeam == "B") and handTotal or 0
+        local mv = R.CompareMelds(S.s.meldsByTeam.A, S.s.meldsByTeam.B, c)
+        if mv == "A" then mpA = meldA
+        elseif mv == "B" then mpB = meldB end
+    else
+        cardA = (oppToBidder == "A") and handTotal or 0
+        cardB = (oppToBidder == "B") and handTotal or 0
+        if oppToBidder == "A" then mpA = meldA + meldB
+        else                       mpB = meldA + meldB end
+    end
+
+    -- Belote (Hokm only): scan played + unplayed cards. Takweesh
+    -- ends the round mid-trick; if K+Q haven't surfaced yet, the
+    -- holder still gets the +20 per Saudi convention.
+    local belote = nil
+    if c.type == K.BID_HOKM and c.trump then
+        local kWho, qWho
+        local function scan(plays_)
+            for _, p in ipairs(plays_ or {}) do
+                if C.Suit(p.card) == c.trump then
+                    if C.Rank(p.card) == "K" then kWho = kWho or p.seat end
+                    if C.Rank(p.card) == "Q" then qWho = qWho or p.seat end
+                end
+            end
+        end
+        for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
+        if S.s.trick then scan(S.s.trick.plays) end
+        for seat = 1, 4 do
+            local h = S.s.hostHands and S.s.hostHands[seat]
+            if h then
+                for _, card in ipairs(h) do
+                    if C.Suit(card) == c.trump then
+                        if C.Rank(card) == "K" then kWho = kWho or seat end
+                        if C.Rank(card) == "Q" then qWho = qWho or seat end
+                    end
+                end
+            end
+        end
+        if kWho and qWho and kWho == qWho then
+            belote = R.TeamOf(kWho)
+        end
+    end
+
+    local rawA = (cardA + mpA) * mult
+    local rawB = (cardB + mpB) * mult
+    if belote == "A" then rawA = rawA + K.MELD_BELOTE
+    elseif belote == "B" then rawB = rawB + K.MELD_BELOTE end
+
+    local addA = math.floor((rawA + 4) / 10)
+    local addB = math.floor((rawB + 4) / 10)
     local totA = S.s.cumulative.A + addA
     local totB = S.s.cumulative.B + addB
 
