@@ -16,17 +16,17 @@ The default points at the Saudi voice from the chat. Override per-run
 via ELEVENLABS_VOICE_ID env var.
 
 Output (in sounds/, overwrites previous attempts):
-    hokm.ogg     "حكم"   — someone bid Hokm
-    sun.ogg      "صَنْ"   — someone bid Sun
-    ashkal.ogg   "أشكَل"  — someone bid Ashkal
-    pass.ogg     "بَسْ"   — round-1 pass
-    wla.ogg      "ولا"    — round-2 pass
+    hokm.ogg     "حُكُمْ"  — someone bid Hokm
+    sun.ogg      "صنّ"    — someone bid Sun
+    ashkal.ogg   "أشكَل"   — someone bid Ashkal
+    pass.ogg     "بسْ"    — round-1 pass
+    wla.ogg      "ولا"     — round-2 pass
     awal.ogg     "أوَل"    — round-1 bidding start
     thany.ogg    "ثآني"   — round-2 bidding start
     triple.ogg   "ثري"    — Triple (×3) escalation
     four.ogg     "فور"    — Four (×4) escalation
-    gahwa.ogg    "قهوة"   — Gahwa (match-win) escalation
-    aka.ogg      "إكَهْ"   — AKA partner-coordination signal
+    gahwa.ogg    "قْهوه"   — Gahwa (match-win) escalation
+    aka.ogg      "إِكَه"   — AKA partner-coordination signal
 """
 import os
 import subprocess
@@ -49,19 +49,19 @@ VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID") or "3nav5pHC1EYvWOd5LmnA"
 MODEL_ID = "eleven_multilingual_v2"
 
 CUES = {
-    "hokm":   "حكم",
+    "hokm":   "حُكُمْ",
     "ashkal": "أشكَل",
-    "sun":    "صَنْ",
-    "pass":   "بَسْ",       # round-1 pass
-    "wla":    "ولا",        # round-2 pass ("none / no preference")
-    "awal":   "أوَل",        # round-1 bidding start
-    "thany":  "ثآني",       # round-2 bidding start
-    "triple": "ثري",         # ×8 escalation (defender)
-    "four":   "فور",         # ×16 escalation (bidder)
-    "gahwa":  "قهوة",        # ×32 escalation (defender, "coffee")
-    "aka":    "إكَهْ",       # AKA call: partner has the highest unplayed
-                             # card in a non-trump suit; teammate should
-                             # not over-trump.
+    "sun":    "صنّ",
+    "pass":   "بسْ",         # round-1 pass
+    "wla":    "ولا",         # round-2 pass ("none / no preference")
+    "awal":   "أوَل",         # round-1 bidding start
+    "thany":  "ثآني",        # round-2 bidding start
+    "triple": "ثري",          # Triple (×3) — bidder's response to Bel
+    "four":   "فور",          # Four (×4) — defenders' response to Triple
+    "gahwa":  "قْهوه",        # Gahwa (match-win) — bidder's terminal
+    "aka":    "إِكَه",        # AKA call: partner has the highest unplayed
+                              # card in a non-trump suit; teammate should
+                              # not over-trump.
 }
 
 

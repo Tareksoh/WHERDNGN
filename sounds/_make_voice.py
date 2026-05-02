@@ -8,17 +8,17 @@ Usage (PowerShell):
     python sounds/_make_voice.py triple four gahwa aka    # specific cues
 
 Output (in sounds/, overwrites previous):
-    hokm.ogg     "حكم"   — someone bid Hokm
-    sun.ogg      "صَنْ"   — someone bid Sun
-    ashkal.ogg   "أشكَل"  — someone bid Ashkal
-    pass.ogg     "بَسْ"   — round-1 pass
-    wla.ogg      "ولا"    — round-2 pass
+    hokm.ogg     "حُكُمْ"  — someone bid Hokm
+    sun.ogg      "صنّ"    — someone bid Sun
+    ashkal.ogg   "أشكَل"   — someone bid Ashkal
+    pass.ogg     "بسْ"    — round-1 pass
+    wla.ogg      "ولا"     — round-2 pass
     awal.ogg     "أوَل"    — round-1 bidding start
     thany.ogg    "ثآني"   — round-2 bidding start
     triple.ogg   "ثري"    — Triple (×3) escalation
     four.ogg     "فور"    — Four (×4) escalation
-    gahwa.ogg    "قهوة"   — Gahwa (match-win) escalation
-    aka.ogg      "إكَهْ"   — AKA partner-coordination signal
+    gahwa.ogg    "قْهوه"   — Gahwa (match-win) escalation
+    aka.ogg      "إِكَه"   — AKA partner-coordination signal
 """
 import asyncio
 import os
@@ -37,17 +37,17 @@ RATE  = "+10%"
 PITCH = "+3Hz"
 
 CUES = {
-    "hokm":   "حكم",
-    "sun":    "صَنْ",
+    "hokm":   "حُكُمْ",
+    "sun":    "صنّ",
     "ashkal": "أشكَل",
-    "pass":   "بَسْ",
+    "pass":   "بسْ",
     "wla":    "ولا",
     "awal":   "أوَل",
     "thany":  "ثآني",
     "triple": "ثري",
     "four":   "فور",
-    "gahwa":  "قهوة",
-    "aka":    "إكَهْ",
+    "gahwa":  "قْهوه",
+    "aka":    "إِكَه",
 }
 
 
