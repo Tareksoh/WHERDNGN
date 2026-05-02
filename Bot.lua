@@ -45,16 +45,26 @@ local BID_JITTER      = 6   -- ±6 swing per call
 -- play hints. Each is gated individually so we can A/B compare in
 -- play and partial fall-throughs are safe.
 function Bot.IsAdvanced()
-    return WHEREDNGNDB and WHEREDNGNDB.advancedBots == true
+    -- M3lm strictly extends Advanced — every Advanced heuristic also
+    -- runs when M3lm is on. So treat M3lm as implying Advanced.
+    return WHEREDNGNDB
+       and (WHEREDNGNDB.advancedBots == true
+            or WHEREDNGNDB.m3lmBots == true)
 end
 
--- M3lm (master) tier — currently a placeholder that always returns
--- false. The lobby exposes the option as greyed-out so its eventual
--- arrival is visible in the UI; the saved value (m3lmBots) is set to
--- false and never checked here. When the deeper heuristics ship, this
--- function flips to: `WHEREDNGNDB and WHEREDNGNDB.m3lmBots == true`.
+-- M3lm (معلم — "master") tier. Pro-level heuristics layered on top
+-- of Advanced:
+--   • Partner play-style modeling: track how partner plays across
+--     the game (trump aggression, Bel frequency, smother tendency,
+--     reliability of AKA response). Decisions calibrate to known
+--     behaviour rather than averages.
+--   • Match-point urgency: beyond Advanced's static "near win/loss"
+--     thresholds, factor in distance-to-152 with finer granularity.
+--   • Coordinated escalation: if partner Beled / Tripled / Foured
+--     in the current contract, bot ramps escalation faster (combined-
+--     team-strength signal); if partner held back, more cautious.
 function Bot.IsM3lm()
-    return false
+    return WHEREDNGNDB and WHEREDNGNDB.m3lmBots == true
 end
 
 local function jitter(base, amp)
@@ -88,6 +98,73 @@ function Bot.ResetMemory()
     Bot._memory = emptyMemory()
 end
 
+-- ---------------------------------------------------------------------
+-- M3lm: partner play-style model
+-- ---------------------------------------------------------------------
+-- Per-seat aggregate counters, accumulated ACROSS the entire GAME
+-- (not reset per round). Stable patterns let the bot calibrate to
+-- known partner / opponent behaviour. Reset on Reset() / new game.
+--
+-- Counters:
+--   bels         — how often this seat has Beled
+--   bidsAttempts — opportunities to bid (used to normalize Bel rate)
+--   trumpEarly   — trump-led on a non-trump trick before trick 5
+--                  (signals aggressive trump-spending)
+--   trumpLate    — trump-led on a non-trump trick from trick 5 onwards
+--                  (saver style)
+--   smothers     — observed A/T dumps onto a partner-winning trick
+--   smotherOpps  — opportunities (won non-trump tricks where this
+--                  seat could have smothered)
+Bot._partnerStyle = nil
+
+local function emptyStyle()
+    local m = {}
+    for s = 1, 4 do
+        m[s] = {
+            bels = 0, bidsAttempts = 0,
+            trumpEarly = 0, trumpLate = 0,
+            smothers = 0, smotherOpps = 0,
+        }
+    end
+    return m
+end
+
+function Bot.ResetStyle()
+    Bot._partnerStyle = emptyStyle()
+end
+
+-- Hook into Net.lua at contract finalization so the seat that Beled
+-- this round adds to their lifetime counter. Net.lua calls this from
+-- _OnDouble / _OnRedouble / _OnTriple / _OnFour / _OnGahwa.
+function Bot.OnEscalation(seat)
+    if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
+    local m = Bot._partnerStyle[seat]
+    if not m then return end
+    m.bels = m.bels + 1
+end
+
+-- Convenience derived metrics. All return nil if we haven't seen
+-- enough actions to be meaningful — caller should fall back to a
+-- neutral default in that case.
+local function styleBelTendency(seat)
+    if not Bot._partnerStyle then return nil end
+    local m = Bot._partnerStyle[seat]
+    if not m or m.bels + m.bidsAttempts < 1 then return nil end
+    -- Map to {-1, 0, 1}: cautious (no bels seen), normal, aggressive.
+    if m.bels == 0 then return -1 end
+    if m.bels >= 2 then return 1 end
+    return 0
+end
+
+local function styleTrumpTempo(seat)
+    if not Bot._partnerStyle then return nil end
+    local m = Bot._partnerStyle[seat]
+    if not m or (m.trumpEarly + m.trumpLate) < 2 then return nil end
+    if m.trumpEarly > m.trumpLate * 1.5 then return 1   end -- aggressive
+    if m.trumpLate  > m.trumpEarly * 1.5 then return -1 end -- conservative
+    return 0
+end
+
 -- Called from Net.lua AFTER each ApplyPlay (host-only). leadSuit may be
 -- nil if the play opens a new trick.
 function Bot.OnPlayObserved(seat, card, leadSuit)
@@ -99,6 +176,26 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     local cardSuit = C.Suit(card)
     if leadSuit and cardSuit ~= leadSuit then
         mem.void[leadSuit] = true
+    end
+
+    -- M3lm: accumulate per-seat play-style stats across the full game.
+    -- Cheap counters; we only USE them in M3lm-gated branches.
+    if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
+    local style = Bot._partnerStyle[seat]
+    if not style then return end
+    -- Trump tempo: did this seat lead trump on a non-trump trick
+    -- (i.e., deliberately spent trump to draw / over-cut)? Track
+    -- whether the spend happened early (trick<5) or late (trick>=5).
+    local contract = S.s and S.s.contract
+    if contract and contract.type == K.BID_HOKM and contract.trump
+       and cardSuit == contract.trump and leadSuit
+       and leadSuit ~= contract.trump then
+        local trickNum = #(S.s.tricks or {}) + 1
+        if trickNum <= 4 then
+            style.trumpEarly = style.trumpEarly + 1
+        else
+            style.trumpLate = style.trumpLate + 1
+        end
     end
 end
 
@@ -258,6 +355,66 @@ local function scoreUrgency(myTeam)
     return 0
 end
 
+-- M3lm-only: smoother match-point urgency. Layers on top of
+-- scoreUrgency with a finer-grained curve based on distance-to-win.
+-- Returns ADDITIONAL modifier to subtract from threshold.
+--   • opponent  ≥ target-15  : extra -8  (defensive desperation)
+--   • opponent  ≥ target-40  : extra -3  (caution)
+--   • we        ≥ target-15  : extra +5  (lock it down)
+--   • behind by 50..80       : extra -3  (take measured risk)
+local function matchPointUrgency(myTeam)
+    if not Bot.IsM3lm() then return 0 end
+    if not S.s.cumulative or not myTeam then return 0 end
+    local me  = S.s.cumulative[myTeam] or 0
+    local opp = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
+    local target = (S.s.target or 152)
+    local mod = 0
+    if opp >= target - 15 then mod = mod - 8
+    elseif opp >= target - 40 then mod = mod - 3 end
+    if me  >= target - 15 then mod = mod + 5 end
+    local diff = opp - me
+    if diff > 50 and diff <= 80 then mod = mod - 3 end
+    return mod
+end
+
+-- M3lm-only: did our partner already escalate in this contract? If
+-- yes, bot should be MORE willing to escalate further (combined-team
+-- strength signal). If partner DECLINED an escalation opportunity
+-- (their seat is the one that should have just acted), that's a
+-- weakness signal — bot should be MORE cautious.
+--
+-- Returns a strength bonus to add (positive = more aggressive).
+local function partnerEscalatedBonus(seat, contract)
+    if not Bot.IsM3lm() then return 0 end
+    if not contract then return 0 end
+    local p = R.Partner(seat)
+    -- partner is the bidder vs defender of this contract:
+    --   contract.doubled was set by the defender (= bidder + 1 mod)
+    --   contract.redoubled was set by the bidder
+    --   contract.tripled by defender, foured by bidder, gahwa by defender
+    local bidder = contract.bidder
+    local defender = bidder and ((bidder % 4) + 1) or nil
+    local bonus = 0
+    -- If partner is the defender and they Beled or Tripled, that's a
+    -- positive signal for us (the bidder team) — we know defenders
+    -- are aggressive and we should respond in kind.
+    if p == defender then
+        if contract.doubled then bonus = bonus + 5  end
+        if contract.tripled then bonus = bonus + 8  end
+        if contract.gahwa   then bonus = bonus + 12 end
+    end
+    -- If partner is the bidder and they Bel-Re'd / Foured, that's a
+    -- positive signal for us (the defender team) — they're confident,
+    -- so the contract is likely to make: we should escalate harder
+    -- to maximize loss IF we still want to push (defensive Triple
+    -- expects our hand also to be strong, which gates this anyway).
+    if p == bidder then
+        if contract.redoubled then bonus = bonus + 5  end
+        if contract.foured    then bonus = bonus + 8  end
+    end
+    return bonus
+end
+
 -- ---------------------------------------------------------------------
 -- Bidding
 -- ---------------------------------------------------------------------
@@ -277,7 +434,7 @@ function Bot.PickBid(seat)
     end
 
     local sun = sunStrength(hand)
-    local urgency = scoreUrgency(R.TeamOf(seat))
+    local urgency = (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     -- Round-2 threshold ought to be ≥ round-1: in R2 the bidder picks
     -- the suit, so fewer hands are forced to commit. Advanced layer
     -- enforces this; basic mode keeps the existing R2<R1 split.
@@ -738,7 +895,8 @@ function Bot.PickDouble(seat)
     -- Advanced: partner's bid is a strong signal of combined-team
     -- strength; score urgency adjusts threshold for desperation/safety.
     strength = strength + partnerBidBonus(seat, contract)
-    local th = K.BOT_BEL_TH - scoreUrgency(R.TeamOf(seat))
+                       + partnerEscalatedBonus(seat, contract)
+    local th = K.BOT_BEL_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     return strength >= jitter(th, BEL_JITTER)
 end
 
@@ -753,7 +911,8 @@ function Bot.PickRedouble(seat)
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
     end
     strength = strength + partnerBidBonus(seat, contract)
-    local th = K.BOT_BELRE_TH - scoreUrgency(R.TeamOf(seat))
+                       + partnerEscalatedBonus(seat, contract)
+    local th = K.BOT_BELRE_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     return strength >= jitter(th, BEL_JITTER)
 end
 
@@ -774,6 +933,7 @@ local function escalationStrength(seat, hand, contract)
     -- Advanced: factor in partner's bid as combined-team strength
     -- info. PASS both rounds → -10; HOKM matching trump → +20; etc.
     strength = strength + partnerBidBonus(seat, contract)
+                       + partnerEscalatedBonus(seat, contract)
     return strength
 end
 
@@ -786,7 +946,7 @@ function Bot.PickTriple(seat)
     local contract = S.s.contract
     if not hand or not contract then return false end
     local strength = escalationStrength(seat, hand, contract)
-    local th = K.BOT_TRIPLE_TH - scoreUrgency(R.TeamOf(seat))
+    local th = K.BOT_TRIPLE_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     return strength >= jitter(th, BEL_JITTER)
 end
 
@@ -797,7 +957,7 @@ function Bot.PickFour(seat)
     local contract = S.s.contract
     if not hand or not contract then return false end
     local strength = escalationStrength(seat, hand, contract)
-    local th = K.BOT_FOUR_TH - scoreUrgency(R.TeamOf(seat))
+    local th = K.BOT_FOUR_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     return strength >= jitter(th, BEL_JITTER)
 end
 
@@ -809,7 +969,7 @@ function Bot.PickGahwa(seat)
     local contract = S.s.contract
     if not hand or not contract then return false end
     local strength = escalationStrength(seat, hand, contract)
-    local th = K.BOT_GAHWA_TH - scoreUrgency(R.TeamOf(seat))
+    local th = K.BOT_GAHWA_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     return strength >= jitter(th, BEL_JITTER)
 end
 

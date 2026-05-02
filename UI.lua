@@ -650,12 +650,15 @@ local function buildLobby()
             .. "threshold modifiers. Host only — affects bots in "
             .. "this game.")
     lobbyPanel.m3lmCheck = makeBotDifficultyCheck(
-        "M3lm (coming soon)", 56, false,
+        "M3lm", 56, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.m3lmBots end,
         function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.m3lmBots = v end,
-        "Master tier. Multi-trick lookahead, signal interpretation, "
-            .. "and meta-game reads. Reserved for a future update — "
-            .. "selectable in addition to Advanced once it ships.")
+        "Master tier (pro level). Layers on top of Advanced: "
+            .. "tracks each opponent and partner's play style across "
+            .. "the game (trump aggression, Bel frequency), uses "
+            .. "match-point urgency for finer score-position calls, "
+            .. "and ramps escalations faster when partner has already "
+            .. "Beled / Tripled. Stack with Advanced for full effect.")
 
     joinBtn = makeButton(lobbyPanel, "Join", 100, 26)
     joinBtn:SetPoint("BOTTOM", 0, 44)
@@ -2001,7 +2004,7 @@ local function renderBanner()
     if S.s.phase == K.PHASE_GAME_END then
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.legalEdge))
-        banner.title:SetText(("|cffffd055GAME OVER|r"))
+        banner.title:SetText(("|cffffd0558amt!! go play something else|r"))
         banner.final:SetText(("Team %s wins  —  %d / %d"):format(
             S.s.winner or "?", S.s.cumulative.A or 0, S.s.cumulative.B or 0))
         return

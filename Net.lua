@@ -523,6 +523,7 @@ function N._OnDouble(sender, seat)
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyDouble(seat)
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
     if S.s.isHost then N.MaybeRunBot() end   -- Bel-Re decision may now be a bot's
 end
 
@@ -536,6 +537,7 @@ function N._OnRedouble(sender, seat)
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyRedouble(seat)
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
     -- After Bel-Re the phase is TRIPLE (defender's escalation window).
     -- MaybeRunBot dispatches the bot triple decision OR arms the AFK
     -- timer for a human defender.
@@ -552,6 +554,7 @@ function N._OnTriple(sender, seat)
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyTriple(seat)
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
     if S.s.isHost then N.MaybeRunBot() end
 end
 
@@ -564,6 +567,7 @@ function N._OnFour(sender, seat)
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyFour(seat)
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
     if S.s.isHost then N.MaybeRunBot() end
 end
 
@@ -577,6 +581,7 @@ function N._OnGahwa(sender, seat)
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyGahwa(seat)
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
     -- Terminal: no further window. Move into PLAY.
     if S.s.isHost then N.HostFinishDeal() end
 end
@@ -754,7 +759,16 @@ function N._HostStepAfterTrick()
         S.ApplyRoundEnd(addA, addB, totA, totB)
         N.SendRound(addA, addB, totA, totB)
         if totA >= S.s.target or totB >= S.s.target then
-            local winner = totA >= totB and "A" or "B"
+            -- Saudi convention: on an exact tie at the target, the
+            -- BIDDING team wins — they took the contract risk and
+            -- got over the line. Default fallback when there's no
+            -- contract (shouldn't happen at game-end) is Team A.
+            local winner
+            if totA == totB and S.s.contract and S.s.contract.bidder then
+                winner = R.TeamOf(S.s.contract.bidder)
+            elseif totA > totB then winner = "A"
+            elseif totB > totA then winner = "B"
+            else                    winner = "A" end
             S.ApplyGameEnd(winner)
             N.SendGameEnd(winner)
         end
@@ -820,6 +834,12 @@ function N.HostStartRound()
 
     -- Fresh bot card memory each round.
     if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
+    -- Partner-style stats reset only at NEW GAME (round 1). Across
+    -- rounds within a game we keep accumulating so the M3lm tier has
+    -- stable patterns to read.
+    if roundNum == 1 and B.Bot and B.Bot.ResetStyle then
+        B.Bot.ResetStyle()
+    end
 
     S.ApplyStart(roundNum, dealer)
     N.SendStart(roundNum, dealer)
@@ -1182,7 +1202,13 @@ function N.HostResolveTakweesh(callerSeat)
         foundIllegal and (foundIllegal.illegalReason or "") or ""))
 
     if totA >= S.s.target or totB >= S.s.target then
-        local winner = (totA >= totB) and "A" or "B"
+        -- Same Saudi tie-rule as the normal-round path above.
+        local winner
+        if totA == totB and S.s.contract and S.s.contract.bidder then
+            winner = R.TeamOf(S.s.contract.bidder)
+        elseif totA > totB then winner = "A"
+        elseif totB > totA then winner = "B"
+        else                    winner = "A" end
         S.ApplyGameEnd(winner)
         N.SendGameEnd(winner)
     end

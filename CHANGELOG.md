@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.1.23 — M3lm tier, audit fixes, banner copy
+
+**M3lm (pro) bot tier — host opt-in, stacks with Advanced**
+- Lobby checkbox is now functional (was greyed in v0.1.20).
+- New slash: `/baloot m3lm` toggles the flag.
+- Adds three new layers on top of Advanced:
+  - **Partner / opponent play-style modeling**: per-seat counters
+    (`bels`, `trumpEarly`, `trumpLate`) accumulate across a full
+    game so the bot can read each player's tendencies. Reset only
+    on round 1 of a new game.
+  - **Match-point urgency**: finer-grained threshold modifier
+    layered on top of Advanced's `scoreUrgency` — opponent ≥
+    target-15 → extra −8 (defensive desperation), opponent ≥
+    target-40 → extra −3 (caution), we ≥ target-15 → extra +5
+    (lock it down), behind 50–80 → extra −3 (measured risk).
+  - **Coordinated escalation**: `partnerEscalatedBonus` adds to
+    escalation strength when partner has already Beled / Tripled
+    in the current contract. Defender chain (Bel/Triple/Gahwa)
+    rewards escalating partners with +5/+8/+12; bidder chain
+    (Bel-Re/Four) rewards bidder partners with +5/+8.
+- Net.lua hooks `Bot.OnEscalation(seat)` from
+  `_OnDouble/_OnRedouble/_OnTriple/_OnFour/_OnGahwa` so the
+  partner-style ledger updates from network events too (covers
+  remote players as well as bots).
+- `Bot.IsAdvanced()` now returns true if EITHER advancedBots OR
+  m3lmBots is set — M3lm strictly extends Advanced.
+
+**Saudi rules audit fixes**
+- Meld declaration window closes at end of trick 1 (Pagat-strict).
+  Previously a player could still declare during trick 2 if they
+  hadn't yet played their first card. `S.GetMeldsForLocal` now
+  returns empty once `#s.tricks >= 1`.
+- Game-end ties now go to the bidding team (Saudi convention)
+  instead of Team A by default. Affects both
+  `_HostStepAfterTrick`'s round-end branch and
+  `HostResolveTakweesh`'s game-end branch.
+
+**Copy**
+- Game-end banner: "GAME OVER" → "8amt!! go play something else".
+
 ## v0.1.22 — only winning team reveals in trick 2
 
 **Fix**

@@ -1228,6 +1228,11 @@ function S.GetMeldsForLocal()
     if not s.localSeat or not s.contract then return {} end
     if s.meldsDeclared[s.localSeat] then return {} end
     if s.phase ~= K.PHASE_DEAL3 and s.phase ~= K.PHASE_PLAY then return {} end
+    -- Saudi rule: melds must be declared during trick 1 only. Once
+    -- trick 1 closes (#s.tricks >= 1), the declaration window is
+    -- shut for everyone — even players who haven't yet played their
+    -- first card of trick 2. Late declarations are forbidden.
+    if (#(s.tricks or {})) >= 1 then return {} end
     local detected = R.DetectMelds(s.hand, s.contract)
     -- Filter out melds this seat already declared so each meld appears
     -- as a button at most once. Match key: (kind, top, suit) — for
