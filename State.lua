@@ -43,17 +43,21 @@ local function reset()
     s.bidCard     = nil
     s.bidRound    = 1
     s.bids        = {}      -- [seat] = "PASS" | "HOKM:S/H/D/C" | "SUN"
-    s.contract    = nil     -- {type, trump, bidder, doubled, redoubled}
+    s.contract    = nil     -- {type, trump, bidder, doubled, tripled, foured, gahwa, openClosed}
     s.hand        = {}      -- our private hand
     s.hostHands   = nil     -- host only: [seat]={cards}
     s.turn        = nil
-    s.turnKind    = nil     -- "bid" | "double" | "redouble" | "play" | "meld"
+    s.turnKind    = nil     -- "bid" | "double" | "play" | "meld"
     s.trick       = nil     -- {leadSuit, plays}
     s.tricks      = {}
     s.meldsByTeam = { A = {}, B = {} }
     s.meldsDeclared = {}    -- [seat] = true once declared (or skipped)
     s.belPending  = nil     -- seats waiting to choose Bel/skip
-    s.belrePending= nil
+    -- Pre-emption (Triple-on-Ace, الثالث): set when a round-2 SUN bid
+    -- lands on an Ace bid card. Maps eligible seats (earlier-in-order,
+    -- non-partner of buyer) to a pending decision. Cleared when a seat
+    -- claims or all eligible seats waive.
+    s.preemptEligible = nil
     -- scores
     s.cumulative  = { A = 0, B = 0 }
     s.target      = 152
@@ -181,6 +185,12 @@ local TRANSIENT_FIELDS = {
     lastRoundResult = true,
     lastRoundDelta  = true,
     lastTrick       = true,
+    -- Pre-emption window state — short-lived (60s AFK timeout).
+    -- After a /reload the resync from host re-establishes phase but
+    -- the eligibility list and pending contract come from host's
+    -- live state, not from our save. Drop on save.
+    preemptEligible = true,
+    pendingPreemptContract = true,
 }
 
 function S.SaveSession()
@@ -222,6 +232,22 @@ function S.RestoreSession()
     -- defaults instead of being explicitly absent.
     for k in pairs(s) do s[k] = nil end
     for k, v in pairs(sess.state) do s[k] = v end
+    -- v0.2.0 upgrader: the escalation chain rewrite removed the
+    -- `redoubled` rung and the `belrePending` window. A pre-v0.2.0
+    -- session restored on a v0.2.0+ install would carry these stale
+    -- fields and confuse the dispatcher (especially if the saved
+    -- phase was REDOUBLE). Strip them and bump REDOUBLE → DOUBLE so
+    -- the eligible defender can act fresh. Stale `redoubled=true` on
+    -- a multi-rung contract just gets cleared — Triple/Four/Gahwa
+    -- flags supersede it in the new chain.
+    if s.contract then
+        s.contract.redoubled = nil
+        s.contract.belOpen    = s.contract.belOpen    or false
+        s.contract.tripleOpen = s.contract.tripleOpen or false
+        s.contract.fourOpen   = s.contract.fourOpen   or false
+    end
+    s.belrePending = nil
+    if s.phase == "redouble" then s.phase = K.PHASE_DOUBLE end
     -- A few field defaults need to be non-nil so the rest of the code
     -- can index them without nil-check noise.
     s.hand         = s.hand         or {}
@@ -262,7 +288,8 @@ end
 function S.ApplyResyncSnapshot(gameID, payload)
     if not gameID or gameID == "" then return end
     if not payload or payload == "" then return end
-    -- Wire layout (matches packSnapshot in Net.lua):
+    -- Wire layout (matches packSnapshot in Net.lua) — v0.1.34 escalation
+    -- rewrite removed the `redoubled` slot, so the layout is now:
     --   1  gameID
     --   2  phase
     --   3  dealer
@@ -273,21 +300,22 @@ function S.ApplyResyncSnapshot(gameID, payload)
     --   8  contract.trump
     --   9  contract.bidder
     --  10  doubled         (×2)
-    --  11  redoubled       (×4)
-    --  12  tripled         (×8)
-    --  13  foured          (×16)
-    --  14  gahwa           (×32)
-    --  15  cumulative.A
-    --  16  cumulative.B
-    --  17  paused
-    --  18  bidRound
-    --  19..22  seat names
-    --  23..26  bids
+    --  11  tripled         (×3)
+    --  12  foured          (×4)
+    --  13  gahwa           (match-win)
+    --  14  contract.tripleOpen   (1 = open / next rung allowed)
+    --  15  contract.fourOpen
+    --  16  cumulative.A
+    --  17  cumulative.B
+    --  18  paused
+    --  19  bidRound
+    --  20..23 seat names
+    --  24..27 bids
     local f = {}
     local i = 1
     for chunk in payload:gmatch("([^|]*)|?") do
         f[i] = chunk; i = i + 1
-        if i > 26 then break end
+        if i > 27 then break end
     end
     if (f[1] or "") ~= gameID then return end
 
@@ -303,30 +331,31 @@ function S.ApplyResyncSnapshot(gameID, payload)
     local ctype = f[7]
     if ctype and ctype ~= "" then
         s.contract = {
-            type      = ctype,
-            trump     = (f[8] ~= "" and f[8]) or nil,
-            bidder    = tonumber(f[9]) or 0,
-            doubled   = f[10] == "1",
-            redoubled = f[11] == "1",
-            tripled   = f[12] == "1",
-            foured    = f[13] == "1",
-            gahwa     = f[14] == "1",
+            type       = ctype,
+            trump      = (f[8] ~= "" and f[8]) or nil,
+            bidder     = tonumber(f[9]) or 0,
+            doubled    = f[10] == "1",
+            tripled    = f[11] == "1",
+            foured     = f[12] == "1",
+            gahwa      = f[13] == "1",
+            tripleOpen = f[14] == "1",
+            fourOpen   = f[15] == "1",
         }
     else
         s.contract = nil
     end
 
     s.cumulative = s.cumulative or { A = 0, B = 0 }
-    s.cumulative.A = tonumber(f[15]) or 0
-    s.cumulative.B = tonumber(f[16]) or 0
-    s.paused       = (f[17] == "1")
-    s.bidRound     = tonumber(f[18]) or s.bidRound or 1
+    s.cumulative.A = tonumber(f[16]) or 0
+    s.cumulative.B = tonumber(f[17]) or 0
+    s.paused       = (f[18] == "1")
+    s.bidRound     = tonumber(f[19]) or s.bidRound or 1
 
     -- Seats: rebuild minimal info; isBot defaults to false here, the
     -- next SendLobby from the host will overwrite with full info.
     s.seats = s.seats or {}
     for seat = 1, 4 do
-        local nm = f[18 + seat] or ""
+        local nm = f[19 + seat] or ""
         if nm ~= "" then
             s.seats[seat] = s.seats[seat] or {}
             s.seats[seat].name = nm
@@ -342,7 +371,7 @@ function S.ApplyResyncSnapshot(gameID, payload)
 
     s.bids = {}
     for seat = 1, 4 do
-        local b = f[22 + seat]
+        local b = f[23 + seat]
         if b and b ~= "" then s.bids[seat] = b end
     end
 
@@ -710,16 +739,24 @@ end
 
 function S.ApplyContract(bidder, btype, trump)
     s.contract = {
-        type      = btype,
-        trump     = trump ~= "" and trump or nil,
-        bidder    = bidder,
-        doubled   = false,
-        redoubled = false,
+        type    = btype,
+        trump   = trump ~= "" and trump or nil,
+        bidder  = bidder,
+        doubled = false,
+        tripled = false,
+        foured  = false,
+        gahwa   = false,
+        -- Open/Closed (التربيع) flags. Default open=true so legacy
+        -- callers that don't pass openFlag advance to the next rung
+        -- (matches old behaviour).
+        belOpen    = false,  -- defenders chose to allow the next rung
+        tripleOpen = false,  -- bidder chose to allow defenders' Four
+        fourOpen   = false,  -- defenders chose to allow bidder's Gahwa
     }
     s.phase = K.PHASE_DOUBLE
     -- Bidding is over. Clear turn/turnKind so the UI turn-glow doesn't
     -- linger on the last bidder and so the dispatcher can't read stale
-    -- turn state during DOUBLE/REDOUBLE.
+    -- turn state during the escalation windows.
     s.turn = nil
     s.turnKind = nil
     -- defenders are partner-pair opposite to bidder
@@ -733,59 +770,70 @@ function S.ApplyContract(bidder, btype, trump)
     if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("bel") end
 end
 
-function S.ApplyDouble(seat)
+-- Bel (×2) — defenders' first escalation.
+-- `open` (default true): allow bidder's Triple counter; if false,
+-- the chain stops here ("Bel & closed" / Bel-and-end-here).
+function S.ApplyDouble(seat, open)
     if not s.contract then return end
     s.contract.doubled = true
-    s.belPending  = nil
-    s.phase = K.PHASE_REDOUBLE
-    -- Bel decision is over; clear stale turn state.
+    s.contract.belOpen = (open ~= false)
+    s.belPending = nil
     s.turn = nil
     s.turnKind = nil
-    -- bidder team gets Bel-Re option
-    local b = s.contract.bidder
-    if b == 1 or b == 3 then s.belrePending = { 1, 3 } else s.belrePending = { 2, 4 } end
-    -- AFK pre-warn for the bel-re decision (the original bidder).
-    if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("belre") end
-end
-
-function S.ApplyRedouble(seat)
-    if not s.contract then return end
-    s.contract.redoubled = true
-    s.belrePending = nil
-    -- After Bel-Re, defenders (opp of bidder) get the Triple window —
-    -- but ONLY in Hokm. Saudi rule: "في الصن لايوجد الثري والفور
-    -- والقهوة" (Sun has no Triple/Four/Gahwa). For Sun, Bel-Re is
-    -- the terminal escalation and we go straight to PLAY.
+    -- Sun rule (Saudi): "في الصن لايوجد الثري والفور والقهوة" — Sun
+    -- has only Bel; no Triple/Four/Gahwa. Sun + Bel goes straight to
+    -- PLAY regardless of open/closed (no rung to advance to).
     if s.contract.type == K.BID_SUN then
         s.phase = K.PHASE_PLAY
-    else
-        s.phase = K.PHASE_TRIPLE
+        return
     end
-    s.turn = nil
-    s.turnKind = nil
+    -- Closed: chain ends; no Triple window.
+    if not s.contract.belOpen then
+        s.phase = K.PHASE_PLAY
+        return
+    end
+    s.phase = K.PHASE_TRIPLE
+    -- AFK pre-warn for the triple decision (the bidder).
+    if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("triple") end
 end
 
--- Triple (×8) — defender's escalation after Bel-Re.
-function S.ApplyTriple(seat)
+-- Triple (×3) — bidder's counter to a Bel.
+-- `open` (default true): allow defenders' Four counter.
+function S.ApplyTriple(seat, open)
     if not s.contract then return end
     s.contract.tripled = true
-    s.phase = K.PHASE_FOUR
+    s.contract.tripleOpen = (open ~= false)
     s.turn = nil
     s.turnKind = nil
     if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_TRIPLE) end
+    if not s.contract.tripleOpen then
+        s.phase = K.PHASE_PLAY
+    else
+        s.phase = K.PHASE_FOUR
+    end
 end
 
--- Four (×16) — bidder's escalation after Triple.
-function S.ApplyFour(seat)
+-- Four (×4) — defenders' counter to a Triple.
+-- `open` (default true): allow bidder's Gahwa counter.
+function S.ApplyFour(seat, open)
     if not s.contract then return end
     s.contract.foured = true
-    s.phase = K.PHASE_GAHWA
+    s.contract.fourOpen = (open ~= false)
     s.turn = nil
     s.turnKind = nil
     if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_FOUR) end
+    if not s.contract.fourOpen then
+        s.phase = K.PHASE_PLAY
+    else
+        s.phase = K.PHASE_GAHWA
+    end
 end
 
--- Gahwa / Coffee (×32) — defender's terminal escalation.
+-- Gahwa / Coffee (match-win) — bidder's terminal escalation.
+-- Per "نظام الدبل في لعبة البلوت", a successful Gahwa wins the entire
+-- MATCH for the caller's team (cumulative jumps to target). A failed
+-- Gahwa hands the match to defenders. Round-multiplier semantics from
+-- the old ×32 rung are gone — see R.ScoreRound for the special branch.
 function S.ApplyGahwa(seat)
     if not s.contract then return end
     s.contract.gahwa = true
@@ -1291,6 +1339,68 @@ function S.HostBeginRound2()
     -- finishes before the voice plays.
     if B.Sound and B.Sound.Cue then
         C_Timer.After(0.5, function() B.Sound.Cue(K.SND_VOICE_THANY) end)
+    end
+end
+
+-- ---------------------------------------------------------------------
+-- Pre-emption (الثالث "Triple-on-Ace") — earlier-seat right
+-- ---------------------------------------------------------------------
+-- When a round-2 SUN bid lands and the bid card's rank is A, an EARLIER
+-- seat in bidding order may "claim before you" — taking the contract
+-- as their own SUN bid. Restrictions per "الثالث" doc:
+--   • Must be earlier in turn order than the buyer.
+--   • May NOT be the buyer's partner ("can't Triple your partner").
+--   • Hokm-on-Ace (someone earlier picked Hokm on the bid card)
+--     cancels the right entirely — moot under this code path because
+--     the contract type is Sun, not Hokm.
+-- The eligible-seat list is built host-side and broadcast as part of
+-- the synthetic preempt phase; clients render the "قبلك" button when
+-- their seat is in the list.
+function S.PreemptEligibleSeats(buyerSeat, bidder)
+    if not buyerSeat or not bidder then return {} end
+    local out = {}
+    -- Bidding order is determined by dealer (dealer+1 acts first).
+    -- We collect seats that BID before `buyerSeat` excluding partner
+    -- of `buyerSeat`. Use the s.bids map: any seat with a bid (not
+    -- nil) in the SAME round that came before buyerSeat in turn order.
+    local d = s.dealer or 1
+    local order = {
+        (d % 4) + 1, ((d + 1) % 4) + 1,
+        ((d + 2) % 4) + 1, d,
+    }
+    local partnerOfBuyer = R.Partner(buyerSeat)
+    for _, seat in ipairs(order) do
+        if seat == buyerSeat then break end
+        if seat ~= partnerOfBuyer then
+            -- Only seats with a recorded bid this round are eligible.
+            -- (PASS counts — they "saw" the bid card and chose not to
+            -- act. They retain pre-emption right.)
+            if s.bids and s.bids[seat] ~= nil then
+                out[#out + 1] = seat
+            end
+        end
+    end
+    return out
+end
+
+function S.ApplyPreempt(seat)
+    -- Seat claims the contract as a SUN bid. Reassign declarer.
+    if not s.preemptEligible then return end
+    s.contract = nil
+    s.preemptEligible = nil
+    s.phase = K.PHASE_DEAL2BID
+    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_SUN) end
+end
+
+function S.ApplyPreemptPass(seat)
+    -- One eligible seat declined. Remove from list; if list now empty,
+    -- finalize the original bid.
+    if not s.preemptEligible then return end
+    for i, s2 in ipairs(s.preemptEligible) do
+        if s2 == seat then table.remove(s.preemptEligible, i); break end
+    end
+    if #s.preemptEligible == 0 then
+        s.preemptEligible = nil
     end
 end
 

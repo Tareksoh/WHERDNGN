@@ -67,11 +67,14 @@ K.BID_ASHKAL  = "ASHKAL"   -- 3rd/4th-position bid that hands a SUN
 
 K.MULT_BASE   = 1
 K.MULT_SUN    = 2  -- sun contracts score x2
-K.MULT_BEL    = 2  -- doubled
-K.MULT_BELRE  = 4  -- redoubled
-K.MULT_TRIPLE = 8  -- ثري — defender's 3rd-stage escalation
-K.MULT_FOUR   = 16 -- فور — bidder's 4th-stage escalation
-K.MULT_GAHWA  = 32 -- قهوة (coffee) — defender's 5th and final escalation
+K.MULT_BEL    = 2  -- doubled (×2)
+K.MULT_TRIPLE = 3  -- ثري — bidder's response after Bel (×3)
+K.MULT_FOUR   = 4  -- فور — defender's response after Triple (×4)
+-- Gahwa (قهوة, "Coffee") is NOT a round-multiplier per canon. The
+-- caller's team WINS THE ENTIRE MATCH outright (cumulative→target).
+-- Handled as a special branch in scoring rather than a multiplier.
+-- See "نظام الدبل في لعبة البلوت": four escalation rungs total —
+-- Bel(×2), Triple(×3), Four(×4), Gahwa(match-win).
 
 -- -- Melds (declarations in trick 1) -----------------------------------
 
@@ -106,11 +109,11 @@ K.PHASE_IDLE     = "idle"        -- no game, lobby visible
 K.PHASE_LOBBY    = "lobby"       -- host has invited, waiting on players to claim seats
 K.PHASE_DEAL1    = "deal1"       -- 5 cards out, bid card up, round-1 bidding
 K.PHASE_DEAL2BID = "deal2bid"    -- all passed round 1, round-2 bidding
-K.PHASE_DOUBLE   = "double"      -- contract decided, opp window for Bel
-K.PHASE_REDOUBLE = "redouble"    -- Bel happened, contracting team window for Bel-Re
-K.PHASE_TRIPLE   = "triple"      -- Bel-Re happened, opp window for Triple (×8)
-K.PHASE_FOUR     = "four"        -- Triple happened, bidder window for Four (×16)
-K.PHASE_GAHWA    = "gahwa"       -- Four happened, opp window for Gahwa (×32)
+K.PHASE_PREEMPT  = "preempt"     -- round-2 Sun on Ace bid card: earlier seats may pre-empt (الثالث)
+K.PHASE_DOUBLE   = "double"      -- contract decided, defenders' window for Bel
+K.PHASE_TRIPLE   = "triple"      -- Bel happened, bidder's window for Triple (×3)
+K.PHASE_FOUR     = "four"        -- Triple happened, defenders' window for Four (×4)
+K.PHASE_GAHWA    = "gahwa"       -- Four happened, bidder's window for Gahwa (match-win)
 K.PHASE_DEAL3    = "deal3"       -- final 3 cards out, optional meld declarations
 K.PHASE_PLAY     = "play"        -- trick play
 K.PHASE_SCORE    = "score"       -- showing score, host advances to next round
@@ -151,11 +154,10 @@ K.MSG_BIDCARD  = "b"   -- public face-up bid card
 K.MSG_TURN     = "T"   -- whose turn now (bidding or play)
 K.MSG_BID      = "B"   -- a bid was made
 K.MSG_CONTRACT = "C"   -- contract finalized
-K.MSG_DOUBLE   = "X"   -- Bel
-K.MSG_REDOUBLE = "Y"   -- Bel-Re
-K.MSG_TRIPLE   = "3"   -- Triple (×8)
-K.MSG_FOUR     = "4"   -- Four (×16)
-K.MSG_GAHWA    = "5"   -- Gahwa (×32)
+K.MSG_DOUBLE   = "X"   -- Bel (×2) — defenders
+K.MSG_TRIPLE   = "3"   -- Triple (×3) — bidder's counter to Bel
+K.MSG_FOUR     = "4"   -- Four (×4) — defenders' counter to Triple
+K.MSG_GAHWA    = "5"   -- Gahwa (match-win) — bidder's terminal
 K.MSG_MELD     = "M"   -- meld declaration in trick 1
 K.MSG_PLAY     = "P"   -- card played
 K.MSG_TRICK    = "W"   -- trick winner + points
@@ -164,10 +166,9 @@ K.MSG_GAMEEND  = "G"   -- game ended
 K.MSG_RESYNC_REQ = "?" -- request state from host
 K.MSG_RESYNC_RES = "="  -- host's resync payload
 K.MSG_SKIP_DBL   = "n"  -- defender voted skip on double window
-K.MSG_SKIP_RDBL  = "m"  -- bidder voted skip on redouble window
-K.MSG_SKIP_TRP   = "u"  -- defender voted skip on triple window
-K.MSG_SKIP_FOR   = "v"  -- bidder voted skip on four window
-K.MSG_SKIP_GHW   = "w"  -- defender voted skip on gahwa window
+K.MSG_SKIP_TRP   = "u"  -- bidder voted skip on triple window
+K.MSG_SKIP_FOR   = "v"  -- defender voted skip on four window
+K.MSG_SKIP_GHW   = "w"  -- bidder voted skip on gahwa window
 K.MSG_TAKWEESH     = "k"  -- player calls Takweesh (catches an illegal play)
 K.MSG_TAKWEESH_OUT = "z"  -- host's outcome: caught or false-call
 K.MSG_KAWESH       = "a"  -- player calls Kawesh/Saneen (5-card 7/8/9 annul)
@@ -192,6 +193,15 @@ K.MSG_SWA_REQ      = "I"  -- caller asks opponents for permission to
 K.MSG_SWA_RESP     = "O"  -- opponent's accept/deny vote on a pending
                           -- SWA permission request. Payload:
                           -- responderSeat;accept(0/1);callerSeat.
+K.MSG_PREEMPT      = "@"  -- "Triple-on-Ace" pre-emption (الثالث): an
+                          -- earlier seat (in bidding order) claims a
+                          -- Sun bid when the bid card is an Ace and a
+                          -- later seat already bought it. Payload:
+                          -- seat. Seat must be earlier in bid order
+                          -- and not the partner of the would-be
+                          -- declarer. Settles the bid by reassigning
+                          -- declarer to the pre-empter.
+K.MSG_PREEMPT_PASS = "%"  -- waive the pre-emption right. Payload: seat.
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:
@@ -215,9 +225,9 @@ K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "بَسْ" — round-1 pass
 K.SND_VOICE_WLA    = SND_BASE .. "wla.ogg"        -- "ولا" — round-2 pass
 K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوَل" (round-1 bidding start)
 K.SND_VOICE_THANY  = SND_BASE .. "thany.ogg"      -- "ثآني" (round-2 bidding start)
-K.SND_VOICE_TRIPLE = SND_BASE .. "triple.ogg"     -- "ثري" (×8 escalation)
-K.SND_VOICE_FOUR   = SND_BASE .. "four.ogg"       -- "فور" (×16 escalation)
-K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.ogg"      -- "قهوة" (×32 escalation, Coffee)
+K.SND_VOICE_TRIPLE = SND_BASE .. "triple.ogg"     -- "ثري" (×3 — bidder's counter to Bel)
+K.SND_VOICE_FOUR   = SND_BASE .. "four.ogg"       -- "فور" (×4 — defenders' counter to Triple)
+K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.ogg"      -- "قهوة" (Coffee — bidder's terminal, match-win)
 K.SND_VOICE_AKA    = SND_BASE .. "aka.ogg"        -- "إكَهْ" (AKA signal)
 
 -- -- Tunables ---------------------------------------------------------
@@ -230,10 +240,11 @@ K.TRICK_GLOW_SEC      = 1.0   -- length of winner-glow before clearing the trick
 K.CARD_ANIM_SEC       = 0.18  -- duration of the card-land scale+fade animation
 
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
--- per-suit and Sun strength formulas).
-K.BOT_BEL_TH          = 70    -- defender bels with own strength >= TH
-K.BOT_BELRE_TH        = 90    -- bidder redoubles with own strength >= TH
-K.BOT_TRIPLE_TH       = 95    -- defender triples (×8) — needs strong hand
-K.BOT_FOUR_TH         = 115   -- bidder fours (×16) — very strong hand
-K.BOT_GAHWA_TH        = 130   -- defender gahwas (×32) — terminal, near-certain
+-- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
+-- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).
+K.BOT_BEL_TH          = 70    -- defenders bel with own strength >= TH
+K.BOT_TRIPLE_TH       = 90    -- bidder triples (×3) — needs strong hand
+K.BOT_FOUR_TH         = 110   -- defenders four (×4) — very strong hand
+K.BOT_GAHWA_TH        = 135   -- bidder gahwa (match-win) — terminal, near-certain
 K.BOT_ASHKAL_TH       = 65    -- partner-of-Hokm-bidder calls Ashkal with Sun-strong hand
+K.BOT_PREEMPT_TH      = 75    -- earlier seat pre-empts a Sun-on-Ace bid

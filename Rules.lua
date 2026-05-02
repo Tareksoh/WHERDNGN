@@ -454,7 +454,7 @@ end
 
 -- Inputs:
 --   tricks: array of { plays, leadSuit, winner } - 8 entries
---   contract: { type, trump, bidder, doubled, redoubled }
+--   contract: { type, trump, bidder, doubled, tripled, foured, gahwa }
 --   meldsByTeam: { A = {...}, B = {...} } - declared melds (only)
 --
 -- Returns: {
@@ -491,6 +491,12 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
 
     -- Belote (K+Q of trump in same hand) — Hokm only, scored independently
     -- of the contract result. Detect by scanning who played which card.
+    --
+    -- Saudi rule (per "ماهو البلوت في لعبة البلوت"): the +20 belote bonus
+    -- is CANCELLED when the same holder also declared a meld of value
+    -- ≥ 100 (sequence-of-5 or carré of T/K/Q/J/A). The 100-meld
+    -- subsumes the belote — no double-counting. Sequences of 3/4 (≤50)
+    -- and the bare belote stand on their own.
     local belote = nil
     if contract.type == K.BID_HOKM and contract.trump then
         local kWho, qWho
@@ -504,6 +510,15 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         end
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
+            -- Cancel belote if the K+Q holder also declared a ≥100 meld.
+            local team = belote
+            local list = (meldsByTeam and meldsByTeam[team]) or {}
+            for _, m in ipairs(list) do
+                if m.declaredBy == kWho and (m.value or 0) >= 100 then
+                    belote = nil
+                    break
+                end
+            end
         end
     end
 
@@ -557,20 +572,23 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         -- alternates with each escalation level — whoever made the
         -- LAST decision is the current "buyer". Tie means that buyer
         -- failed, so the OTHER side takes the count.
-        --   no escalation         → bidder is buyer       → fail (def takes)
-        --   doubled               → defender is buyer     → take (bidder takes)
-        --   redoubled             → bidder is buyer again → fail
-        --   tripled (×8)          → defender is buyer     → take
-        --   foured (×16)          → bidder is buyer       → fail
-        --   gahwa (×32)           → defender is buyer     → take
+        -- v0.2.0+ chain (Bel-Re removed):
+        --   no escalation     → bidder is buyer    → fail (def takes)
+        --   doubled (Bel)     → defender is buyer  → take (bidder takes)
+        --   tripled (Triple)  → bidder is buyer    → fail
+        --   foured  (Four)    → defender is buyer  → take
+        --   gahwa             → bidder is buyer    → fail
+        --     (gahwa is normally short-circuit to match-win, so this
+        --      tie path is only reached when ScoreRound is called from
+        --      an SWA / takweesh penalty path that doesn't trigger
+        --      the match-win branch.)
         local highest
-        if contract.gahwa     then highest = "gahwa"
+        if     contract.gahwa   then highest = "gahwa"
         elseif contract.foured  then highest = "four"
         elseif contract.tripled then highest = "triple"
-        elseif contract.redoubled then highest = "redouble"
-        elseif contract.doubled   then highest = "double"
-        else                            highest = "none" end
-        if highest == "double" or highest == "triple" or highest == "gahwa" then
+        elseif contract.doubled then highest = "double"
+        else                         highest = "none" end
+        if highest == "double" or highest == "four" then
             outcome_kind = "take"   -- defender escalated last; tie → bidder takes
         else
             outcome_kind = "fail"
@@ -610,23 +628,27 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         elseif outcome == "B" then meldPoints.B = meldB end
     end
 
-    -- Multipliers: Sun stacks with the highest active escalation level
-    -- (Bel ×2, Bel-Re ×4, Triple ×8, Four ×16, Gahwa ×32). Only one
-    -- escalation multiplier applies — they replace each other rather
-    -- than compound.
+    -- Multipliers (v0.2.0+ canonical 4-rung): Sun stacks with the
+    -- highest active escalation. Only one escalation multiplier
+    -- applies — they replace each other rather than compound.
+    --   Bel    ×2
+    --   Triple ×3
+    --   Four   ×4
+    --   Gahwa  → match-win (special-cased below; mult kept at ×4 for
+    --           any per-round computation, but the match-win branch
+    --           overrides cumulative totals).
     local mult = K.MULT_BASE
     if contract.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if     contract.gahwa     then mult = mult * K.MULT_GAHWA
-    elseif contract.foured    then mult = mult * K.MULT_FOUR
-    elseif contract.tripled   then mult = mult * K.MULT_TRIPLE
-    elseif contract.redoubled then mult = mult * K.MULT_BELRE
-    elseif contract.doubled   then mult = mult * K.MULT_BEL end
+    if     contract.gahwa   then mult = mult * K.MULT_FOUR  -- ×4 baseline
+    elseif contract.foured  then mult = mult * K.MULT_FOUR
+    elseif contract.tripled then mult = mult * K.MULT_TRIPLE
+    elseif contract.doubled then mult = mult * K.MULT_BEL end
 
     local rawA = (cardA + meldPoints.A) * mult
     local rawB = (cardB + meldPoints.B) * mult
 
     -- Belote: independent +20 raw, applied AFTER the multiplier.
-    -- Pagat: "Baloot always 2 points unaffected" — Bel/Bel-Re/Sun multipliers
+    -- Pagat: "Baloot always 2 points unaffected" — Bel/Triple/Four/Sun multipliers
     -- do NOT scale the Belote bonus. Always +2 game points to that team.
     if belote == "A" then
         rawA = rawA + K.MELD_BELOTE
@@ -639,6 +661,25 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- Saudi convention: round to nearest 10, "5 rounds down", then /10.
     local function div10(x) return math.floor((x + 4) / 10) end
 
+    -- Gahwa MATCH-WIN branch (v0.2.0+, per "نظام الدبل في لعبة البلوت"):
+    -- a successful Gahwa wins the entire match for the caller's team
+    -- regardless of point delta. A failed Gahwa hands the match to
+    -- defenders. Override the per-round delta to push cumulative-to-
+    -- target by signaling a "match-win" flag the caller (Net.lua's
+    -- HostStepAfterTrick) can read off the result struct.
+    local gahwaWonGame = false
+    local gahwaWinner
+    if contract.gahwa then
+        -- Caller's team = bidder team. They "win" if bidderMade
+        -- (made or doubled-tie inversion), "lose" otherwise.
+        if bidderMade then
+            gahwaWinner = bidderTeam
+        else
+            gahwaWinner = oppTeam
+        end
+        gahwaWonGame = true
+    end
+
     return {
         teamPoints    = teamPoints,
         meldPoints    = meldPoints,
@@ -648,6 +689,8 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         sweep         = sweepTeam,
         belote        = belote,
         multiplier    = mult,
+        gahwaWonGame  = gahwaWonGame,
+        gahwaWinner   = gahwaWinner,
         raw           = { A = rawA, B = rawB },
         final         = { A = div10(rawA), B = div10(rawB) },
     }

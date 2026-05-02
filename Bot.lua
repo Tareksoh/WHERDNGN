@@ -12,7 +12,8 @@
 --   - Following: try to beat the current winner, save high cards when
 --     partner is winning, trump in if Hokm and lead suit isn't yours.
 --   - Always declare detected melds.
---   - Never call Bel/Bel-Re (conservative).
+--   - Bel/Triple/Four/Gahwa escalation is gated on strength thresholds.
+--   - Triple-on-Ace pre-emption (الثالث) handled via Bot.PickPreempt.
 
 WHEREDNGN = WHEREDNGN or {}
 local B = WHEREDNGN
@@ -143,7 +144,7 @@ end
 
 -- Hook into Net.lua at contract finalization so the seat that Beled
 -- this round adds to their lifetime counter. Net.lua calls this from
--- _OnDouble / _OnRedouble / _OnTriple / _OnFour / _OnGahwa.
+-- _OnDouble / _OnTriple / _OnFour / _OnGahwa.
 function Bot.OnEscalation(seat)
     if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
     local m = Bot._partnerStyle[seat]
@@ -402,29 +403,28 @@ local function partnerEscalatedBonus(seat, contract)
     if not Bot.IsM3lm() then return 0 end
     if not contract then return 0 end
     local p = R.Partner(seat)
-    -- partner is the bidder vs defender of this contract:
-    --   contract.doubled was set by the defender (= bidder + 1 mod)
-    --   contract.redoubled was set by the bidder
-    --   contract.tripled by defender, foured by bidder, gahwa by defender
+    -- v0.2.0: contract escalation roles have flipped from the 5-rung
+    -- chain. Mapping:
+    --   contract.doubled — set by the defender (Bel)
+    --   contract.tripled — set by the bidder (Triple)
+    --   contract.foured  — set by the defender (Four)
+    --   contract.gahwa   — set by the bidder (Gahwa, match-win)
     local bidder = contract.bidder
     local defender = bidder and ((bidder % 4) + 1) or nil
     local bonus = 0
-    -- If partner is the defender and they Beled or Tripled, that's a
-    -- positive signal for us (the bidder team) — we know defenders
-    -- are aggressive and we should respond in kind.
+    -- If partner is the DEFENDER and they Beled or Foured, that's a
+    -- positive signal for us (the defender team) — escalation chain
+    -- says we're confident in breaking the contract. Bidder team
+    -- shouldn't read this as a positive for them.
     if p == defender then
         if contract.doubled then bonus = bonus + 5  end
-        if contract.tripled then bonus = bonus + 8  end
-        if contract.gahwa   then bonus = bonus + 12 end
+        if contract.foured  then bonus = bonus + 8  end
     end
-    -- If partner is the bidder and they Bel-Re'd / Foured, that's a
-    -- positive signal for us (the defender team) — they're confident,
-    -- so the contract is likely to make: we should escalate harder
-    -- to maximize loss IF we still want to push (defensive Triple
-    -- expects our hand also to be strong, which gates this anyway).
+    -- If partner is the BIDDER and they Tripled, that's a positive
+    -- signal for us (the bidder team) — they're confident in making.
     if p == bidder then
-        if contract.redoubled then bonus = bonus + 5  end
-        if contract.foured    then bonus = bonus + 8  end
+        if contract.tripled then bonus = bonus + 5  end
+        if contract.gahwa   then bonus = bonus + 12 end
     end
     return bonus
 end
@@ -964,17 +964,21 @@ function Bot.PickMelds(seat)
     return R.DetectMelds(hand, S.s.contract)
 end
 
--- Smarter Bel/Bel-Re — gated by hand strength so a weak defender
--- doesn't bel into stronger opposition. Sun contracts get a small
--- bonus because Sun is harder to make than Hokm. Threshold is jittered
--- per-call by ±10 so the Bel decision isn't a hard cliff at exactly
--- the configured value (was the #1 "predictable bot" complaint).
+-- Smarter Bel — gated by hand strength so a weak defender doesn't bel
+-- into stronger opposition. Sun contracts get a small bonus because
+-- Sun is harder to make than Hokm. Threshold is jittered per-call by
+-- ±10 so the Bel decision isn't a hard cliff at exactly the configured
+-- value (was the #1 "predictable bot" complaint).
 local BEL_JITTER = 10
 
+-- v0.2.0: returns (yes, wantOpen) like the other escalation pickers.
+-- wantOpen: open the chain to a bidder Triple counter only if our hand
+-- is comfortably above threshold (we'd survive the next rung's stakes).
+-- Sun forces wantOpen=false since Sun has no Triple rung anyway.
 function Bot.PickDouble(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
-    if not hand or not contract then return false end
+    if not hand or not contract then return false, false end
 
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
@@ -990,33 +994,24 @@ function Bot.PickDouble(seat)
     strength = strength + partnerBidBonus(seat, contract)
                        + partnerEscalatedBonus(seat, contract)
     local th = K.BOT_BEL_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
-    return strength >= jitter(th, BEL_JITTER)
-end
-
-function Bot.PickRedouble(seat)
-    local hand = S.s.hostHands and S.s.hostHands[seat]
-    local contract = S.s.contract
-    if not hand or not contract then return false end
-
-    -- Bidder Bel-Res only with a clearly above-average hand.
-    local strength = sunStrength(hand)
-    if contract.type == K.BID_HOKM and contract.trump then
-        strength = strength + suitStrengthAsTrump(hand, contract.trump)
-    end
-    strength = strength + partnerBidBonus(seat, contract)
-                       + partnerEscalatedBonus(seat, contract)
-    local th = K.BOT_BELRE_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
-    return strength >= jitter(th, BEL_JITTER)
+    local jth = jitter(th, BEL_JITTER)
+    if strength < jth then return false, false end
+    -- Sun: open is moot (no Triple rung).
+    if contract.type == K.BID_SUN then return true, false end
+    -- Open if we have a comfortable buffer (would survive a Triple
+    -- counter); else close to lock in the ×2.
+    local wantOpen = strength >= jth + 20
+    return true, wantOpen
 end
 
 -- ---------------------------------------------------------------------
--- Triple / Four / Gahwa escalation
+-- Triple / Four / Gahwa escalation (v0.2.0+ canonical 4-rung chain)
 -- ---------------------------------------------------------------------
--- Each rung up the escalation chain doubles the multiplier and inverts
--- the tie threshold. Bots only escalate on a HAND that materially
--- exceeds the previous rung's threshold — no random pulls. Strength
--- model matches the Bel pickers: Sun rank-strength + half/full of
--- the trump-as-trump score in Hokm contracts.
+-- Bel(def, ×2) → Triple(bidder, ×3) → Four(def, ×4) → Gahwa(bidder, match-win).
+-- Each rung is a counter to the previous rung's caller. Bots return
+-- (yes, wantOpen) — wantOpen=true allows the next rung; false closes
+-- the chain. Closed-with-strong-hand is the safer play when the
+-- partner's escalation tendency is uncertain.
 
 local function escalationStrength(seat, hand, contract)
     local strength = sunStrength(hand)
@@ -1030,39 +1025,75 @@ local function escalationStrength(seat, hand, contract)
     return strength
 end
 
+-- Returns (yes, wantOpen). wantOpen heuristic: open if our strength
+-- has a comfortable buffer over the threshold (we'd be willing to
+-- escalate again next rung if challenged).
+local function escalateDecision(strength, th)
+    local jth = jitter(th, BEL_JITTER)
+    if strength < jth then return false, false end
+    -- Strong-enough → open if we're well past threshold (we'd
+    -- still escalate the next rung); else close.
+    local wantOpen = strength >= jth + 20
+    return true, wantOpen
+end
+
 function Bot.PickTriple(seat)
-    -- Triple is the defender's response to Bel-Re. They've already
-    -- evaluated for Bel; tripling means "I think I can break this
-    -- with even more confidence". Threshold is markedly higher than
-    -- BOT_BEL_TH so a bot that beled doesn't auto-triple too.
+    -- v0.2.0: Triple is the BIDDER's response to a defender's Bel.
+    -- A confident bidder triples (×3 multiplier) and may stay open if
+    -- they think they can absorb a defender's Four counter.
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
-    if not hand or not contract then return false end
+    if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     local th = K.BOT_TRIPLE_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
-    return strength >= jitter(th, BEL_JITTER)
+    return escalateDecision(strength, th)
 end
 
 function Bot.PickFour(seat)
-    -- Bidder's response to Triple. Bidder must be VERY confident — a
-    -- failed ×16 round is a hand-killer.
+    -- v0.2.0: Four is the DEFENDER's response to bidder's Triple.
+    -- A failed ×4 round is a hand-killer — defender needs to be
+    -- highly confident the contract will fail.
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
-    if not hand or not contract then return false end
+    if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     local th = K.BOT_FOUR_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
-    return strength >= jitter(th, BEL_JITTER)
+    return escalateDecision(strength, th)
 end
 
 function Bot.PickGahwa(seat)
-    -- Defender's terminal escalation. Only fires when the defender's
-    -- hand reads as near-certain to break the contract — the ×32
-    -- multiplier is brutal in either direction.
+    -- v0.2.0: Gahwa is the BIDDER's terminal — match-win or match-loss.
+    -- Bot only fires this on a near-certain hand: the entire match
+    -- hangs on the next 8 tricks.
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false end
     local strength = escalationStrength(seat, hand, contract)
     local th = K.BOT_GAHWA_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
+    return strength >= jitter(th, BEL_JITTER)
+end
+
+-- Triple-on-Ace pre-emption (الثالث) — bot decision for an earlier
+-- seat eligible to claim a Sun bid when the bid card is an Ace.
+-- Heuristic: claim only if our own Sun strength is strong enough that
+-- we'd have wanted to bid Sun ourselves (subject to BOT_PREEMPT_TH).
+function Bot.PickPreempt(seat)
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    if not hand then return false end
+    local strength = sunStrength(hand)
+    -- Slight bonus when we hold the Ace of the bid suit ourselves
+    -- (it would have been our trick-winner anyway).
+    local bidSuit = S.s.bidCard and C.Suit(S.s.bidCard)
+    if bidSuit then
+        for _, c in ipairs(hand) do
+            if C.Rank(c) == "A" and C.Suit(c) == bidSuit then
+                strength = strength + 8; break
+            end
+        end
+    end
+    strength = strength + scoreUrgency(R.TeamOf(seat))
+                       + matchPointUrgency(R.TeamOf(seat))
+    local th = K.BOT_PREEMPT_TH or 75
     return strength >= jitter(th, BEL_JITTER)
 end
 

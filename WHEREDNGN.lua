@@ -52,6 +52,12 @@ local DEFAULTS = {
     -- cards are instant (no permission). Toggle via /baloot swaperm
     -- if your group always allows without asking.
     swaRequiresPermission = true,
+    -- Triple-on-Ace pre-emption (الثالث): when a round-2 Sun bid lands
+    -- on an Ace bid card, earlier eligible seats may "claim before you"
+    -- and take the contract themselves. Per "الثالث" doc — canonical
+    -- Saudi rule. ON by default. Disable for groups that prefer the
+    -- simpler "first non-pass wins" Sun resolution.
+    preemptOnAce = true,
 }
 
 local function ensureDB()

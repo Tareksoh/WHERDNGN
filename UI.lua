@@ -1193,47 +1193,72 @@ local function renderActions()
         local b = S.s.contract and S.s.contract.bidder
         local nextSeat = b and ((b % 4) + 1) or nil
         if nextSeat == S.s.localSeat then
-            -- Bel doubles the round stakes (×2). Confirm before firing
-            -- so a stray click can't accidentally double a hand the
-            -- defender wasn't actually planning to challenge.
-            addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
-                function() net().LocalDouble() end)
-            addAction("Skip", function() net().LocalSkipDouble() end)
-        end
-    elseif S.s.phase == K.PHASE_REDOUBLE then
-        local b = S.s.contract and S.s.contract.bidder
-        if b == S.s.localSeat then
-            -- Bel-Re takes stakes to ×4 — biggest single-click swing in
-            -- the game. Confirmation is mandatory.
-            addConfirmAction("Bel-Re (x4)", "|cffff5555Confirm Bel-Re?|r",
-                function() net().LocalRedouble() end)
+            -- Bel (×2). Open/Closed (التربيع) choice: open lets the
+            -- bidder counter with Triple; closed stops the chain.
+            -- Sun has no Triple rung, so only the Bel button shows.
+            local isSun = S.s.contract and S.s.contract.type == K.BID_SUN
+            if isSun then
+                addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
+                    function() net().LocalDouble(false) end)
+            else
+                addConfirmAction("Bel & open", "|cffff7755Confirm Bel & open?|r",
+                    function() net().LocalDouble(true) end)
+                addConfirmAction("Bel & closed", "|cffff7755Confirm Bel & close?|r",
+                    function() net().LocalDouble(false) end)
+            end
             addAction("Skip", function() net().LocalSkipDouble() end)
         end
     elseif S.s.phase == K.PHASE_TRIPLE then
+        -- v0.2.0: Triple is the BIDDER's response to Bel.
         local b = S.s.contract and S.s.contract.bidder
-        local def = b and ((b % 4) + 1) or nil
-        if def == S.s.localSeat then
-            addConfirmAction("Triple (x8)",
-                "|cffff5555Confirm Triple?|r",
-                function() net().LocalTriple() end)
+        if b == S.s.localSeat then
+            addConfirmAction("Triple & open (x3)",
+                "|cffff5555Confirm Triple & open?|r",
+                function() net().LocalTriple(true) end)
+            addConfirmAction("Triple & closed (x3)",
+                "|cffff5555Confirm Triple & close?|r",
+                function() net().LocalTriple(false) end)
             addAction("Skip", function() net().LocalSkipDouble() end)
         end
     elseif S.s.phase == K.PHASE_FOUR then
-        local b = S.s.contract and S.s.contract.bidder
-        if b == S.s.localSeat then
-            addConfirmAction("Four (x16)",
-                "|cffff3333Confirm Four?|r",
-                function() net().LocalFour() end)
-            addAction("Skip", function() net().LocalSkipDouble() end)
-        end
-    elseif S.s.phase == K.PHASE_GAHWA then
+        -- v0.2.0: Four is the DEFENDER's response to Triple.
         local b = S.s.contract and S.s.contract.bidder
         local def = b and ((b % 4) + 1) or nil
         if def == S.s.localSeat then
-            addConfirmAction("|cffffd055Gahwa (x32)|r",
-                "|cffff0000Confirm Gahwa?|r",
+            addConfirmAction("Four & open (x4)",
+                "|cffff3333Confirm Four & open?|r",
+                function() net().LocalFour(true) end)
+            addConfirmAction("Four & closed (x4)",
+                "|cffff3333Confirm Four & close?|r",
+                function() net().LocalFour(false) end)
+            addAction("Skip", function() net().LocalSkipDouble() end)
+        end
+    elseif S.s.phase == K.PHASE_GAHWA then
+        -- v0.2.0: Gahwa is the BIDDER's terminal — caller's team WINS
+        -- the entire match outright if the contract makes; loses if
+        -- it fails. No open/closed (terminal).
+        local b = S.s.contract and S.s.contract.bidder
+        if b == S.s.localSeat then
+            addConfirmAction("|cffffd055Gahwa (match-win)|r",
+                "|cffff0000Confirm Gahwa? (match-win or match-loss)|r",
                 function() net().LocalGahwa() end)
             addAction("Skip", function() net().LocalSkipDouble() end)
+        end
+    elseif S.s.phase == K.PHASE_PREEMPT then
+        -- Triple-on-Ace pre-emption (الثالث): earlier seats may claim
+        -- the Sun bid for themselves. "قبلك" = "before you" / "I'll take it".
+        if S.s.preemptEligible and S.s.localSeat then
+            local eligible = false
+            for _, s2 in ipairs(S.s.preemptEligible) do
+                if s2 == S.s.localSeat then eligible = true; break end
+            end
+            if eligible then
+                addConfirmAction("|cff66ddffقبلك (Pre-empt)|r",
+                    "|cffff7755Take this Sun for yourself?|r",
+                    function() net().LocalPreempt() end)
+                addAction("Pass",
+                    function() net().LocalPreemptPass() end)
+            end
         end
     elseif S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY then
         -- Meld declaration window — Pagat allows multiple melds per
@@ -1514,7 +1539,8 @@ local function cardCountForSeat(seat)
     -- else 5 if mid-bidding. Simplest: deduce from phase.
     local total = 0
     if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
-       or S.s.phase == K.PHASE_DOUBLE or S.s.phase == K.PHASE_REDOUBLE
+       or S.s.phase == K.PHASE_PREEMPT
+       or S.s.phase == K.PHASE_DOUBLE
        or S.s.phase == K.PHASE_TRIPLE or S.s.phase == K.PHASE_FOUR
        or S.s.phase == K.PHASE_GAHWA then
         total = 5
@@ -1785,12 +1811,12 @@ local function renderCenter()
     end
     -- During bidding AND the escalation chain, keep the bid card
     -- visible so players retain the "what was bid" reference all the
-    -- way through the Bel / Bel-Re / Triple / Four / Gahwa decisions.
+    -- way through Pre-empt / Bel / Triple / Four / Gahwa decisions.
     -- The bid card is only finally cleared when PHASE_PLAY starts.
     if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
+       or S.s.phase == K.PHASE_PREEMPT
        or S.s.phase == K.PHASE_DEAL3
        or S.s.phase == K.PHASE_DOUBLE
-       or S.s.phase == K.PHASE_REDOUBLE
        or S.s.phase == K.PHASE_TRIPLE
        or S.s.phase == K.PHASE_FOUR
        or S.s.phase == K.PHASE_GAHWA then
@@ -2049,11 +2075,11 @@ local function statusFor(phase)
         local nm = seat and S.s.seats[seat] and shortName(S.s.seats[seat].name) or "?"
         return ("Bidding (round 2) — %s to act"):format(nm)
     end
-    if phase == K.PHASE_DOUBLE then return "Defenders: Bel?" end
-    if phase == K.PHASE_REDOUBLE then return "Bidder: Bel-Re?" end
-    if phase == K.PHASE_TRIPLE then return "Defenders: Triple? (×8)" end
-    if phase == K.PHASE_FOUR then return "Bidder: Four? (×16)" end
-    if phase == K.PHASE_GAHWA then return "Defenders: Gahwa? (×32)" end
+    if phase == K.PHASE_PREEMPT then return "Pre-empt window — earlier seats may claim" end
+    if phase == K.PHASE_DOUBLE then return "Defenders: Bel? (×2)" end
+    if phase == K.PHASE_TRIPLE then return "Bidder: Triple? (×3)" end
+    if phase == K.PHASE_FOUR then return "Defenders: Four? (×4)" end
+    if phase == K.PHASE_GAHWA then return "Bidder: Gahwa? (match-win)" end
     if phase == K.PHASE_DEAL3 then return "Final 3 dealt — declare melds" end
     if phase == K.PHASE_PLAY then
         if S.IsMyTurn() then return "|cff55ff55Your turn|r" end
@@ -2219,7 +2245,9 @@ local function renderBanner()
     local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN) and "Sun" or "Hokm"
     local mods = { typeStr }
     if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Bel" end
-    if S.s.contract and S.s.contract.redoubled then mods[#mods + 1] = "Bel-Re" end
+    if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
+    if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
+    if S.s.contract and S.s.contract.gahwa then mods[#mods + 1] = "Gahwa (match-win)" end
     if r.multiplier and r.multiplier > 1 then
         mods[#mods + 1] = ("×%d"):format(r.multiplier)
     end
@@ -2288,7 +2316,8 @@ local function renderPauseControls()
 
     local activePhase =
         S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
-        or S.s.phase == K.PHASE_DOUBLE or S.s.phase == K.PHASE_REDOUBLE
+        or S.s.phase == K.PHASE_PREEMPT
+        or S.s.phase == K.PHASE_DOUBLE
         or S.s.phase == K.PHASE_TRIPLE or S.s.phase == K.PHASE_FOUR
         or S.s.phase == K.PHASE_GAHWA
         or S.s.phase == K.PHASE_DEAL3 or S.s.phase == K.PHASE_PLAY
@@ -2329,11 +2358,10 @@ local function renderStatus()
             trumpStr = (" %s%s|r"):format(col, glyph)
         end
         local mods = {}
-        if c.doubled    then mods[#mods + 1] = "Bel"    end
-        if c.redoubled  then mods[#mods + 1] = "Bel-Re" end
-        if c.tripled    then mods[#mods + 1] = "x8"     end
-        if c.foured     then mods[#mods + 1] = "x16"    end
-        if c.gahwa      then mods[#mods + 1] = "x32"    end
+        if c.doubled    then mods[#mods + 1] = "Bel (x2)"        end
+        if c.tripled    then mods[#mods + 1] = "Triple (x3)"     end
+        if c.foured     then mods[#mods + 1] = "Four (x4)"       end
+        if c.gahwa      then mods[#mods + 1] = "Gahwa (match)"   end
         local modStr = #mods > 0
             and (" |cffff7755[" .. table.concat(mods, "+") .. "]|r")
             or ""

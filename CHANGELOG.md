@@ -1,5 +1,138 @@
 # Changelog
 
+## v0.2.0 — Canonical 4-rung escalation + Triple-on-Ace pre-emption
+
+This release applies the remaining canonical Saudi rules from the
+new batch of documents ("نظام الدبل في لعبة البلوت" / "الثالث" /
+"ماهو البلوت في لعبة البلوت"). It is a **wire-format-incompatible**
+release — clients on <v0.2.0 will desync. Bump everyone together.
+
+### Escalation chain rewrite (FOUR rungs, not five)
+
+Per "نظام الدبل في لعبة البلوت", the canonical Saudi escalation chain
+has only **four** rungs, not the five we shipped previously. The
+"Bel-Re" rung is non-canonical and has been removed entirely.
+
+**Old chain (5 rungs):**
+- Bel(def, ×2) → Bel-Re(bid, ×4) → Triple(def, ×8) → Four(bid, ×16) → Gahwa(def, ×32)
+
+**New chain (4 rungs):**
+- Bel(def, ×2) → Triple(bid, ×3) → Four(def, ×4) → Gahwa(bid, **match-win**)
+
+Every escalation alternates between the bidder and defenders. The
+multipliers now match canon: ×2 / ×3 / ×4. Gahwa is no longer a
+round-multiplier — calling it bets the entire match: a successful
+Gahwa wins the game outright (cumulative→target); a failed Gahwa
+hands the match to defenders.
+
+Removed across `Constants.lua`, `State.lua`, `Net.lua`, `Rules.lua`,
+`UI.lua`, `Bot.lua`:
+- `K.MULT_BELRE`, `K.MULT_GAHWA`, `K.PHASE_REDOUBLE`, `K.MSG_REDOUBLE`,
+  `K.MSG_SKIP_RDBL`, `K.BOT_BELRE_TH`
+- `S.ApplyRedouble`, `s.belrePending`, `contract.redoubled`
+- `N.SendRedouble`, `N._OnRedouble`, `N._OnSkipRedouble`, `N.LocalRedouble`
+- `Bot.PickRedouble`
+- All UI references to "Bel-Re" / `PHASE_REDOUBLE`
+
+Re-targeted constants:
+- `K.MULT_TRIPLE`: 8 → **3**
+- `K.MULT_FOUR`: 16 → **4**
+- `K.MULT_GAHWA`: 32 → (deleted; Gahwa is match-win, not a multiplier)
+- `K.BOT_TRIPLE_TH`: 95 → **90** (lower — Triple is now ×3, less risky)
+- `K.BOT_FOUR_TH`: 115 → **110**
+- `K.BOT_GAHWA_TH`: 130 → **135** (raised — Gahwa is now terminal)
+
+Role flips (Triple/Four/Gahwa):
+- **Triple** was defender's response to Bel-Re; now **bidder's** response to Bel.
+- **Four** was bidder's response to Triple; now **defenders'** response to Triple.
+- **Gahwa** was defender's terminal; now **bidder's** terminal (match-win).
+
+`Rules.lua` tie-inversion table rewritten for the 4-rung chain:
+`R.ScoreRound` returns `gahwaWonGame=true` + `gahwaWinner` when the
+contract had Gahwa active; `_HostStepAfterTrick` reads these and
+overrides `addA`/`addB` to push the winner to the cumulative target.
+
+### Open/Closed escalation choice (التربيع)
+
+Per the same doc, each escalation rung lets the caller choose **open**
+("I bel & I'm prepared for your Triple") or **closed** ("I bel & we
+play — no further escalation"). The wire format extends each
+escalation tag with a trailing `;0` (closed) or `;1` (open) field;
+pre-v0.2.0 senders that omit it default to open.
+
+- `S.ApplyDouble`/`ApplyTriple`/`ApplyFour` take an `open` boolean.
+  Closed transitions phase directly to PLAY; open advances to the
+  next-rung window.
+- UI: each escalation now has paired buttons ("Bel & open" / "Bel
+  & closed"). Sun's Bel button hides the open variant since Sun has
+  no Triple rung anyway.
+- Bot: `Bot.PickTriple/Four` return `(yes, wantOpen)` — open if
+  strength is ≥20 above threshold (we'd still escalate next rung),
+  else closed.
+
+### Belote cancellation when 100-meld present
+
+Per "ماهو البلوت في لعبة البلوت": the +20 belote bonus is **cancelled**
+when the same K+Q-of-trump holder also declared a meld of value ≥100
+(seq5 or carré of T/K/Q/J/A). The 100-meld subsumes the belote — no
+double-counting. Sequences of 3/4 (≤50) and the bare belote stand on
+their own.
+
+- `R.ScoreRound`: belote scan now post-checks `meldsByTeam[team]` for
+  any meld with `declaredBy == kWho and value ≥ 100`. Match → cancel
+  belote.
+- Same guard in `N.HostResolveTakweesh` and `N.HostResolveSWA`
+  invalid branch.
+
+### Triple-on-Ace pre-emption (الثالث) — host-toggleable, ON by default
+
+Entirely new mechanic. When a round-2 Sun bid lands and the original
+**bid card is an Ace**, eligible earlier seats (those who already bid
+in this round, excluding the buyer's partner — "can't Triple your
+partner") may "claim before you" — taking the Sun contract for
+themselves. Per "الثالث" doc.
+
+New constants:
+- `K.PHASE_PREEMPT` — pre-emption window phase
+- `K.MSG_PREEMPT = "@"`, `K.MSG_PREEMPT_PASS = "%"` — wire tags
+- `K.BOT_PREEMPT_TH = 75` — bot threshold
+
+New host-toggleable: `WHEREDNGNDB.preemptOnAce` (default true). Toggle
+via `/baloot preempt`.
+
+New code:
+- `S.PreemptEligibleSeats(buyer, bidder)` — eligibility list
+- `S.ApplyPreempt`, `S.ApplyPreemptPass` — state transitions
+- `N._OnPreempt`, `N._OnPreemptPass`, `N._FinalizePreempt`,
+  `N.LocalPreempt`, `N.LocalPreemptPass`, `N.SendPreempt`,
+  `N.SendPreemptPass`
+- UI: `PHASE_PREEMPT` action panel with "قبلك (Pre-empt)" + "Pass"
+  buttons for eligible seats only
+- Bot: `Bot.PickPreempt(seat)` — Sun-strength gated, +8 bonus when
+  holding the Ace of bid suit
+- AFK timer: `kind="preempt_pass"` auto-passes after 60s
+
+### Saved-game upgrader
+
+`State.RestoreSession` strips stale `redoubled=true` /
+`belrePending` fields and bumps any `phase=="redouble"` save back to
+`PHASE_DOUBLE` so the eligible defender can act fresh. Pre-v0.2.0
+sessions restored on v0.2.0+ install will not freeze on load.
+
+### Wire format changes (v0.2.0+, breaking)
+
+- `K.MSG_DOUBLE/TRIPLE/FOUR`: payload extended with trailing `;0|;1`
+  open/closed flag. Receivers default to open if missing.
+- Resync snapshot (`packSnapshot`): removed `redoubled` slot; added
+  `tripleOpen`, `fourOpen`. Slots renumbered (15-17 → 14-19).
+- `K.MSG_REDOUBLE` and `K.MSG_SKIP_RDBL` deleted.
+- `K.MSG_PREEMPT`, `K.MSG_PREEMPT_PASS` added.
+
+Hard requirement: all party members must be on v0.2.0+. Mixed
+versions will desync immediately.
+
+---
+
 ## v0.1.33 — Saudi rules sweep (canonical doc-driven fixes)
 
 This release applies the canonical Saudi rules from the

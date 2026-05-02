@@ -19,6 +19,7 @@ local function help()
     print("  /baloot fzloky       - toggle Fzloky (signal-aware) tier (host only)")
     print("  /baloot saudimaster  - toggle Saudi Master (ISMCTS) tier (host only)")
     print("  /baloot swa          - toggle SWA claim-the-rest (default on; off = tournament mode)")
+    print("  /baloot preempt      - toggle Triple-on-Ace pre-emption (default on)")
     print("  /baloot start        - host: start the round once lobby is full")
     print("  /baloot debug        - toggle debug logging")
     print("  /baloot log [N]      - dump last N log lines (default 50)")
@@ -141,6 +142,15 @@ local function dispatch(msg)
         if WHEREDNGNDB.allowSWA == nil then WHEREDNGNDB.allowSWA = true end
         WHEREDNGNDB.allowSWA = not WHEREDNGNDB.allowSWA
         say("SWA (سوا claim-the-rest) = " .. tostring(WHEREDNGNDB.allowSWA))
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
+
+    if msg == "preempt" or msg == "ahel" or msg == "thaleth" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        if WHEREDNGNDB.preemptOnAce == nil then WHEREDNGNDB.preemptOnAce = true end
+        WHEREDNGNDB.preemptOnAce = not WHEREDNGNDB.preemptOnAce
+        say("Triple-on-Ace pre-emption (الثالث) = " .. tostring(WHEREDNGNDB.preemptOnAce))
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end

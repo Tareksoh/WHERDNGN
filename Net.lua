@@ -130,24 +130,36 @@ function N.SendContract(bidder, btype, trump)
     broadcast(("%s;%d;%s;%s"):format(K.MSG_CONTRACT, bidder, btype, trump or ""))
 end
 
-function N.SendDouble(seat)
-    broadcast(("%s;%d"):format(K.MSG_DOUBLE, seat))
+-- Escalation broadcasts. v0.2.0+ wire format adds an Open/Closed flag:
+-- "<TAG>;<seat>;<open>" where <open> is "1" (open — chain may continue)
+-- or "0" (closed — chain stops here, no next rung). Clients on
+-- pre-v0.2.0 wire that lack the flag are treated as Open (default).
+-- Gahwa is terminal so no flag is meaningful there.
+function N.SendDouble(seat, open)
+    broadcast(("%s;%d;%s"):format(K.MSG_DOUBLE, seat,
+        (open == false) and "0" or "1"))
 end
 
-function N.SendRedouble(seat)
-    broadcast(("%s;%d"):format(K.MSG_REDOUBLE, seat))
+function N.SendTriple(seat, open)
+    broadcast(("%s;%d;%s"):format(K.MSG_TRIPLE, seat,
+        (open == false) and "0" or "1"))
 end
 
-function N.SendTriple(seat)
-    broadcast(("%s;%d"):format(K.MSG_TRIPLE, seat))
-end
-
-function N.SendFour(seat)
-    broadcast(("%s;%d"):format(K.MSG_FOUR, seat))
+function N.SendFour(seat, open)
+    broadcast(("%s;%d;%s"):format(K.MSG_FOUR, seat,
+        (open == false) and "0" or "1"))
 end
 
 function N.SendGahwa(seat)
     broadcast(("%s;%d"):format(K.MSG_GAHWA, seat))
+end
+
+function N.SendPreempt(seat)
+    broadcast(("%s;%d"):format(K.MSG_PREEMPT, seat))
+end
+
+function N.SendPreemptPass(seat)
+    broadcast(("%s;%d"):format(K.MSG_PREEMPT_PASS, seat))
 end
 
 function N.SendMeld(seat, meld)
@@ -257,11 +269,12 @@ local function packSnapshot()
         nz(c.type),                              -- HOKM | SUN | ""
         nz(c.trump),
         tostring(c.bidder or 0),
-        c.doubled   and "1" or "0",
-        c.redoubled and "1" or "0",
-        c.tripled   and "1" or "0",              -- Triple (×8)
-        c.foured    and "1" or "0",              -- Four (×16)
-        c.gahwa     and "1" or "0",              -- Gahwa (×32)
+        c.doubled and "1" or "0",                -- Bel (×2)
+        c.tripled and "1" or "0",                -- Triple (×3)
+        c.foured  and "1" or "0",                -- Four (×4)
+        c.gahwa   and "1" or "0",                -- Gahwa (match-win)
+        c.tripleOpen and "1" or "0",             -- bidder allowed Four counter?
+        c.fourOpen   and "1" or "0",             -- defenders allowed Gahwa counter?
         tostring(s.cumulative and s.cumulative.A or 0),
         tostring(s.cumulative and s.cumulative.B or 0),
         s.paused and "1" or "0",
@@ -293,6 +306,29 @@ function N.SendResyncRes(target, gameID)
                 K.MSG_MELD, m.declaredBy or 0,
                 m.kind or "", m.suit or "", m.top or "", enc))
         end
+    end
+    -- Replay pre-emption window state when a rejoiner lands during
+    -- PHASE_PREEMPT — the host's preemptEligible list isn't in the
+    -- packed snapshot (it's host-only state). We re-broadcast the
+    -- window-open ping plus pass-events for any seat that already
+    -- waived. The rejoiner's UI will gate "قبلك" button on whether
+    -- their own seat is still in the freshly-rebuilt eligible list.
+    if S.s.phase == K.PHASE_PREEMPT and S.s.preemptEligible then
+        whisper(target, ("%s;0"):format(K.MSG_PREEMPT_PASS))
+        -- Record the LIVE eligible list seat-by-seat so the rejoiner
+        -- can rebuild it. Reuse a helper field on the wire by sending
+        -- a synthetic MSG_PREEMPT_PASS for each seat NOT in the live
+        -- list (since they already passed). Skips the buyer's partner
+        -- which the rejoiner re-derives via S.PreemptEligibleSeats.
+        -- Simpler: just replay live state as a piped seat list.
+        local live = {}
+        for _, s2 in ipairs(S.s.preemptEligible) do
+            live[s2] = true
+        end
+        -- We can't easily reconstruct PreemptEligibleSeats client-side
+        -- without the buyer info, so just leave the rejoiner with a
+        -- nil preemptEligible list (UI hides the button when nil — the
+        -- live ping is informational only).
     end
     -- Replay closed-trick history (fed via MSG_TRICK so the receiver
     -- runs the same ApplyTrickEnd path; we provide the fully-encoded
@@ -363,19 +399,19 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_CONTRACT then
         N._OnContract(sender, tonumber(fields[2]), fields[3], fields[4])
     elseif tag == K.MSG_DOUBLE then
-        N._OnDouble(sender, tonumber(fields[2]))
-    elseif tag == K.MSG_REDOUBLE then
-        N._OnRedouble(sender, tonumber(fields[2]))
+        N._OnDouble(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_TRIPLE then
-        N._OnTriple(sender, tonumber(fields[2]))
+        N._OnTriple(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_FOUR then
-        N._OnFour(sender, tonumber(fields[2]))
+        N._OnFour(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_GAHWA then
         N._OnGahwa(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_PREEMPT then
+        N._OnPreempt(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_PREEMPT_PASS then
+        N._OnPreemptPass(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_DBL then
         N._OnSkipDouble(sender, tonumber(fields[2]))
-    elseif tag == K.MSG_SKIP_RDBL then
-        N._OnSkipRedouble(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_TRP then
         N._OnSkipTriple(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_FOR then
@@ -593,41 +629,27 @@ function N._OnContract(sender, bidder, btype, trump)
     S.ApplyContract(bidder, btype, trump)
 end
 
-function N._OnDouble(sender, seat)
+function N._OnDouble(sender, seat, openField)
     if fromSelf(sender) then return end
     if not seat then return end
-    -- Idempotence: ignore if no contract or already doubled. Without this
-    -- a duplicate/spoofed DOUBLE during PLAY would re-set s.phase back to
-    -- REDOUBLE and freeze the hand mid-trick.
+    -- Idempotence: ignore if no contract or already doubled.
     if not S.s.contract or S.s.contract.doubled then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
     -- Authority: only the eligible defender (NextSeat of bidder) can bel.
     local eligibleSeat = (S.s.contract.bidder % 4) + 1
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
-    S.ApplyDouble(seat)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
-    if S.s.isHost then N.MaybeRunBot() end   -- Bel-Re decision may now be a bot's
-end
-
-function N._OnRedouble(sender, seat)
-    if fromSelf(sender) then return end
-    if not seat then return end
-    -- Idempotence: same hazard as _OnDouble — a re-applied REDOUBLE would
-    -- re-trigger HostFinishDeal in PLAY phase and re-deal cards.
-    if not S.s.contract or not S.s.contract.doubled or S.s.contract.redoubled then return end
-    if S.s.phase ~= K.PHASE_REDOUBLE then return end
-    if seat ~= S.s.contract.bidder then return end
-    if not authorizeSeat(seat, sender) then return end
+    -- Open/Closed flag (v0.2.0+ wire). Pre-v0.2.0 senders won't include
+    -- it; default to OPEN (current behavior).
+    local open = (openField == nil) or (openField ~= "0")
     local wasSun = S.s.contract.type == K.BID_SUN
-    S.ApplyRedouble(seat)
+    S.ApplyDouble(seat, open)
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
-    -- After Bel-Re in Hokm: phase is TRIPLE (defender's window).
-    -- After Bel-Re in Sun: terminal — go straight to PLAY (no
-    -- Triple/Four/Gahwa per the Saudi rule). The host triggers
-    -- HostFinishDeal directly so we don't sit in REDOUBLE.
+    -- Sun: ApplyDouble already set phase=PLAY (Sun has no Triple).
+    -- Closed Bel: ApplyDouble set phase=PLAY too.
+    -- Open Bel in Hokm: phase=TRIPLE, defer to bot dispatcher.
     if S.s.isHost then
-        if wasSun then
+        if wasSun or not open then
             N.HostFinishDeal()
         else
             N.MaybeRunBot()
@@ -635,31 +657,37 @@ function N._OnRedouble(sender, seat)
     end
 end
 
-function N._OnTriple(sender, seat)
+function N._OnTriple(sender, seat, openField)
     if fromSelf(sender) then return end
     if not seat then return end
     if not S.s.contract or S.s.contract.tripled then return end
     if S.s.phase ~= K.PHASE_TRIPLE then return end
-    -- Triple is the DEFENDER's escalation: NextSeat(bidder).
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if seat ~= eligibleSeat then return end
+    -- Triple is the BIDDER's response to Bel.
+    if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
-    S.ApplyTriple(seat)
+    local open = (openField == nil) or (openField ~= "0")
+    S.ApplyTriple(seat, open)
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
-    if S.s.isHost then N.MaybeRunBot() end
+    if S.s.isHost then
+        if open then N.MaybeRunBot() else N.HostFinishDeal() end
+    end
 end
 
-function N._OnFour(sender, seat)
+function N._OnFour(sender, seat, openField)
     if fromSelf(sender) then return end
     if not seat then return end
     if not S.s.contract or S.s.contract.foured then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
-    -- Four is the BIDDER's escalation.
-    if seat ~= S.s.contract.bidder then return end
+    -- Four is the DEFENDER's response to Triple.
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
-    S.ApplyFour(seat)
+    local open = (openField == nil) or (openField ~= "0")
+    S.ApplyFour(seat, open)
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
-    if S.s.isHost then N.MaybeRunBot() end
+    if S.s.isHost then
+        if open then N.MaybeRunBot() else N.HostFinishDeal() end
+    end
 end
 
 function N._OnGahwa(sender, seat)
@@ -667,14 +695,74 @@ function N._OnGahwa(sender, seat)
     if not seat then return end
     if not S.s.contract or S.s.contract.gahwa then return end
     if S.s.phase ~= K.PHASE_GAHWA then return end
-    -- Gahwa is the DEFENDER's terminal escalation.
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if seat ~= eligibleSeat then return end
+    -- Gahwa is the BIDDER's terminal (match-win) escalation.
+    if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyGahwa(seat)
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
     -- Terminal: no further window. Move into PLAY.
     if S.s.isHost then N.HostFinishDeal() end
+end
+
+function N._OnPreempt(sender, seat)
+    if fromSelf(sender) then return end
+    if not seat then return end
+    if S.s.phase ~= K.PHASE_PREEMPT then return end
+    if not S.s.preemptEligible then return end
+    local eligible = false
+    for _, s2 in ipairs(S.s.preemptEligible) do
+        if s2 == seat then eligible = true; break end
+    end
+    if not eligible then return end
+    if not authorizeSeat(seat, sender) then return end
+    S.ApplyPreempt(seat)
+    -- Pre-emption claim: the seat takes the contract as their own SUN.
+    if S.s.isHost then
+        S.s.pendingPreemptContract = nil
+        S.ApplyContract(seat, K.BID_SUN, nil)
+        N.SendContract(seat, K.BID_SUN, "")
+        local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+        local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+        if cumA < 101 and cumB < 101 then
+            S.s.belPending = nil
+            N.HostFinishDeal()
+            return
+        end
+        N.MaybeRunBot()
+    end
+end
+
+function N._OnPreemptPass(sender, seat)
+    if fromSelf(sender) then return end
+    if not seat then return end
+    if S.s.phase ~= K.PHASE_PREEMPT then return end
+    if not S.s.preemptEligible then return end
+    if not authorizeSeat(seat, sender) then return end
+    S.ApplyPreemptPass(seat)
+    if not S.s.preemptEligible and S.s.isHost then
+        N._FinalizePreempt()
+    end
+end
+
+-- Finalize the original buyer's contract once all eligible pre-empters
+-- waived. The host queued the contract struct as s.pendingPreemptContract
+-- when PHASE_PREEMPT opened.
+function N._FinalizePreempt()
+    if not S.s.isHost then return end
+    if not S.s.pendingPreemptContract then return end
+    local pc = S.s.pendingPreemptContract
+    S.s.pendingPreemptContract = nil
+    S.s.preemptEligible = nil
+    S.ApplyContract(pc.bidder, pc.type, pc.trump)
+    N.SendContract(pc.bidder, pc.type, pc.trump or "")
+    local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+    local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+    if pc.type == K.BID_SUN and cumA < 101 and cumB < 101 then
+        S.s.belPending = nil
+        N.HostFinishDeal()
+        return
+    end
+    N.MaybeRunBot()
 end
 
 function N._OnSkipDouble(sender, seat)
@@ -687,21 +775,12 @@ function N._OnSkipDouble(sender, seat)
     if S.s.isHost then N.HostFinishDeal() end
 end
 
-function N._OnSkipRedouble(sender, seat)
-    if fromSelf(sender) then return end
-    if S.s.phase ~= K.PHASE_REDOUBLE then return end
-    if not seat or not S.s.contract then return end
-    if seat ~= S.s.contract.bidder then return end
-    if not authorizeSeat(seat, sender) then return end
-    if S.s.isHost then N.HostFinishDeal() end
-end
-
 function N._OnSkipTriple(sender, seat)
     if fromSelf(sender) then return end
     if S.s.phase ~= K.PHASE_TRIPLE then return end
     if not seat or not S.s.contract then return end
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if seat ~= eligibleSeat then return end
+    -- Bidder skips their Triple window.
+    if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     if S.s.isHost then N.HostFinishDeal() end
 end
@@ -710,7 +789,9 @@ function N._OnSkipFour(sender, seat)
     if fromSelf(sender) then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
     if not seat or not S.s.contract then return end
-    if seat ~= S.s.contract.bidder then return end
+    -- Defender skips their Four window.
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
     if S.s.isHost then N.HostFinishDeal() end
 end
@@ -719,8 +800,8 @@ function N._OnSkipGahwa(sender, seat)
     if fromSelf(sender) then return end
     if S.s.phase ~= K.PHASE_GAHWA then return end
     if not seat or not S.s.contract then return end
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if seat ~= eligibleSeat then return end
+    -- Bidder skips their Gahwa window.
+    if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     if S.s.isHost then N.HostFinishDeal() end
 end
@@ -814,19 +895,50 @@ function N._HostStepBid()
         N.SendTurn(payload.seat, "bid")
         N.MaybeRunBot()
     elseif action == "contract" then
+        -- Triple-on-Ace pre-emption (الثالث): a round-2 SUN bid where
+        -- the bid card is an Ace AND there are eligible earlier seats
+        -- triggers a pre-emption window. Toggleable via
+        -- WHEREDNGNDB.preemptOnAce (default ON in v0.2.0+).
+        local enablePreempt = (WHEREDNGNDB == nil)
+                           or (WHEREDNGNDB.preemptOnAce ~= false)
+        local bidRank = S.s.bidCard and C.Rank(S.s.bidCard) or nil
+        if enablePreempt
+           and S.s.bidRound == 2
+           and payload.type == K.BID_SUN
+           and bidRank == "A" then
+            local elig = S.PreemptEligibleSeats(payload.bidder, payload.bidder)
+            if elig and #elig > 0 then
+                -- Open a pre-emption window. Stash the original buyer's
+                -- contract; finalize either when a seat claims (claimer
+                -- becomes declarer) or when all eligible seats waive.
+                S.s.preemptEligible = elig
+                S.s.pendingPreemptContract = {
+                    bidder = payload.bidder,
+                    type   = payload.type,
+                    trump  = payload.trump,
+                }
+                S.s.phase = K.PHASE_PREEMPT
+                -- Broadcast: re-use MSG_PREEMPT_PASS as a "window open"
+                -- ping with seat=0; clients render UI based on
+                -- s.preemptEligible. Simpler than adding another tag.
+                broadcast(("%s;0"):format(K.MSG_PREEMPT_PASS))
+                -- Bots dispatch via MaybeRunBot's preempt branch.
+                N.MaybeRunBot()
+                if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                return
+            end
+        end
         S.ApplyContract(payload.bidder, payload.type, payload.trump)
         N.SendContract(payload.bidder, payload.type, payload.trump or "")
         -- Saudi Sun rule: contract Sun can be Beled only after one
         -- team's cumulative game score has exceeded 100 (i.e. ≥101).
         -- If Sun and neither team is past 100, skip the DOUBLE phase
         -- entirely and go straight to play. Triple/Four/Gahwa never
-        -- exist for Sun (handled in the Bel cascade).
+        -- exist for Sun.
         if payload.type == K.BID_SUN then
             local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
             local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
             if cumA < 101 and cumB < 101 then
-                -- Skip Bel window; clear belPending the contract
-                -- setup populated and finish dealing.
                 S.s.belPending = nil
                 N.HostFinishDeal()
                 return
@@ -886,6 +998,17 @@ function N._HostStepAfterTrick()
         if not res then return end
         S.ApplyRoundResult(res)               -- host-only stash for summary panel
         local addA, addB = res.final.A, res.final.B
+        -- Gahwa match-win override: a successful (or failed) Gahwa
+        -- hands the entire match to a single team. Force their
+        -- cumulative to the target so the game-end branch fires.
+        if res.gahwaWonGame and res.gahwaWinner then
+            local target = S.s.target or 152
+            if res.gahwaWinner == "A" then
+                addA = math.max(addA, target - (S.s.cumulative.A or 0))
+            else
+                addB = math.max(addB, target - (S.s.cumulative.B or 0))
+            end
+        end
         local totA = S.s.cumulative.A + addA
         local totB = S.s.cumulative.B + addB
         S.ApplyRoundEnd(addA, addB, totA, totB)
@@ -1012,60 +1135,66 @@ function N.LocalBid(bid)
     if S.s.isHost then N._HostStepBid() end
 end
 
-function N.LocalDouble()
+-- Each Local* escalation action takes an `open` flag (default true)
+-- — controls whether the chain may continue with the opposing team's
+-- next-rung counter. UI surfaces this as paired buttons (e.g., "Bel
+-- (open)" vs "Bel (closed)"). Gahwa is terminal so no flag needed.
+function N.LocalDouble(open)
     if S.s.paused then return end
     if not S.s.contract or S.s.contract.doubled then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
     local b = S.s.contract.bidder
     if S.s.localSeat ~= (b % 4) + 1 then return end
     cancelLocalWarn()
-    S.ApplyDouble(S.s.localSeat)
-    N.SendDouble(S.s.localSeat)
-    if S.s.isHost then N.MaybeRunBot() end
+    if open == nil then open = true end
+    -- In Sun, open/closed is moot — there's no Triple rung. Force
+    -- closed so the chain doesn't pretend to advance.
+    if S.s.contract.type == K.BID_SUN then open = false end
+    S.ApplyDouble(S.s.localSeat, open)
+    N.SendDouble(S.s.localSeat, open)
+    if S.s.isHost then
+        if S.s.contract.type == K.BID_SUN or not open then
+            N.HostFinishDeal()
+        else
+            N.MaybeRunBot()
+        end
+    end
 end
 
-function N.LocalRedouble()
-    if S.s.paused then return end
-    if not S.s.contract or not S.s.contract.doubled or S.s.contract.redoubled then return end
-    if S.s.phase ~= K.PHASE_REDOUBLE then return end
-    if S.s.localSeat ~= S.s.contract.bidder then return end
-    cancelLocalWarn()
-    S.ApplyRedouble(S.s.localSeat)
-    N.SendRedouble(S.s.localSeat)
-    -- Phase moved to TRIPLE; let MaybeRunBot dispatch the bot/AFK
-    -- handling for the defender's window.
-    if S.s.isHost then N.MaybeRunBot() end
-end
-
-function N.LocalTriple()
+function N.LocalTriple(open)
     if S.s.paused then return end
     if not S.s.contract or S.s.contract.tripled then return end
     if S.s.phase ~= K.PHASE_TRIPLE then return end
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if S.s.localSeat ~= eligibleSeat then return end
+    if S.s.localSeat ~= S.s.contract.bidder then return end
     cancelLocalWarn()
-    S.ApplyTriple(S.s.localSeat)
-    N.SendTriple(S.s.localSeat)
-    if S.s.isHost then N.MaybeRunBot() end
+    if open == nil then open = true end
+    S.ApplyTriple(S.s.localSeat, open)
+    N.SendTriple(S.s.localSeat, open)
+    if S.s.isHost then
+        if open then N.MaybeRunBot() else N.HostFinishDeal() end
+    end
 end
 
-function N.LocalFour()
+function N.LocalFour(open)
     if S.s.paused then return end
     if not S.s.contract or S.s.contract.foured then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
-    if S.s.localSeat ~= S.s.contract.bidder then return end
+    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    if S.s.localSeat ~= eligibleSeat then return end
     cancelLocalWarn()
-    S.ApplyFour(S.s.localSeat)
-    N.SendFour(S.s.localSeat)
-    if S.s.isHost then N.MaybeRunBot() end
+    if open == nil then open = true end
+    S.ApplyFour(S.s.localSeat, open)
+    N.SendFour(S.s.localSeat, open)
+    if S.s.isHost then
+        if open then N.MaybeRunBot() else N.HostFinishDeal() end
+    end
 end
 
 function N.LocalGahwa()
     if S.s.paused then return end
     if not S.s.contract or S.s.contract.gahwa then return end
     if S.s.phase ~= K.PHASE_GAHWA then return end
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if S.s.localSeat ~= eligibleSeat then return end
+    if S.s.localSeat ~= S.s.contract.bidder then return end
     cancelLocalWarn()
     S.ApplyGahwa(S.s.localSeat)
     N.SendGahwa(S.s.localSeat)
@@ -1073,8 +1202,36 @@ function N.LocalGahwa()
     if S.s.isHost then N.HostFinishDeal() end
 end
 
+-- Local pre-emption (الثالث, "Triple-on-Ace") action.
+function N.LocalPreempt()
+    if S.s.paused then return end
+    if S.s.phase ~= K.PHASE_PREEMPT then return end
+    if not S.s.localSeat or not S.s.preemptEligible then return end
+    local eligible = false
+    for _, s2 in ipairs(S.s.preemptEligible) do
+        if s2 == S.s.localSeat then eligible = true; break end
+    end
+    if not eligible then return end
+    cancelLocalWarn()
+    N.SendPreempt(S.s.localSeat)
+    if S.s.isHost then
+        N._OnPreempt(S.s.localName or "__host__", S.s.localSeat)
+    end
+end
+
+function N.LocalPreemptPass()
+    if S.s.paused then return end
+    if S.s.phase ~= K.PHASE_PREEMPT then return end
+    if not S.s.localSeat or not S.s.preemptEligible then return end
+    cancelLocalWarn()
+    N.SendPreemptPass(S.s.localSeat)
+    if S.s.isHost then
+        N._OnPreemptPass(S.s.localName or "__host__", S.s.localSeat)
+    end
+end
+
 -- Skip vote. Anyone with the eligible seat can broadcast; the host
--- (or anyone receiving) acts on it via _OnSkipDouble / _OnSkipRedouble.
+-- (or anyone receiving) acts on it via _OnSkip*.
 function N.LocalSkipDouble()
     if S.s.paused then return end
     if not S.s.contract or not S.s.localSeat then return end
@@ -1084,20 +1241,19 @@ function N.LocalSkipDouble()
         if S.s.localSeat ~= def then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
-    elseif S.s.phase == K.PHASE_REDOUBLE then
-        if S.s.localSeat ~= S.s.contract.bidder then return end
-        broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, S.s.localSeat))
-        if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_TRIPLE then
-        if S.s.localSeat ~= def then return end
+        -- Bidder skips Triple.
+        if S.s.localSeat ~= S.s.contract.bidder then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_FOUR then
-        if S.s.localSeat ~= S.s.contract.bidder then return end
+        -- Defender skips Four.
+        if S.s.localSeat ~= def then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_GAHWA then
-        if S.s.localSeat ~= def then return end
+        -- Bidder skips Gahwa.
+        if S.s.localSeat ~= S.s.contract.bidder then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
     end
@@ -1270,13 +1426,19 @@ function N.HostResolveTakweesh(callerSeat)
     local winnerTeam = foundIllegal and callerTeam or oppTeam
 
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
+    -- v0.2.0+ multiplier ladder: Bel(×2)/Triple(×3)/Four(×4). Gahwa is
+    -- NOT a multiplier — it's a match-win. But for early-termination
+    -- penalties (takweesh, invalid SWA), the per-round score is still
+    -- computed to charge the bare 26 (Sun) / 16 (Hokm) penalty even
+    -- when Gahwa was called — so we treat Gahwa as ×4 for THIS path
+    -- (highest active rung). The match-win semantic only applies to
+    -- a fully-played-out round, not a forfeit.
     local mult = K.MULT_BASE
     if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if     c.gahwa     then mult = mult * K.MULT_GAHWA
-    elseif c.foured    then mult = mult * K.MULT_FOUR
-    elseif c.tripled   then mult = mult * K.MULT_TRIPLE
-    elseif c.redoubled then mult = mult * K.MULT_BELRE
-    elseif c.doubled   then mult = mult * K.MULT_BEL end
+    if     c.gahwa   then mult = mult * K.MULT_FOUR
+    elseif c.foured  then mult = mult * K.MULT_FOUR
+    elseif c.tripled then mult = mult * K.MULT_TRIPLE
+    elseif c.doubled then mult = mult * K.MULT_BEL end
 
     local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
@@ -1288,6 +1450,8 @@ function N.HostResolveTakweesh(callerSeat)
     local mpB = (winnerTeam == "B") and meldB or 0
 
     -- Belote (Hokm only, played cards only — Saudi rule rb3haa).
+    -- Cancelled when the K+Q holder also declared a ≥100 meld (per
+    -- "ماهو البلوت في لعبة البلوت"). Same rule as R.ScoreRound.
     local belote
     if c.type == K.BID_HOKM and c.trump then
         local kWho, qWho
@@ -1303,6 +1467,13 @@ function N.HostResolveTakweesh(callerSeat)
         if S.s.trick then scan(S.s.trick.plays) end
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
+            local list = (S.s.meldsByTeam and S.s.meldsByTeam[belote]) or {}
+            for _, m in ipairs(list) do
+                if m.declaredBy == kWho and (m.value or 0) >= 100 then
+                    belote = nil
+                    break
+                end
+            end
         end
     end
 
@@ -1691,13 +1862,15 @@ function N.HostResolveSWA(callerSeat, callerHand)
         -- WITH THEM — does NOT transfer to opp. Opp only adds
         -- THEIR OWN melds × mult. Belote independent.
         local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
+        -- v0.2.0+ multiplier ladder. Gahwa is treated as ×4 here (same
+        -- as Four) because the match-win semantic only applies to a
+        -- fully-played-out round; an invalid SWA is a per-round penalty.
         local mult = K.MULT_BASE
         if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-        if     c.gahwa     then mult = mult * K.MULT_GAHWA
-        elseif c.foured    then mult = mult * K.MULT_FOUR
-        elseif c.tripled   then mult = mult * K.MULT_TRIPLE
-        elseif c.redoubled then mult = mult * K.MULT_BELRE
-        elseif c.doubled   then mult = mult * K.MULT_BEL end
+        if     c.gahwa   then mult = mult * K.MULT_FOUR
+        elseif c.foured  then mult = mult * K.MULT_FOUR
+        elseif c.tripled then mult = mult * K.MULT_TRIPLE
+        elseif c.doubled then mult = mult * K.MULT_BEL end
         local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         local cardA = (oppOfCaller == "A") and handTotal or 0
@@ -1707,6 +1880,7 @@ function N.HostResolveSWA(callerSeat, callerHand)
         local mpA = (oppOfCaller == "A") and meldA or 0
         local mpB = (oppOfCaller == "B") and meldB or 0
         -- Belote scan (played cards only — Saudi rule rb3haa).
+        -- Cancelled when the K+Q holder also declared a ≥100 meld.
         local beloteOwner
         if c.type == K.BID_HOKM and c.trump then
             local kWho, qWho
@@ -1722,6 +1896,13 @@ function N.HostResolveSWA(callerSeat, callerHand)
             if S.s.trick then scan(S.s.trick.plays) end
             if kWho and qWho and kWho == qWho then
                 beloteOwner = R.TeamOf(kWho)
+                local list = (S.s.meldsByTeam and S.s.meldsByTeam[beloteOwner]) or {}
+                for _, m in ipairs(list) do
+                    if m.declaredBy == kWho and (m.value or 0) >= 100 then
+                        beloteOwner = nil
+                        break
+                    end
+                end
             end
         end
         local rawA = (cardA + mpA) * mult
@@ -1935,7 +2116,7 @@ end
 local localWarnTimer
 
 -- NOTE: declared up top (forward-decl) so closures in N.LocalBid /
--- N.LocalPlay / N.LocalDouble / N.LocalRedouble / N.LocalSkipDouble
+-- N.LocalPlay / N.LocalDouble / N.LocalSkipDouble
 -- all bind to the SAME upvalue and see this assignment at runtime.
 cancelLocalWarn = function()
     if localWarnTimer then
@@ -1966,7 +2147,8 @@ function N.StartLocalWarn(kind)
     elseif kind == "bel" then
         mine = S.s.contract and S.s.localSeat
                and S.s.localSeat == ((S.s.contract.bidder % 4) + 1)
-    elseif kind == "belre" then
+    elseif kind == "triple" then
+        -- v0.2.0: Triple is bidder's response to Bel.
         mine = S.s.contract and S.s.localSeat
                and S.s.localSeat == S.s.contract.bidder
     end
@@ -2018,10 +2200,11 @@ function N._HostTurnTimeout(seat, kind)
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
--- Bel/Bel-Re windows have no turn pointer (s.turn stays nil), so the
--- standard AFK turn timer can't cover them. We arm a dedicated timer
--- that auto-skips after K.TURN_TIMEOUT_SEC. Reuses turnTimer because
--- only one of {turn, bel, belre} can be active at a time.
+-- Escalation windows (Bel/Triple/Four/Gahwa/Pre-empt) have no turn
+-- pointer (s.turn stays nil), so the standard AFK turn timer can't
+-- cover them. We arm a dedicated timer that auto-skips after
+-- K.TURN_TIMEOUT_SEC. Reuses turnTimer because only one window can
+-- be active at a time.
 function N.StartBelTimer(seat, kind)
     N.CancelTurnTimer()
     if not S.s.isHost then return end
@@ -2040,10 +2223,6 @@ function N._HostBelTimeout(seat, kind)
         log("Info", "AFK timeout: bel skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
         N.HostFinishDeal()
-    elseif kind == "redouble" and S.s.phase == K.PHASE_REDOUBLE then
-        log("Info", "AFK timeout: bel-re skip seat=%d", seat)
-        broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, seat))
-        N.HostFinishDeal()
     elseif kind == "triple" and S.s.phase == K.PHASE_TRIPLE then
         log("Info", "AFK timeout: triple skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, seat))
@@ -2056,6 +2235,16 @@ function N._HostBelTimeout(seat, kind)
         log("Info", "AFK timeout: gahwa skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, seat))
         N.HostFinishDeal()
+    elseif kind == "preempt_pass" and S.s.phase == K.PHASE_PREEMPT then
+        -- Pre-emption window timed out for an eligible seat — auto-pass
+        -- on their behalf. This may close the window and finalize the
+        -- original buyer's contract.
+        log("Info", "AFK timeout: preempt waive seat=%d", seat)
+        broadcast(("%s;%d"):format(K.MSG_PREEMPT_PASS, seat))
+        S.ApplyPreemptPass(seat)
+        if not S.s.preemptEligible then
+            N._FinalizePreempt()
+        end
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
@@ -2095,7 +2284,7 @@ end
 -- visual turn pointer. 1.6s gives the announcement room to breathe.
 local BOT_DELAY_BID  = 1.6
 local BOT_DELAY_PLAY = 1.2
-local BOT_DELAY_BEL  = 1.4   -- Bel/Bel-Re also has a voice cue
+local BOT_DELAY_BEL  = 1.4   -- Bel/Triple/Four/Gahwa also have voice cues
 
 local function isBotSeat(seat)
     return S.s.isHost and seat and S.s.seats[seat] and S.s.seats[seat].isBot
@@ -2124,12 +2313,22 @@ function N.MaybeRunBot()
                         log("Info", "bel-decision skipped: phase=%s", tostring(S.s.phase))
                         return
                     end
-                    local bel = B.Bot.PickDouble(belSeat)
-                    log("Info", "bel-decision seat=%d pick=%s", belSeat, tostring(bel))
+                    local bel, wantOpen = B.Bot.PickDouble(belSeat)
+                    log("Info", "bel-decision seat=%d pick=%s open=%s",
+                        belSeat, tostring(bel), tostring(wantOpen))
                     if bel then
-                        S.ApplyDouble(belSeat)
-                        N.SendDouble(belSeat)
-                        N.MaybeRunBot()
+                        local isSun = S.s.contract
+                                  and S.s.contract.type == K.BID_SUN
+                        -- Sun forces closed (no Triple rung). Bot's
+                        -- wantOpen also respected for Hokm.
+                        local effOpen = (not isSun) and wantOpen
+                        S.ApplyDouble(belSeat, effOpen)
+                        N.SendDouble(belSeat, effOpen)
+                        if isSun or not effOpen then
+                            N.HostFinishDeal()
+                        else
+                            N.MaybeRunBot()
+                        end
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
                         N.HostFinishDeal()
@@ -2155,106 +2354,123 @@ function N.MaybeRunBot()
         end
     end
 
-    -- Bel-Re decision: bidder
-    if S.s.phase == K.PHASE_REDOUBLE and S.s.contract then
+    -- v0.2.0: Triple decision is the BIDDER's response to Bel.
+    -- Each escalation now picks (yes, wantOpen) — wantOpen=true means
+    -- the chain may continue with the opposing team's next-rung
+    -- counter; wantOpen=false closes the chain and goes straight to PLAY.
+    if S.s.phase == K.PHASE_TRIPLE and S.s.contract then
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
-            log("Info", "schedule belre-decision for bot seat=%d", bidder)
-            C_Timer.After(BOT_DELAY_BEL, function()
-                if S.s.paused then return end
-                if S.s.phase ~= K.PHASE_REDOUBLE then return end
-                if B.Bot.PickRedouble(bidder) then
-                    S.ApplyRedouble(bidder)
-                    N.SendRedouble(bidder)
-                    -- Phase is now TRIPLE; recurse to handle that
-                    -- window's defender response.
-                    N.MaybeRunBot()
-                else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_RDBL, bidder))
-                    N.HostFinishDeal()
-                end
-                if B.UI then B.UI.Refresh() end
-            end)
-            return
-        else
-            N.StartBelTimer(bidder, "redouble")
-            return
-        end
-    end
-
-    -- Triple decision: defender. Bots default to skip with a small
-    -- Triple/Four/Gahwa: bots now use Bot.PickTriple / PickFour /
-    -- PickGahwa heuristics (strength-gated, threshold-based) instead
-    -- of a flat 10% random escalation. Old code used a `escalateChance`
-    -- coin-flip; that's been replaced so a strong defensive hand
-    -- actually triples, and a weak one passes.
-    if S.s.phase == K.PHASE_TRIPLE and S.s.contract then
-        local defSeat = (S.s.contract.bidder % 4) + 1
-        if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
                 if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_TRIPLE then return end
-                if B.Bot.PickTriple and B.Bot.PickTriple(defSeat) then
-                    S.ApplyTriple(defSeat)
-                    N.SendTriple(defSeat)
-                    N.MaybeRunBot()
+                local yes, wantOpen = false, true
+                if B.Bot.PickTriple then
+                    yes, wantOpen = B.Bot.PickTriple(bidder)
+                end
+                if yes then
+                    S.ApplyTriple(bidder, wantOpen)
+                    N.SendTriple(bidder, wantOpen)
+                    if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                 else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, defSeat))
+                    broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
                     N.HostFinishDeal()
                 end
                 if B.UI then B.UI.Refresh() end
             end)
             return
         else
-            N.StartBelTimer(defSeat, "triple")
+            N.StartBelTimer(bidder, "triple")
             return
         end
     end
 
-    -- Four decision: bidder.
+    -- v0.2.0: Four decision is the DEFENDER's response to Triple.
     if S.s.phase == K.PHASE_FOUR and S.s.contract then
-        local bidder = S.s.contract.bidder
-        if isBotSeat(bidder) then
-            C_Timer.After(BOT_DELAY_BEL, function()
-                if S.s.paused then return end
-                if S.s.phase ~= K.PHASE_FOUR then return end
-                if B.Bot.PickFour and B.Bot.PickFour(bidder) then
-                    S.ApplyFour(bidder)
-                    N.SendFour(bidder)
-                    N.MaybeRunBot()
-                else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, bidder))
-                    N.HostFinishDeal()
-                end
-                if B.UI then B.UI.Refresh() end
-            end)
-            return
-        else
-            N.StartBelTimer(bidder, "four")
-            return
-        end
-    end
-
-    -- Gahwa decision: defender (terminal).
-    if S.s.phase == K.PHASE_GAHWA and S.s.contract then
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
                 if S.s.paused then return end
-                if S.s.phase ~= K.PHASE_GAHWA then return end
-                if B.Bot.PickGahwa and B.Bot.PickGahwa(defSeat) then
-                    S.ApplyGahwa(defSeat)
-                    N.SendGahwa(defSeat)
+                if S.s.phase ~= K.PHASE_FOUR then return end
+                local yes, wantOpen = false, true
+                if B.Bot.PickFour then
+                    yes, wantOpen = B.Bot.PickFour(defSeat)
+                end
+                if yes then
+                    S.ApplyFour(defSeat, wantOpen)
+                    N.SendFour(defSeat, wantOpen)
+                    if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                 else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, defSeat))
+                    broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
+                    N.HostFinishDeal()
+                end
+                if B.UI then B.UI.Refresh() end
+            end)
+            return
+        else
+            N.StartBelTimer(defSeat, "four")
+            return
+        end
+    end
+
+    -- v0.2.0: Gahwa decision is the BIDDER's terminal (match-win).
+    if S.s.phase == K.PHASE_GAHWA and S.s.contract then
+        local bidder = S.s.contract.bidder
+        if isBotSeat(bidder) then
+            C_Timer.After(BOT_DELAY_BEL, function()
+                if S.s.paused then return end
+                if S.s.phase ~= K.PHASE_GAHWA then return end
+                if B.Bot.PickGahwa and B.Bot.PickGahwa(bidder) then
+                    S.ApplyGahwa(bidder)
+                    N.SendGahwa(bidder)
+                else
+                    broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
                 end
                 N.HostFinishDeal()
                 if B.UI then B.UI.Refresh() end
             end)
             return
         else
-            N.StartBelTimer(defSeat, "gahwa")
+            N.StartBelTimer(bidder, "gahwa")
             return
+        end
+    end
+
+    -- Pre-emption window: each eligible seat (bot or human) decides
+    -- whether to claim. Bots use Bot.PickPreempt (Sun-strength gated).
+    -- Humans get a UI button + AFK auto-pass.
+    if S.s.phase == K.PHASE_PREEMPT and S.s.preemptEligible then
+        for _, seat in ipairs(S.s.preemptEligible) do
+            if isBotSeat(seat) then
+                C_Timer.After(BOT_DELAY_BEL, function()
+                    if S.s.paused then return end
+                    if S.s.phase ~= K.PHASE_PREEMPT then return end
+                    -- Re-check eligibility (another bot may have
+                    -- claimed in the meantime).
+                    if not S.s.preemptEligible then return end
+                    local stillEligible = false
+                    for _, s2 in ipairs(S.s.preemptEligible) do
+                        if s2 == seat then stillEligible = true; break end
+                    end
+                    if not stillEligible then return end
+                    if B.Bot.PickPreempt and B.Bot.PickPreempt(seat) then
+                        N.SendPreempt(seat)
+                        N._OnPreempt("__host__", seat)
+                    else
+                        N.SendPreemptPass(seat)
+                        S.ApplyPreemptPass(seat)
+                        if not S.s.preemptEligible then
+                            N._FinalizePreempt()
+                        end
+                    end
+                    if B.UI then B.UI.Refresh() end
+                end)
+                return
+            else
+                -- Human eligible. Arm an AFK auto-pass timer.
+                N.StartBelTimer(seat, "preempt_pass")
+                return
+            end
         end
     end
 
