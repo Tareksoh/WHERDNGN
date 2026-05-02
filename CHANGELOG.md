@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.29 — belote tightened to "K+Q played", SWA/takweesh docs
+
+**Fix (Saudi rule, rb3haa)**
+- Belote (+20 raw) now requires the K AND Q of trump to BOTH be
+  played before the round ends. v0.1.27/v0.1.28 had been scanning
+  unplayed hands too — that's wrong: per Saudi convention, belote
+  must be announced as the cards are played. If a takweesh or SWA
+  ends the round before K+Q both surface, no belote bonus.
+- Applies to both `HostResolveSWA` and `HostResolveTakweesh`.
+
+**Documentation**
+- `HostResolveSWA` doc-comment now flags the made/failed contract
+  mapping as a HOUSE-RULE NORMALIZATION. The published Saudi
+  sources don't fully specify a meld/belote formula for SWA —
+  our mapping (valid+bidder→MADE etc.) is a defensible synthesis
+  but isn't a verbatim attested rule.
+
 ## v0.1.28 — takweesh scoring respects melds + belote
 
 **Fix (same shape as v0.1.27)**

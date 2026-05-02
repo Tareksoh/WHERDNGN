@@ -1215,9 +1215,10 @@ function N.HostResolveTakweesh(callerSeat)
         else                       mpB = meldA + meldB end
     end
 
-    -- Belote (Hokm only): scan played + unplayed cards. Takweesh
-    -- ends the round mid-trick; if K+Q haven't surfaced yet, the
-    -- holder still gets the +20 per Saudi convention.
+    -- Belote (Hokm only): K+Q of trump in same hand. Per Saudi rule
+    -- (rb3haa), belote must be played out — if both K and Q haven't
+    -- surfaced before takweesh ended the round, no bonus. Scan
+    -- played cards only.
     local belote = nil
     if c.type == K.BID_HOKM and c.trump then
         local kWho, qWho
@@ -1231,17 +1232,6 @@ function N.HostResolveTakweesh(callerSeat)
         end
         for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
         if S.s.trick then scan(S.s.trick.plays) end
-        for seat = 1, 4 do
-            local h = S.s.hostHands and S.s.hostHands[seat]
-            if h then
-                for _, card in ipairs(h) do
-                    if C.Suit(card) == c.trump then
-                        if C.Rank(card) == "K" then kWho = kWho or seat end
-                        if C.Rank(card) == "Q" then qWho = qWho or seat end
-                    end
-                end
-            end
-        end
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
         end
@@ -1462,6 +1452,15 @@ end
 -- scores the round routed through the standard made / failed branches
 -- so MELDS and BELOTE are awarded correctly.
 --
+-- HOUSE-RULE NORMALIZATION: published Saudi sources (Pagat, Jawaker,
+-- Saudi Federation gameplay refs) describe SWA procedurally — caller
+-- takes value of remaining tricks if valid, full score to opponent
+-- if invalid — without a fully-specified meld/belote formula. This
+-- addon normalizes by mapping (valid, callerTeam) onto the same
+-- made/failed contract resolution used by Rules.ScoreRound. It's a
+-- defensible synthesis but explicitly a house-rule choice, not an
+-- attested verbatim rule.
+--
 -- Outcome model:
 --   valid + caller is bidder team    → contract MADE (caller swept)
 --   valid + caller is defender team  → contract FAILED (defender stops)
@@ -1471,12 +1470,13 @@ end
 --
 -- Made branch: bidder team takes handTotal × mult. Meld winner
 -- (per R.CompareMelds) gets their melds × mult. Belote +20 raw
--- to whoever holds K+Q of trump (Hokm only).
+-- to whoever holds K+Q of trump (only if both played out — Saudi
+-- rule, rb3haa).
 --
 -- Failed branch: opp team takes handTotal × mult AND ALL melds
 -- (both teams' values combined) × mult. Same rule the regular
--- ScoreRound uses for a busted contract. Belote still flows
--- to its holder.
+-- ScoreRound uses for a busted contract. Belote still flows to
+-- its holder if K+Q both played out.
 function N.HostResolveSWA(callerSeat, callerHand)
     if not S.s.isHost or not S.s.contract then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
@@ -1548,11 +1548,11 @@ function N.HostResolveSWA(callerSeat, callerHand)
         else                   mpB = meldA + meldB end
     end
 
-    -- Belote (Hokm only): K+Q of trump in same hand. Scan all known
-    -- card locations — both played tricks and the in-progress trick.
-    -- A holder who hasn't played them yet (round ends early via SWA)
-    -- still gets the +20 bonus per Saudi convention; we cover that
-    -- by scanning unplayed hands too.
+    -- Belote (Hokm only): K+Q of trump in same hand. Per Saudi rule
+    -- (rb3haa, Arabic-Baloot guides), belote must be ANNOUNCED when
+    -- the K and Q are PLAYED — if both haven't surfaced before the
+    -- round ends, no points. So we scan only played cards (completed
+    -- tricks + the in-progress trick), NOT unplayed hands.
     local belote = nil
     if c.type == K.BID_HOKM and c.trump then
         local kWho, qWho
@@ -1566,17 +1566,6 @@ function N.HostResolveSWA(callerSeat, callerHand)
         end
         for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
         if S.s.trick then scan(S.s.trick.plays) end
-        for seat = 1, 4 do
-            local h = hands[seat]
-            if h then
-                for _, card in ipairs(h) do
-                    if C.Suit(card) == c.trump then
-                        if C.Rank(card) == "K" then kWho = kWho or seat end
-                        if C.Rank(card) == "Q" then qWho = qWho or seat end
-                    end
-                end
-            end
-        end
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
         end
