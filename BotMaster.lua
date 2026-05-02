@@ -258,7 +258,46 @@ local function rolloutValue(seat, card, world, contract)
             if #winners > 0 then return lowestRank(winners) end
             return lowestRank(legal)
         end
-        -- Lead: low from longest non-trump (or lowest legal).
+        -- Lead. Heuristic-mirror of Bot.pickLead's defender path:
+        --   1. Bidder team in Hokm: lead highest trump (draw out).
+        --   2. Otherwise: lead the lowest non-trump from our longest
+        --      non-trump suit, or fall through to lowest legal.
+        local bidder = contract.bidder
+        local myTeamRoll = R.TeamOf(s)
+        local bidderTeamRoll = R.TeamOf(bidder)
+        if contract.type == K.BID_HOKM and myTeamRoll == bidderTeamRoll then
+            local bestT, bestR = nil, -1
+            for _, c in ipairs(legal) do
+                if C.IsTrump(c, contract) then
+                    local r = C.TrickRank(c, contract)
+                    if r > bestR then bestT, bestR = c, r end
+                end
+            end
+            if bestT then return bestT end
+        end
+        local nonTrumps = {}
+        local suitCount = { S = 0, H = 0, D = 0, C = 0 }
+        for _, c in ipairs(legal) do
+            if not C.IsTrump(c, contract) then
+                nonTrumps[#nonTrumps + 1] = c
+                suitCount[C.Suit(c)] = suitCount[C.Suit(c)] + 1
+            end
+        end
+        if #nonTrumps > 0 then
+            local longest, longestN = nil, 0
+            for _, suit in ipairs({ "S", "H", "D", "C" }) do
+                local n = suitCount[suit] or 0
+                if n > longestN then longest, longestN = suit, n end
+            end
+            local fromLongest = {}
+            for _, c in ipairs(nonTrumps) do
+                if C.Suit(c) == longest then
+                    fromLongest[#fromLongest + 1] = c
+                end
+            end
+            if #fromLongest > 0 then return lowestRank(fromLongest) end
+            return lowestRank(nonTrumps)
+        end
         return lowestRank(legal)
     end
 

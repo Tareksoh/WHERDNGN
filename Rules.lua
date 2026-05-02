@@ -523,14 +523,23 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
 
     -- Saudi rule 4-2/4-3: bidder must STRICTLY beat defender's total.
     -- Equal totals = tie; tie default goes to defenders. Bidder's total
-    -- includes tricks + melds + belote (rule 4-5 explicitly carves out
-    -- the "without belote" case, implying belote shifts the threshold).
+    -- includes tricks + (only the meld-winner team's) melds + their
+    -- belote. ONLY THE MELD COMPARISON WINNER counts — the loser's
+    -- declared melds drop to 0 even for the threshold check (matches
+    -- the actual scoring branch below). Adding both teams' melds to
+    -- both totals would be a wash for equal-meld cases, but when
+    -- meld values are unequal (e.g. seq3=20 vs seq4=50, or trump
+    -- tie-break favors one), summing them on both sides flips the
+    -- threshold incorrectly.
     local beloteA = (belote == "A") and K.MELD_BELOTE or 0
     local beloteB = (belote == "B") and K.MELD_BELOTE or 0
+    local meldVerdict = R.CompareMelds(meldsByTeam.A, meldsByTeam.B, contract)
+    local effMeldA = (meldVerdict == "A") and meldA or 0
+    local effMeldB = (meldVerdict == "B") and meldB or 0
     local bidderTotal = teamPoints[bidderTeam] +
-        (bidderTeam == "A" and (meldA + beloteA) or (meldB + beloteB))
+        (bidderTeam == "A" and (effMeldA + beloteA) or (effMeldB + beloteB))
     local oppTotal = teamPoints[oppTeam] +
-        (oppTeam == "A" and (meldA + beloteA) or (meldB + beloteB))
+        (oppTeam == "A" and (effMeldA + beloteA) or (effMeldB + beloteB))
 
     -- Outcome resolution. Three branches:
     --   "make"  bidder strictly beat opp → normal scoring

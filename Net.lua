@@ -266,6 +266,37 @@ function N.SendResyncRes(target, gameID)
     if not target then return end
     local payload = packSnapshot()
     whisper(target, ("%s;%s;%s"):format(K.MSG_RESYNC_RES, gameID or "", payload))
+    -- Replay rebuild for fields not in the packed snapshot (tricks
+    -- history, declared melds, bid card). Whispered to the target
+    -- only — they reuse the same handlers (MSG_MELD / MSG_TRICK /
+    -- MSG_BIDCARD), so no new wire format. This restores the meld
+    -- strip / peek-last-trick / contract-banner state on a mid-hand
+    -- /reload-rejoiner.
+    if S.s.bidCard then
+        whisper(target, ("%s;%s"):format(K.MSG_BIDCARD, S.s.bidCard))
+    end
+    -- Replay declared melds (winning team's strip + losing team's
+    -- meld score eligibility both rely on s.meldsByTeam).
+    for _, team in ipairs({ "A", "B" }) do
+        for _, m in ipairs((S.s.meldsByTeam and S.s.meldsByTeam[team]) or {}) do
+            local enc = (m.cards and C.EncodeHand(m.cards)) or ""
+            whisper(target, ("%s;%d;%s;%s;%s;%s"):format(
+                K.MSG_MELD, m.declaredBy or 0,
+                m.kind or "", m.suit or "", m.top or "", enc))
+        end
+    end
+    -- Replay closed-trick history (fed via MSG_TRICK so the receiver
+    -- runs the same ApplyTrickEnd path; we provide the fully-encoded
+    -- plays so they don't depend on MSG_PLAY arrival order).
+    for _, t in ipairs(S.s.tricks or {}) do
+        local enc = ""
+        for _, p in ipairs(t.plays or {}) do
+            enc = enc .. (p.card or "??") .. tostring(p.seat or 0)
+        end
+        whisper(target, ("%s;%d;%d;%s;%s"):format(
+            K.MSG_TRICK, t.winner or 0, t.points or 0,
+            t.leadSuit or "", enc))
+    end
 end
 
 -- -- Receive -----------------------------------------------------
@@ -793,6 +824,10 @@ function N._HostStepPlay()
     -- "see the trick" time + the winner-glow read.
     C_Timer.After(2.2, function()
         if not S.s.isHost then return end
+        -- Pause-state guard: if the host paused during the 2.2s
+        -- window, don't resolve the trick into a paused state — wait
+        -- for resume to fire the next StepPlay.
+        if S.s.paused then return end
         -- A Takweesh during the wait window can move phase to SCORE.
         -- Don't resolve the trick if we're no longer in PLAY.
         if S.s.phase ~= K.PHASE_PLAY then return end
@@ -855,6 +890,14 @@ function N._HostRedeal()
 
     C_Timer.After(3.0, function()
         if not S.s.isHost then return end
+        -- Reset / pause guards: if the user reset or paused during
+        -- the 3s redeal banner, abort the deal — otherwise we'd
+        -- write fresh round state into a wiped or paused game.
+        if S.s.phase ~= K.PHASE_DEAL2BID and S.s.phase ~= K.PHASE_DEAL1
+           and not S.s.redealing then
+            return
+        end
+        if S.s.paused then return end
         S.s.dealer = nextDealer
         if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
         S.ApplyStart(S.s.roundNumber, nextDealer)
@@ -1612,6 +1655,10 @@ function N._OnAKA(sender, seat, suit)
     if fromSelf(sender) then return end
     if not seat or seat < 1 or seat > 4 then return end
     if not suit or suit == "" then return end
+    -- Authority: only the seat itself can call AKA on its own behalf.
+    -- Cosmetic protection — a spoofed AKA wouldn't change scoring,
+    -- but it would mislead a partner's play decision.
+    if not authorizeSeat(seat, sender) then return end
     -- Only meaningful during play; ignore stragglers from a previous
     -- hand that arrive after PHASE_SCORE.
     if S.s.phase ~= K.PHASE_PLAY then return end

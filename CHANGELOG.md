@@ -1,5 +1,76 @@
 # Changelog
 
+## v0.1.32 — five-agent audit sweep
+
+**HIGH-severity fixes**
+
+- **`Rules.ScoreRound` make-check**: the threshold comparison was
+  adding both teams' melds to both team totals, which could flip
+  a made contract to failed when meld values differed. Now uses
+  `R.CompareMelds` first and only the winning team's melds count
+  toward the threshold (matches the actual scoring branches).
+- **`S.ApplyMeld` trick-1 lock**: rejects late wire-side meld
+  declarations once trick 1 has closed, backing up the UI / Bot
+  / GetMeldsForLocal local gates.
+- **Resync replay**: `SendResyncRes` now whispers the bid card,
+  every declared meld, and every closed trick to the rejoiner
+  using existing `MSG_BIDCARD` / `MSG_MELD` / `MSG_TRICK` wires.
+  A mid-hand /reload-rejoin now correctly rebuilds the meld strip,
+  peek-last-trick state, and contract banner. Previous resync
+  snapshot was 26-field-only and dropped trick history + melds.
+- **Bot trump-tempo counter**: was firing on RUFF (defensive cut)
+  rather than LEAD. Now requires `#trick.plays == 1` and
+  `leadSuit == trump` so only voluntary tempo-spending counts.
+- **Fzloky avoid-suit `pairs()` ordering**: rewritten as a
+  two-pass selection so the avoid-suit can never claim "longest"
+  via iteration-order luck. Avoid-suit only wins if it exceeds
+  the best non-avoid by ≥2 cards.
+- **`bidsAttempts` counter**: dropped — was never incremented and
+  drove `styleBelTendency` into degenerate values. Belief now
+  gates on `bels >= 1` count alone.
+- **AKA banner reposition**: was 26 px tall anchored above the
+  centre pad, but the gap to the top seat-badge is only 10 px.
+  Banner pokes ~16 px into the partner badge. Now 22 px tall
+  anchored INSIDE centerPad's top edge — clear of both seat and
+  trick area.
+- **Contract banner reposition**: was at `f.BOTTOM, 0, 6`,
+  overlapping the score and round text at the same Y. Now sits
+  at `f.BOTTOM, 0, 30` — above the score line.
+- **`_HostStepPlay` paused guard**: trick-resolve timer no longer
+  fires while the host is paused.
+- **`_HostRedeal` reset/pause guard**: 3 s redeal timer now
+  aborts if game state was reset or paused during the wait.
+
+**MEDIUM-severity fixes**
+
+- **`S.ApplyGameEnd` idempotence**: returns early on duplicate
+  re-apply with the same winner — prevents the BALOOT fanfare
+  cue from double-firing on host-loopback + remote receive.
+- **Bid card visible during escalation**: `renderCenter` now
+  keeps the bid card up through DEAL3 / DOUBLE / REDOUBLE /
+  TRIPLE / FOUR / GAHWA, not just the bidding rounds. Players
+  retain "what was bid" reference all the way to play start.
+- **Transient-fields cleanup**: `lastRoundResult`,
+  `lastRoundDelta`, `lastTrick` added to TRANSIENT_FIELDS so
+  they don't survive a /reload (would otherwise surface a
+  previous round's banner).
+- **`BotMaster.lua` rollout policy**: was always picking
+  `lowestRank(legal)` on lead. Now mirrors `Bot.pickLead`
+  — bidder team leads highest trump in Hokm, defenders lead
+  lowest from longest non-trump. Removes the systematic bias
+  toward passive lines in determinization rollouts.
+- **Dead-code cleanup**: `partnerVoidIn` (defined, never
+  called), `smothers` / `smotherOpps` counters (never
+  written) removed from `Bot._partnerStyle` and `Bot.lua`.
+
+**LOW-severity fixes**
+
+- `_OnAKA` now goes through `authorizeSeat` — prevents a peer
+  from spoofing an AKA banner for another seat.
+- `WHEREDNGNLog` removed from `WHEREDNGN.toc` — the
+  `SavedVariablesPerCharacter` declaration was unused; log
+  buffer is in-memory only.
+
 ## v0.1.31 — Saudi Master tier (ISMCTS-flavoured)
 
 **New tier: Saudi Master** — top of the cascade

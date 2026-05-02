@@ -121,24 +121,17 @@ end
 -- known partner / opponent behaviour. Reset on Reset() / new game.
 --
 -- Counters:
---   bels         — how often this seat has Beled
---   bidsAttempts — opportunities to bid (used to normalize Bel rate)
---   trumpEarly   — trump-led on a non-trump trick before trick 5
---                  (signals aggressive trump-spending)
---   trumpLate    — trump-led on a non-trump trick from trick 5 onwards
---                  (saver style)
---   smothers     — observed A/T dumps onto a partner-winning trick
---   smotherOpps  — opportunities (won non-trump tricks where this
---                  seat could have smothered)
+--   bels       — how often this seat has Beled
+--   trumpEarly — trump LEAD before trick 5 (aggressive tempo)
+--   trumpLate  — trump LEAD from trick 5 onwards (saver style)
 Bot._partnerStyle = nil
 
 local function emptyStyle()
     local m = {}
     for s = 1, 4 do
         m[s] = {
-            bels = 0, bidsAttempts = 0,
+            bels = 0,
             trumpEarly = 0, trumpLate = 0,
-            smothers = 0, smotherOpps = 0,
         }
     end
     return m
@@ -160,13 +153,15 @@ end
 
 -- Convenience derived metrics. All return nil if we haven't seen
 -- enough actions to be meaningful — caller should fall back to a
--- neutral default in that case.
+-- neutral default in that case. Currently unused by the picker
+-- code; reserved for future M3lm-Plus heuristics that gate on
+-- per-seat play style (e.g., bias trump-counting against a partner
+-- known to leak trump early). Keep them around as the ledger is
+-- already maintained by OnPlayObserved / OnEscalation.
 local function styleBelTendency(seat)
     if not Bot._partnerStyle then return nil end
     local m = Bot._partnerStyle[seat]
-    if not m or m.bels + m.bidsAttempts < 1 then return nil end
-    -- Map to {-1, 0, 1}: cautious (no bels seen), normal, aggressive.
-    if m.bels == 0 then return -1 end
+    if not m or m.bels < 1 then return nil end
     if m.bels >= 2 then return 1 end
     return 0
 end
@@ -204,13 +199,17 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
     local style = Bot._partnerStyle[seat]
     if not style then return end
-    -- Trump tempo: did this seat lead trump on a non-trump trick
-    -- (i.e., deliberately spent trump to draw / over-cut)? Track
-    -- whether the spend happened early (trick<5) or late (trick>=5).
+    -- Trump tempo: did this seat LEAD trump (i.e., voluntarily
+    -- spent it to draw out opponents' trump)? Lead = first play of
+    -- a trick. A trump-RUFF in response to a non-trump lead by
+    -- another seat is defensive, not tempo-spending — must NOT
+    -- be counted here.
     local contract = S.s and S.s.contract
+    local trickPlays = (S.s.trick and S.s.trick.plays) or {}
     if contract and contract.type == K.BID_HOKM and contract.trump
-       and cardSuit == contract.trump and leadSuit
-       and leadSuit ~= contract.trump then
+       and cardSuit == contract.trump
+       and (#trickPlays == 1)  -- this is the LEAD (we're the only play in)
+       and leadSuit == contract.trump then
         local trickNum = #(S.s.tricks or {}) + 1
         if trickNum <= 4 then
             style.trumpEarly = style.trumpEarly + 1
@@ -218,12 +217,6 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
             style.trumpLate = style.trumpLate + 1
         end
     end
-end
-
-local function partnerVoidIn(seat, suit)
-    if not Bot._memory then return false end
-    local p = R.Partner(seat)
-    return Bot._memory[p] and Bot._memory[p].void[suit] or false
 end
 
 local function opponentsVoidInAll(seat, suit)
@@ -725,18 +718,30 @@ local function pickLead(legal, contract, seat)
     -- a partner-avoid suit (their LOW first-discard), exclude that
     -- suit from the longest-pick when an alternative exists.
     if #nonTrumps > 0 then
+        -- Two-pass selection avoids the iteration-order bug where
+        -- pairs(suitCount) might visit the avoid-suit first and let
+        -- it claim `longest` before any alternative is considered.
+        -- Pass 1: longest NON-avoid suit. Pass 2: any longest if pass
+        -- 1 found nothing. The Fzloky "≥2 more cards" tolerance is
+        -- now applied as a tie-break — avoid-suit only wins if it
+        -- exceeds the best non-avoid by ≥2.
         local longest, longestN = nil, 0
-        for suit, n in pairs(suitCount) do
-            if suit == fzlokyAvoidSuit and n < (longestN + 2) then
-                -- Skip avoid-suit unless it's overwhelmingly longest
-                -- (≥2 more cards than alternatives).
-            else
-                if n > longestN then longest, longestN = suit, n end
+        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+            local n = suitCount[suit] or 0
+            if suit ~= fzlokyAvoidSuit and n > longestN then
+                longest, longestN = suit, n
+            end
+        end
+        if fzlokyAvoidSuit then
+            local avoidN = suitCount[fzlokyAvoidSuit] or 0
+            if avoidN >= longestN + 2 then
+                longest, longestN = fzlokyAvoidSuit, avoidN
             end
         end
         if not longest then
-            -- Fall back: avoid-suit is the only non-trump we have.
-            for suit, n in pairs(suitCount) do
+            -- Avoid-suit was our only non-trump. Use it.
+            for _, suit in ipairs({ "S", "H", "D", "C" }) do
+                local n = suitCount[suit] or 0
                 if n > longestN then longest, longestN = suit, n end
             end
         end

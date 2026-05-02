@@ -424,13 +424,12 @@ local function buildMain()
     roundText = makeText(f, 12, "RIGHT")
     roundText:SetPoint("BOTTOMRIGHT", -12, 8)
 
-    -- Contract banner at the bottom of the main frame. Larger / bolder
-    -- than the rest of the status text and sat in a wood-edged plate
-    -- so it reads at a glance ("am I attacking? what's trump?") without
-    -- having to hunt across the screen.
+    -- Contract banner at the bottom of the main frame. Sits ABOVE the
+    -- score / round line so long team names + score don't get covered.
+    -- Wood-edged plate so the contract reads at a glance.
     local contractBg = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    contractBg:SetSize(360, 24)
-    contractBg:SetPoint("BOTTOM", f, "BOTTOM", 0, 6)
+    contractBg:SetSize(360, 22)
+    contractBg:SetPoint("BOTTOM", f, "BOTTOM", 0, 30)
     setBackdrop(contractBg, true,
         { 0.06, 0.10, 0.07, 0.92 }, COL.legalEdge, 8, "solid")
     contractBg:Hide()  -- only shown once a contract exists
@@ -944,8 +943,14 @@ local function buildTable()
     -- space. Hidden by default; renderAKABanner shows it for the
     -- lifetime of the trick (cleared in ApplyTrickEnd).
     local akaBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
-    akaBanner:SetSize(180, 26)
-    akaBanner:SetPoint("BOTTOM", centerPad, "TOP", 0, 6)
+    -- Anchor inside centerPad's top edge instead of above it. The gap
+    -- between the centerPad and the top seat-badge is only 10 px —
+    -- a 26-px banner anchored to "BOTTOM, centerPad, TOP" pokes ~16
+    -- px into the partner badge and covers their card-back fan.
+    -- Sitting INSIDE the top of centerPad keeps the trick area clear
+    -- below (centre cross is at +/-58 from centre, banner at top edge).
+    akaBanner:SetSize(180, 22)
+    akaBanner:SetPoint("TOP", centerPad, "TOP", 0, -4)
     setBackdrop(akaBanner, true,
         { 0.05, 0.10, 0.05, 0.90 }, COL.legalEdge, 8, "solid")
     akaBanner:Hide()
@@ -1234,6 +1239,14 @@ local function renderActions()
                     addAction(label, function() net().LocalDeclareMeld(m2) end)
                 end
                 addAction("Done", function()
+                    -- "Done" hides the per-meld buttons for the local
+                    -- player. It's a UX-only flag — the authoritative
+                    -- meld lock is the trick-1 gate (#s.tricks >= 1)
+                    -- enforced in S.ApplyMeld, S.GetMeldsForLocal, and
+                    -- Bot.PickMelds. So no network round-trip needed
+                    -- here: any actual declaration already broadcasted
+                    -- via LocalDeclareMeld; "Done" just dismisses the
+                    -- buttons on the local screen.
                     S.s.meldsDeclared[S.s.localSeat] = true
                     U.Refresh()
                 end)
@@ -1732,8 +1745,17 @@ local function renderCenter()
         end
         return
     end
-    -- During bidding, show the face-up bid card in the dedicated center slot.
-    if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID then
+    -- During bidding AND the escalation chain, keep the bid card
+    -- visible so players retain the "what was bid" reference all the
+    -- way through the Bel / Bel-Re / Triple / Four / Gahwa decisions.
+    -- The bid card is only finally cleared when PHASE_PLAY starts.
+    if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID
+       or S.s.phase == K.PHASE_DEAL3
+       or S.s.phase == K.PHASE_DOUBLE
+       or S.s.phase == K.PHASE_REDOUBLE
+       or S.s.phase == K.PHASE_TRIPLE
+       or S.s.phase == K.PHASE_FOUR
+       or S.s.phase == K.PHASE_GAHWA then
         if S.s.bidCard then
             local slot = centerCards.bid
             slot.frame:Show()

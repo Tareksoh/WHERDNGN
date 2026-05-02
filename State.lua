@@ -168,6 +168,12 @@ local TRANSIENT_FIELDS = {
     -- SWA outcome is a per-round banner struct; cleared at next
     -- ApplyStart, no need to persist.
     swaResult = true,
+    -- Round-end display state: only meaningful within the round
+    -- they describe. After /reload they'd be stale and could
+    -- surface a previous round's banner unintentionally.
+    lastRoundResult = true,
+    lastRoundDelta  = true,
+    lastTrick       = true,
 }
 
 function S.SaveSession()
@@ -776,6 +782,11 @@ function S.ApplyGahwa(seat)
 end
 
 function S.ApplyMeld(seat, kind, suit, top, encodedCards)
+    -- Saudi rule: melds must be declared during trick 1 only. Reject
+    -- any wire-side declaration that arrives after trick 1 has closed
+    -- (#s.tricks >= 1) — this is the authoritative gate that backs up
+    -- the UI / Bot.PickMelds / S.GetMeldsForLocal trick-1 locks.
+    if (#(s.tricks or {})) >= 1 then return end
     local team = R.TeamOf(seat)
     s.meldsByTeam[team] = s.meldsByTeam[team] or {}
     -- Idempotent: dedupe by (seat, kind, top, suit).
@@ -1045,6 +1056,13 @@ function S.ApplyRoundResult(result)
 end
 
 function S.ApplyGameEnd(winnerTeam)
+    -- Idempotent re-apply: if we're already in GAME_END with the
+    -- same winner, skip — prevents the BALOOT-fanfare cue from
+    -- double-firing on a duplicate broadcast (host loopback +
+    -- _OnGameEnd from another client).
+    if s.phase == K.PHASE_GAME_END and s.winner == winnerTeam then
+        return
+    end
     s.phase = K.PHASE_GAME_END
     s.winner = winnerTeam
 end
