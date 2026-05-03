@@ -32,10 +32,27 @@ B.BotMaster = B.BotMaster or {}
 local BM = B.BotMaster
 local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 
--- Number of determinizations per move. 30 is a good compromise
--- between decision quality and per-move latency. Larger gives
--- diminishing returns once the candidate ordering stabilizes.
-local NUM_WORLDS = 30
+-- Default number of determinizations. Scaled up in PickPlay for end-game.
+local BASE_NUM_WORLDS = 30
+
+-- Helper: identify cards a seat is likely to hold based on the contract.
+local function getStrongCards(contract)
+    local strong = {}
+    if contract.type == K.BID_HOKM and contract.trump then
+        local t = contract.trump
+        strong["J"..t] = 50; strong["9"..t] = 40; strong["A"..t] = 30
+        strong["T"..t] = 20; strong["K"..t] = 10; strong["Q"..t] = 10
+        -- Side Aces
+        for _, s in ipairs(K.SUITS) do
+            if s ~= t then strong["A"..s] = 15 end
+        end
+    elseif contract.type == K.BID_SUN then
+        for _, s in ipairs(K.SUITS) do
+            strong["A"..s] = 40; strong["T"..s] = 30; strong["K"..s] = 10
+        end
+    end
+    return strong
+end
 
 -- Helper: returns true if Saudi-Master tier is active.
 function BM.IsActive()
@@ -103,41 +120,80 @@ local function shuffle(t)
 end
 
 -- Try to deal `unseen` cards to the three non-self seats consistent
--- with their inferred voids. Returns nil if a consistent deal can't
--- be found within `maxAttempts`. Each retry shuffles the deck.
+-- with their inferred voids and likely hand strength (from bids).
 local function sampleConsistentDeal(seat, unseen)
+    local contract = S.s.contract
+    local bidder = contract and contract.bidder
+    local strong = getStrongCards(contract)
+    local partner = R.Partner(seat)
+    local pMem = B.Bot._memory and B.Bot._memory[partner]
+    local pSignalSuit = pMem and pMem.firstDiscard and pMem.firstDiscard.suit
+
     local sizes = {}
     for s = 1, 4 do
         if s ~= seat then sizes[s] = seatHandSize(s) end
     end
-    -- 13th-bot-audit fix (Codex+ISMCTS agent): pin the bid card to
-    -- the bidder's seat. The bid card is publicly face-up; per Saudi
-    -- rules it goes to the bidder's hand. Without this, the sampler
-    -- could randomly assign it to any opponent, corrupting every
-    -- rollout's evaluation by ~10 points per trick where they'd use
-    -- it. Only pin when (a) the bid card is in `unseen` (i.e., still
-    -- in someone's hand, not played) and (b) the bidder is not us.
+
     local pinSeat, pinCard = nil, nil
-    if S.s.contract and S.s.contract.bidder
-       and S.s.contract.bidder ~= seat
-       and S.s.bidCard then
+    if contract and bidder and bidder ~= seat and S.s.bidCard then
         for _, c in ipairs(unseen) do
             if c == S.s.bidCard then
-                pinSeat = S.s.contract.bidder
+                pinSeat = bidder
                 pinCard = S.s.bidCard
                 break
             end
         end
     end
-    local maxAttempts = 20
+
+    -- 26th-audit fix (Codex Saudi Master finding #5): pin every
+    -- unplayed card from a DECLARED MELD to its declarer. Melds
+    -- expose exact cards (m.cards + m.declaredBy) — without pinning,
+    -- the sampler can scatter "Hearts Tierce 7-8-9" cards across all
+    -- four seats instead of keeping them in the declarer's hand,
+    -- corrupting every rollout's view of who holds what.
+    --
+    -- Build a map: card -> declaring seat. Skip cards already played
+    -- (they're in `seen` already and excluded from `unseen`). Skip
+    -- the calling bot's own meld cards (they're in our hand, not
+    -- unseen). The pinned-card list is consulted alongside pinCard
+    -- (bid card) below.
+    local meldPins = {}
+    if S.s.meldsByTeam then
+        for _, team in ipairs({ "A", "B" }) do
+            for _, m in ipairs(S.s.meldsByTeam[team] or {}) do
+                if m.declaredBy and m.declaredBy ~= seat
+                   and m.cards then
+                    for _, c in ipairs(m.cards) do
+                        -- Only pin if still in unseen pool (not played).
+                        for _, u in ipairs(unseen) do
+                            if u == c then
+                                meldPins[c] = m.declaredBy
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local maxAttempts = 15
     for attempt = 1, maxAttempts do
         local pool = {}
         for _, c in ipairs(unseen) do
-            if c ~= pinCard then pool[#pool + 1] = c end
+            if c ~= pinCard and not meldPins[c] then
+                pool[#pool + 1] = c
+            end
         end
         shuffle(pool)
+
         local deal = {}
         local ok = true
+        local used = {}
+        if pinCard then used[pinCard] = true end
+        for c, _ in pairs(meldPins) do used[c] = true end
+
+        -- Sequential deal with seat-specific biasing.
         for s = 1, 4 do
             if s == seat then
                 deal[s] = (S.s.hostHands and S.s.hostHands[s]) or {}
@@ -146,30 +202,53 @@ local function sampleConsistentDeal(seat, unseen)
                 local voids = (B.Bot._memory and B.Bot._memory[s]
                                and B.Bot._memory[s].void) or {}
                 local hand = {}
-                -- Pin: pre-place the bid card if this is the bidder.
-                if s == pinSeat and pinCard then
-                    hand[#hand + 1] = pinCard
+                if s == pinSeat and pinCard then hand[#hand + 1] = pinCard end
+                -- Pre-place this seat's declared meld cards.
+                for c, declarerSeat in pairs(meldPins) do
+                    if declarerSeat == s then hand[#hand + 1] = c end
                 end
-                local leftover = {}
+
+                -- Phase 1: Biased pick from pool.
+                -- Bidder gets strong cards; partner gets signaled suit.
+                local desire = (s == bidder) and strong or {}
+                if s == partner and pSignalSuit then desire[pSignalSuit] = 1 end
+
+                local remainingInPool = {}
                 for _, c in ipairs(pool) do
-                    if #hand < n and not voids[C.Suit(c)] then
-                        hand[#hand + 1] = c
+                    if #hand < n and not used[c] and not voids[C.Suit(c)] then
+                        local weight = desire[c] or (desire[C.Suit(c)] and 20) or 0
+                        -- 70% chance to take a "desired" card if weight exists.
+                        if weight > 0 and math.random() < 0.7 then
+                            hand[#hand + 1] = c
+                            used[c] = true
+                        else
+                            remainingInPool[#remainingInPool + 1] = c
+                        end
                     else
-                        leftover[#leftover + 1] = c
+                        remainingInPool[#remainingInPool + 1] = c
                     end
                 end
-                if #hand < n then
-                    -- Couldn't satisfy void constraints; abandon
-                    -- this attempt.
-                    ok = false; break
+                pool = remainingInPool
+
+                -- Phase 2: Fill remaining slots for this seat.
+                local leftovers = {}
+                for _, c in ipairs(pool) do
+                    if #hand < n and not used[c] and not voids[C.Suit(c)] then
+                        hand[#hand + 1] = c
+                        used[c] = true
+                    else
+                        leftovers[#leftovers + 1] = c
+                    end
                 end
+                if #hand < n then ok = false; break end
                 deal[s] = hand
-                pool = leftover
+                pool = leftovers
             end
         end
         if ok then return deal end
     end
-    -- Fallback: shuffle once and deal without void constraints.
+
+    -- Fallback: uniform random deal ignoring voids.
     local pool = {}
     for _, c in ipairs(unseen) do
         if c ~= pinCard then pool[#pool + 1] = c end
@@ -183,9 +262,7 @@ local function sampleConsistentDeal(seat, unseen)
         else
             local n = seatHandSize(s)
             local hand = {}
-            if s == pinSeat and pinCard then
-                hand[#hand + 1] = pinCard
-            end
+            if s == pinSeat and pinCard then hand[#hand + 1] = pinCard end
             while #hand < n and idx <= #pool do
                 hand[#hand + 1] = pool[idx]
                 idx = idx + 1
@@ -195,6 +272,7 @@ local function sampleConsistentDeal(seat, unseen)
     end
     return deal
 end
+
 
 -- Estimate the "value" of playing `card` from `seat` in the current
 -- world. Simulates forward to round end using existing pickFollow
@@ -210,21 +288,46 @@ end
 --     not adversarial-optimal. Good enough at this depth.
 local function rolloutValue(seat, card, world, contract)
     local myTeam = R.TeamOf(seat)
+    -- Capture initial hands for meld detection. Reconstruct by combining
+    -- sampled remaining cards with already-played cards for each seat.
+    local initialHands = {}
+    for s = 1, 4 do
+        local h = {}
+        for _, c in ipairs(world[s] or {}) do h[#h + 1] = c end
+        for _, t in ipairs(S.s.tricks or {}) do
+            for _, p in ipairs(t.plays or {}) do
+                if p.seat == s then h[#h + 1] = p.card end
+            end
+        end
+        if S.s.trick and S.s.trick.plays then
+            for _, p in ipairs(S.s.trick.plays) do
+                if p.seat == s then h[#h + 1] = p.card end
+            end
+        end
+        initialHands[s] = h
+    end
+
     local hands = {}
     for s = 1, 4 do
         local out = {}
         for _, c in ipairs(world[s] or {}) do out[#out + 1] = c end
         hands[s] = out
     end
-    local trick = {
+
+    local simTricks = {}
+    -- Load already completed tricks.
+    for _, t in ipairs(S.s.tricks or {}) do simTricks[#simTricks + 1] = t end
+
+    local currentTrick = {
         leadSuit = (S.s.trick and S.s.trick.leadSuit) or nil,
         plays = {},
     }
     if S.s.trick and S.s.trick.plays then
         for _, p in ipairs(S.s.trick.plays) do
-            trick.plays[#trick.plays + 1] = { seat = p.seat, card = p.card }
+            currentTrick.plays[#currentTrick.plays + 1] = { seat = p.seat, card = p.card }
         end
     end
+
     -- Apply our candidate card.
     local function removeCard(arr, c)
         for i, x in ipairs(arr) do
@@ -232,35 +335,21 @@ local function rolloutValue(seat, card, world, contract)
         end
     end
     removeCard(hands[seat], card)
-    if #trick.plays == 0 then trick.leadSuit = C.Suit(card) end
-    trick.plays[#trick.plays + 1] = { seat = seat, card = card }
+    if #currentTrick.plays == 0 then currentTrick.leadSuit = C.Suit(card) end
+    currentTrick.plays[#currentTrick.plays + 1] = { seat = seat, card = card }
 
-    local pointsByTeam = { A = 0, B = 0 }
-    -- Sum already-earned trick points first.
-    for _, t in ipairs(S.s.tricks or {}) do
-        local tw = t.winner
-        if tw then
-            pointsByTeam[R.TeamOf(tw)] = pointsByTeam[R.TeamOf(tw)]
-                                        + R.TrickPoints(t, contract)
-        end
-    end
-
-    -- Helper: pick a heuristic card for `seat` given current trick.
-    local function heuristicPick(s)
-        -- Build legal-plays list.
+    -- Helper: pick a card using pro-level heuristics (Advanced-mirror).
+    local function heuristicPick(s, trick)
         local hand = hands[s]
         local legal = {}
         for _, c in ipairs(hand) do
-            local ok = R.IsLegalPlay(c, hand, trick, contract, s)
-            if ok then legal[#legal + 1] = c end
+            if R.IsLegalPlay(c, hand, trick, contract, s) then
+                legal[#legal + 1] = c
+            end
         end
         if #legal == 0 then return nil end
         if #legal == 1 then return legal[1] end
-        -- Use a cheap heuristic: if we'd win the trick, take the
-        -- lowest winner; else if partner is winning, dump low; else
-        -- lowest legal. This is roughly what Bot.pickFollow does
-        -- without M3lm/Fzloky overlays — keeps the rollout fast and
-        -- deterministic.
+
         local function lowestRank(cards)
             local b, br = cards[1], math.huge
             for _, c in ipairs(cards) do
@@ -269,174 +358,134 @@ local function rolloutValue(seat, card, world, contract)
             end
             return b
         end
-        local function wouldWin(c)
-            local tp = { leadSuit = trick.leadSuit, plays = {} }
-            for _, p in ipairs(trick.plays) do tp.plays[#tp.plays + 1] = p end
-            tp.plays[#tp.plays + 1] = { seat = s, card = c }
-            return R.CurrentTrickWinner(tp, contract) == s
+        local function highestRank(cards)
+            local b, br = cards[1], -1
+            for _, c in ipairs(cards) do
+                local r = C.TrickRank(c, contract)
+                if r > br then b, br = c, r end
+            end
+            return b
         end
-        if #trick.plays > 0 then
-            local cur = R.CurrentTrickWinner(trick, contract)
-            local pos = #trick.plays + 1
-            local lastSeat = (pos == 4)
-            -- 13th-bot-audit fix (Codex+Gemini+ISMCTS agent): partner
-            -- winning + we're closing the trick = SMOTHER. Dump A or
-            -- T of the lead suit onto partner's pile (free points).
-            -- Without this, rollout massively under-values smother
-            -- candidates and Saudi Master misranks plays that set up
-            -- partner sweeps.
-            if cur and R.Partner(s) == cur then
-                if lastSeat and trick.leadSuit and (
-                    contract.type ~= K.BID_HOKM
-                    or trick.leadSuit ~= contract.trump
-                ) then
-                    local lead = trick.leadSuit
-                    local highInSuit = nil
-                    local highRank = -1
+
+        local pos = #trick.plays + 1
+        if pos > 1 then
+            local curWinner = R.CurrentTrickWinner(trick, contract)
+            local partnerWinning = curWinner and R.Partner(s) == curWinner
+            if partnerWinning then
+                -- Smother logic (from Bot.lua).
+                if trick.leadSuit and (contract.type ~= K.BID_HOKM or trick.leadSuit ~= contract.trump) then
                     for _, c in ipairs(legal) do
                         local r = C.Rank(c)
-                        if C.Suit(c) == lead and (r == "A" or r == "T") then
-                            local tr = C.TrickRank(c, contract)
-                            if not highInSuit or tr < highRank then
-                                highInSuit = c
-                                highRank = tr
-                            end
+                        if C.Suit(c) == trick.leadSuit and (r == "A" or r == "T") then
+                            return c
                         end
                     end
-                    if highInSuit then return highInSuit end
                 end
                 return lowestRank(legal)
             end
+
             local winners = {}
             for _, c in ipairs(legal) do
-                if wouldWin(c) then winners[#winners + 1] = c end
+                local tp = { leadSuit = trick.leadSuit, plays = {} }
+                for _, p in ipairs(trick.plays) do tp.plays[#tp.plays + 1] = p end
+                tp.plays[#tp.plays + 1] = { seat = s, card = c }
+                if R.CurrentTrickWinner(tp, contract) == s then
+                    winners[#winners + 1] = c
+                end
             end
+
             if #winners > 0 then
-                -- 13th-bot-audit fix: position-3-high. Force the 4th
-                -- seat to overcut with a higher card, increasing the
-                -- chance the trick stays with us. Live pickFollow
-                -- already does this; previous heuristicPick always
-                -- played lowest winner, distorting rollouts.
-                if pos == 3 then
-                    local best, bestRank = winners[1], -1
-                    for _, c in ipairs(winners) do
-                        local r = C.TrickRank(c, contract)
-                        if r > bestRank then best, bestRank = c, r end
-                    end
-                    -- EXCEPTION: forced ruff with only-trump winners —
-                    -- ruff with the LOWEST trump to save the J / 9.
-                    if contract.type == K.BID_HOKM and contract.trump then
-                        local trumpWinners = {}
+                if pos == 2 then
+                    -- Ducking logic: second hand low if not unbeatable.
+                    local unbeatable = false
+                    if contract.type == K.BID_SUN then
                         for _, c in ipairs(winners) do
-                            if C.IsTrump(c, contract) then
-                                trumpWinners[#trumpWinners + 1] = c
+                            if C.Rank(c) == "A" and C.Suit(c) == trick.leadSuit then
+                                unbeatable = true; break
                             end
                         end
-                        if #trumpWinners > 0 and #trumpWinners == #winners then
-                            return lowestRank(trumpWinners)
-                        end
                     end
-                    return best
+                    if unbeatable then return highestRank(winners) end
+                    local nonWinners = {}
+                    for _, c in ipairs(legal) do
+                        local win = false
+                        for _, w in ipairs(winners) do if w == c then win = true; break end end
+                        if not win then nonWinners[#nonWinners + 1] = c end
+                    end
+                    if #nonWinners > 0 then return lowestRank(nonWinners) end
+                elseif pos == 3 then
+                    -- Third hand high (commit).
+                    return highestRank(winners)
                 end
                 return lowestRank(winners)
             end
-            -- Can't win. 13th-bot-audit fix: trump preservation. If
-            -- not last seat AND we have non-trump options, discard
-            -- the lowest non-trump rather than burning a trump.
-            if not lastSeat and contract.type == K.BID_HOKM
-               and contract.trump then
-                local discardable = {}
-                for _, c in ipairs(legal) do
-                    if not C.IsTrump(c, contract) then
-                        discardable[#discardable + 1] = c
-                    end
-                end
-                if #discardable > 0 then return lowestRank(discardable) end
-            end
             return lowestRank(legal)
         end
-        -- Lead. Heuristic-mirror of Bot.pickLead's defender path:
-        --   1. Bidder team in Hokm: lead highest trump (draw out).
-        --   2. Otherwise: lead the lowest non-trump from our longest
-        --      non-trump suit, or fall through to lowest legal.
-        local bidder = contract.bidder
-        local myTeamRoll = R.TeamOf(s)
-        local bidderTeamRoll = R.TeamOf(bidder)
-        if contract.type == K.BID_HOKM and myTeamRoll == bidderTeamRoll then
-            local bestT, bestR = nil, -1
-            for _, c in ipairs(legal) do
-                if C.IsTrump(c, contract) then
-                    local r = C.TrickRank(c, contract)
-                    if r > bestR then bestT, bestR = c, r end
-                end
-            end
-            if bestT then return bestT end
+
+        -- Lead heuristics (Advanced-mirror).
+        local bidderTeam = R.TeamOf(contract.bidder)
+        if contract.type == K.BID_HOKM and R.TeamOf(s) == bidderTeam then
+            local t = highestRank(legal) -- placeholder: lead high trump
+            if C.IsTrump(t, contract) then return t end
         end
         local nonTrumps = {}
-        local suitCount = { S = 0, H = 0, D = 0, C = 0 }
         for _, c in ipairs(legal) do
-            if not C.IsTrump(c, contract) then
-                nonTrumps[#nonTrumps + 1] = c
-                suitCount[C.Suit(c)] = suitCount[C.Suit(c)] + 1
-            end
+            if not C.IsTrump(c, contract) then nonTrumps[#nonTrumps + 1] = c end
         end
-        if #nonTrumps > 0 then
-            local longest, longestN = nil, 0
-            for _, suit in ipairs({ "S", "H", "D", "C" }) do
-                local n = suitCount[suit] or 0
-                if n > longestN then longest, longestN = suit, n end
-            end
-            local fromLongest = {}
-            for _, c in ipairs(nonTrumps) do
-                if C.Suit(c) == longest then
-                    fromLongest[#fromLongest + 1] = c
-                end
-            end
-            if #fromLongest > 0 then return lowestRank(fromLongest) end
-            return lowestRank(nonTrumps)
-        end
+        if #nonTrumps > 0 then return lowestRank(nonTrumps) end
         return lowestRank(legal)
     end
 
-    -- Play out the rest of the hand. Each iteration completes
-    -- one play; after every 4 plays we resolve the trick.
-    local safety = 64
-    while safety > 0 do
-        safety = safety - 1
-        if #trick.plays == 4 then
-            local winner = R.CurrentTrickWinner(trick, contract)
+    -- Play out the rest of the hand.
+    while #simTricks < 8 do
+        if #currentTrick.plays == 4 then
+            local winner = R.CurrentTrickWinner(currentTrick, contract)
             if not winner then break end
-            local pts = R.TrickPoints(trick, contract)
-            pointsByTeam[R.TeamOf(winner)] = pointsByTeam[R.TeamOf(winner)] + pts
-            -- Check end-of-round: if every hand is empty we're done.
-            local anyLeft = false
-            for s = 1, 4 do
-                if #hands[s] > 0 then anyLeft = true; break end
-            end
-            if not anyLeft then
-                -- Last-trick bonus to the trick winner.
-                pointsByTeam[R.TeamOf(winner)] = pointsByTeam[R.TeamOf(winner)]
-                                                + K.LAST_TRICK_BONUS
-                break
-            end
-            trick = { leadSuit = nil, plays = {} }
-            -- Winner leads next.
+            currentTrick.winner = winner
+            simTricks[#simTricks + 1] = currentTrick
+            if #simTricks == 8 then break end
+            currentTrick = { leadSuit = nil, plays = {} }
             local nextSeat = winner
-            local pick = heuristicPick(nextSeat)
+            local pick = heuristicPick(nextSeat, currentTrick)
             if not pick then break end
             removeCard(hands[nextSeat], pick)
-            trick.leadSuit = C.Suit(pick)
-            trick.plays[#trick.plays + 1] = { seat = nextSeat, card = pick }
+            currentTrick.leadSuit = C.Suit(pick)
+            currentTrick.plays[1] = { seat = nextSeat, card = pick }
         else
-            local nextSeat = (trick.plays[#trick.plays].seat % 4) + 1
-            local pick = heuristicPick(nextSeat)
+            local prev = currentTrick.plays[#currentTrick.plays]
+            local nextSeat = (prev.seat % 4) + 1
+            local pick = heuristicPick(nextSeat, currentTrick)
             if not pick then break end
             removeCard(hands[nextSeat], pick)
-            trick.plays[#trick.plays + 1] = { seat = nextSeat, card = pick }
+            currentTrick.plays[#currentTrick.plays + 1] = { seat = nextSeat, card = pick }
         end
     end
 
-    return pointsByTeam[myTeam] or 0
+    -- Accurate round scoring including melds and make/fail cliffs.
+    local meldsByTeam = { A = {}, B = {} }
+    for s = 1, 4 do
+        local team = R.TeamOf(s)
+        local m = R.DetectMelds(initialHands[s], contract)
+        for _, meld in ipairs(m) do
+            meld.declaredBy = s
+            table.insert(meldsByTeam[team], meld)
+        end
+    end
+
+    local result = R.ScoreRound(simTricks, contract, meldsByTeam)
+    -- 26th-audit fix (Codex Saudi Master critical #1 variant):
+    -- return TEAM DIFF (us - them) rather than just our raw points.
+    -- This puts both candidate-A "we make by 5" (+162) and candidate-
+    -- B "we fail by 2" (-162) onto a single ranking axis where the
+    -- contract-outcome cliff dominates raw-point fluctuation.
+    -- Gahwa terminal: huge boost when our team wins the match.
+    local oppTeam = (myTeam == "A") and "B" or "A"
+    local diff = (result.raw[myTeam] or 0) - (result.raw[oppTeam] or 0)
+    if result.gahwaWonGame and result.gahwaWinner then
+        if result.gahwaWinner == myTeam then diff = diff + 10000
+        else diff = diff - 10000 end
+    end
+    return diff
 end
 
 -- Public entry point: pick the best play using ISMCTS-flavoured
@@ -461,7 +510,13 @@ function BM.PickPlay(seat)
     local scores = {}
     for _, c in ipairs(legal) do scores[c] = 0 end
 
-    for w = 1, NUM_WORLDS do
+    -- Dynamic world count: scale up for end-game accuracy.
+    local numTricks = #(S.s.tricks or {})
+    local numWorlds = BASE_NUM_WORLDS
+    if numTricks >= 6 then numWorlds = 100
+    elseif numTricks >= 4 then numWorlds = 60 end
+
+    for w = 1, numWorlds do
         local world = sampleConsistentDeal(seat, unseen)
         if world then
             for _, card in ipairs(legal) do

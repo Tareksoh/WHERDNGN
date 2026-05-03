@@ -662,7 +662,7 @@ end
 -- same contract), but it should at least not lose. We assert that the
 -- M3lm side's per-round point total is in a sensible range.
 local NUM_ROUNDS = 30
-local basicSum, m3lmSum = 0, 0
+local basicSum, m3lmSum, masterSum = 0, 0, 0
 local nilCount = 0
 
 for i = 1, NUM_ROUNDS do
@@ -679,19 +679,24 @@ for i = 1, NUM_ROUNDS do
     local r2 = playOneRound(hands, contract, leader)
     m3lmSum = m3lmSum + (r2.teamPoints[R.TeamOf(contract.bidder)] or 0)
 
+    setTier("master")
+    local r3 = playOneRound(hands, contract, leader)
+    masterSum = masterSum + (r3.teamPoints[R.TeamOf(contract.bidder)] or 0)
+
     -- Sanity: every round should produce a valid result.
-    if r1.teamPoints == nil or r2.teamPoints == nil then
+    if r1.teamPoints == nil or r2.teamPoints == nil or r3.teamPoints == nil then
         nilCount = nilCount + 1
     end
 end
 
 assertEq(nilCount, 0, "Tournament: all rounds produced a valid result")
--- Both tiers should accumulate sane totals (>0; bidder team usually
+-- All tiers should accumulate sane totals (>0; bidder team usually
 -- captures at least some tricks).
 assertTrue(basicSum > 0, ("Tournament: Basic bidder-team total > 0 (got %d)"):format(basicSum))
 assertTrue(m3lmSum > 0,  ("Tournament: M3lm bidder-team total > 0 (got %d)"):format(m3lmSum))
-print(("    [info] Basic bidder-team avg/round = %.1f, M3lm = %.1f over %d rounds")
-      :format(basicSum / NUM_ROUNDS, m3lmSum / NUM_ROUNDS, NUM_ROUNDS))
+assertTrue(masterSum > 0, ("Tournament: Master bidder-team total > 0 (got %d)"):format(masterSum))
+print(("    [info] Basic avg = %.1f, M3lm = %.1f, Master = %.1f over %d rounds")
+      :format(basicSum / NUM_ROUNDS, m3lmSum / NUM_ROUNDS, masterSum / NUM_ROUNDS, NUM_ROUNDS))
 
 -- The strict-superset cascade implies: M3lm includes all Advanced
 -- heuristics, which include Basic. So M3lm should never play strictly

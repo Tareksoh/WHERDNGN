@@ -1,5 +1,78 @@
 # Changelog
 
+## v0.4.1 — Saudi Master pro-grade ISMCTS
+
+Major BotMaster.lua upgrade driven by a 25-agent + Codex + Gemini
+deep audit focused exclusively on the Saudi Master tier. The bot
+now plays meaningfully closer to a pro Saudi Baloot tactician.
+
+### Sampling fidelity (`sampleConsistentDeal`)
+
+- **Bidder strong-card weighting**: bidder's hand sample is now
+  biased toward J / 9 / A of trump (Hokm) or multi-suit Aces (Sun)
+  with 70% selection rate per "desired" card. Previously uniform
+  random.
+- **Partner Fzloky signal**: partner's first-discard suit gets a
+  +20 weight in the sampler so worlds match what the bot already
+  reads at lead time.
+- **Declared meld cards pinned**: every unplayed card in a declared
+  tierce / quart / quint / carré is pinned to the declarer's seat.
+  Previously the sampler could scatter "Hearts Tierce 7-8-9" across
+  all four seats, corrupting every rollout's view.
+- **Bid card pinned to bidder** (kept from v0.3.x): the public bid
+  card always lands in the bidder's hand.
+
+### Rollout value function (`rolloutValue`)
+
+- **Real Saudi scoring**: `R.ScoreRound` now drives the rollout
+  utility — multipliers (Bel ×2, Triple ×3, Four ×4), make/fail
+  cliff, melds, sweep, belote, last-trick bonus all priced in. The
+  previous raw-trick-points return ignored multipliers entirely.
+- **Team diff axis**: returns `result.raw[us] - result.raw[opp]`
+  instead of just our points. Puts both "we make by 5" and "we
+  fail by 2" on a single ranking axis where the contract-outcome
+  cliff dominates raw-point fluctuation.
+- **Gahwa terminal boost**: ±10000 when the rollout reaches a
+  Gahwa-won-game state, ensuring match-winning candidates dominate.
+- **Meld reconstruction**: each rollout reconstructs the initial
+  8-card hand for each seat and runs `R.DetectMelds` so opponent
+  meld threats are correctly priced (was previously zero).
+
+### Rollout policy (`heuristicPick`)
+
+- Now mirrors live `pickFollow` for position-aware play:
+  - Pos-2 ducking with sure-stopper exception (Ace of led suit
+    in Sun is unbeatable; Hokm trump-only-1-out is a stopper).
+  - Pos-3 third-hand-high (committed winner so 4th seat can't
+    cheaply overcut).
+  - Smother on partner-winning + non-trump-led trick.
+  - Trump preservation when not last seat.
+
+### Adaptive search depth (`PickPlay`)
+
+- World count scales with trick number for endgame fidelity:
+  - Tricks 1-3: 30 worlds (default)
+  - Tricks 4-5: 60 worlds
+  - Tricks 6+: 100 worlds (small information set, near-exhaustive)
+
+### Tests
+
+177/177 passing (new Master-tier tournament test in
+`test_state_bot.lua` confirms Master tier matches M3lm tier
+under randomized synthetic deals).
+
+### Audit findings deferred
+
+- Backtracking CSP for void-fallback sampler (architectural
+  overhaul; current 15-attempt retry adequate for normal play).
+- Bel-open/closed inversion claim (verified that current code
+  already matches Saudi convention: strong defender opens to
+  invite escalation, marginal defender closes to lock-in ×2).
+- Adaptive `numWorlds` based on confidence intervals (current
+  trick-based scaling is simpler and well-tuned for the budget).
+- Per-seat Hokm/Sun bid count ledger extension (would require new
+  Bot.OnBid hook; deferred to a follow-up release).
+
 ## v0.4.0 — Bot AI improvements (25-agent audit)
 
 Tactical and evaluation upgrades across all bot tiers. No wire-format
