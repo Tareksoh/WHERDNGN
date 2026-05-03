@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.1 — Classic v2 deck + royal_noir refresh
+
+Two cosmetic adds; no wire-protocol changes, no rule changes.
+
+- New card style `classic_v2` from David Bellot's SVG-cards (LGPL,
+  via Huub de Beer's PNG mirror at htdebeer/SVG-cards). Pulls the
+  2x PNGs and rasterizes them to TGA at the addon's 128×192 size.
+  Pairs naturally with the Midnight felt theme — uses `back-black.png`
+  from the same source.
+- Royal Noir refresh: replaced the SVG sources with the user-supplied
+  zip and re-rendered the 33 TGAs. Same `royal_noir` style name, new
+  art.
+
+Activation:
+
+    /baloot cards classic_v2
+    /baloot cards royal_noir
+    /baloot themes              -- shows the full list
+
 ## v0.3.0 — Visual themes (mix-and-match) + deep audit hardening
 
 Wire-format compatible additive release. v0.2.x clients can play with

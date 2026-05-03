@@ -73,6 +73,12 @@ local CARD_STYLES = {
         cardBack     = { 0.10, 0.24, 0.50, 1.00 },
         cardBackEdge = { 0.04, 0.10, 0.22, 1.00 },
     },
+    classic_v2 = {
+        name         = "Classic v2",       -- htdebeer SVG-cards (LGPL)
+        texSubdir    = "classic_v2\\",     -- cards/classic_v2/<card>.tga
+        cardBack     = { 0.06, 0.06, 0.08, 1.00 },   -- charcoal back body
+        cardBackEdge = { 0.50, 0.50, 0.55, 1.00 },   -- silver edge
+    },
     burgundy = {
         name         = "Burgundy",         -- SVGCards Accessible/Horizontal
         texSubdir    = "burgundy\\",       -- cards/burgundy/<card>.tga

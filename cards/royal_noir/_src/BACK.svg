@@ -1,57 +1,46 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 1050" width="750" height="1050">
 <defs>
-  <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0%" stop-color="#ffe28a"></stop>
-    <stop offset="50%" stop-color="#f4c34a"></stop>
-    <stop offset="100%" stop-color="#c89320"></stop>
-  </linearGradient>
-  <linearGradient id="goldGradFlip" x1="0" y1="1" x2="0" y2="0">
-    <stop offset="0%" stop-color="#ffe28a"></stop>
-    <stop offset="50%" stop-color="#f4c34a"></stop>
-    <stop offset="100%" stop-color="#c89320"></stop>
-  </linearGradient>
-  <linearGradient id="goldDark" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0%" stop-color="#c89320"></stop>
-    <stop offset="100%" stop-color="#8a5e10"></stop>
-  </linearGradient>
-  <radialGradient id="bgVignette" cx="50%" cy="50%" r="70%">
-    <stop offset="0%" stop-color="#1a1820"></stop>
-    <stop offset="100%" stop-color="#0f0d12"></stop>
-  </radialGradient>
-</defs>
-<rect width="750" height="1050" fill="#0f0d12"></rect>
-<rect x="30" y="30" width="690" height="990" rx="40" ry="40" fill="#1a1820" stroke="#f4c34a" stroke-width="2" opacity="0.5"></rect>
+<linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0%" stop-color="#ffe893"></stop>
+  <stop offset="50%" stop-color="#f4cc4e"></stop>
+  <stop offset="100%" stop-color="#cf9a22"></stop>
+</linearGradient>
+<linearGradient id="goldDark" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0%" stop-color="#cf9a22"></stop>
+  <stop offset="100%" stop-color="#7a5810"></stop>
+</linearGradient>
+<radialGradient id="bgVignette" cx="50%" cy="50%" r="70%">
+  <stop offset="0%" stop-color="#1a1820"></stop>
+  <stop offset="100%" stop-color="#0a080d"></stop>
+</radialGradient></defs>
+<rect width="750" height="1050" fill="url(#bgVignette)"></rect>
+<rect x="20" y="20" width="710" height="1010" rx="46" ry="46" fill="#15131a" stroke="url(#goldGrad)" stroke-width="3"></rect>
+<rect x="38" y="38" width="674" height="974" rx="34" ry="34" fill="none" stroke="url(#goldDark)" stroke-width="1.5"></rect>
 <g transform="translate(375 525)">
+  <circle r="320" fill="none" stroke="url(#goldGrad)" stroke-width="2"></circle>
+  <circle r="290" fill="none" stroke="url(#goldDark)" stroke-width="1" stroke-dasharray="3 6"></circle>
+  <circle r="260" fill="none" stroke="url(#goldGrad)" stroke-width="1.5"></circle>
   
-  <circle r="280" fill="none" stroke="#f4c34a" stroke-width="1" opacity="0.35"></circle>
-  <circle r="240" fill="none" stroke="#f4c34a" stroke-width="1.5" opacity="0.5"></circle>
+  <g fill="none" stroke="url(#goldGrad)" stroke-width="2">
+    <g transform="rotate(0)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(30)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(60)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(90)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(120)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(150)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(180)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(210)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(240)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(270)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(300)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g><g transform="rotate(330)"><path d="M 0 -250 Q 30 -180 0 -110 Q -30 -180 0 -250 Z"></path></g>
+  </g>
+  
+  <g fill="none" stroke="url(#goldGrad)" stroke-width="2">
+    <g transform="rotate(0)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(45)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(90)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(135)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(180)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(225)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(270)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g><g transform="rotate(315)"><path d="M 0 -150 L 20 -50 L 0 0 L -20 -50 Z"></path></g>
+  </g>
+  <circle r="80" fill="#15131a" stroke="url(#goldGrad)" stroke-width="2"></circle>
+  <circle r="70" fill="none" stroke="url(#goldDark)" stroke-width="1"></circle>
   
   <g fill="url(#goldGrad)">
-    <g transform="translate(0 -200)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-    <g transform="translate(0 200)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-    <g transform="translate(-200 0)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-    <g transform="translate(200 0)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-  </g>
-  <g fill="url(#goldDark)">
-    <g transform="translate(0 -200)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
-    <g transform="translate(0 200)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
-    <g transform="translate(-200 0)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
-    <g transform="translate(200 0)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
+    <g transform="translate(0 -40) scale(0.5)"><path d="M 0 -55 C -22 -22 -55 -2 -55 28 C -55 50 -34 56 -16 50 C -8 47 -3 42 -2 34 L -12 56 L 12 56 L 2 34 C 3 42 8 47 16 50 C 34 56 55 50 55 28 C 55 -2 22 -22 0 -55 Z"></path></g>
+    <g transform="translate(0 40) scale(0.5)"><path d="M 0 55 C -12 38 -55 14 -55 -16 C -55 -42 -34 -55 -18 -55 C -8 -55 -2 -46 0 -38 C 2 -46 8 -55 18 -55 C 34 -55 55 -42 55 -16 C 55 14 12 38 0 55 Z"></path></g>
+    <g transform="translate(-40 0) scale(0.5)"><path d="M -22 10 C -44 10 -54 -8 -44 -24 C -32 -42 -8 -34 -6 -18 C -14 -28 -22 -36 -22 -46 C -22 -58 -10 -64 0 -64 C 10 -64 22 -58 22 -46 C 22 -36 14 -28 6 -18 C 8 -34 32 -42 44 -24 C 54 -8 44 10 22 10 C 12 10 4 4 0 -2 L 10 36 L -10 36 L 0 -2 C -4 4 -12 10 -22 10 Z"></path></g>
+    <g transform="translate(40 0) scale(0.5)"><path d="M 0 -55 L 38 0 L 0 55 L -38 0 Z"></path></g>
   </g>
   
-  <g fill="#f4c34a" opacity="0.5">
-    <g transform="translate(141 -141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-    <g transform="translate(-141 -141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-    <g transform="translate(141 141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-    <g transform="translate(-141 141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
-  </g>
-  
-  <circle r="120" fill="#0f0d12" stroke="#f4c34a" stroke-width="2"></circle>
-  <circle r="100" fill="none" stroke="#f4c34a" stroke-width="1" opacity="0.5"></circle>
-  <g transform="scale(1.5)">
-    <path d="M 0 -50 L 30 -10 L 50 25 L 25 45 L 8 38 L 0 30 L -8 38 L -25 45 L -50 25 L -30 -10 Z" fill="url(#goldGrad)"></path>
-    <path d="M 0 -50 L 0 30 L -8 38 L -50 25 L -30 -10 Z" fill="url(#goldDark)"></path>
-    <path d="M -8 38 L -14 50 L 14 50 L 8 38 L 0 30 Z" fill="url(#goldGrad)"></path>
+  <g fill="url(#goldGrad)" stroke="#7a5810" stroke-width="1.5">
+    <circle cx="0" cy="-320" r="8"></circle><circle cx="0" cy="320" r="8"></circle>
+    <circle cx="-320" cy="0" r="8"></circle><circle cx="320" cy="0" r="8"></circle>
   </g>
 </g>
 </svg>
