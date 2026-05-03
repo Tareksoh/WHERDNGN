@@ -92,7 +92,14 @@ K.MELD_SEQ3        = 20
 K.MELD_SEQ4        = 50
 K.MELD_SEQ5        = 100
 K.MELD_CARRE_OTHER = 100   -- T, K, Q, J (any contract type)
-K.MELD_CARRE_A_SUN = 400   -- "Four Hundred" (الأربع مئة) — four Aces in Sun
+K.MELD_CARRE_A_SUN = 200   -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
+                           -- Stored as 200 raw so the Sun ×2 multiplier
+                           -- in R.ScoreRound brings the final raw to 400
+                           -- (= 40 gp after div10), matching the canonical
+                           -- "أربع مئة" Saudi value. Previously stored as
+                           -- 400 raw which double-counted with Sun mult
+                           -- and produced 800 raw / 80 gp — twice the
+                           -- intended value (Gemini scoring-audit catch).
 K.MELD_BELOTE      = 20    -- K+Q of trump in same hand, Hokm only
 
 K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped

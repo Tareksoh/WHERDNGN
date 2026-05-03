@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.4.3 — Saudi rule corrections (10-agent scoring audit)
+
+Three rule-compliance fixes from a 10-agent audit (Codex + Gemini + 8
+Claude angle agents) that cross-checked the scoring algorithm against
+seven canonical Saudi Baloot PDF references:
+- نظام التسجيل في البلوت (Scoring System)
+- نظام الدبل في لعبة البلوت (Doubling System)
+- نظام اللعب في البلوت (Play System)
+- ماهو البلوت في لعبة البلوت (Bloot Definition)
+- الثالث (Triple-on-Ace)
+- سر الاحتراف 1 + 3 (Pro Secrets)
+
+The audit identified ~7 issues; the user authorised three to fix and
+deferred the rest pending interpretation. Re-confirmed-correct: card
+values, hand totals, Bloot value (20 raw = 2 gp), Bloot cancellation,
+sequence values, Sun-no-Triple/Four/Gahwa, tie resolution, qaid
+penalty scaling under escalation (interpretation b).
+
+### Fixed
+
+- **Carre-A in Sun double-counted (CRITICAL):** `K.MELD_CARRE_A_SUN`
+  was 400 raw, then multiplied by `MULT_SUN=2` in `R.ScoreRound` →
+  800 raw / 80 gp final. Saudi rule says "أربع مئة" = 400 (final
+  raw, post-Sun-mult). Constant now 200 raw so the Sun ×2 brings the
+  final to 400 raw / 40 gp, matching canon.
+
+- **Qaid melds nullified loser's projects (HIGH):** Both
+  `HostResolveTakweesh` and the invalid-SWA path in `HostResolveSWA`
+  zeroed out the loser's declared melds, contradicting Saudi rule
+  "مشروعي لي ومشروعك لك" (each team keeps their own melds during a
+  qaid). Both teams now retain their own declared melds; the qaid
+  penalty (handTotal × multiplier) is awarded to the winner
+  separately.
+
+- **Sun Bel eligibility too permissive (HIGH):** Code enabled Sun Bel
+  whenever EITHER team had cumulative ≥ 101. Saudi rule "ويكون الدبل
+  للمتأخر فقط وهو الذي لم يتجاوز عدده 100" requires the doubler to
+  be the BEHIND team, AND someone to have crossed 100. New helper
+  `N._SunBelAllowed(bidderSeat)` enforces: bidder team ≥ 101 AND
+  defender team < 101. Applied to all 5 Sun-Bel-gate sites
+  (post-bid contract, preempt finalize, post-preempt-claim, host
+  bot path, local preempt action).
+
+### Researched (deferred)
+
+- **Sun "no abnat" rule:** A research agent confirmed the addon's
+  `div10` rounding is canonically correct for Hokm but produces
+  ±1 game-point errors for Sun at certain card-point boundaries
+  (totals ending in 3 or 6). Canonical Sun rule is "round to nearest
+  10 preserving units-5, then ÷5", which differs from the current
+  "× MULT_SUN(2), then round-half-down ÷10". The fix would require
+  refactoring the rounding pipeline to apply card-point rounding
+  BEFORE the multiplier — deferred pending design call.
+
+### Confirmed correct (no change)
+
+- Card point values (J/9 in trump, J in non-trump)
+- Hand totals (162 Hokm, 130 Sun)
+- Bloot value (20 raw → 2 gp), cancellation, no-doubling
+- Sun phase machine blocks Triple/Four/Gahwa
+- Tie resolution (strict bidder>defender, doubled-tie inversion)
+- Sequence values (SEQ3=20, SEQ4=50, SEQ5=100)
+- Qaid penalty scaled by escalation (interpretation b per user)
+
+Tests: 177 passed, 0 failed.
+
 ## v0.4.2 — Round-end banner clarity (player feedback)
 
 Two cosmetic fixes only; no rule / wire / scoring changes.

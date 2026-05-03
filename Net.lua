@@ -54,6 +54,27 @@ end
 N.Broadcast = broadcast
 N.Whisper   = whisper
 
+-- 14th-audit helper (scoring-vs-rules audit). Saudi rule for Sun Bel
+-- (per "نظام الدبل في لعبة البلوت"):
+--   "ولايحق للاعب ان يدبل خصمة الا بعد ان يتجاوز المئة اي 101"
+--   "ويكون الدبل للمتأخر فقط وهو الذي لم يتجاوز عدده 100"
+-- ⇒ Sun Bel is allowed only when:
+--   (a) the BIDDER team's cumulative has crossed 100 (>= 101), AND
+--   (b) the DEFENDER team's cumulative is still BELOW 101 (the
+--       "behind" team that gets to double).
+-- If both teams are below 101 (no one crossed yet) OR both are
+-- above 100 (no one is "behind"), Sun Bel is silently skipped.
+-- Hokm has no such gate (Bel/Triple/Four open from any score).
+function N._SunBelAllowed(bidderSeat)
+    if not bidderSeat then return false end
+    local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+    local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+    local bidderTeam = R.TeamOf(bidderSeat)
+    local cumBidder   = (bidderTeam == "A") and cumA or cumB
+    local cumDefender = (bidderTeam == "A") and cumB or cumA
+    return cumBidder >= 101 and cumDefender < 101
+end
+
 -- High-level senders. These are called by State / UI; they format and
 -- broadcast or whisper. Most are host-only invocations.
 
@@ -871,9 +892,12 @@ function N._OnPreempt(sender, seat)
         S.s.pendingPreemptContract = nil
         S.ApplyContract(seat, K.BID_SUN, nil)
         N.SendContract(seat, K.BID_SUN, "")
-        local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
-        local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
-        if cumA < 101 and cumB < 101 then
+        -- 14th-audit fix (scoring vs rules): Sun Bel is restricted to
+        -- the BEHIND team (defender side still < 101) AND requires the
+        -- bidder team to have crossed 100. Was previously enabled if
+        -- EITHER team was past 100, which let a leading defender (who
+        -- shouldn't be doubling) call Bel.
+        if not N._SunBelAllowed(seat) then
             S.s.belPending = nil
             N.HostFinishDeal()
             return
@@ -935,9 +959,8 @@ function N._FinalizePreempt()
     S.s.preemptEligible = nil
     S.ApplyContract(pc.bidder, pc.type, pc.trump)
     N.SendContract(pc.bidder, pc.type, pc.trump or "")
-    local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
-    local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
-    if pc.type == K.BID_SUN and cumA < 101 and cumB < 101 then
+    -- 14th-audit fix: Sun Bel only enabled for the behind defender.
+    if pc.type == K.BID_SUN and not N._SunBelAllowed(pc.bidder) then
         S.s.belPending = nil
         N.HostFinishDeal()
         return
@@ -1161,9 +1184,8 @@ function N._HostStepBid()
         -- entirely and go straight to play. Triple/Four/Gahwa never
         -- exist for Sun.
         if payload.type == K.BID_SUN then
-            local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
-            local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
-            if cumA < 101 and cumB < 101 then
+            -- 14th-audit fix: Sun Bel restricted to behind defender.
+            if not N._SunBelAllowed(payload.bidder) then
                 S.s.belPending = nil
                 N.HostFinishDeal()
                 return
@@ -1473,9 +1495,8 @@ function N.LocalPreempt()
         S.s.pendingPreemptContract = nil
         S.ApplyContract(S.s.localSeat, K.BID_SUN, nil)
         N.SendContract(S.s.localSeat, K.BID_SUN, "")
-        local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
-        local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
-        if cumA < 101 and cumB < 101 then
+        -- 14th-audit fix: Sun Bel only enabled for behind defender.
+        if not N._SunBelAllowed(S.s.localSeat) then
             S.s.belPending = nil
             N.HostFinishDeal()
             return
@@ -1718,10 +1739,15 @@ function N.HostResolveTakweesh(callerSeat)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
     local cardA = (winnerTeam == "A") and handTotal or 0
     local cardB = (winnerTeam == "B") and handTotal or 0
-    -- Per the Saudi Qayd rule: winner takes ONLY their own melds.
-    -- The loser's melds STAY WITH THEM (don't transfer to winner).
-    local mpA = (winnerTeam == "A") and meldA or 0
-    local mpB = (winnerTeam == "B") and meldB or 0
+    -- Saudi Qayd rule (per "نظام التسجيل في البلوت"): "مشروعي لي
+    -- ومشروعك لك" — both teams KEEP their OWN declared melds during
+    -- a Qaid penalty. The penalty itself (handTotal × mult) goes to
+    -- the winner; melds are NOT transferred or nullified.
+    -- 14th-audit fix (Codex+Gemini scoring audit): previously the
+    -- LOSER's meld was zeroed out, contradicting the rule's "your
+    -- meld is yours regardless of the qaid outcome."
+    local mpA = meldA
+    local mpB = meldB
 
     -- Belote (Hokm only, played cards only — Saudi rule rb3haa).
     -- Cancelled when the K+Q holder also declared a ≥100 meld (per
@@ -2317,10 +2343,11 @@ function N.HostResolveSWA(callerSeat, callerHand)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         local cardA = (oppOfCaller == "A") and handTotal or 0
         local cardB = (oppOfCaller == "B") and handTotal or 0
-        -- Saudi Qayd: opp takes only their OWN melds. Offender's
-        -- melds don't transfer.
-        local mpA = (oppOfCaller == "A") and meldA or 0
-        local mpB = (oppOfCaller == "B") and meldB or 0
+        -- Saudi Qayd rule: BOTH teams keep their OWN declared melds.
+        -- The penalty (handTotal × mult) goes to the winner; melds
+        -- are NOT transferred or nullified. 14th-audit fix.
+        local mpA = meldA
+        local mpB = meldB
         -- Belote scan (played cards only — Saudi rule rb3haa).
         -- Cancelled when the K+Q holder also declared a ≥100 meld.
         local beloteOwner
@@ -3125,9 +3152,8 @@ function N.MaybeRunBot()
                                 S.ApplyContract(seat, K.BID_SUN, nil)
                                 N.SendContract(seat, K.BID_SUN, "")
                                 claimApplied = true
-                                local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
-                                local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
-                                if cumA < 101 and cumB < 101 then
+                                -- 14th-audit fix: Sun Bel restricted.
+                                if not N._SunBelAllowed(seat) then
                                     S.s.belPending = nil
                                     N.HostFinishDeal()
                                 else
