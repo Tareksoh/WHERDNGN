@@ -114,6 +114,13 @@ local FELT_THEMES = {
         centerPad    = { 0.14, 0.08, 0.05, 0.95 },
         feltTexPath  = "felt_vintage",     -- cards/felt_vintage.tga
     },
+    midnight = {
+        name         = "Midnight",
+        feltDark     = { 0.04, 0.04, 0.06, 0.97 },
+        feltLight    = { 0.08, 0.08, 0.12, 0.95 },
+        centerPad    = { 0.03, 0.03, 0.05, 0.95 },
+        feltTexPath  = "felt_midnight",    -- cards/felt_midnight.tga
+    },
 }
 B._cardStyles = CARD_STYLES   -- expose for lobby UI option list
 B._feltThemes = FELT_THEMES
