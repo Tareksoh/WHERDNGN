@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 1050" width="750" height="1050">
+<defs>
+  <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#ffe28a"></stop>
+    <stop offset="50%" stop-color="#f4c34a"></stop>
+    <stop offset="100%" stop-color="#c89320"></stop>
+  </linearGradient>
+  <linearGradient id="goldGradFlip" x1="0" y1="1" x2="0" y2="0">
+    <stop offset="0%" stop-color="#ffe28a"></stop>
+    <stop offset="50%" stop-color="#f4c34a"></stop>
+    <stop offset="100%" stop-color="#c89320"></stop>
+  </linearGradient>
+  <linearGradient id="goldDark" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#c89320"></stop>
+    <stop offset="100%" stop-color="#8a5e10"></stop>
+  </linearGradient>
+  <radialGradient id="bgVignette" cx="50%" cy="50%" r="70%">
+    <stop offset="0%" stop-color="#1a1820"></stop>
+    <stop offset="100%" stop-color="#0f0d12"></stop>
+  </radialGradient>
+</defs>
+<rect width="750" height="1050" fill="#0f0d12"></rect>
+<rect x="30" y="30" width="690" height="990" rx="40" ry="40" fill="#1a1820" stroke="#f4c34a" stroke-width="2" opacity="0.5"></rect>
+<g transform="translate(375 525)">
+  
+  <circle r="280" fill="none" stroke="#f4c34a" stroke-width="1" opacity="0.35"></circle>
+  <circle r="240" fill="none" stroke="#f4c34a" stroke-width="1.5" opacity="0.5"></circle>
+  
+  <g fill="url(#goldGrad)">
+    <g transform="translate(0 -200)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+    <g transform="translate(0 200)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+    <g transform="translate(-200 0)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+    <g transform="translate(200 0)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+  </g>
+  <g fill="url(#goldDark)">
+    <g transform="translate(0 -200)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
+    <g transform="translate(0 200)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
+    <g transform="translate(-200 0)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
+    <g transform="translate(200 0)"><path d="M 0 -50 L -35 0 L 0 50 Z"></path></g>
+  </g>
+  
+  <g fill="#f4c34a" opacity="0.5">
+    <g transform="translate(141 -141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+    <g transform="translate(-141 -141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+    <g transform="translate(141 141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+    <g transform="translate(-141 141) scale(0.6)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z"></path></g>
+  </g>
+  
+  <circle r="120" fill="#0f0d12" stroke="#f4c34a" stroke-width="2"></circle>
+  <circle r="100" fill="none" stroke="#f4c34a" stroke-width="1" opacity="0.5"></circle>
+  <g transform="scale(1.5)">
+    <path d="M 0 -50 L 30 -10 L 50 25 L 25 45 L 8 38 L 0 30 L -8 38 L -25 45 L -50 25 L -30 -10 Z" fill="url(#goldGrad)"></path>
+    <path d="M 0 -50 L 0 30 L -8 38 L -50 25 L -30 -10 Z" fill="url(#goldDark)"></path>
+    <path d="M -8 38 L -14 50 L 14 50 L 8 38 L 0 30 Z" fill="url(#goldGrad)"></path>
+  </g>
+</g>
+</svg>
