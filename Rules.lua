@@ -350,20 +350,16 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
     if not callerSeat or not hands or not contract then return false end
     if not trickState then trickState = { plays = {}, leader = callerSeat } end
 
-    -- Done: caller emptied their hand, claim succeeded.
-    if (#(hands[callerSeat] or {})) == 0 then
-        -- Caller must have NO cards left. If anyone else still holds
-        -- cards, those tricks are uncontested by caller (no claim to
-        -- win them). For a "claim the rest" assertion the caller
-        -- must literally play their last card and the rest fall.
-        return true
-    end
-
     local plays = trickState.plays or {}
     local leadSuit = trickState.leadSuit
     local leader   = trickState.leader
 
-    -- Resolve a complete trick.
+    -- Re-audit fix V14: resolve a COMPLETE trick BEFORE the
+    -- caller-empty short-circuit. Otherwise: if caller plays their
+    -- last card as the 4th play of a trick they would actually LOSE
+    -- (e.g. opponent already trumped in), `#hands[caller]==0` would
+    -- trigger before `#plays==4` and the recursion would return true
+    -- without ever calling CurrentTrickWinner — false-positive SWA.
     if #plays == 4 then
         local winner = R.CurrentTrickWinner(
             { leadSuit = leadSuit, plays = plays }, contract)
@@ -371,6 +367,12 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
         return R.IsValidSWA(callerSeat, hands, contract, {
             leader = callerSeat, leadSuit = nil, plays = {}
         })
+    end
+
+    -- Done: caller emptied their hand BETWEEN tricks (i.e. trick just
+    -- closed in their favour and no cards remain). Claim succeeded.
+    if (#(hands[callerSeat] or {})) == 0 then
+        return true
     end
 
     -- Determine next seat to play.

@@ -663,6 +663,10 @@ local function buildLobby()
     local seatLabels = { "Seat 1 (Host)", "Seat 2", "Seat 3 (Host's partner)", "Seat 4" }
     lobbyPanel.seatTexts = {}
     lobbyPanel.swapBtns  = {}
+    -- Re-audit fix V5: track the row frames so SetFeltTheme can
+    -- re-tint their backdrop (default uses COL.feltDark via setBackdrop's
+    -- bgRGBA fallback).
+    lobbyPanel.seatRows  = {}
     for i = 1, 4 do
         local row = CreateFrame("Frame", nil, lobbyPanel, "BackdropTemplate")
         -- Anchor each row to the lobby's left edge and the party panel's
@@ -673,6 +677,7 @@ local function buildLobby()
         row:SetPoint("TOPLEFT",  lobbyPanel, "TOPLEFT",  12, -76 - (i - 1) * 34)
         row:SetPoint("TOPRIGHT", partyPanel, "TOPLEFT",  -8,      -(i - 1) * 34)
         setBackdrop(row, true)
+        lobbyPanel.seatRows[i] = row
         local lbl = makeText(row, 12, "LEFT")
         lbl:SetPoint("LEFT", 8, 0)
         lbl:SetText(seatLabels[i])
@@ -2782,6 +2787,13 @@ function U.SetFeltTheme(name)
     end
     if tablePanel and tablePanel.localBar then reTintFL(tablePanel.localBar) end
     if lobbyPanel and lobbyPanel.partyPanel then reTintFL(lobbyPanel.partyPanel) end
+    -- Re-audit V5 fix: also re-tint the 4 lobby seat-rows. They use
+    -- setBackdrop's default bg (COL.feltDark) and were previously left
+    -- with a stale tint when the user switched felt while the lobby
+    -- panel was visible.
+    if lobbyPanel and lobbyPanel.seatRows then
+        for _, row in ipairs(lobbyPanel.seatRows) do reTintFD(row) end
+    end
     -- Outer rim of the main frame uses the dark default from setBackdrop.
     -- Note: the turn-glow renderer in Refresh re-derives this from
     -- COL.feltDark every tick, so we don't strictly need to touch f

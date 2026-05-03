@@ -183,6 +183,26 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                     end
                 end
             end
+            -- Re-audit fix V13: also re-arm the LOCAL T-10s pre-warn
+            -- (audio ping + UI pulse) on every client. StartLocalWarn
+            -- self-gates on whether the LOCAL seat is the one waiting,
+            -- so calling it on every client is safe — only the
+            -- relevant client actually arms a timer. Covers both the
+            -- normal turn and the escalation windows.
+            if B.Net and B.Net.StartLocalWarn then
+                local s = B.State.s
+                if s.turnKind == "bid" or s.turnKind == "play" then
+                    B.Net.StartLocalWarn(s.turnKind)
+                elseif s.phase == K.PHASE_DOUBLE then
+                    B.Net.StartLocalWarn("bel")
+                elseif s.phase == K.PHASE_TRIPLE then
+                    B.Net.StartLocalWarn("triple")
+                elseif s.phase == K.PHASE_FOUR then
+                    B.Net.StartLocalWarn("four")
+                elseif s.phase == K.PHASE_GAHWA then
+                    B.Net.StartLocalWarn("gahwa")
+                end
+            end
             if B.UI and B.UI.Refresh then B.UI.Refresh() end
         end
         return

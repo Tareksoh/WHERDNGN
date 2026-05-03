@@ -1173,10 +1173,13 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     -- Audit fix: BALOOT fanfare for AL-KABOOT (sweep) or contract
     -- failure now fires on EVERY client, not just the host. The
     -- sweep / bidderMade flags arrive via MSG_ROUND (broadcast by
-    -- the host's SendRound). Pre-v0.3.0 hosts won't supply the
-    -- flags; treat absent as no-fanfare for back-compat.
+    -- the host's SendRound). Pre-v0.3.0 hosts and Takweesh/SWA call
+    -- sites pass nil for both — treat as no-fanfare. Only fire when
+    -- we have an explicit signal (sweep set, or bidderMade==false).
+    -- (Re-audit V16/V10/V9 finding: the old `bidderMade==false`
+    -- check fired on the absent case too because nil ~= false.)
     if B.Sound and B.Sound.Cue
-       and (sweep or bidderMade == false) then
+       and (sweep ~= nil or bidderMade == false) then
         B.Sound.Cue(K.SND_BALOOT)
     end
 end

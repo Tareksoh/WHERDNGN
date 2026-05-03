@@ -233,9 +233,18 @@ function N.SendRound(addA, addB, totA, totB, sweep, bidderMade)
     -- can fire the BALOOT fanfare on AL-KABOOT or failed-contract.
     -- Previously only the host (via ApplyRoundResult on the
     -- HostScoreRoundResult struct) heard the fanfare.
-    -- Backwards-compatible: pre-v0.3.0 receivers ignore extra fields.
+    --
+    -- Three-state encoding for bidderMade ("" | "0" | "1") so the
+    -- receiver can distinguish "host didn't supply" (legacy / SWA /
+    -- Takweesh paths) from explicit "bidder failed". Without this,
+    -- pre-v0.3.0 hosts and Takweesh/SWA call sites that omit the
+    -- flag would all decode as bidderMade=false, firing a spurious
+    -- fanfare on every round-end. (Re-audit V16/V10/V9 finding.)
     local sweepStr = (sweep == "A" or sweep == "B") and sweep or ""
-    local madeStr  = bidderMade and "1" or "0"
+    local madeStr
+    if bidderMade == true       then madeStr = "1"
+    elseif bidderMade == false  then madeStr = "0"
+    else                              madeStr = "" end
     broadcast(("%s;%d;%d;%d;%d;%s;%s"):format(
         K.MSG_ROUND, addA, addB, totA, totB, sweepStr, madeStr))
 end
@@ -463,8 +472,14 @@ function N.HandleMessage(prefix, message, channel, sender)
                    fields[4], fields[5])
     elseif tag == K.MSG_ROUND then
         local sweep = fields[6]
-        if sweep == "" then sweep = nil end
-        local bidderMade = (fields[7] == "1")
+        if sweep == "" or sweep == nil then sweep = nil end
+        -- Three-state decode for bidderMade (see N.SendRound). Empty
+        -- or absent → nil (don't fire fanfare); "1" → true; "0" → false.
+        local madeRaw = fields[7]
+        local bidderMade
+        if     madeRaw == "1" then bidderMade = true
+        elseif madeRaw == "0" then bidderMade = false
+        else                       bidderMade = nil end
         N._OnRound(sender, tonumber(fields[2]), tonumber(fields[3]),
                    tonumber(fields[4]), tonumber(fields[5]),
                    sweep, bidderMade)
@@ -2437,6 +2452,11 @@ function N.MaybeRunBot()
         if isBotSeat(belSeat) then
             log("Info", "schedule bel-decision for bot seat=%d", belSeat)
             C_Timer.After(BOT_DELAY_BEL, function()
+                -- Re-audit fix: track whether ApplyDouble fired before
+                -- the error. If it did, the phase has already advanced
+                -- past PHASE_DOUBLE, so the simple phase guard in
+                -- recovery would skip and the deal would stall.
+                local applied = false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_DOUBLE then
@@ -2449,10 +2469,9 @@ function N.MaybeRunBot()
                     if bel then
                         local isSun = S.s.contract
                                   and S.s.contract.type == K.BID_SUN
-                        -- Sun forces closed (no Triple rung). Bot's
-                        -- wantOpen also respected for Hokm.
                         local effOpen = (not isSun) and wantOpen
                         S.ApplyDouble(belSeat, effOpen)
+                        applied = true
                         N.SendDouble(belSeat, effOpen)
                         if isSun or not effOpen then
                             N.HostFinishDeal()
@@ -2466,10 +2485,12 @@ function N.MaybeRunBot()
                 end)
                 if not ok then
                     log("Error", "bel-decision callback failed: %s", tostring(err))
-                    -- Defensive recovery: if the contract is still
-                    -- waiting on a bel decision, force-skip so the game
-                    -- doesn't freeze on this seat.
-                    if S.s.phase == K.PHASE_DOUBLE then
+                    if applied then
+                        -- ApplyDouble already advanced phase; just push
+                        -- the deal forward without re-broadcasting skip.
+                        N.HostFinishDeal()
+                    elseif S.s.phase == K.PHASE_DOUBLE then
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
                         N.HostFinishDeal()
                     end
                 end
@@ -2492,8 +2513,7 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                -- Audit fix: pcall the body so a Bot.PickTriple error
-                -- doesn't freeze the deal (bots have no AFK timer).
+                local applied = false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_TRIPLE then return end
@@ -2503,6 +2523,7 @@ function N.MaybeRunBot()
                     end
                     if yes then
                         S.ApplyTriple(bidder, wantOpen)
+                        applied = true
                         N.SendTriple(bidder, wantOpen)
                         if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                     else
@@ -2512,7 +2533,9 @@ function N.MaybeRunBot()
                 end)
                 if not ok then
                     log("Error", "triple-decision callback failed: %s", tostring(err))
-                    if S.s.phase == K.PHASE_TRIPLE then
+                    if applied then
+                        N.HostFinishDeal()
+                    elseif S.s.phase == K.PHASE_TRIPLE then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
                         N.HostFinishDeal()
                     end
@@ -2531,6 +2554,7 @@ function N.MaybeRunBot()
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
+                local applied = false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_FOUR then return end
@@ -2540,6 +2564,7 @@ function N.MaybeRunBot()
                     end
                     if yes then
                         S.ApplyFour(defSeat, wantOpen)
+                        applied = true
                         N.SendFour(defSeat, wantOpen)
                         if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                     else
@@ -2549,7 +2574,9 @@ function N.MaybeRunBot()
                 end)
                 if not ok then
                     log("Error", "four-decision callback failed: %s", tostring(err))
-                    if S.s.phase == K.PHASE_FOUR then
+                    if applied then
+                        N.HostFinishDeal()
+                    elseif S.s.phase == K.PHASE_FOUR then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
                         N.HostFinishDeal()
                     end
@@ -2568,6 +2595,7 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
+                local applied = false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_GAHWA then return end
@@ -2577,6 +2605,7 @@ function N.MaybeRunBot()
                     end
                     if yes then
                         S.ApplyGahwa(bidder)
+                        applied = true
                         N.SendGahwa(bidder)
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
@@ -2585,7 +2614,13 @@ function N.MaybeRunBot()
                 end)
                 if not ok then
                     log("Error", "gahwa-decision callback failed: %s", tostring(err))
-                    if S.s.phase == K.PHASE_GAHWA then
+                    if applied then
+                        -- ApplyGahwa doesn't change phase, but the
+                        -- subsequent SendGahwa or HostFinishDeal could
+                        -- have errored. Just push the deal forward
+                        -- without re-broadcasting a contradictory skip.
+                        N.HostFinishDeal()
+                    elseif S.s.phase == K.PHASE_GAHWA then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
                         N.HostFinishDeal()
                     end
@@ -2767,6 +2802,14 @@ function N.MaybeRunBot()
                 log("Error", "play-decision callback failed: %s", tostring(err))
                 if S.s.phase == K.PHASE_PLAY
                    and S.s.turn == seat and S.s.turnKind == "play" then
+                    -- Re-audit V9 fix: if PickMelds errored mid-loop,
+                    -- partial melds may have already broadcast but
+                    -- meldsDeclared[seat] stayed false. Mark it true
+                    -- now to prevent the next MaybeRunBot pass from
+                    -- re-running the (already-erroring) meld pick.
+                    if S.s.meldsDeclared and not S.s.meldsDeclared[seat] then
+                        S.s.meldsDeclared[seat] = true
+                    end
                     local hand = S.s.hostHands and S.s.hostHands[seat]
                     if hand and S.s.contract then
                         local legal = {}
