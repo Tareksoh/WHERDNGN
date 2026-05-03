@@ -495,8 +495,20 @@ function S.MyHand() return s.hand end
 
 function S.SeatOf(name)
     if not name then return nil end
+    -- 8th-audit fix: tolerate realm-suffix mismatch between the lookup
+    -- name (e.g. s.localName, normalized) and roster entries (which
+    -- may have been seeded from a saved-session restore where the
+    -- suffix was missing). Without this, a same-realm player whose
+    -- name was stored bare wouldn't find their own seat — the UI
+    -- would never light up for them.
+    local norm = name
+    if S.NormalizeName then norm = S.NormalizeName(name) or name end
     for seat, info in pairs(s.seats) do
-        if info and info.name == name then return seat end
+        if info and info.name then
+            if info.name == name then return seat end
+            local n = S.NormalizeName and S.NormalizeName(info.name) or info.name
+            if n == norm then return seat end
+        end
     end
     return nil
 end
@@ -718,6 +730,13 @@ function S.ApplyStart(roundNumber, dealer)
     -- Last hand's takweesh / SWA banners cleared at next round.
     s.takweeshResult = nil
     s.swaResult      = nil
+    -- 8th-audit fix: also clear in-flight SWA request. If a round was
+    -- abandoned mid-vote (e.g., Kawesh redeal during opponents' SWA
+    -- voting window), swaRequest was previously persisted into the
+    -- next round and opponents saw stale Accept/Deny buttons for the
+    -- previous round's hand.
+    s.swaRequest     = nil
+    s.swaDenied      = nil
     -- Round-start "Awal" announcement. Delayed half a second so the
     -- new hand + bid card finish landing visually before the voice
     -- fires — without the delay, clicking "Next Round" plays Awal

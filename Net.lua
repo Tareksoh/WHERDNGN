@@ -585,7 +585,16 @@ local function authorizeSeat(seat, sender)
     if info.isBot then
         return S.s.hostName ~= nil and nsender == S.s.hostName
     end
-    return info.name ~= nil and info.name == nsender
+    if info.name == nil then return false end
+    -- 8th-audit fix: normalize info.name as well. Previous code
+    -- normalized only `sender`; if the roster was populated from a
+    -- restored saved-session or a non-suffixed source, raw equality
+    -- against the suffixed live sender failed and the seat owner's
+    -- own messages were rejected. Fast path first (avoid normalization
+    -- on the common exact-match case).
+    if info.name == nsender then return true end
+    local nname = (S.NormalizeName and S.NormalizeName(info.name)) or info.name
+    return nname == nsender
 end
 
 -- Loopback policy: SendAddonMessage delivers a copy back to the sender
@@ -2587,6 +2596,11 @@ function N._HostTurnTimeout(seat, kind)
     -- applied between fire and execution would otherwise let the
     -- auto-action run mid-pause.
     if S.s.paused then return end
+    -- 8th-audit fix: also defer when an SWA permission request is in
+    -- flight. The SWA caller's turn is locked behind voting, so the
+    -- 60s AFK auto-pass would forcibly play their hand under them.
+    -- _OnSWAResp re-arms the turn timer when the request resolves.
+    if S.s.swaRequest and S.s.swaRequest.caller then return end
     if S.s.turn ~= seat or S.s.turnKind ~= kind then return end
     log("Info", "AFK timeout for seat %d kind=%s", seat, tostring(kind))
     if kind == "bid" then
