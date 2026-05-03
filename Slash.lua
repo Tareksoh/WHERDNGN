@@ -43,6 +43,16 @@ local function dispatch(msg)
         -- Solo hosting is allowed; the lobby fills with bots via /baloot
         -- bots or the "Fill Bots" button. Broadcasts no-op when not in a
         -- party.
+        --
+        -- 4th-audit X9-2 fix: refuse if a game is already running.
+        -- HostBeginLobby calls reset() which silently destroys the
+        -- active state — only safe from IDLE or GAME_END.
+        local p = B.State.s.phase
+        if p ~= K.PHASE_IDLE and p ~= K.PHASE_GAME_END then
+            say("already in a game (phase=" .. tostring(p)
+                .. "). /baloot reset first.")
+            return
+        end
         local id = B.State.HostBeginLobby()
         if id then
             B.Net.SendLobby(B.State.s.seats, id)

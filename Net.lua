@@ -188,10 +188,22 @@ function N.SendSWA(seat, encodedHand)
     broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, encodedHand or ""))
 end
 
-function N.SendSWAOut(caller, valid, addA, addB, totA, totB)
-    broadcast(("%s;%d;%s;%d;%d;%d;%d"):format(
+function N.SendSWAOut(caller, valid, addA, addB, totA, totB, sweep, bidderMade)
+    -- 4th-audit X4 fix: append sweep + bidderMade flags so receivers
+    -- can fire the BALOOT fanfare on SWA-resolved sweeps / failed
+    -- contracts (host's direct ApplyRoundEnd call already covers
+    -- the host side; this closes the gap for remote clients).
+    -- Three-state encoding ("" | "0" | "1") matches MSG_ROUND.
+    -- Append-only so pre-v0.3.0 clients reading the old 7-field
+    -- form work unchanged.
+    local sweepStr = (sweep == "A" or sweep == "B") and sweep or ""
+    local madeStr
+    if bidderMade == true       then madeStr = "1"
+    elseif bidderMade == false  then madeStr = "0"
+    else                              madeStr = "" end
+    broadcast(("%s;%d;%s;%d;%d;%d;%d;%s;%s"):format(
         K.MSG_SWA_OUT, caller, valid and "1" or "0",
-        addA, addB, totA, totB))
+        addA, addB, totA, totB, sweepStr, madeStr))
 end
 
 function N.SendSWAReq(seat, encodedHand)
@@ -503,10 +515,21 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_SWA then
         N._OnSWA(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_SWA_OUT then
+        -- fields[8] = sweep ("" | "A" | "B"); fields[9] = bidderMade
+        -- ("" | "0" | "1"). Both optional / ignored on legacy (7-arg)
+        -- senders; receivers fall through to nil and skip fanfare.
+        local swSweep = fields[8]
+        if swSweep == "" or swSweep == nil then swSweep = nil end
+        local swMadeRaw = fields[9]
+        local swMade
+        if     swMadeRaw == "1" then swMade = true
+        elseif swMadeRaw == "0" then swMade = false
+        else                         swMade = nil end
         N._OnSWAOut(sender, tonumber(fields[2]),
                     fields[3] == "1",
                     tonumber(fields[4]), tonumber(fields[5]),
-                    tonumber(fields[6]), tonumber(fields[7]))
+                    tonumber(fields[6]), tonumber(fields[7]),
+                    swSweep, swMade)
     elseif tag == K.MSG_SWA_REQ then
         N._OnSWAReq(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_SWA_RESP then
@@ -570,8 +593,11 @@ end
 function N._OnHost(sender, gameID, version)
     if fromSelf(sender) then return end
     -- Track the host's addon version so the lobby can flag mismatches.
+    -- 4th-audit X9-4 fix: normalize the key so same-realm senders merge
+    -- into the same entry the UI looks up (see _OnLobby).
     if version and version ~= "" then
-        S.s.peerVersions[sender] = version
+        local skey = (S.NormalizeName and S.NormalizeName(sender)) or sender
+        S.s.peerVersions[skey] = version
     end
     if S.s.isHost then return end
     -- Accept host announcements during any "passive" phase: IDLE, LOBBY,
@@ -593,7 +619,8 @@ end
 function N._OnJoin(sender, gameID, version)
     if fromSelf(sender) then return end
     if version and version ~= "" then
-        S.s.peerVersions[sender] = version
+        local skey = (S.NormalizeName and S.NormalizeName(sender)) or sender
+        S.s.peerVersions[skey] = version
     end
     if not S.s.isHost or S.s.phase ~= K.PHASE_LOBBY then return end
     if gameID ~= S.s.gameID then return end
@@ -612,11 +639,31 @@ end
 
 function N._OnLobby(sender, gameID, names, botMask, hostVersion)
     if fromSelf(sender) then return end
+    -- 4th-audit X9-3 fix: tighten host adoption. Previously any peer
+    -- who broadcast MSG_LOBBY first could claim hostName when our
+    -- pendingHost was unset (e.g., post-/reload before we got a
+    -- MSG_HOST). Now require either:
+    --   (a) sender already known as host (idempotent re-bind), or
+    --   (b) we have a pendingHost record matching this gameID, or
+    --   (c) the gameID matches the one we previously joined
+    --       (WHEREDNGNDB.lastGameID surviving /reload).
+    -- Otherwise leave hostName alone — better to mis-render a lobby
+    -- than to grant host authority to an arbitrary peer.
     if not fromHost(sender) and not S.s.pendingHost then
+        local trustGameID = (WHEREDNGNDB and WHEREDNGNDB.lastGameID == gameID)
+        if trustGameID then
+            S.s.hostName = sender
+        end
+    elseif S.s.pendingHost and S.s.pendingHost.gameID == gameID then
         S.s.hostName = sender
     end
+    -- 4th-audit X9-4 fix: peerVersions is keyed by raw sender on the
+    -- write side but read by Name-Realm in UI. Normalize the key so
+    -- same-realm senders (sometimes "Name", sometimes "Name-Realm"
+    -- depending on WoW client) merge into one entry the UI can find.
+    local skey = (S.NormalizeName and S.NormalizeName(sender)) or sender
     if hostVersion and hostVersion ~= "" then
-        S.s.peerVersions[sender] = hostVersion
+        S.s.peerVersions[skey] = hostVersion
     end
     S.ApplyLobby(gameID, names, botMask)
 end
@@ -1021,6 +1068,14 @@ function N._HostStepBid()
                 -- ping with seat=0; clients render UI based on
                 -- s.preemptEligible. Simpler than adding another tag.
                 broadcast(("%s;0"):format(K.MSG_PREEMPT_PASS))
+                -- 4th-audit X7 fix: arm the local T-10s pre-warn for
+                -- any human eligible seat. The other escalation
+                -- windows (Bel/Triple/Four/Gahwa) arm their pre-warn
+                -- on phase entry from State.lua; PHASE_PREEMPT is
+                -- the lone outlier because the eligibility list is
+                -- host-side. StartLocalWarn self-gates on whether
+                -- localSeat is in S.s.preemptEligible.
+                if N.StartLocalWarn then N.StartLocalWarn("preempt") end
                 -- Bots dispatch via MaybeRunBot's preempt branch.
                 N.MaybeRunBot()
                 if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -1744,6 +1799,28 @@ function N.LocalPause(paused)
                 N.StartTurnTimer(S.s.turn, S.s.turnKind)
             end
         end
+        -- 4th-audit X8 fix: also re-arm the LOCAL T-10s pre-warn
+        -- (audio ping + UI pulse). StartLocalWarn was cancelled
+        -- when pause hit; without this re-dispatch, the human at
+        -- the active seat / eligible escalation seat gets no
+        -- pre-warn ping until the next phase change. Mirrors the
+        -- PLAYER_LOGIN restore re-arm in WHEREDNGN.lua.
+        if N.StartLocalWarn then
+            local sk = S.s.turnKind
+            if sk == "bid" or sk == "play" then
+                N.StartLocalWarn(sk)
+            elseif S.s.phase == K.PHASE_DOUBLE then
+                N.StartLocalWarn("bel")
+            elseif S.s.phase == K.PHASE_TRIPLE then
+                N.StartLocalWarn("triple")
+            elseif S.s.phase == K.PHASE_FOUR then
+                N.StartLocalWarn("four")
+            elseif S.s.phase == K.PHASE_GAHWA then
+                N.StartLocalWarn("gahwa")
+            elseif S.s.phase == K.PHASE_PREEMPT then
+                N.StartLocalWarn("preempt")
+            end
+        end
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
@@ -1921,16 +1998,22 @@ function N._OnSWA(sender, seat, encodedHand)
     end
 end
 
-function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB)
+function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB, sweep, bidderMade)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if not caller then return end
     -- Mirror the takweesh-result struct so the score banner can
     -- render the SWA outcome with its own copy.
-    S.s.swaResult = { caller = caller, valid = valid }
+    S.s.swaResult = {
+        caller = caller, valid = valid,
+        sweep = sweep, contractMade = bidderMade,
+    }
     S.s.lastRoundResult = nil
     S.s.trick = nil
-    S.ApplyRoundEnd(addA or 0, addB or 0, totA or 0, totB or 0)
+    -- 4th-audit X4 fix: pass sweep + bidderMade through so the BALOOT
+    -- fanfare fires on remote clients too. Pre-v0.3.0 senders won't
+    -- supply the flags; both decode to nil → no fanfare (back-compat).
+    S.ApplyRoundEnd(addA or 0, addB or 0, totA or 0, totB or 0, sweep, bidderMade)
 end
 
 -- Host-only: resolve an SWA claim.
@@ -1972,7 +2055,12 @@ function N.HostResolveSWA(callerSeat, callerHand)
     if #trickPlays > 0 then
         trickLeader = trickPlays[1].seat
     else
-        trickLeader = callerSeat
+        -- 4th-audit X6 fix: when no plays are in flight (between
+        -- tricks), the next-to-lead is whoever won the previous
+        -- trick — i.e. S.s.turn. Hard-coding callerSeat as leader
+        -- silently produced wrong validation when a non-leader seat
+        -- called SWA between tricks.
+        trickLeader = S.s.turn or callerSeat
     end
     local trickState = {
         leadSuit = trickLead, leader = trickLeader, plays = trickPlays,
@@ -2116,18 +2204,12 @@ function N.HostResolveSWA(callerSeat, callerHand)
     }
     S.s.lastRoundResult = nil
     S.s.trick = nil
-    -- Re-audit W1 fix: pass sweepTeam + contractMade through so the
-    -- BALOOT fanfare fires on host AND on remote clients (via the
-    -- MSG_SWA_OUT replay below). Without this the host's own
-    -- ApplyRoundEnd has no flags and the fanfare is suppressed.
-    -- Note: receivers go through _OnSWAOut which doesn't carry the
-    -- flags on the wire — they call ApplyRoundEnd with nil. To fix
-    -- the receiver-side fanfare we'd need to extend MSG_SWA_OUT.
-    -- For now host hears it; remote clients will fire on the
-    -- subsequent MSG_ROUND if any (none for SWA, so this is a
-    -- known limitation tracked for v0.3.1).
+    -- Re-audit W1 + 4th-audit X4 fix: pass sweepTeam + contractMade
+    -- through so the BALOOT fanfare fires on host AND on remote
+    -- clients (MSG_SWA_OUT now carries the flags too).
     S.ApplyRoundEnd(addA, addB, totA, totB, sweepTeam, contractMade)
-    N.SendSWAOut(callerSeat, valid, addA, addB, totA, totB)
+    N.SendSWAOut(callerSeat, valid, addA, addB, totA, totB,
+                 sweepTeam, contractMade)
 
     if totA >= S.s.target or totB >= S.s.target then
         local winner
@@ -2206,10 +2288,18 @@ function N._OnResyncRes(sender, gameID, payload)
        and WHEREDNGNDB.lastGameID ~= gameID then
         return
     end
-    -- We don't yet know who the host is on a fresh /reload, so we trust
-    -- that the sender claims to be host. A subsequent SendLobby (which
-    -- the host broadcasts on lobby/seat changes) will reconfirm.
-    S.s.hostName = sender
+    -- We don't yet know who the host is on a fresh /reload, so we
+    -- trust that the sender claims to be host — but only if the
+    -- gameID matches the one we asked about (already verified above
+    -- via WHEREDNGNDB.lastGameID). A subsequent SendLobby will
+    -- reconfirm. A peer not matching gameID was rejected at the
+    -- guard above, so reaching here means either no recorded
+    -- gameID (fresh client) or a match.
+    --
+    -- 4th-audit X9-3 fix: normalize the sender so subsequent
+    -- fromHost(...) checks compare against the canonical form
+    -- (matches what every other site uses).
+    S.s.hostName = (S.NormalizeName and S.NormalizeName(sender)) or sender
     S.ApplyResyncSnapshot(gameID, payload)
 end
 
@@ -2718,6 +2808,15 @@ function N.MaybeRunBot()
         for _, seat in ipairs(S.s.preemptEligible) do
             if isBotSeat(seat) then
                 C_Timer.After(BOT_DELAY_BEL, function()
+                    -- Re-re-audit X1 fix: track per-step flags so the
+                    -- recovery branch knows what already happened and
+                    -- doesn't double-emit / contradict earlier sends.
+                    --   claimSent — N.SendPreempt fired (claim path)
+                    --   claimApplied — S.ApplyPreempt + ApplyContract done
+                    --   passSent  — N.SendPreemptPass fired (pass path)
+                    --   passApplied — S.ApplyPreemptPass done
+                    local claimSent, claimApplied = false, false
+                    local passSent,  passApplied  = false, false
                     local ok, err = pcall(function()
                         if S.s.paused then return end
                         if S.s.phase ~= K.PHASE_PREEMPT then return end
@@ -2731,18 +2830,17 @@ function N.MaybeRunBot()
                         if not stillEligible then return end
                         if B.Bot.PickPreempt and B.Bot.PickPreempt(seat) then
                             N.SendPreempt(seat)
-                            -- Re-audit W5 fix: don't route the bot's
-                            -- claim through _OnPreempt — it short-
-                            -- circuits on `fromSelf(sender)` long
-                            -- before authorizeSeat, so any sender
-                            -- equal to S.s.localName silently drops.
-                            -- Apply locally + run the host-side
-                            -- post-apply block directly.
+                            claimSent = true
+                            -- Re-audit W5 fix: apply locally + run the
+                            -- host-side post-apply directly. _OnPreempt
+                            -- short-circuits on fromSelf and would never
+                            -- reach authorizeSeat for a bot's claim.
                             S.ApplyPreempt(seat)
                             if S.s.isHost then
                                 S.s.pendingPreemptContract = nil
                                 S.ApplyContract(seat, K.BID_SUN, nil)
                                 N.SendContract(seat, K.BID_SUN, "")
+                                claimApplied = true
                                 local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
                                 local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
                                 if cumA < 101 and cumB < 101 then
@@ -2751,27 +2849,68 @@ function N.MaybeRunBot()
                                 else
                                     N.MaybeRunBot()
                                 end
+                            else
+                                claimApplied = true
                             end
                         else
                             N.SendPreemptPass(seat)
+                            passSent = true
                             S.ApplyPreemptPass(seat)
+                            passApplied = true
                             if not S.s.preemptEligible then
-                                -- All eligible seats waived → finalize the
-                                -- original buyer's contract.
                                 N._FinalizePreempt()
                             else
-                                -- Non-final pass: redispatch the next
-                                -- eligible seat. Without this, the chain
-                                -- stalls until something else calls
-                                -- MaybeRunBot (Codex #2 audit catch).
                                 N.MaybeRunBot()
                             end
                         end
                     end)
                     if not ok then
                         log("Error", "preempt-decision callback failed: %s", tostring(err))
-                        if S.s.phase == K.PHASE_PREEMPT then
-                            -- Force-pass on error so the chain advances.
+                        -- 4th-audit X1 fix: branch on what already ran.
+                        if claimApplied then
+                            -- Claim fully landed (state + contract +
+                            -- broadcast); error was downstream. Just
+                            -- push the deal forward (or run next bot).
+                            if S.s.isHost and S.s.phase == K.PHASE_PREEMPT then
+                                -- Defensive: if phase wasn't advanced
+                                -- (shouldn't happen post-ApplyContract),
+                                -- finalize directly.
+                                S.s.preemptEligible = nil
+                                N.HostFinishDeal()
+                            else
+                                N.MaybeRunBot()
+                            end
+                        elseif claimSent then
+                            -- Claim broadcast went out but ApplyPreempt
+                            -- / ApplyContract didn't complete. Apply
+                            -- now to match what peers think happened.
+                            S.ApplyPreempt(seat)
+                            if S.s.isHost then
+                                S.s.pendingPreemptContract = nil
+                                S.ApplyContract(seat, K.BID_SUN, nil)
+                                N.SendContract(seat, K.BID_SUN, "")
+                                N.HostFinishDeal()
+                            end
+                        elseif passApplied then
+                            -- Pass fully landed; downstream finalize/
+                            -- MaybeRunBot errored. Re-attempt the chain
+                            -- advance without re-emitting the pass.
+                            if not S.s.preemptEligible then
+                                N._FinalizePreempt()
+                            else
+                                N.MaybeRunBot()
+                            end
+                        elseif passSent then
+                            -- Pass broadcast went out but ApplyPreemptPass
+                            -- didn't run; mirror it and continue.
+                            S.ApplyPreemptPass(seat)
+                            if not S.s.preemptEligible then
+                                N._FinalizePreempt()
+                            else
+                                N.MaybeRunBot()
+                            end
+                        elseif S.s.phase == K.PHASE_PREEMPT then
+                            -- Nothing applied or sent; default to pass.
                             N.SendPreemptPass(seat)
                             S.ApplyPreemptPass(seat)
                             if not S.s.preemptEligible then

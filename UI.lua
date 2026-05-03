@@ -729,6 +729,23 @@ local function buildLobby()
     local hostNewBtn = makeButton(lobbyPanel, "Host Game", 120, 26)
     hostNewBtn:SetPoint("BOTTOM", 0, 12)
     hostNewBtn:SetScript("OnClick", function()
+        -- 4th-audit X9-2 fix: refuse to /host while a game is
+        -- already in progress. HostBeginLobby calls reset() which
+        -- silently destroys the active round/game with no
+        -- confirmation. Only IDLE / GAME_END are safe states to
+        -- start a fresh lobby from.
+        if S.s.phase ~= K.PHASE_IDLE and S.s.phase ~= K.PHASE_GAME_END then
+            print("|cffff5555WHEREDNGN|r already in a game — /baloot reset first.")
+            return
+        end
+        -- 4th-audit X9-1 fix: cancel any prior lobby ticker before
+        -- arming a new one. Slash.lua's /baloot host had this guard
+        -- (commit 2803dcf) but the lobby button was missed —
+        -- repeated clicks would otherwise leak overlapping tickers
+        -- and double the lobby broadcast rate.
+        if B._lobbyTicker then
+            B._lobbyTicker:Cancel(); B._lobbyTicker = nil
+        end
         local id = S.HostBeginLobby()
         if id then
             net().SendLobby(S.s.seats, id)
