@@ -25,8 +25,9 @@ local function help()
     print("  /baloot log [N]      - dump last N log lines (default 50)")
     print("  /baloot log clear    - wipe log buffer")
     print("  /baloot target <N>   - set game-win cumulative target (default 152)")
-    print("  /baloot theme <name> - switch card+felt theme (classic|burgundy)")
-    print("  /baloot themes       - list available themes")
+    print("  /baloot cards <name> - switch card style (classic|burgundy)")
+    print("  /baloot felt <name>  - switch felt theme (green|burgundy)")
+    print("  /baloot themes       - list available card styles + felt themes")
     print("  /baloot status       - print current phase + seats")
 end
 
@@ -193,17 +194,47 @@ local function dispatch(msg)
     end
 
     if msg == "themes" then
-        say("available themes:")
-        if B.UI and B.UI.GetThemes then
-            local active = B.UI.GetActiveTheme and B.UI.GetActiveTheme() or "classic"
-            for _, t in ipairs(B.UI.GetThemes()) do
-                local marker = (t.id == active) and " *" or ""
+        if B.UI and B.UI.GetCardStyles then
+            local activeCS = B.UI.GetActiveCardStyle and B.UI.GetActiveCardStyle() or "classic"
+            say("card styles:")
+            for _, t in ipairs(B.UI.GetCardStyles()) do
+                local marker = (t.id == activeCS) and " *" or ""
+                print(("  %s%s — %s"):format(t.id, marker, t.name))
+            end
+        end
+        if B.UI and B.UI.GetFeltThemes then
+            local activeFT = B.UI.GetActiveFeltTheme and B.UI.GetActiveFeltTheme() or "green"
+            say("felt themes:")
+            for _, t in ipairs(B.UI.GetFeltThemes()) do
+                local marker = (t.id == activeFT) and " *" or ""
                 print(("  %s%s — %s"):format(t.id, marker, t.name))
             end
         end
         return
     end
 
+    local cardArg = msg:match("^cards%s+(%S+)$")
+    if cardArg then
+        if B.UI and B.UI.SetCardStyle and B.UI.SetCardStyle(cardArg) then
+            say("card style = " .. cardArg)
+        else
+            say("unknown card style '" .. cardArg .. "'. try /baloot themes")
+        end
+        return
+    end
+
+    local feltArg = msg:match("^felt%s+(%S+)$")
+    if feltArg then
+        if B.UI and B.UI.SetFeltTheme and B.UI.SetFeltTheme(feltArg) then
+            say("felt theme = " .. feltArg)
+        else
+            say("unknown felt theme '" .. feltArg .. "'. try /baloot themes")
+        end
+        return
+    end
+
+    -- Back-compat: pre-split single-axis selector. Maps "classic" /
+    -- "burgundy" to a paired card-style + felt-theme set.
     local theme = msg:match("^theme%s+(%S+)$")
     if theme then
         if B.UI and B.UI.SetTheme and B.UI.SetTheme(theme) then

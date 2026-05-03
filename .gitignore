@@ -6,3 +6,4 @@ backup/
 node_modules/
 package.json
 package-lock.json
+cards/__pycache__/
