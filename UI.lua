@@ -33,6 +33,13 @@ local scoreText, contractText, roundText, gameIDText
 local hostStartBtn
 local joinBtn
 
+-- Theme refresh: card-back and trick-glow textures live deep inside
+-- child frames built by helpers. We collect them into module-local
+-- lists at construction so SetTheme() can re-bind their texture paths
+-- without rebuilding the whole window.
+local cardBackTextures = {}
+local glowTextures     = {}
+
 -- Forward declaration: buildTable wires this into a button OnClick,
 -- but the implementation lives later in the file. Without forward-
 -- declaring as a local, the closure captures a global (nil) instead
@@ -43,15 +50,49 @@ local peekLastTrick
 -- Universal online-WHEREDNGN aesthetic: green felt table, dark wood trim,
 -- cream card faces with classic red/black French-deck suit colors,
 -- gold active-turn accents.
+--
+-- Themes ---------------------------------------------------------------
+-- A small registry of palette+texture-subdir pairs that the user can
+-- swap via /baloot theme. The active theme's colors are stamped into
+-- COL (mutated in place) so existing reads of COL.feltDark etc. pick
+-- up the new values without touching individual call sites. The
+-- texSubdir slots into cardTexturePath so card faces / back / felt /
+-- glow load from cards/<subdir>/ instead of cards/.
+--
+-- Persisted in WHEREDNGNDB.cardTheme so the choice survives reloads.
+local THEMES = {
+    classic = {
+        name         = "Classic (green)",
+        feltDark     = { 0.05, 0.20, 0.11, 0.97 },
+        feltLight    = { 0.08, 0.28, 0.16, 0.95 },
+        centerPad    = { 0.04, 0.16, 0.09, 0.95 },
+        cardBack     = { 0.10, 0.24, 0.50, 1.00 },
+        cardBackEdge = { 0.04, 0.10, 0.22, 1.00 },
+        texSubdir    = "",                            -- cards/<card>.tga
+    },
+    burgundy = {
+        name         = "Burgundy (red)",
+        feltDark     = { 0.20, 0.05, 0.09, 0.97 },
+        feltLight    = { 0.30, 0.08, 0.13, 0.95 },
+        centerPad    = { 0.18, 0.04, 0.07, 0.95 },
+        cardBack     = { 0.42, 0.10, 0.16, 1.00 },
+        cardBackEdge = { 0.20, 0.04, 0.08, 1.00 },
+        texSubdir    = "burgundy\\",                  -- cards/burgundy/<card>.tga
+    },
+}
+B._themes = THEMES   -- expose for the lobby UI option list
+
 local COL = {
+    -- Theme-driven (overwritten by applyThemeColors).
     feltDark   = { 0.05, 0.20, 0.11, 0.97 },
     feltLight  = { 0.08, 0.28, 0.16, 0.95 },
     centerPad  = { 0.04, 0.16, 0.09, 0.95 },
+    cardBack   = { 0.10, 0.24, 0.50, 1.00 },
+    cardBackEdge = { 0.04, 0.10, 0.22, 1.00 },
+    -- Theme-independent.
     woodEdge   = { 0.34, 0.22, 0.12, 1.00 },
     cardFace   = { 0.96, 0.94, 0.86, 1.00 },
     cardEdge   = { 0.18, 0.13, 0.08, 1.00 },
-    cardBack   = { 0.10, 0.24, 0.50, 1.00 },
-    cardBackEdge = { 0.04, 0.10, 0.22, 1.00 },
     badEdge    = { 0.55, 0.20, 0.20, 1.00 },
     legalEdge  = { 0.95, 0.78, 0.30, 1.00 },     -- gold
     activeGlow = { 1.00, 0.84, 0.30, 0.22 },     -- gold tint
@@ -61,6 +102,26 @@ local COL = {
     txtUs      = "ff66ff88",
     txtThem    = "ffff7777",
 }
+
+local function activeThemeName()
+    local t = WHEREDNGNDB and WHEREDNGNDB.cardTheme
+    if t and THEMES[t] then return t end
+    return "classic"
+end
+
+local function themeData() return THEMES[activeThemeName()] end
+
+local function applyThemeColors()
+    local t = themeData()
+    COL.feltDark     = t.feltDark
+    COL.feltLight    = t.feltLight
+    COL.centerPad    = t.centerPad
+    COL.cardBack     = t.cardBack
+    COL.cardBackEdge = t.cardBackEdge
+end
+
+-- Stamp the saved theme's colors into COL before any frame is built.
+applyThemeColors()
 
 -- Map a position label (relative to local player) to absolute seat.
 local function seatAtPos(pos)
@@ -119,10 +180,13 @@ local CARD_TEX_DIR = "Interface\\AddOns\\WHEREDNGN\\cards\\"
 
 -- Returns the texture path for a card id ("AS", "9D", etc) or for the
 -- card back if `card` is nil. Returns nil if the card id is unparseable.
+-- Honors the active theme via themeData().texSubdir so a card's path
+-- becomes cards/<subdir>/<card> when a non-default theme is active.
 local function cardTexturePath(card)
-    if not card then return CARD_TEX_DIR .. "back" end
+    local sub = themeData().texSubdir
+    if not card then return CARD_TEX_DIR .. sub .. "back" end
     if not C.IsValid or not C.IsValid(card) then return nil end
-    return CARD_TEX_DIR .. card  -- e.g. AS, 9D, TJ
+    return CARD_TEX_DIR .. sub .. card
 end
 
 -- Build a "card face" frame: shows a real card image (Texture). When
@@ -184,7 +248,8 @@ local function makeCardBack(parent, w, h)
     local tex = frame:CreateTexture(nil, "ARTWORK")
     tex:SetPoint("TOPLEFT", 2, -2)
     tex:SetPoint("BOTTOMRIGHT", -2, 2)
-    tex:SetTexture(CARD_TEX_DIR .. "back")
+    tex:SetTexture(cardTexturePath(nil))   -- theme-aware "back" path
+    cardBackTextures[#cardBackTextures + 1] = tex   -- track for SetTheme
     return frame
 end
 
@@ -678,6 +743,45 @@ local function buildLobby()
             .. "round across all worlds. Picks the card with the "
             .. "best aggregate outcome. ~150 ms per move.")
 
+    -- Theme cycle button. Mirrors the bot-tier checkboxes on the
+    -- opposite (left) column of the lobby. Single button that cycles
+    -- through registered themes; label updates to show current.
+    local themeBtn = makeButton(lobbyPanel, "Theme: Classic", 130, 22)
+    themeBtn:SetPoint("BOTTOM", 90, 56)
+    local function refreshThemeBtnLabel()
+        if not (U.GetActiveTheme and U.GetThemes) then return end
+        local active = U.GetActiveTheme()
+        local label
+        for _, t in ipairs(U.GetThemes()) do
+            if t.id == active then label = t.name end
+        end
+        themeBtn:SetText("Theme: " .. (label or active))
+    end
+    themeBtn:SetScript("OnClick", function()
+        if not (U.GetThemes and U.SetTheme and U.GetActiveTheme) then return end
+        local list = U.GetThemes()
+        local active = U.GetActiveTheme()
+        -- Find index of active and advance by 1 (wrap).
+        local idx = 1
+        for i, t in ipairs(list) do if t.id == active then idx = i end end
+        local next = list[(idx % #list) + 1]
+        if U.SetTheme(next.id) then refreshThemeBtnLabel() end
+    end)
+    themeBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Card / felt theme", 1, 1, 1)
+        GameTooltip:AddLine(
+            "Classic: green felt, navy lattice card backs.\n"
+            .. "Burgundy: red SVGCards art with red lattice backs on a "
+            .. "burgundy felt table.\nChoice persists in saved variables.",
+            0.85, 0.85, 0.85, true)
+        GameTooltip:Show()
+    end)
+    themeBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    refreshThemeBtnLabel()
+    lobbyPanel.themeBtn      = themeBtn
+    lobbyPanel.themeBtnUpdate = refreshThemeBtnLabel
+
     joinBtn = makeButton(lobbyPanel, "Join", 100, 26)
     joinBtn:SetPoint("BOTTOM", 0, 44)
     joinBtn:SetScript("OnClick", function()
@@ -753,7 +857,7 @@ local function setMeldStripCards(strip, cards, alpha)
         local slot = strip.slots[i]
         if i <= n then
             local card = cards[i]
-            slot.tex:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\" .. card)
+            slot.tex:SetTexture(cardTexturePath(card))
             slot.tex:Show()
             slot.frame:SetAlpha(alpha or 1.0)
             slot.frame:Show()
@@ -838,7 +942,8 @@ local function buildCenterSlot(parent, anchorCb)
     -- clipped. Hidden by default; renderCenter shows it for the seat
     -- that won the trick.
     local glow = face.frame:CreateTexture(nil, "BACKGROUND", nil, 0)
-    glow:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\glow")
+    glow:SetTexture(CARD_TEX_DIR .. themeData().texSubdir .. "glow")
+    glowTextures[#glowTextures + 1] = glow   -- track for SetTheme
     glow:SetBlendMode("ADD")
     glow:SetPoint("TOPLEFT", -16, 16)
     glow:SetPoint("BOTTOMRIGHT", 16, -16)
@@ -873,12 +978,13 @@ local function buildTable()
     -- repeats it instead of stretching, so the grain stays consistent
     -- regardless of the pad size.
     local feltTex = centerPad:CreateTexture(nil, "BACKGROUND", nil, 1)
-    feltTex:SetTexture("Interface\\AddOns\\WHEREDNGN\\cards\\felt",
+    feltTex:SetTexture(CARD_TEX_DIR .. themeData().texSubdir .. "felt",
                        "REPEAT", "REPEAT")
     feltTex:SetHorizTile(true)
     feltTex:SetVertTile(true)
     feltTex:SetPoint("TOPLEFT", 4, -4)
     feltTex:SetPoint("BOTTOMRIGHT", -4, 4)
+    tablePanel.feltTex = feltTex   -- expose for SetTheme refresh
 
     -- Last-trick peek button: small "?" button parented to the main
     -- frame and anchored at the top-right edge, between the Reset
@@ -2473,3 +2579,52 @@ end
 function U.IsShown()
     return f and f:IsShown()
 end
+
+-- Switch the active card / felt theme. `name` must be a key in THEMES
+-- (currently "classic" or "burgundy"). Persists the choice in
+-- WHEREDNGNDB.cardTheme, re-stamps COL with the new color set, and
+-- rebinds every theme-aware texture without rebuilding the window.
+-- Returns true on success, false (with no side effects) on unknown name.
+function U.SetTheme(name)
+    if not name or not THEMES[name] then return false end
+    WHEREDNGNDB = WHEREDNGNDB or {}
+    WHEREDNGNDB.cardTheme = name
+    applyThemeColors()
+
+    local sub = themeData().texSubdir
+
+    -- Felt texture (single instance, lives on tablePanel.feltTex).
+    if tablePanel and tablePanel.feltTex then
+        tablePanel.feltTex:SetTexture(
+            CARD_TEX_DIR .. sub .. "felt", "REPEAT", "REPEAT")
+    end
+    -- Center-pad solid backdrop tint follows the theme.
+    if tablePanel and tablePanel.centerPad
+       and tablePanel.centerPad.SetBackdropColor then
+        local c = COL.centerPad
+        tablePanel.centerPad:SetBackdropColor(c[1], c[2], c[3], c[4])
+    end
+
+    -- All card-back stack textures (one per seat badge × stride 8).
+    for _, tex in ipairs(cardBackTextures) do
+        tex:SetTexture(cardTexturePath(nil))
+    end
+    -- All trick-winner glow textures (one per center-card slot).
+    for _, tex in ipairs(glowTextures) do
+        tex:SetTexture(CARD_TEX_DIR .. sub .. "glow")
+    end
+
+    -- Refresh redraws every face card via setCardSlot, which calls
+    -- cardTexturePath again and picks up the new subdir automatically.
+    if U.Refresh then U.Refresh() end
+    return true
+end
+
+function U.GetThemes()
+    local out = {}
+    for k, v in pairs(THEMES) do out[#out + 1] = { id = k, name = v.name } end
+    table.sort(out, function(a, b) return a.id < b.id end)
+    return out
+end
+
+function U.GetActiveTheme() return activeThemeName() end

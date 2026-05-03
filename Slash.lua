@@ -25,6 +25,8 @@ local function help()
     print("  /baloot log [N]      - dump last N log lines (default 50)")
     print("  /baloot log clear    - wipe log buffer")
     print("  /baloot target <N>   - set game-win cumulative target (default 152)")
+    print("  /baloot theme <name> - switch card+felt theme (classic|burgundy)")
+    print("  /baloot themes       - list available themes")
     print("  /baloot status       - print current phase + seats")
 end
 
@@ -187,6 +189,28 @@ local function dispatch(msg)
         WHEREDNGNDB.target = tonumber(tNum)
         B.State.s.target = WHEREDNGNDB.target
         say("target = " .. WHEREDNGNDB.target)
+        return
+    end
+
+    if msg == "themes" then
+        say("available themes:")
+        if B.UI and B.UI.GetThemes then
+            local active = B.UI.GetActiveTheme and B.UI.GetActiveTheme() or "classic"
+            for _, t in ipairs(B.UI.GetThemes()) do
+                local marker = (t.id == active) and " *" or ""
+                print(("  %s%s — %s"):format(t.id, marker, t.name))
+            end
+        end
+        return
+    end
+
+    local theme = msg:match("^theme%s+(%S+)$")
+    if theme then
+        if B.UI and B.UI.SetTheme and B.UI.SetTheme(theme) then
+            say("theme = " .. theme)
+        else
+            say("unknown theme '" .. theme .. "'. try /baloot themes")
+        end
         return
     end
 
