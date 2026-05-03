@@ -650,6 +650,13 @@ end
 
 function N._OnLobby(sender, gameID, names, botMask, hostVersion)
     if fromSelf(sender) then return end
+    -- 12th-audit fix (Codex): active host must NEVER apply another
+    -- peer's MSG_LOBBY — we ARE the host. Without this guard, a
+    -- stale or forged MSG_LOBBY with a different gameID would route
+    -- through S.ApplyLobby's "new game" branch, run S.Reset(), and
+    -- demote the host into IDLE. Same defensive class as the
+    -- _OnResyncRes guard added in 0aa496f.
+    if S.s.isHost then return end
     -- 4th-audit X9-3 fix: tighten host adoption. Previously any peer
     -- who broadcast MSG_LOBBY first could claim hostName when our
     -- pendingHost was unset (e.g., post-/reload before we got a
