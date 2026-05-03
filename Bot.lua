@@ -309,6 +309,11 @@ local function suitStrengthAsTrump(hand, suit)
             elseif r == "T" then strength = strength + 10
             elseif r == "K" then strength = strength + 4
             elseif r == "Q" then strength = strength + 3
+            -- 13th-bot-audit fix: 8 and 7 of trump are worth 2 each
+            -- per Saudi Hokm point convention. Previously fell through
+            -- with 0 contribution, undercounting trump-rich hands.
+            elseif r == "8" then strength = strength + 2
+            elseif r == "7" then strength = strength + 2
             end
         end
     end
@@ -350,11 +355,19 @@ local function sunStrength(hand)
     local s = 0
     local count = { S = 0, H = 0, D = 0, C = 0 }
     local honors = { S = false, H = false, D = false, C = false }
+    -- 13th-bot-audit fix: also track per-suit Aces / Kings / Queens
+    -- so we can detect AKQ "stopper" patterns and length walks.
+    local hasA   = { S = false, H = false, D = false, C = false }
+    local hasK   = { S = false, H = false, D = false, C = false }
+    local hasQ   = { S = false, H = false, D = false, C = false }
     for _, card in ipairs(hand) do
         local r = C.Rank(card)
         local su = C.Suit(card)
         count[su] = count[su] + 1
         if r == "A" or r == "T" or r == "K" then honors[su] = true end
+        if r == "A" then hasA[su] = true
+        elseif r == "K" then hasK[su] = true
+        elseif r == "Q" then hasQ[su] = true end
         if     r == "A" then s = s + 11
         elseif r == "T" then s = s + 10
         elseif r == "K" then s = s + 4
@@ -362,12 +375,25 @@ local function sunStrength(hand)
         elseif r == "J" then s = s + 2
         end
     end
+    -- 13th-bot-audit fix (Codex+sunStrength agent): long suits with
+    -- a top card (A or K) "walk" in Sun once opponents are out — bonus
+    -- +6 per card beyond 4 in such suits. Without this, a 6-card suit
+    -- AKQxxx scored barely above 18; should be ~30+.
+    for _, su in ipairs({ "S", "H", "D", "C" }) do
+        if count[su] >= 5 and (hasA[su] or hasK[su]) then
+            s = s + (count[su] - 4) * 6
+        end
+        -- Stopper triple: AKQ in same suit means 3 guaranteed tricks.
+        if hasA[su] and hasK[su] and hasQ[su] then s = s + 8 end
+    end
     if Bot.IsAdvanced() then
         local penalty = 0
         for _, su in ipairs({ "S", "H", "D", "C" }) do
             if count[su] < 2 or not honors[su] then penalty = penalty + 10 end
         end
-        s = s - math.min(penalty, 25)
+        -- Cap softened from 25 to 18 (Gemini): lopsided hands with a
+        -- solid long suit shouldn't bleed all of their headroom.
+        s = s - math.min(penalty, 18)
     end
     return s
 end
@@ -446,11 +472,17 @@ local function matchPointUrgency(myTeam)
     local opp = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
     local target = (S.s.target or 152)
     local mod = 0
-    if opp >= target - 15 then mod = mod + 8
-    elseif opp >= target - 40 then mod = mod + 3 end
+    if opp >= target - 15 then mod = mod + 5    -- was +8
+    elseif opp >= target - 40 then mod = mod + 2 end  -- was +3
     if me  >= target - 15 then mod = mod - 5 end
     local diff = opp - me
     if diff > 50 and diff <= 80 then mod = mod + 3 end
+    -- 13th-bot-audit fix (Codex catch): cap output so stacking with
+    -- scoreUrgency doesn't drop thresholds past 50% (Bel 70→50 etc).
+    -- Saudi tournament play uses target-15 as the canonical "near"
+    -- boundary; magnitudes were also halved on the opp-near branches.
+    if mod >  10 then mod =  10 end
+    if mod < -10 then mod = -10 end
     return mod
 end
 
@@ -524,9 +556,20 @@ function Bot.PickBid(seat)
     -- Round-2 threshold ought to be ≥ round-1: in R2 the bidder picks
     -- the suit, so fewer hands are forced to commit. Advanced layer
     -- enforces this; basic mode keeps the existing R2<R1 split.
+    --
+    -- 13th-bot-audit fix (Codex+Gemini consensus): the Advanced bump
+    -- was previously +6 (r2Base=48), making M3lm pass winnable
+    -- marginal hands that Basic scooped up — directly responsible for
+    -- the headless-tournament regression where M3lm bidder-team-avg
+    -- (97.7) under-performed Basic (99.1). Reduce to +2 so Advanced
+    -- R2 (38) is only mildly stricter than Basic R2 (36) — still
+    -- consistent with "R2 should be ≥ R1" intent (since R1=42 base,
+    -- R2=38 with the fix is still below R1, matching basic-mode
+    -- semantics; the bump just prevents R2 from being _easier_ in
+    -- Advanced after urgency stacks).
     local r1Base = TH_HOKM_R1_BASE
     local r2Base = TH_HOKM_R2_BASE
-    if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base + 6) end
+    if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base - 4) end
     local thHokmR1 = jitter(r1Base    - urgency, BID_JITTER)
     local thHokmR2 = jitter(r2Base    - urgency, BID_JITTER)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
@@ -879,17 +922,23 @@ local function pickFollow(legal, hand, trick, contract, seat)
     local lastSeat = (pos == 4)
 
     if partnerWinning then
-        -- Smother: in Hokm, dumping our Ace/10 of lead suit onto partner's
+        -- Smother: dumping our Ace/10 of lead suit onto partner's
         -- trick-pile feeds points to our team. Gate:
         --   (a) we have a SECOND A or T in that suit (so we keep one
         --       for defensive depth), OR
         --   (b) we're past the first 3 tricks, OR
         --   (c) [ANY MODE] we're 4th to act — the trick is going on
         --       partner's pile no matter what, free points.
-        -- Trump-led: smother is skipped (trump tricks don't reward
-        -- feeding A/T).
-        if contract.type == K.BID_HOKM and trick.leadSuit
-           and trick.leadSuit ~= contract.trump then
+        -- 13th-bot-audit fix (Codex+pickFollow agent): smother now
+        -- fires on Sun + Ashkal too. The original Hokm-only gate
+        -- missed the case where partner sweeps in Sun — A/T are
+        -- worth 11/10 points there too. Trump-led smother stays
+        -- skipped under Hokm only (trump tricks don't reward feed).
+        local feedSafe = trick.leadSuit and (
+            contract.type ~= K.BID_HOKM
+            or trick.leadSuit ~= contract.trump
+        )
+        if feedSafe then
             local lead = trick.leadSuit
             local highInSuit = {}  -- list of A/T legal cards in lead suit
             for _, c in ipairs(legal) do
@@ -943,6 +992,24 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         end
                     end
                 end
+                -- 13th-bot-audit fix (Codex+Gemini+pickFollow agent):
+                -- in Sun, an Ace of the led suit is unbeatable AND a
+                -- point card (11). Don't duck it. Same for any A/T of
+                -- the led suit in any contract — those are the high-
+                -- value point cards we'd be voluntarily losing if we
+                -- ducked. (Position-2-low only makes sense when the
+                -- card we'd take with is a low-point K/Q/J — saving
+                -- it for partner doesn't apply to A/T.)
+                if not sureStopper and trick.leadSuit then
+                    for _, c in ipairs(winners) do
+                        local r = C.Rank(c)
+                        if C.Suit(c) == trick.leadSuit
+                           and (r == "A" or r == "T") then
+                            sureStopper = c
+                            break
+                        end
+                    end
+                end
                 if sureStopper then return sureStopper end
                 -- Duck: throw the lowest legal that ISN'T a winner.
                 local nonWinners = {}
@@ -959,6 +1026,22 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 -- All legal cards are winners — fall through.
             elseif pos == 3 then
                 -- Highest winner so the 4th seat can't easily overcut.
+                -- 13th-bot-audit fix: EXCEPT when the only winners are
+                -- trump (forced ruff) — then ruff with the LOWEST trump
+                -- to save the J / 9 / A for forcing leads. Wasting the
+                -- J of trump on a 7-of-side-suit ruff is a classic
+                -- give-back; bot must conserve high trump.
+                if contract.type == K.BID_HOKM and contract.trump then
+                    local trumpWinners = {}
+                    for _, c in ipairs(winners) do
+                        if C.IsTrump(c, contract) then
+                            trumpWinners[#trumpWinners + 1] = c
+                        end
+                    end
+                    if #trumpWinners > 0 and #trumpWinners == #winners then
+                        return lowestByRank(trumpWinners, contract)
+                    end
+                end
                 return highestByRank(winners, contract)
             end
         end
@@ -1180,19 +1263,48 @@ function Bot.PickPreempt(seat)
     if not hand then return false end
     local strength = sunStrength(hand)
     -- Slight bonus when we hold the Ace of the bid suit ourselves
-    -- (it would have been our trick-winner anyway).
+    -- (it would have been our trick-winner anyway). 13th-bot-audit
+    -- raised this from +8 to +12 (Codex+Claude consensus): the Ace
+    -- is worth ~11 points + tempo control + guaranteed first-trick,
+    -- under-weighted at +8.
     local bidSuit = S.s.bidCard and C.Suit(S.s.bidCard)
     if bidSuit then
         for _, c in ipairs(hand) do
             if C.Rank(c) == "A" and C.Suit(c) == bidSuit then
-                strength = strength + 8; break
+                strength = strength + 12; break
             end
         end
+    end
+    -- 13th-bot-audit fix (Codex): factor partner's bid history.
+    -- Partner who already passed (Sun option declined) → preempt is
+    -- riskier (no fallback if our Sun fails). Partner who bid Sun or
+    -- Hokm → side-suit coverage already implied → safer to preempt.
+    local pBid = S.s.bids and S.s.bids[R.Partner(seat)]
+    if pBid == K.BID_PASS then strength = strength - 6
+    elseif pBid == K.BID_SUN then strength = strength + 8
+    elseif pBid and pBid:sub(1, #K.BID_HOKM) == K.BID_HOKM then
+        strength = strength + 5
     end
     strength = strength + scoreUrgency(R.TeamOf(seat))
                        + matchPointUrgency(R.TeamOf(seat))
     local th = K.BOT_PREEMPT_TH or 75
     return strength >= jitter(th, BEL_JITTER)
+end
+
+-- ---------------------------------------------------------------------
+-- Kawesh / Saneen detection
+-- ---------------------------------------------------------------------
+-- Bot decision to call hand-annul when holding 5+ cards of 7/8/9.
+-- 13th-bot-audit: Kawesh was missing for bots — humans got the redeal
+-- option but bots had to play unwinnable hands. Decision is
+-- unconditional: if eligible, call. The hand has no honors, no length,
+-- no scoring potential — redeal is strictly better than playing it.
+function Bot.PickKawesh(seat)
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    if not hand then return false end
+    if S.s.phase ~= K.PHASE_DEAL1 then return false end
+    if C.IsKaweshHand and C.IsKaweshHand(hand) then return true end
+    return false
 end
 
 -- ---------------------------------------------------------------------

@@ -110,10 +110,31 @@ local function sampleConsistentDeal(seat, unseen)
     for s = 1, 4 do
         if s ~= seat then sizes[s] = seatHandSize(s) end
     end
+    -- 13th-bot-audit fix (Codex+ISMCTS agent): pin the bid card to
+    -- the bidder's seat. The bid card is publicly face-up; per Saudi
+    -- rules it goes to the bidder's hand. Without this, the sampler
+    -- could randomly assign it to any opponent, corrupting every
+    -- rollout's evaluation by ~10 points per trick where they'd use
+    -- it. Only pin when (a) the bid card is in `unseen` (i.e., still
+    -- in someone's hand, not played) and (b) the bidder is not us.
+    local pinSeat, pinCard = nil, nil
+    if S.s.contract and S.s.contract.bidder
+       and S.s.contract.bidder ~= seat
+       and S.s.bidCard then
+        for _, c in ipairs(unseen) do
+            if c == S.s.bidCard then
+                pinSeat = S.s.contract.bidder
+                pinCard = S.s.bidCard
+                break
+            end
+        end
+    end
     local maxAttempts = 20
     for attempt = 1, maxAttempts do
         local pool = {}
-        for _, c in ipairs(unseen) do pool[#pool + 1] = c end
+        for _, c in ipairs(unseen) do
+            if c ~= pinCard then pool[#pool + 1] = c end
+        end
         shuffle(pool)
         local deal = {}
         local ok = true
@@ -125,6 +146,10 @@ local function sampleConsistentDeal(seat, unseen)
                 local voids = (B.Bot._memory and B.Bot._memory[s]
                                and B.Bot._memory[s].void) or {}
                 local hand = {}
+                -- Pin: pre-place the bid card if this is the bidder.
+                if s == pinSeat and pinCard then
+                    hand[#hand + 1] = pinCard
+                end
                 local leftover = {}
                 for _, c in ipairs(pool) do
                     if #hand < n and not voids[C.Suit(c)] then
@@ -146,7 +171,9 @@ local function sampleConsistentDeal(seat, unseen)
     end
     -- Fallback: shuffle once and deal without void constraints.
     local pool = {}
-    for _, c in ipairs(unseen) do pool[#pool + 1] = c end
+    for _, c in ipairs(unseen) do
+        if c ~= pinCard then pool[#pool + 1] = c end
+    end
     shuffle(pool)
     local deal = {}
     local idx = 1
@@ -156,10 +183,12 @@ local function sampleConsistentDeal(seat, unseen)
         else
             local n = seatHandSize(s)
             local hand = {}
-            for j = 1, n do
-                if idx <= #pool then
-                    hand[#hand + 1] = pool[idx]; idx = idx + 1
-                end
+            if s == pinSeat and pinCard then
+                hand[#hand + 1] = pinCard
+            end
+            while #hand < n and idx <= #pool do
+                hand[#hand + 1] = pool[idx]
+                idx = idx + 1
             end
             deal[s] = hand
         end
@@ -248,14 +277,82 @@ local function rolloutValue(seat, card, world, contract)
         end
         if #trick.plays > 0 then
             local cur = R.CurrentTrickWinner(trick, contract)
+            local pos = #trick.plays + 1
+            local lastSeat = (pos == 4)
+            -- 13th-bot-audit fix (Codex+Gemini+ISMCTS agent): partner
+            -- winning + we're closing the trick = SMOTHER. Dump A or
+            -- T of the lead suit onto partner's pile (free points).
+            -- Without this, rollout massively under-values smother
+            -- candidates and Saudi Master misranks plays that set up
+            -- partner sweeps.
             if cur and R.Partner(s) == cur then
+                if lastSeat and trick.leadSuit and (
+                    contract.type ~= K.BID_HOKM
+                    or trick.leadSuit ~= contract.trump
+                ) then
+                    local lead = trick.leadSuit
+                    local highInSuit = nil
+                    local highRank = -1
+                    for _, c in ipairs(legal) do
+                        local r = C.Rank(c)
+                        if C.Suit(c) == lead and (r == "A" or r == "T") then
+                            local tr = C.TrickRank(c, contract)
+                            if not highInSuit or tr < highRank then
+                                highInSuit = c
+                                highRank = tr
+                            end
+                        end
+                    end
+                    if highInSuit then return highInSuit end
+                end
                 return lowestRank(legal)
             end
             local winners = {}
             for _, c in ipairs(legal) do
                 if wouldWin(c) then winners[#winners + 1] = c end
             end
-            if #winners > 0 then return lowestRank(winners) end
+            if #winners > 0 then
+                -- 13th-bot-audit fix: position-3-high. Force the 4th
+                -- seat to overcut with a higher card, increasing the
+                -- chance the trick stays with us. Live pickFollow
+                -- already does this; previous heuristicPick always
+                -- played lowest winner, distorting rollouts.
+                if pos == 3 then
+                    local best, bestRank = winners[1], -1
+                    for _, c in ipairs(winners) do
+                        local r = C.TrickRank(c, contract)
+                        if r > bestRank then best, bestRank = c, r end
+                    end
+                    -- EXCEPTION: forced ruff with only-trump winners —
+                    -- ruff with the LOWEST trump to save the J / 9.
+                    if contract.type == K.BID_HOKM and contract.trump then
+                        local trumpWinners = {}
+                        for _, c in ipairs(winners) do
+                            if C.IsTrump(c, contract) then
+                                trumpWinners[#trumpWinners + 1] = c
+                            end
+                        end
+                        if #trumpWinners > 0 and #trumpWinners == #winners then
+                            return lowestRank(trumpWinners)
+                        end
+                    end
+                    return best
+                end
+                return lowestRank(winners)
+            end
+            -- Can't win. 13th-bot-audit fix: trump preservation. If
+            -- not last seat AND we have non-trump options, discard
+            -- the lowest non-trump rather than burning a trump.
+            if not lastSeat and contract.type == K.BID_HOKM
+               and contract.trump then
+                local discardable = {}
+                for _, c in ipairs(legal) do
+                    if not C.IsTrump(c, contract) then
+                        discardable[#discardable + 1] = c
+                    end
+                end
+                if #discardable > 0 then return lowestRank(discardable) end
+            end
             return lowestRank(legal)
         end
         -- Lead. Heuristic-mirror of Bot.pickLead's defender path:

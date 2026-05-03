@@ -3232,6 +3232,23 @@ function N.MaybeRunBot()
                 if S.s.phase ~= K.PHASE_DEAL1 and S.s.phase ~= K.PHASE_DEAL2BID then return end
                 if S.s.turn ~= seat or S.s.turnKind ~= "bid" then return end
                 if S.s.bids[seat] ~= nil then return end
+                -- 13th-bot-audit fix: Kawesh check before bidding.
+                -- If the bot's hand is 5+ cards of {7,8,9}, call
+                -- Kawesh to annul the deal — the hand is unwinnable.
+                -- Humans had this option via UI; bots didn't. Match
+                -- the LocalKawesh wire path so receivers see the
+                -- announcement correctly.
+                if S.s.phase == K.PHASE_DEAL1
+                   and B.Bot.PickKawesh and B.Bot.PickKawesh(seat) then
+                    local info = S.s.seats[seat]
+                    local nm = (info and info.name
+                                and (info.name:match("^([^%-]+)") or info.name))
+                                or "?"
+                    print(("|cffff8800WHEREDNGN|r %s called Kawesh — hand annulled, redeal."):format(nm))
+                    broadcast(("%s;%d"):format(K.MSG_KAWESH, seat))
+                    N.HostHandleKawesh(seat)
+                    return
+                end
                 local bid = B.Bot.PickBid(seat)
                 S.ApplyBid(seat, bid)
                 N.SendBid(seat, bid)

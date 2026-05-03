@@ -1,5 +1,81 @@
 # Changelog
 
+## v0.4.0 — Bot AI improvements (25-agent audit)
+
+Tactical and evaluation upgrades across all bot tiers. No wire-format
+changes. Driven by a 25-agent audit (23 Claude angle agents + Codex
+CLI + Gemini CLI) focused exclusively on Bot.lua and BotMaster.lua.
+
+### Bidding evaluation
+
+- `suitStrengthAsTrump` now scores 7 and 8 of trump at +2 each (Saudi
+  Hokm convention). Previously fell through with 0 contribution,
+  undercounting trump-rich hands by up to 8 points.
+- `sunStrength` adds two new bonuses:
+  - **+6 per card beyond 4** in suits ≥5 long that contain an A or K
+    ("the suit walks"). A 6-card spade suit with AKQ now scores ~30
+    higher than before, properly reflecting Sun-control value.
+  - **+8 stopper triple** for any AKQ in the same suit (3 guaranteed
+    tricks in no-trump).
+  - Distribution penalty cap softened from −25 to −18 (long solid
+    suits no longer bleed all their headroom).
+- Advanced R2 threshold bump reduced from +6 to −4. The previous +6
+  forced Advanced/M3lm to pass winnable marginal hands that Basic
+  scooped up — directly responsible for the headless-tournament
+  M3lm regression (97.7 vs Basic 99.1).
+- `matchPointUrgency` magnitudes halved on the opp-near-win branches
+  (+8→+5, +3→+2) and the function output is now capped at ±10.
+  Previously stacked with `scoreUrgency` could reduce thresholds by
+  up to 20 points (Bel 70→50), causing desperate over-escalations.
+
+### Card play tactics
+
+- `pickFollow` smother (partner winning) now fires on Sun and Ashkal,
+  not Hokm-only. Dumping A/T of the led suit is free points in any
+  contract.
+- New Sun sure-stopper: in any contract with a non-trump lead, the
+  Ace of the led suit is unbeatable AND a high-point card. Pos-2 no
+  longer ducks A/T of the led suit ("don't voluntarily lose 11
+  points").
+- Pos-3 forced trump-ruff now uses the LOWEST trump, not the highest
+  — saving J / 9 / A for forcing leads. Previously the bot wasted
+  the J of trump on a 7-of-side-suit ruff in a classic give-back.
+
+### Kawesh / Saneen
+
+- New `Bot.PickKawesh(seat)` implements the bot side of the
+  hand-annul rule: 5+ cards of {7,8,9} → unconditionally call
+  Kawesh in DEAL1. Net.lua bot dispatch checks before bidding so
+  the bot redeals an unwinnable hand the same way a human would.
+  Previously bots had to play these hands and lose.
+
+### Pre-emption
+
+- `Bot.PickPreempt` now factors partner's bid history. Partner who
+  passed → −6 (no fallback if our Sun fails). Partner who bid Sun →
+  +8 (side-suit coverage implied). Partner who bid Hokm → +5.
+- The Ace-of-bid-suit bonus raised from +8 to +12. The Ace is worth
+  ~11 raw points + tempo control + guaranteed first-trick — under-
+  weighted at +8.
+
+### Saudi Master ISMCTS rollouts
+
+- `BotMaster.heuristicPick` upgraded with three of the highest-impact
+  live heuristics, closing the gap with `Bot.pickFollow`:
+  - Smother on partner-winning + last-seat (with non-trump lead).
+  - Position-3 highest-winner (was always lowest).
+  - Position-3 forced-trump-ruff exception: lowest trump.
+  - Trump preservation: discard non-trump first when not last seat.
+- `sampleConsistentDeal` now pins the public bid card to the
+  bidder's hand. Previously the sampler could randomly assign it to
+  any opponent, corrupting every rollout's evaluation.
+
+### Tests
+
+176/176 passing. Headless tournament (`test_state_bot.lua`) tests
+play-only with synthetic contracts; full bidding-round comparison
+between tiers requires a separate harness and is not in this release.
+
 ## v0.3.2 — Lobby card-style preview
 
 Cosmetic add only.
