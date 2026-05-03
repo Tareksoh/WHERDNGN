@@ -152,4 +152,10 @@
 </g>
 
 <line x1="200" y1="525" x2="550" y2="525" stroke="#1a1612" stroke-width="1.5" stroke-dasharray="4 4"></line>
+
+
+<g>
+  <g transform="translate(375 140) scale(0.85)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z" fill="#8a2a26"></path></g>
+  <g transform="translate(375 910) rotate(180) scale(0.85)"><path d="M 0 -50 L 35 0 L 0 50 L -35 0 Z" fill="#8a2a26"></path></g>
+</g>
 </svg>

@@ -152,4 +152,10 @@
 </g>
 
 <line x1="200" y1="525" x2="550" y2="525" stroke="#1a1612" stroke-width="1.5" stroke-dasharray="4 4"></line>
+
+
+<g>
+  <g transform="translate(375 140) scale(0.85)"><path d="M 0 -50 C -20 -20 -50 0 -50 25 C -50 45 -30 50 -15 45 C -8 42 -3 38 -2 30 L -10 50 L 10 50 L 2 30 C 3 38 8 42 15 45 C 30 50 50 45 50 25 C 50 0 20 -20 0 -50 Z" fill="#1a1612"></path></g>
+  <g transform="translate(375 910) rotate(180) scale(0.85)"><path d="M 0 -50 C -20 -20 -50 0 -50 25 C -50 45 -30 50 -15 45 C -8 42 -3 38 -2 30 L -10 50 L 10 50 L 2 30 C 3 38 8 42 15 45 C 30 50 50 45 50 25 C 50 0 20 -20 0 -50 Z" fill="#1a1612"></path></g>
+</g>
 </svg>
