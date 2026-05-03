@@ -403,29 +403,42 @@ end
 -- Score-position urgency. Returns a threshold MODIFIER (subtract
 -- from threshold to lower it / be more aggressive). Off (returns 0)
 -- when advanced is disabled.
---   • near win (cumulative >= target-25): +8 (more conservative)
---   • near loss (opp cumulative >= target-25): -12 (desperate)
---   • behind by 80+: -6 (take risks)
+--   • near win (cumulative >= target-25): -8 (more conservative)
+--   • near loss (opp cumulative >= target-25): +12 (desperate)
+--   • behind by 80+: +6 (take risks)
 --   • else: 0
+--
+-- 6th-audit fix: signs were previously inverted vs. the comments.
+-- Callers do `th = base - urgency`, so a POSITIVE return lowers
+-- threshold (more aggressive); a NEGATIVE return raises it (more
+-- conservative). Near-win = conservative ⇒ negative; near-loss =
+-- desperate ⇒ positive; far-behind = take risks ⇒ positive. The
+-- old returns gave the opposite of the documented intent.
 local function scoreUrgency(myTeam)
     if not Bot.IsAdvanced() then return 0 end
     if not S.s.cumulative or not myTeam then return 0 end
     local me  = S.s.cumulative[myTeam] or 0
     local opp = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
     local target = (S.s.target or 152)
-    if me  >= target - 25 then return  8  end
-    if opp >= target - 25 then return -12 end
-    if opp - me > 80      then return -6  end
+    if me  >= target - 25 then return -8  end   -- conservative when nearly won
+    if opp >= target - 25 then return  12 end   -- desperate when nearly lost
+    if opp - me > 80      then return  6  end   -- take risks when far behind
     return 0
 end
 
 -- M3lm-only: smoother match-point urgency. Layers on top of
 -- scoreUrgency with a finer-grained curve based on distance-to-win.
--- Returns ADDITIONAL modifier to subtract from threshold.
---   • opponent  ≥ target-15  : extra -8  (defensive desperation)
---   • opponent  ≥ target-40  : extra -3  (caution)
---   • we        ≥ target-15  : extra +5  (lock it down)
---   • behind by 50..80       : extra -3  (take measured risk)
+-- Returns ADDITIONAL modifier to subtract from threshold (so positive
+-- = more aggressive, negative = more conservative — same convention
+-- as scoreUrgency).
+--   • opponent  ≥ target-15  : extra +8  (defensive desperation)
+--   • opponent  ≥ target-40  : extra +3  (caution → guard the lead)
+--   • we        ≥ target-15  : extra -5  (lock it down)
+--   • behind by 50..80       : extra +3  (take measured risk)
+--
+-- 6th-audit fix: signs flipped to match the documented threshold
+-- convention. The previous code returned negative-when-aggressive,
+-- which the caller's subtraction inverted into the wrong direction.
 local function matchPointUrgency(myTeam)
     if not Bot.IsM3lm() then return 0 end
     if not S.s.cumulative or not myTeam then return 0 end
@@ -433,11 +446,11 @@ local function matchPointUrgency(myTeam)
     local opp = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
     local target = (S.s.target or 152)
     local mod = 0
-    if opp >= target - 15 then mod = mod - 8
-    elseif opp >= target - 40 then mod = mod - 3 end
-    if me  >= target - 15 then mod = mod + 5 end
+    if opp >= target - 15 then mod = mod + 8
+    elseif opp >= target - 40 then mod = mod + 3 end
+    if me  >= target - 15 then mod = mod - 5 end
     local diff = opp - me
-    if diff > 50 and diff <= 80 then mod = mod - 3 end
+    if diff > 50 and diff <= 80 then mod = mod + 3 end
     return mod
 end
 

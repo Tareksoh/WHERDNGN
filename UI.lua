@@ -2119,6 +2119,14 @@ peekLastTrick = function()
         return
     end
     if S.s.peekedThisRound then return end
+    -- 6th-audit fix: phase gate. Peek is meant for the brief lull
+    -- between tricks during PLAY (and the SWA voting window). If a
+    -- player triggers the peek while a Takweesh / SWA banner has
+    -- already moved phase to SCORE/GAME_END, the centerOverride lays
+    -- the trick cards on top of the round-end banner for 3 seconds.
+    if S.s.phase ~= K.PHASE_PLAY and S.s.phase ~= K.PHASE_DEAL3 then
+        return
+    end
     S.s.peekedThisRound = true
     centerOverride = S.s.lastTrick
     if U.Refresh then U.Refresh() end
@@ -2656,7 +2664,18 @@ function U.Refresh()
     else
         renderSeats()
         renderCenter()
-        renderHand()
+        -- 6th-audit fix: hide the hand row during SCORE / GAME_END.
+        -- Cards are anchored to handRow which lives in the table
+        -- frame's hierarchy and renders ABOVE the round-end banner
+        -- (banner created earlier → lower sibling z-order). Players
+        -- saw their cards bleeding over the score banner. Clearing
+        -- the hand pool when the round ends is also correct
+        -- semantically — the round is done, those plays are over.
+        if S.s.phase == K.PHASE_SCORE or S.s.phase == K.PHASE_GAME_END then
+            clearHand()
+        else
+            renderHand()
+        end
         renderBanner()
         renderAKABanner()
         renderPeekButton()

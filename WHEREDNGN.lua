@@ -182,6 +182,26 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                         B.Net.StartBelTimer(bidder, "gahwa")
                     end
                 end
+                -- 6th-audit fix: re-fire _HostStepPlay if a 4-play
+                -- trick was stuck mid-resolution at /reload time.
+                -- _HostStepPlay's 2.2s C_Timer doesn't survive a
+                -- /reload, so a host who reloaded with a complete
+                -- trick on the table would never resolve it — the
+                -- table soft-locks waiting for a 5th play that never
+                -- comes. Schedule a delayed step to give the rest of
+                -- the restore (network/UI) time to settle first.
+                if s.phase == K.PHASE_PLAY and s.trick
+                   and s.trick.plays and #s.trick.plays >= 4
+                   and B.Net and B.Net._HostStepPlay then
+                    C_Timer.After(0.5, function()
+                        if not B.State.s.isHost then return end
+                        if B.State.s.phase ~= K.PHASE_PLAY then return end
+                        if B.State.s.paused then return end
+                        if not B.State.s.trick then return end
+                        if #B.State.s.trick.plays < 4 then return end
+                        B.Net._HostStepPlay()
+                    end)
+                end
             end
             -- Re-audit fix V13: also re-arm the LOCAL T-10s pre-warn
             -- (audio ping + UI pulse) on every client. StartLocalWarn

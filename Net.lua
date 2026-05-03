@@ -1367,6 +1367,14 @@ function N.LocalGahwa()
 end
 
 -- Local pre-emption (الثالث, "Triple-on-Ace") action.
+--
+-- 6th-audit fix: when the LOCAL player IS the host, we cannot route
+-- through `_OnPreempt(localName, ...)` because that handler starts
+-- with `if fromSelf(sender) then return end` and silently drops the
+-- claim — the host's own preempt was being swallowed, leaving the
+-- table soft-locked until 60s AFK fired. Instead, mirror the cleaner
+-- `LocalGahwa` pattern: apply state locally, broadcast, then run the
+-- host post-apply logic inline.
 function N.LocalPreempt()
     if S.s.paused then return end
     if S.s.phase ~= K.PHASE_PREEMPT then return end
@@ -1377,9 +1385,23 @@ function N.LocalPreempt()
     end
     if not eligible then return end
     cancelLocalWarn()
+    -- Apply locally first (state mutation), then broadcast so peers
+    -- can mirror. Order matches LocalGahwa for consistency.
+    S.ApplyPreempt(S.s.localSeat)
     N.SendPreempt(S.s.localSeat)
     if S.s.isHost then
-        N._OnPreempt(S.s.localName or "__host__", S.s.localSeat)
+        -- Replicate _OnPreempt's host post-apply branch directly.
+        S.s.pendingPreemptContract = nil
+        S.ApplyContract(S.s.localSeat, K.BID_SUN, nil)
+        N.SendContract(S.s.localSeat, K.BID_SUN, "")
+        local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+        local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+        if cumA < 101 and cumB < 101 then
+            S.s.belPending = nil
+            N.HostFinishDeal()
+            return
+        end
+        N.MaybeRunBot()
     end
 end
 
@@ -1388,9 +1410,17 @@ function N.LocalPreemptPass()
     if S.s.phase ~= K.PHASE_PREEMPT then return end
     if not S.s.localSeat or not S.s.preemptEligible then return end
     cancelLocalWarn()
+    -- Apply locally first, then broadcast (mirrors LocalGahwa).
+    S.ApplyPreemptPass(S.s.localSeat)
     N.SendPreemptPass(S.s.localSeat)
     if S.s.isHost then
-        N._OnPreemptPass(S.s.localName or "__host__", S.s.localSeat)
+        if not S.s.preemptEligible then
+            -- All eligible seats waived → finalize original buyer.
+            N._FinalizePreempt()
+        else
+            -- Non-final pass: dispatch the next eligible seat.
+            N.MaybeRunBot()
+        end
     end
 end
 
@@ -1910,6 +1940,16 @@ function N._OnSWAReq(sender, seat, encodedHand)
     if S.s.phase ~= K.PHASE_PLAY then return end
     if not authorizeSeat(seat, sender) then return end
     if WHEREDNGNDB and WHEREDNGNDB.allowSWA == false then return end
+    -- 6th-audit fix: overwrite guard. If a request is already
+    -- pending (e.g., a different player's request was just received
+    -- and is still being voted on), a second MSG_SWA_REQ would
+    -- clobber the in-flight request, dropping any votes that had
+    -- already arrived. Reject the second request until the first
+    -- resolves. Same caller re-sending is also a no-op (the first
+    -- request struct is still authoritative).
+    if S.s.swaRequest and S.s.swaRequest.caller then
+        return
+    end
     -- Stash the pending request so the UI can render Accept/Deny
     -- buttons for opponents and the host can collate responses.
     S.s.swaRequest = {
@@ -2253,10 +2293,19 @@ function N._OnResyncReq(sender, gameID)
     if not S.s.isHost then return end
     if not gameID or gameID == "" then return end
     if S.s.gameID ~= gameID then return end
+    -- 6th-audit fix: normalize the sender before comparing against
+    -- the seat roster. WoW addon-channel `sender` arrives with a
+    -- "-Realm" suffix on cross-realm groups but the seat names were
+    -- stored from GetUnitName which sometimes drops the suffix on
+    -- same-realm parties — strict equality misses legitimate
+    -- requests, leaving party members soft-locked after a /reload.
+    -- Use the same normalization helper that fromSelf / fromHost /
+    -- authorizeSeat already share.
+    local nsender = normSender(sender)
     local found = false
     for i = 1, 4 do
         local info = S.s.seats[i]
-        if info and info.name == sender then found = true; break end
+        if info and info.name == nsender then found = true; break end
     end
     if not found then
         log("Warn", "resync from %s rejected (not in roster)", tostring(sender))
@@ -2265,9 +2314,11 @@ function N._OnResyncReq(sender, gameID)
     log("Info", "resync to %s for game %s", sender, gameID)
     N.SendResyncRes(sender, gameID)
     -- Also re-whisper their hand. The host knows it from hostHands.
+    -- Use the normalized sender for seat lookup — same realm-suffix
+    -- mismatch bug as the roster gate above.
     local seat
     for i = 1, 4 do
-        if S.s.seats[i] and S.s.seats[i].name == sender then seat = i; break end
+        if S.s.seats[i] and S.s.seats[i].name == nsender then seat = i; break end
     end
     if seat and S.s.hostHands and S.s.hostHands[seat] then
         N.SendHand(sender, S.s.hostHands[seat])

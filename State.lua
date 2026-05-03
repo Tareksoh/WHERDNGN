@@ -61,11 +61,28 @@ local function reset()
     s.preemptEligible = nil
     -- scores
     s.cumulative  = { A = 0, B = 0 }
-    s.target      = 152
+    -- 6th-audit fix: pull target / teamNames from WHEREDNGNDB so a
+    -- /baloot reset (or any other reset() entry, e.g. host-finishes-
+    -- game cleanup) doesn't silently revert the user's saved
+    -- preferences to the hard-coded defaults. Previously, after the
+    -- user set /baloot target 100 and started a new game, the next
+    -- reset between games would silently snap target back to 152.
+    s.target      = (WHEREDNGNDB and tonumber(WHEREDNGNDB.target)) or 152
     -- Team display names. Default to generic A/B labels but the host
     -- can rename via the lobby inputs (broadcast on MSG_TEAMS so all
     -- clients see the same labels). 20-char max enforced UI-side.
-    s.teamNames   = { A = "Team A", B = "Team B" }
+    local tnA, tnB = "Team A", "Team B"
+    if WHEREDNGNDB and type(WHEREDNGNDB.teamNames) == "table" then
+        if type(WHEREDNGNDB.teamNames.A) == "string"
+           and WHEREDNGNDB.teamNames.A ~= "" then
+            tnA = WHEREDNGNDB.teamNames.A
+        end
+        if type(WHEREDNGNDB.teamNames.B) == "string"
+           and WHEREDNGNDB.teamNames.B ~= "" then
+            tnB = WHEREDNGNDB.teamNames.B
+        end
+    end
+    s.teamNames   = { A = tnA, B = tnB }
     -- Per-name version map, populated as host/join/lobby broadcasts
     -- arrive carrying the sender's addon version. Lets the lobby UI
     -- flag mismatched versions before someone starts a game.
@@ -168,7 +185,12 @@ end
 -- ---------------------------------------------------------------------
 local TRANSIENT_FIELDS = {
     pendingHost = true,   -- ephemeral host announce we may have heard
-    hostDeckRemainder = true,  -- only meaningful between deal-1 and deal-3
+    -- NOTE: hostDeckRemainder is NOT transient — it pairs with
+    -- hostHands across PHASE_DEAL1..PHASE_DEAL3. A host /reload after
+    -- the initial 5-card deal but before the final 3-card deal would
+    -- restore hostHands without hostDeckRemainder; then HostDealRest
+    -- short-circuits on the missing remainder and the round soft-
+    -- locks. Both fields must persist together.
     -- Per-trick double-click guard: cleared by ApplyTurn whenever the
     -- turn advances. If we /reload AFTER the local player just played,
     -- a persisted true would stay true until the next ApplyTurn fires
@@ -794,9 +816,23 @@ function S.ApplyBid(seat, bid)
 end
 
 function S.ApplyContract(bidder, btype, trump)
+    -- 6th-audit fix: idempotence guard. If a duplicate MSG_CONTRACT
+    -- arrives (e.g., from the host's normal broadcast then again via
+    -- a resync replay, or from a brief network race), recreating the
+    -- contract table from scratch wipes any escalation flags that
+    -- were already applied (doubled / tripled / foured / gahwa /
+    -- belOpen / tripleOpen / fourOpen). A second call with the same
+    -- bidder + type + trump is a no-op so escalations don't reset.
+    local trumpNorm = (trump ~= "" and trump) or nil
+    if s.contract
+       and s.contract.bidder == bidder
+       and s.contract.type   == btype
+       and s.contract.trump  == trumpNorm then
+        return
+    end
     s.contract = {
         type    = btype,
-        trump   = trump ~= "" and trump or nil,
+        trump   = trumpNorm,
         bidder  = bidder,
         doubled = false,
         tripled = false,
