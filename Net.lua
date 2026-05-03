@@ -689,12 +689,21 @@ end
 function N._OnStart(sender, roundNumber, dealer)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    -- 13th-audit defense-in-depth: hosts are authoritative; never
+    -- apply host-broadcast frames from other peers. Already gated by
+    -- fromHost for an active host, but explicit isHost makes the
+    -- invariant local. Same pattern applied to every host-broadcast
+    -- handler in this wave (_OnDealPhase, _OnHand, _OnBidCard,
+    -- _OnTurn, _OnContract, _OnTrick, _OnRound, _OnGameEnd, _OnPause,
+    -- _OnTeams, _OnTakweeshOut, _OnSWAOut).
+    if S.s.isHost then return end
     S.ApplyStart(roundNumber, dealer)
 end
 
 function N._OnDealPhase(sender, phase, extra)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     if phase == "1" then S.s.phase = K.PHASE_DEAL1
     elseif phase == "2" then
         S.s.phase = K.PHASE_DEAL2BID
@@ -725,18 +734,21 @@ function N._OnHand(sender, encodedCards, forRound)
     -- HostStartRound / HostFinishDeal. So we still skip-self defensively.
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     S.ApplyHand(C.DecodeHand(encodedCards), forRound)
 end
 
 function N._OnBidCard(sender, card)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     S.ApplyBidCard(card)
 end
 
 function N._OnTurn(sender, seat, kind)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     if not seat then return end
     S.ApplyTurn(seat, kind)
 end
@@ -760,6 +772,7 @@ end
 function N._OnContract(sender, bidder, btype, trump)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     if not bidder or not btype then return end
     S.ApplyContract(bidder, btype, trump)
 end
@@ -881,6 +894,7 @@ function N._OnPreemptPass(sender, seat, eligCsv)
     -- earlier code dropped as "not in PHASE_PREEMPT yet".
     if seat == 0 then
         if not fromHost(sender) then return end
+        if S.s.isHost then return end  -- defense in depth
         if not eligCsv or eligCsv == "" then return end
         local elig = {}
         for n in eligCsv:gmatch("(%d+)") do
@@ -980,6 +994,10 @@ function N._OnMeld(sender, seat, kind, suit, top, encodedCards, replayFlag)
     -- frame and skip the per-seat authorizeSeat (which would reject
     -- because sender is the HOST, not the seat owner).
     local isReplay = (replayFlag == "1") and fromHost(sender)
+    -- 13th-audit defense: hosts must never be the target of a replay
+    -- frame (resync replay only goes to rejoiners). Skip the host's
+    -- replay-branch path entirely.
+    if isReplay and S.s.isHost then return end
     -- Phase: melds are declarable in DEAL3 / PLAY only. ApplyMeld already
     -- dedupes by (seat, kind, top, suit), but we still gate phase + author
     -- here so a stale message from a previous round can't poison the
@@ -1002,6 +1020,9 @@ function N._OnPlay(sender, seat, card, replayFlag)
     -- trust the frame and skip turn + authority checks. Idempotence
     -- still applies — never double-add a seat to the same trick.
     local isReplay = (replayFlag == "1") and fromHost(sender)
+    -- 13th-audit defense: hosts are never the target of a replay
+    -- frame; resync replay only goes to rejoiners.
+    if isReplay and S.s.isHost then return end
     if not isReplay then
         -- Turn: only the seat whose turn it is may play.
         if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
@@ -1033,6 +1054,7 @@ end
 function N._OnTrick(sender, winner, points, leadSuit, encPlays)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     -- Authoritative trick snapshot from host. We rebuild s.trick from
     -- the encoded plays so ApplyTrickEnd's lastTrick stash is complete
     -- regardless of MSG_PLAY arrival order. Older hosts (pre-v0.1.25)
@@ -1061,12 +1083,14 @@ end
 function N._OnRound(sender, addA, addB, totA, totB, sweep, bidderMade)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
 end
 
 function N._OnGameEnd(sender, winner)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     S.ApplyGameEnd(winner)
 end
 
@@ -1602,6 +1626,7 @@ end
 function N._OnTakweeshOut(sender, callerSeat, caught, illegalSeat, card, reason)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     -- Display only — score change rides through the parallel SendRound.
     local cName = S.s.seats[callerSeat] and (S.s.seats[callerSeat].name:match("^([^%-]+)") or S.s.seats[callerSeat].name) or "?"
     if caught then
@@ -1913,6 +1938,7 @@ end
 function N._OnPause(sender, payload)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     local paused = (payload == "1")
     if S.s.paused == paused then return end
     S.ApplyPause(paused)
@@ -1921,6 +1947,7 @@ end
 function N._OnTeams(sender, teamA, teamB)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     S.ApplyTeamNames(teamA, teamB)
 end
 
@@ -2182,6 +2209,7 @@ end
 function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB, sweep, bidderMade)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
+    if S.s.isHost then return end
     if not caller then return end
     -- Mirror the takweesh-result struct so the score banner can
     -- render the SWA outcome with its own copy.
@@ -2420,6 +2448,8 @@ function N._OnAKA(sender, seat, suit, replayFlag)
     -- Audit fix: replay bypass — host whispers AKA replay during
     -- resync; sender is host, not the seat owner.
     local isReplay = (replayFlag == "1") and fromHost(sender)
+    -- 13th-audit defense: hosts are never the target of a replay frame.
+    if isReplay and S.s.isHost then return end
     -- Authority: only the seat itself can call AKA on its own behalf.
     -- Cosmetic protection — a spoofed AKA wouldn't change scoring,
     -- but it would mislead a partner's play decision.
