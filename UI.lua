@@ -101,6 +101,13 @@ local FELT_THEMES = {
         centerPad    = { 0.18, 0.04, 0.07, 0.95 },
         feltTexPath  = "burgundy\\felt",   -- cards/burgundy/felt.tga
     },
+    vintage = {
+        name         = "Vintage Leather",
+        feltDark     = { 0.16, 0.10, 0.06, 0.97 },
+        feltLight    = { 0.24, 0.16, 0.10, 0.95 },
+        centerPad    = { 0.14, 0.08, 0.05, 0.95 },
+        feltTexPath  = "felt_vintage",     -- cards/felt_vintage.tga
+    },
 }
 B._cardStyles = CARD_STYLES   -- expose for lobby UI option list
 B._feltThemes = FELT_THEMES
