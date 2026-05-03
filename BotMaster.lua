@@ -279,9 +279,21 @@ local function sampleConsistentDeal(seat, unseen)
     end
 
     -- Fallback: uniform random deal ignoring voids.
+    --
+    -- 50-agent codebase audit fix (H-6 regression): the prior fallback
+    -- ignored both meldPins AND voids. Voids are intentionally ignored
+    -- here (it's the "give up trying to satisfy constraints" path), but
+    -- meldPins MUST be respected — declared meld cards are exact known
+    -- positions, not soft constraints. Without this, a Tierce 7-8-9 of
+    -- Hearts declared by seat 3 could end up split across all four
+    -- seats in the rollout deal, corrupting every rollout's view of who
+    -- holds what. The primary path (above) handled meldPins correctly;
+    -- the fallback was missing the same logic.
     local pool = {}
     for _, c in ipairs(unseen) do
-        if c ~= pinCard then pool[#pool + 1] = c end
+        if c ~= pinCard and not meldPins[c] then
+            pool[#pool + 1] = c
+        end
     end
     shuffle(pool)
     local deal = {}
@@ -293,6 +305,10 @@ local function sampleConsistentDeal(seat, unseen)
             local n = seatHandSize(s)
             local hand = {}
             if s == pinSeat and pinCard then hand[#hand + 1] = pinCard end
+            -- Pre-place this seat's declared meld cards.
+            for c, declarerSeat in pairs(meldPins) do
+                if declarerSeat == s then hand[#hand + 1] = c end
+            end
             while #hand < n and idx <= #pool do
                 hand[#hand + 1] = pool[idx]
                 idx = idx + 1

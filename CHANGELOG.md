@@ -1,5 +1,115 @@
 # Changelog
 
+## v0.4.7 — 50-agent empirical + codebase audit (5 critical bugs found)
+
+A second 50-agent ruflo-swarm audit, this time split 20 agents on
+empirical playtest scenarios (tracing real game flows step-by-step)
+and 30 agents on full-codebase review. The empirical wave alone
+caught two CRITICAL bugs that pure static analysis missed in v0.4.6.
+Full audit report at `.swarm_findings/v0.4.7_AUDIT_REPORT.md`.
+
+### Fixed (Critical)
+
+- **v0.4.6 turn-desync fix was incomplete (CRITICAL):** the self-heal
+  block at `Net.lua:_OnPlay` correctly accepted host-signed plays for
+  any seat AT THE FIRST GATE, then patched `s.turn`. But the SECOND
+  authority gate (`if not isReplay and not authorizeSeat(seat, sender)
+  then return end`) did NOT have the fromHost escape. For human
+  seats, `authorizeSeat(seat, host)` returns false (sender is host,
+  seat owner is the human's name), so the play was silently dropped
+  AFTER the self-heal patched `s.turn`. The reported AFK auto-play
+  cascade (player sees stuck turn → AFK fires → click an
+  already-played card → "illegal play") was NOT actually fixed in
+  v0.4.6 — only after this v0.4.7 patch is the chain complete. Mirror
+  the fromHost escape on the second gate at Net.lua:1104.
+
+- **AFK timeout silently forfeited melds (CRITICAL):**
+  `_HostTurnTimeout`'s play branch auto-played the AFK seat's lowest
+  legal card but did NOT auto-declare melds. The Saudi meld
+  declaration window closes after trick 1 (`#s.tricks >= 1` gate in
+  `S.GetMeldsForLocal` / `S.ApplyMeld` / `Bot.PickMelds`), so a human
+  AFK'd through trick 1 silently lost their entire meld score — a
+  declared Quarte (50 raw) under Bel ×2 = 100 raw = 10 gp lost with
+  no UI feedback. Now mirrors `MaybeRunBot`'s auto-declare pattern:
+  if `meldsDeclared[seat]` is false, run the meld picker on the AFK
+  seat's behalf, broadcast, stamp `meldsDeclared`, then play the
+  card. Outside the trick-1 window the meld picker returns `{}`
+  naturally, so the fix is a no-op there.
+
+- **BotMaster fallback deal path missing meldPins (CRITICAL):**
+  `sampleConsistentDeal`'s primary path correctly pinned declared
+  meld cards to their declarer (since v0.4.5). The fallback path
+  (used when the primary 15-attempt loop exhausts) ignored
+  `meldPins` entirely — a Tierce 7-8-9 of Hearts declared by seat 3
+  could end up split across all four seats in fallback rollouts,
+  corrupting every Saudi Master ISMCTS estimate in games with active
+  melds. Fix mirrors the primary path: exclude `meldPins` keys from
+  the fallback shuffle pool and pre-place them into the declaring
+  seat's hand before filling the remainder.
+
+### Fixed (High)
+
+- **SWA 5-sec timer ignored pause:** both `_OnSWAReq` and `LocalSWA`
+  C_Timer.After callbacks fired during paused games, force-approving
+  SWA requests mid-pause. Now the timer's first action is a paused
+  check; if paused, re-arm a fresh 5-sec window when the game resumes
+  rather than auto-approving. Opponents retain the chance to press
+  Takweesh after unpause.
+
+- **Bot.OnPlayObserved fired on replay frames:** during a resync
+  /reload, `_OnPlay` re-applies in-flight plays with `isReplay=true`.
+  The Bot.OnPlayObserved call was outside the `not isReplay` guard,
+  so void inference / firstDiscard / aceLate / leadCount / likelyKawesh
+  counters could be poisoned by phantom replay observations on any
+  client with bot logic loaded. Currently safe because only humans
+  rejoin (B.Bot is unused on their clients), but the latent risk is
+  closed — guard added.
+
+### Fixed (Medium one-line patches per audit synthesis)
+
+- **`C.IsKaweshHand` requires ≥5 cards:** Saudi Kawesh is defined on
+  the first-five-dealt hand. The previous guard `#hand == 0` allowed
+  a 1-4-card mid-deal hand of all 7/8/9 to falsely match. Tightened
+  to `#hand < 5`.
+
+- **`WHEREDNGN.lua` `B.Net` nil-guard:** the CHAT_MSG_ADDON dispatcher
+  called `B.Net.HandleMessage` without a nil-check. Every other
+  module reference in the file is nil-guarded; this one was an
+  outlier and would flood error popups if Net.lua ever failed to
+  load.
+
+- **`UI.lua` `renderActions` localSeat guard:** spectators (joined
+  party with no seat) had no top-level gate. Most action branches
+  gated on localSeat internally, but PHASE_SCORE/GAME_END only
+  checked isHost — exposing host buttons to spectator-host edge
+  cases. Single `if not S.s.localSeat then return end` at the entry.
+
+### Audit-confirmed PASS items (no change)
+
+- B-61 sunFail direction is correct (raise threshold = Bel less);
+  earlier wave's EV math was flawed (forgot Bel doubles bidder's
+  made score symmetrically)
+- Carré J = 100 and no-Carré-9 are correct per Saudi rule
+  (Pagat-strict, not French Belote convention); confirmed against
+  v0.4.3 audit citations to "نظام التسجيل في البلوت"
+- Trick resolution, must-follow / overcut / partner-winning
+  exception in `R.IsLegalPlay` all correct
+- Resync / replay flow / packSnapshot serialization clean
+- AFK timer arming/cancelation respects pause and SWA correctly
+  (preempt window post-host-reload is the only minor gap)
+
+### Open (deferred — info / next sprint)
+
+- AKA receiver behavior in pickFollow: bot partner reads `akaSent`
+  per-suit dedup but doesn't actually consult `S.s.akaCalled` to
+  suppress over-trumping. Half of the AKA convention is missing.
+- Headless tournament test fixtures cannot exercise Tier 4 features
+  (resets between rounds). 5 concrete test skeletons proposed in
+  audit report; not yet implemented.
+- All-4-disconnect: non-host state lost (no resync mechanism after
+  group dissolves). Acceptable for v1; would need a mid-host-migrate
+  protocol to fix.
+
 ## v0.4.6 — Three player-reported bugs + SWA UX rework + 50-agent audit follow-ups
 
 A 50-agent ruflo-swarm audit on the v0.4.5 + v0.4.6 changes (10 waves

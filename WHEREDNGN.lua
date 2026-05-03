@@ -256,7 +256,14 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
     end
     if event == "CHAT_MSG_ADDON" then
         -- args: prefix, message, channel, sender
-        B.Net.HandleMessage(arg1, arg2, arg3, arg4)
+        -- 50-agent codebase audit fix (M-2): nil-guard B.Net for
+        -- consistency with every other module reference in this file.
+        -- If Net.lua failed to load (e.g., partial install or version
+        -- skew), an unguarded call would raise on every incoming
+        -- addon message — flooding error popups.
+        if B.Net and B.Net.HandleMessage then
+            B.Net.HandleMessage(arg1, arg2, arg3, arg4)
+        end
         return
     end
     if event == "GROUP_ROSTER_UPDATE" then

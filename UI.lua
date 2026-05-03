@@ -1503,6 +1503,16 @@ end
 
 local function renderActions()
     clearActions()
+    -- 50-agent codebase audit fix (M-4): top-level localSeat guard.
+    -- A spectator (joined party but no seat) had no guard at this
+    -- entry — most action branches gate on localSeat comparisons
+    -- internally, but PHASE_SCORE/GAME_END only check isHost. A
+    -- spectator who is also the host (rare but possible) saw
+    -- "Next Round" / "New Game" buttons. Adding a single explicit
+    -- guard makes the intent uniform and protects future phase
+    -- branches from accidental spectator exposure. Host-only phase
+    -- buttons remain reachable because the host always has a seat.
+    if not S.s.localSeat then return end
     if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID then
         if S.IsMyTurn() and S.s.turnKind == "bid" then
             -- Pass label: "Pass" in round 1, "wla" (ولا) in round 2 to

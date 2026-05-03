@@ -1100,13 +1100,30 @@ function N._OnPlay(sender, seat, card, replayFlag)
             if p.seat == seat then return end
         end
     end
-    -- Authority: sender must own the seat (or host if it's a bot).
-    if not isReplay and not authorizeSeat(seat, sender) then return end
+    -- Authority: sender must own the seat (or host if it's a bot,
+    -- OR if the host is auto-acting on behalf of a human via AFK
+    -- timeout / error-recovery — host-signed plays for human seats
+    -- are legitimate authoritative actions). 50-agent playtest
+    -- audit caught this as the missing half of the v0.4.6 turn-
+    -- desync fix: the self-heal block above (line 1090) correctly
+    -- accepts host-signed plays for any seat, but this gate
+    -- previously rejected them for human seats — silently dropping
+    -- the very AFK auto-play that the self-heal was designed to
+    -- accept. Mirroring the fromHost escape closes the loop.
+    if not isReplay and not fromHost(sender)
+       and not authorizeSeat(seat, sender) then return end
     -- Capture lead suit BEFORE ApplyPlay so the bot memory observer
     -- knows whether `card` followed suit or was off-suit (a void tell).
     local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
     S.ApplyPlay(seat, card)
-    if B.Bot and B.Bot.OnPlayObserved then
+    -- 50-agent playtest audit fix: do not feed Bot.OnPlayObserved on
+    -- replay frames during a resync. The plays are reconstructive,
+    -- not new — observing them would corrupt void / firstDiscard /
+    -- aceLate / leadCount counters with phantom data on any client
+    -- that has Bot loaded. Currently safe because rejoiners are
+    -- always human (B.Bot is nil-or-unused there), but the guard
+    -- closes the latent risk if bot seats ever exist on non-host.
+    if not isReplay and B.Bot and B.Bot.OnPlayObserved then
         B.Bot.OnPlayObserved(seat, card, leadBefore)
     end
     -- Don't advance host's turn machinery on a replay frame — those
@@ -2103,6 +2120,28 @@ function N.LocalSWA()
                 end
                 C_Timer.After(windowSec, function()
                     if not S.s.isHost then return end
+                    -- 50-agent playtest audit fix: pause-respecting
+                    -- re-arm. Same logic as _OnSWAReq's timer. If
+                    -- paused, defer the auto-approve to the next
+                    -- 5-sec window after resume.
+                    if S.s.paused then
+                        local req2 = S.s.swaRequest
+                        if req2 and req2.caller == mySeat then
+                            req2.ts = (GetTime and GetTime()) or req2.ts
+                            if C_Timer and C_Timer.After then
+                                C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
+                                    if S.s.isHost and S.s.swaRequest
+                                       and S.s.swaRequest.caller == mySeat
+                                       and S.s.phase == K.PHASE_PLAY
+                                       and not S.s.paused then
+                                        S.s.swaRequest = nil
+                                        N.HostResolveSWA(mySeat, pinnedHand)
+                                    end
+                                end)
+                            end
+                        end
+                        return
+                    end
                     local req = S.s.swaRequest
                     if not req or req.caller ~= mySeat then return end
                     if S.s.phase ~= K.PHASE_PLAY then return end
@@ -2228,6 +2267,31 @@ function N._OnSWAReq(sender, seat, encodedHand)
             local windowSec = K.SWA_TIMEOUT_SEC or 5
             C_Timer.After(windowSec, function()
                 if not S.s.isHost then return end
+                -- 50-agent playtest audit fix: respect pause. Without
+                -- this guard, the SWA timer fires during a paused game
+                -- and forcibly auto-approves mid-pause. Re-arm a fresh
+                -- 5-sec window when the game resumes; until then,
+                -- swaRequest stays pending and opponents can still
+                -- press Takweesh once unpaused.
+                if S.s.paused then
+                    local req2 = S.s.swaRequest
+                    if req2 and req2.caller == seat then
+                        req2.ts = (GetTime and GetTime()) or req2.ts
+                        if C_Timer and C_Timer.After then
+                            C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
+                                if S.s.isHost and S.s.swaRequest
+                                   and S.s.swaRequest.caller == seat
+                                   and S.s.phase == K.PHASE_PLAY
+                                   and not S.s.paused then
+                                    local h = (encodedHand and C.DecodeHand(encodedHand)) or {}
+                                    S.s.swaRequest = nil
+                                    N.HostResolveSWA(seat, h)
+                                end
+                            end)
+                        end
+                    end
+                    return
+                end
                 local req = S.s.swaRequest
                 if not req or req.caller ~= seat then return end
                 if S.s.phase ~= K.PHASE_PLAY then return end
@@ -2876,6 +2940,26 @@ function N._HostTurnTimeout(seat, kind)
         for _, c in ipairs(legal) do
             local r = C.TrickRank(c, S.s.contract)
             if r < bestRank then best, bestRank = c, r end
+        end
+        -- 50-agent playtest audit fix: AFK auto-play during trick 1
+        -- previously skipped meld declaration entirely. The Saudi
+        -- meld window closes after trick 1 (`#s.tricks >= 1` gate in
+        -- S.GetMeldsForLocal / ApplyMeld / Bot.PickMelds), so a human
+        -- AFK'd through trick 1 silently forfeited their melds — a
+        -- 50-point Quarte just disappears. Mirror MaybeRunBot's auto-
+        -- declare logic at Net.lua:3454-3461: if the AFK'd seat hasn't
+        -- declared yet, run the meld picker on their behalf and stamp
+        -- meldsDeclared[seat]=true. The picker itself respects the
+        -- trick-1 gate and returns {} after trick 1, so this is a
+        -- no-op outside the meld window.
+        if S.s.meldsDeclared and not S.s.meldsDeclared[seat] then
+            local melds = (B.Bot and B.Bot.PickMelds and B.Bot.PickMelds(seat)) or {}
+            for _, m in ipairs(melds) do
+                S.ApplyMeld(seat, m.kind, m.suit, m.top,
+                    C.EncodeHand(m.cards or {}))
+                N.SendMeld(seat, m)
+            end
+            S.s.meldsDeclared[seat] = true
         end
         -- Audit C-1: AFK auto-play needs to feed Bot.OnPlayObserved
         -- like the regular dispatch path, otherwise void inference and

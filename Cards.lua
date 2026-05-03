@@ -159,10 +159,16 @@ end
 
 -- "Kawesh" / "Saneen" eligibility: a player whose first-five-dealt
 -- hand contains only 7s, 8s, and 9s may annul during round 1 bidding.
--- Returns false if hand has 0 cards (game hasn't dealt yet) or any rank
--- outside {7, 8, 9}.
+-- Returns false if hand has fewer than 5 cards (game hasn't dealt
+-- the first batch yet) or any rank outside {7, 8, 9}.
+--
+-- 50-agent codebase audit fix (M-1): tightened the empty-hand guard
+-- from `#hand == 0` to `#hand < 5`. Saudi Kawesh is defined on the
+-- first-five-dealt hand; 1-4 cards is a partial deal in flight, not a
+-- valid Kawesh check. Prevents a false positive if some path queries
+-- IsKaweshHand mid-deal.
 function M.IsKaweshHand(hand)
-    if not hand or #hand == 0 then return false end
+    if not hand or #hand < 5 then return false end
     for _, card in ipairs(hand) do
         local r = M.Rank(card)
         if r ~= "7" and r ~= "8" and r ~= "9" then return false end
