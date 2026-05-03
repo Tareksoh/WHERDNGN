@@ -112,7 +112,12 @@ local function dealHandsToHumans(hands)
 end
 
 function N.SendBidCard(card)
-    broadcast(("%s;%s"):format(K.MSG_BIDCARD, card))
+    -- Audit Cl22 fix: when card is nil, "%s" stringifies it to "nil",
+    -- producing the wire frame "b;nil". Receivers store the literal
+    -- string "nil" in s.bidCard, which UI's truthy check treats as a
+    -- real card and tries to render. Coalesce to empty string so the
+    -- field round-trips as a clear no-card sentinel.
+    broadcast(("%s;%s"):format(K.MSG_BIDCARD, card or ""))
 end
 
 function N.SendTurn(seat, kind)
@@ -341,6 +346,18 @@ function N.SendResyncRes(target, gameID)
         whisper(target, ("%s;%d;%d;%s;%s"):format(
             K.MSG_TRICK, t.winner or 0, t.points or 0,
             t.leadSuit or "", enc))
+    end
+    -- Replay in-flight trick plays (so the rejoiner sees the cards
+    -- currently on the table).
+    if S.s.trick and S.s.trick.plays then
+        for _, p in ipairs(S.s.trick.plays) do
+            whisper(target, ("%s;%d;%s"):format(K.MSG_PLAY, p.seat or 0, p.card or "??"))
+        end
+    end
+    -- Replay AKA banner if active this trick.
+    if S.s.akaCalled then
+        whisper(target, ("%s;%d;%s"):format(
+            K.MSG_AKA, S.s.akaCalled.seat or 0, S.s.akaCalled.suit or ""))
     end
 end
 
@@ -1005,8 +1022,8 @@ function N._HostStepPlay()
         if not S.s.trick or #S.s.trick.plays < 4 then return end
         local winner = R.TrickWinner(S.s.trick, S.s.contract)
         local points = R.TrickPoints(S.s.trick, S.s.contract)
-        S.ApplyTrickEnd(winner, points)
         N.SendTrick(winner, points)
+        S.ApplyTrickEnd(winner, points)
         N._HostStepAfterTrick()
         if B.UI then B.UI.Refresh() end
     end)
@@ -2106,6 +2123,11 @@ function N.LocalKawesh()
     if S.s.phase ~= K.PHASE_DEAL1 then return end
     if not S.s.localSeat then return end
     if not C.IsKaweshHand(S.s.hand) then return end  -- can't fake
+    -- Print announcement locally (broadcast won't echo it back to _OnKawesh
+    -- because of fromSelf guard).
+    local info = S.s.seats[S.s.localSeat]
+    local nm = (info and info.name and (info.name:match("^([^%-]+)") or info.name)) or "?"
+    print(("|cffff8800WHEREDNGN|r %s called Kawesh — hand annulled, redeal."):format(nm))
     broadcast(("%s;%d"):format(K.MSG_KAWESH, S.s.localSeat))
     if S.s.isHost then N.HostHandleKawesh(S.s.localSeat) end
 end
@@ -2300,10 +2322,6 @@ function N.HostHandleKawesh(seat)
             return
         end
     end
-    -- Local print for host
-    local info = S.s.seats[seat]
-    local nm = (info and info.name and (info.name:match("^([^%-]+)") or info.name)) or "?"
-    print(("|cffff8800WHEREDNGN|r %s called Kawesh — hand annulled, redeal."):format(nm))
     -- _HostRedeal advances the dealer itself; do NOT pre-rotate here
     -- or we'd skip a seat (was a bug — rotated twice).
     N._HostRedeal()

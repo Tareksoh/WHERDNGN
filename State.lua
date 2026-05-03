@@ -378,6 +378,15 @@ function S.ApplyResyncSnapshot(gameID, payload)
         if b and b ~= "" then s.bids[seat] = b end
     end
 
+    -- Round history is not snapshotted; it arrives via replayed
+    -- MSG_MELD / MSG_TRICK broadcasts right after the snapshot.
+    -- Clear any local state (including RestoreSession leftovers)
+    -- so the replayed history doesn't duplicate.
+    s.tricks       = {}
+    s.meldsByTeam  = { A = {}, B = {} }
+    s.meldsDeclared= {}
+    s.playedCardsThisRound = {}
+
     -- Trick / hand are not snapshotted; they'll arrive via the next
     -- play broadcast and the re-whispered MSG_HAND respectively.
     s.trick = nil
@@ -972,6 +981,7 @@ function S.ApplyTrickEnd(winner, points)
     }
     for _, p in ipairs(s.trick.plays) do
         s.lastTrick.plays[#s.lastTrick.plays + 1] = { seat = p.seat, card = p.card }
+        if s.playedCardsThisRound then s.playedCardsThisRound[p.card] = true end
     end
     s.trick = { leadSuit = nil, plays = {} }
     -- AKA banner only persists for the trick it was called on; clear it
