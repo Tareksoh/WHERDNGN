@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.2 — Lobby card-style preview
+
+Cosmetic add only.
+
+- The `Cards: <name>` cycle button in the lobby now renders a 3-card
+  preview (Ace of Spades · King of Hearts · 10 of Diamonds) at its
+  right edge using the currently-selected style. Both the in-lobby
+  cycle button and `/baloot cards <name>` keep the preview in sync
+  with the active style.
+
 ## v0.3.1 — Classic v2 deck + royal_noir refresh
 
 Two cosmetic adds; no wire-protocol changes, no rule changes.

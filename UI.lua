@@ -911,6 +911,65 @@ local function buildLobby()
             .. "burgundy deck with a green felt if you like. "
             .. "Persists in saved variables.")
 
+    -- 3-card preview strip to the right of the Cards button. Shows
+    -- AS / KH / TD at the currently-active card style so the user
+    -- can see the actual face art before committing to a cycle.
+    -- A (ace), K (face), 10 (number) covers all three card-art
+    -- categories per the user spec; mixed suits (S/H/D) demonstrate
+    -- the four-color suit tinting.
+    local function buildCardsPreview()
+        local strip = CreateFrame("Frame", nil, lobbyPanel)
+        local W, H, STRIDE = 22, 32, 18
+        strip:SetSize(STRIDE * 2 + W, H)
+        strip:SetPoint("LEFT", cardsBtn, "RIGHT", 6, 0)
+        strip.slots = {}
+        for i = 1, 3 do
+            local sf = CreateFrame("Frame", nil, strip)
+            sf:SetSize(W, H)
+            sf:SetPoint("LEFT", strip, "LEFT", (i - 1) * STRIDE, 0)
+            sf:SetFrameLevel(strip:GetFrameLevel() + i)  -- later on top
+            local edge = sf:CreateTexture(nil, "BACKGROUND", nil, 0)
+            edge:SetAllPoints(sf)
+            edge:SetColorTexture(COL.cardEdge[1], COL.cardEdge[2],
+                                 COL.cardEdge[3], 1.0)
+            local body = sf:CreateTexture(nil, "BACKGROUND", nil, 1)
+            body:SetPoint("TOPLEFT", sf, "TOPLEFT", 1, -1)
+            body:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", -1, 1)
+            body:SetColorTexture(COL.cardFace[1], COL.cardFace[2],
+                                 COL.cardFace[3], 1.0)
+            local tex = sf:CreateTexture(nil, "ARTWORK")
+            tex:SetPoint("TOPLEFT", sf, "TOPLEFT", 1, -1)
+            tex:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", -1, 1)
+            sf.tex = tex
+            strip.slots[i] = sf
+        end
+        return strip
+    end
+    local cardsPreview = buildCardsPreview()
+    local PREVIEW_CARDS = { "AS", "KH", "TD" }
+    local function refreshCardsPreview()
+        for i, card in ipairs(PREVIEW_CARDS) do
+            local sf = cardsPreview.slots[i]
+            local path = cardTexturePath(card)
+            if path then
+                sf.tex:SetTexture(path)
+                sf.tex:Show()
+            else
+                sf.tex:Hide()
+            end
+        end
+    end
+    refreshCardsPreview()
+    -- Re-render the preview every time the user cycles, on top of the
+    -- normal label refresh. SetCardStyle's own U.Refresh() rebuilds
+    -- the in-game cards (renderHand etc.) but doesn't reach this
+    -- lobby-panel preview.
+    local cardsCycleOnClick = cardsBtn:GetScript("OnClick")
+    cardsBtn:SetScript("OnClick", function(self, button)
+        if cardsCycleOnClick then cardsCycleOnClick(self, button) end
+        refreshCardsPreview()
+    end)
+
     local feltBtn, feltRefresh = makeCycleBtn(
         "Felt", 56,
         U.GetActiveFeltTheme, U.GetFeltThemes, U.SetFeltTheme,
@@ -918,10 +977,12 @@ local function buildLobby()
             .. "Independent of the card style. Persists in saved "
             .. "variables.")
 
-    lobbyPanel.cardsBtn        = cardsBtn
-    lobbyPanel.cardsBtnUpdate  = cardsRefresh
-    lobbyPanel.feltBtn         = feltBtn
-    lobbyPanel.feltBtnUpdate   = feltRefresh
+    lobbyPanel.cardsBtn          = cardsBtn
+    lobbyPanel.cardsBtnUpdate    = cardsRefresh
+    lobbyPanel.cardsPreview      = cardsPreview
+    lobbyPanel.cardsPreviewRefresh = refreshCardsPreview
+    lobbyPanel.feltBtn           = feltBtn
+    lobbyPanel.feltBtnUpdate     = feltRefresh
 
     joinBtn = makeButton(lobbyPanel, "Join", 100, 26)
     joinBtn:SetPoint("BOTTOM", 0, 44)
@@ -2801,6 +2862,16 @@ function U.SetCardStyle(name)
     -- Refresh redraws every face card via setCardSlot, which calls
     -- cardTexturePath again and picks up the new subdir automatically.
     if U.Refresh then U.Refresh() end
+    -- Re-render the lobby preview strip (A/K/T sample) so a slash-
+    -- command style switch keeps the on-screen preview in sync, not
+    -- just an in-lobby button cycle. cardsBtnUpdate keeps the label
+    -- ("Cards: <name>") aligned with the active style.
+    if lobbyPanel and lobbyPanel.cardsPreviewRefresh then
+        lobbyPanel.cardsPreviewRefresh()
+    end
+    if lobbyPanel and lobbyPanel.cardsBtnUpdate then
+        lobbyPanel.cardsBtnUpdate()
+    end
     return true
 end
 
