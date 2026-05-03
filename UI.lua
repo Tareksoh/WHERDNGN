@@ -1007,15 +1007,19 @@ end
 -- is unreliable at sizes this small — the edge file gets clipped and
 -- the bg sometimes fails to render at all. The solid-texture approach
 -- always shows.
-local function buildMeldStrip(parent)
+local function buildMeldStrip(parent, scale)
+    -- 28th-audit / player feedback: scale parameter (default 1.0)
+    -- lets seat badges build a larger strip than the local bar.
+    -- Players reported the seat-side meld strip was too small to read
+    -- during the 5-second trick-2 reveal; scaling 1.45x gives ~40%
+    -- larger glyphs while still fanning across the badge width.
+    scale = scale or 1.0
     local strip = CreateFrame("Frame", nil, parent)
-    strip:SetSize(140, 32)
+    local W      = math.floor(22 * scale + 0.5)
+    local H      = math.floor(30 * scale + 0.5)
+    local STRIDE = math.floor(18 * scale + 0.5)
+    strip:SetSize(W + STRIDE * 4 + 4, H + 2)
     strip.slots = {}
-    -- 22×30 cards on a 18-px stride gives a tight fan that fits below
-    -- the seat badge's card-back row without overlapping it. The
-    -- rank pip in the corner of each TGA stays clearly visible at
-    -- this size.
-    local W, H, STRIDE = 22, 30, 18
     for i = 1, 5 do
         local sf = CreateFrame("Frame", nil, strip)
         sf:SetSize(W, H)
@@ -1109,18 +1113,27 @@ local function buildSeatBadge(parent, anchorCb)
     meldTx:SetPoint("BOTTOM", 0, 4)
     meldTx:SetTextColor(1, 0.84, 0.30)
 
-    -- Meld card strip: face-up mini cards showing the actual cards in
-    -- this seat's declared melds. Per Saudi rule the cards are laid
-    -- on the table during trick 1 only, then rejoin the hand. The
-    -- strip sits at the bottom of the badge over the meldText slot —
-    -- once the strip becomes visible we hide the text label so the
-    -- two don't overlap.
-    local meldStrip = buildMeldStrip(b)
-    meldStrip:SetPoint("BOTTOM", b, "BOTTOM", 0, 4)
+    -- 28th-audit / player feedback: seat-side meld strip is now
+    -- 1.45x larger AND anchored BELOW the badge frame (extending
+    -- ~46 px down) so the cards are readable during the 5-second
+    -- trick-2 reveal. The local bar's strip is kept at 1.0x +
+    -- inside-the-bar to preserve its existing layout.
+    local meldStrip = buildMeldStrip(b, 1.45)
+    meldStrip:SetPoint("TOP", b, "BOTTOM", 0, -2)
 
     local dealerTx = makeText(b, 12, "LEFT")
     dealerTx:SetPoint("TOPLEFT", 6, -6)
     dealerTx:SetTextColor(1, 0.84, 0.30)
+
+    -- 28th-audit / player feedback: bid label visible during the
+    -- bidding phases (DEAL1 / DEAL2BID). When a player calls Hokm
+    -- in round 2, the suit they declared is now visible to other
+    -- players — so over-bidders can decide whether to Sun, Bel, or
+    -- skip. Hidden once contract is finalized or play starts.
+    local bidTx = makeText(b, 12, "CENTER")
+    bidTx:SetPoint("TOP", nameTx, "BOTTOM", 0, -2)
+    bidTx:SetTextColor(0.95, 0.78, 0.30)
+    bidTx:SetText("")
 
     local turnGlow = b:CreateTexture(nil, "OVERLAY")
     turnGlow:SetAllPoints()
@@ -1131,6 +1144,7 @@ local function buildSeatBadge(parent, anchorCb)
              countText = countTx, meldText = meldTx,
              meldStrip = meldStrip,
              dealerText = dealerTx, turnGlow = turnGlow,
+             bidText = bidTx,
              avatar = avatar }
 end
 
@@ -1957,6 +1971,34 @@ local function meldTextVisible()
     return (#(S.s.tricks or {}) == 0)
 end
 
+-- 28th-audit / player feedback: render a player's bid for the seat
+-- badges during the bidding phases. "HOKM:S" → "حكم ♠" with the
+-- suit glyph so over-bidders see the Hokm direction. PASS / SUN /
+-- ASHKAL render as their plain labels. Returns "" outside bidding
+-- phases or when the seat has no bid yet.
+local function bidLabelForSeat(seat)
+    if not seat then return "" end
+    if S.s.phase ~= K.PHASE_DEAL1 and S.s.phase ~= K.PHASE_DEAL2BID then
+        return ""
+    end
+    local b = S.s.bids and S.s.bids[seat]
+    if not b or b == "" then return "" end
+    if b == K.BID_PASS then
+        return "|cff888888بس|r"  -- "Pass" — soft grey, low emphasis
+    elseif b == K.BID_SUN then
+        return "|cffffd055SUN|r"
+    elseif b == K.BID_ASHKAL then
+        return "|cffffd055ASHKAL|r"
+    elseif b:sub(1, #K.BID_HOKM) == K.BID_HOKM then
+        local suit = b:sub(#K.BID_HOKM + 2)  -- skip "HOKM:"
+        local glyph = K.SUIT_GLYPH and K.SUIT_GLYPH[suit] or suit
+        local color = K.SUIT_COLOR_ONCARD and K.SUIT_COLOR_ONCARD[suit]
+                       or "ffffd055"
+        return ("|cffffd055HOKM|r |c%s%s|r"):format(color, glyph)
+    end
+    return b  -- fallback: raw bid string
+end
+
 local function renderSeats()
     if not S.s.localSeat then return end
 
@@ -1994,6 +2036,13 @@ local function renderSeats()
                 end
             end
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
+            -- 28th-audit: bid label below the name. Shows "HOKM ♠"
+            -- when a player calls Hokm in round 2, so over-bidders
+            -- can choose Sun / Bel knowingly. Hidden outside the
+            -- bidding phases.
+            if b.bidText then
+                b.bidText:SetText(bidLabelForSeat(seat))
+            end
             -- Avatar: bot seats get the bundled colored badge; humans
             -- have no avatar so the seat reads "live player".
             if b.avatar then

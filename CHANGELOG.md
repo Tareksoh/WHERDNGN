@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.4 — Bidding visibility + bigger meld strips (player feedback)
+
+Two cosmetic fixes from player feedback. No rule / wire / scoring
+changes.
+
+- **Hokm bid suit visible to other players.** When a player calls
+  Hokm in round 2 (or any bidding round), the seat badge now shows
+  "HOKM ♠" (or ♥ / ♦ / ♣) below the player's name, in the suit's
+  on-card colour. Over-bidders can now see which direction someone
+  is going and decide whether to over-bid with Sun, Bel, or skip.
+  Pass / Sun / Ashkal also render. Visible only during the bidding
+  phases (DEAL1 / DEAL2BID); cleared once the contract is locked.
+
+- **Meld strip 1.45x larger and below the badge.** Players reported
+  the seat-side meld card strip (cards face-up during the 5-second
+  trick-2 reveal) was too small to read. Cards now scale 1.45x and
+  the strip is anchored BELOW the seat badge frame (extending ~46
+  px down into the table area) instead of squeezed inside the
+  badge bottom. The local bar's strip is unchanged so the local
+  player's own layout stays the same.
+
 ## v0.4.3 — Saudi rule corrections (10-agent scoring audit)
 
 Three rule-compliance fixes from a 10-agent audit (Codex + Gemini + 8
