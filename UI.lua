@@ -2458,6 +2458,35 @@ end
 -- Show/hide the round-result banner. Host has the full result struct
 -- in S.s.lastRoundResult and shows a multi-line breakdown; non-host
 -- clients only have the deltas, so they get a compact one-liner.
+-- Player-team-aware coloring for the round-end banner. Returns
+-- |c<color>...|r-wrapped strings — `usVsThem` paints the local
+-- player's team green and the opponents red. When localSeat is
+-- unknown (spectator / pre-join state), falls back to the legacy
+-- A=green, B=red so the banner still has visible structure.
+local function teamColor(t)
+    if not t then return "ffaaaaaa" end
+    if S.s.localSeat then
+        local myTeam = (S.s.localSeat == 1 or S.s.localSeat == 3) and "A" or "B"
+        return (t == myTeam) and COL.txtUs or COL.txtThem
+    end
+    return (t == "A") and COL.txtUs or COL.txtThem
+end
+
+-- Wrap a label in the team color so the user reads who they are
+-- vs who they aren't at a glance, instead of memorising A=green.
+local function colorTeam(t, text)
+    return ("|c%s%s|r"):format(teamColor(t), text or teamLabel(t))
+end
+
+-- "YA MRW7" — tease the losing team. Returned as a |c-wrapped red
+-- snippet to append onto the banner title. `loser` is the team
+-- letter ("A" or "B"). When loser is unknown (rare ties / structural
+-- weirdness), returns empty string so the title degrades silently.
+local function yaMrw7(loser)
+    if not loser then return "" end
+    return (" |cffff5544—  YA MRW7|r %s"):format(colorTeam(loser))
+end
+
 local function renderBanner()
     local banner = tablePanel and tablePanel.banner
     if not banner then return end
@@ -2512,17 +2541,23 @@ local function renderBanner()
         local d = S.s.lastRoundDelta or { A = 0, B = 0 }
         local cName = (sw.caller and S.s.seats[sw.caller]
                        and shortName(S.s.seats[sw.caller].name)) or "?"
+        local callerTeam = sw.caller and R.TeamOf(sw.caller)
+        local oppTeam = callerTeam and ((callerTeam == "A") and "B" or "A") or nil
         banner:Show()
         if sw.valid then
             banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
-            banner.title:SetText(("|cffffd055SWA!|r %s claimed the rest"):format(cName))
+            banner.title:SetText(("|cffffd055SWA!|r %s claimed the rest%s"):format(
+                cName, yaMrw7(oppTeam)))
             banner.bidder:SetText("Claim verified — all remaining tricks awarded.")
         else
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
-            banner.title:SetText(("|cffff5544SWA failed|r — %s claimed wrongly"):format(cName))
+            banner.title:SetText(("|cffff5544SWA failed|r — %s claimed wrongly%s"):format(
+                cName, yaMrw7(callerTeam)))
             banner.bidder:SetText("Penalty applied (full hand to opponents).")
         end
-        banner.final:SetText(("A +%d   B +%d"):format(d.A or 0, d.B or 0))
+        banner.final:SetText(("%s +%d   %s +%d"):format(
+            colorTeam("A", "A"), d.A or 0,
+            colorTeam("B", "B"), d.B or 0))
         return
     end
 
@@ -2531,6 +2566,8 @@ local function renderBanner()
         local d = S.s.lastRoundDelta or { A = 0, B = 0 }
         local cName = (tk.caller and S.s.seats[tk.caller]
                        and shortName(S.s.seats[tk.caller].name)) or "?"
+        local callerTeam = tk.caller and R.TeamOf(tk.caller)
+        local offenderTeam = tk.offender and R.TeamOf(tk.offender)
         banner:Show()
         if tk.caught then
             local oName = (tk.offender and S.s.seats[tk.offender]
@@ -2541,15 +2578,19 @@ local function renderBanner()
                 glyph = K.SUIT_GLYPH[C.Suit(tk.card)] or C.Suit(tk.card)
             end
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
-            banner.title:SetText(("|cffff5544TAKWEESH!|r %s caught %s"):format(cName, oName))
+            banner.title:SetText(("|cffff5544TAKWEESH!|r %s caught %s%s"):format(
+                cName, oName, yaMrw7(offenderTeam)))
             banner.bidder:SetText(("Played |cffffd055%s%s|r — %s"):format(
                 rankG, glyph, tk.reason or "illegal"))
         else
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
-            banner.title:SetText(("|cffff5544TAKWEESH!|r %s called incorrectly"):format(cName))
+            banner.title:SetText(("|cffff5544TAKWEESH!|r %s called incorrectly%s"):format(
+                cName, yaMrw7(callerTeam)))
             banner.bidder:SetText("No illegal play found — penalty applied.")
         end
-        banner.final:SetText(("A +%d   B +%d"):format(d.A or 0, d.B or 0))
+        banner.final:SetText(("%s +%d   %s +%d"):format(
+            colorTeam("A", "A"), d.A or 0,
+            colorTeam("B", "B"), d.B or 0))
         return
     end
 
@@ -2557,11 +2598,18 @@ local function renderBanner()
     local d = S.s.lastRoundDelta or { A = 0, B = 0 }
 
     if not r then
-        -- Non-host: degraded view, just the delta.
+        -- Non-host: degraded view, just the delta. Loser inferred from
+        -- the broadcast delta (lower delta = the team that took the
+        -- penalty side of this round). Tied deltas (rare) get no tease.
+        local nonHostLoser = nil
+        if (d.A or 0) > (d.B or 0) then nonHostLoser = "B"
+        elseif (d.B or 0) > (d.A or 0) then nonHostLoser = "A" end
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.woodEdge))
-        banner.title:SetText("Round done")
-        banner.final:SetText(("A +%d   B +%d"):format(d.A or 0, d.B or 0))
+        banner.title:SetText("Round done" .. yaMrw7(nonHostLoser))
+        banner.final:SetText(("%s +%d   %s +%d"):format(
+            colorTeam("A", "A"), d.A or 0,
+            colorTeam("B", "B"), d.B or 0))
         return
     end
 
@@ -2569,16 +2617,22 @@ local function renderBanner()
     local bidT = r.bidderTeam
     local oppT = (bidT == "A") and "B" or "A"
 
-    -- Title
+    -- 27th-audit fix (player feedback): the round-end title was
+    -- ambiguous about WHO actually lost. Add a "YA MRW7" tease
+    -- pointing at the losing team in red. AL-KABOOT loser = the
+    -- team that didn't sweep; BALOOT loser = bidder team (contract
+    -- failed); ALLY B3DO loser = defender team (contract made).
     if r.sweep then
+        local sweepLoser = (r.sweep == "A") and "B" or "A"
         banner:SetBackdropBorderColor(1.0, 0.84, 0.30, 1)
-        banner.title:SetText(("|cffffd055AL-KABOOT!|r %s sweeps"):format(teamLabel(r.sweep)))
+        banner.title:SetText(("|cffffd055AL-KABOOT!|r %s sweeps%s"):format(
+            teamLabel(r.sweep), yaMrw7(sweepLoser)))
     elseif not r.bidderMade then
         banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
-        banner.title:SetText("|cffff5544BALOOT!|r contract failed")
+        banner.title:SetText("|cffff5544BALOOT!|r contract failed" .. yaMrw7(bidT))
     else
         banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
-        banner.title:SetText("|cff66ff88ALLY B3DO|r")
+        banner.title:SetText("|cff66ff88ALLY B3DO|r" .. yaMrw7(oppT))
     end
 
     -- Per-team breakdown lines: cards + melds raw
@@ -2604,9 +2658,12 @@ local function renderBanner()
         banner.belote:SetText(("Belote (K+Q ♥): %s +20 raw"):format(teamLabel(r.belote)))
     end
 
-    -- Final delta
-    banner.final:SetText(("|cff66ff88A +%d|r   |cffff7777B +%d|r"):format(
-        d.A or 0, d.B or 0))
+    -- Final delta — color each team's number by us-vs-them so the
+    -- player reads "my team +X" at a glance instead of decoding A/B.
+    -- The labels themselves carry the same color, doubling the cue.
+    banner.final:SetText(("%s +%d   %s +%d"):format(
+        colorTeam("A", "A"), d.A or 0,
+        colorTeam("B", "B"), d.B or 0))
 
     banner:Show()
 end

@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.2 — Round-end banner clarity (player feedback)
+
+Two cosmetic fixes only; no rule / wire / scoring changes.
+
+- **YA MRW7 tease for the losing team.** The round-end banner used
+  to declare the OUTCOME ("AL-KABOOT", "BALOOT", "ALLY B3DO") but
+  not WHICH team got the bad end. Players reported the result was
+  ambiguous when their team's identity wasn't obvious. The title
+  now appends "— YA MRW7 [losing team]" in red. Same applies to
+  Takweesh, SWA, and the non-host degraded view (which infers the
+  loser from the broadcast delta).
+- **Score colors now reflect us-vs-them, not Team A vs Team B.**
+  The final-delta line and team labels (A +X, B +Y) used to
+  hard-code Team A as green and Team B as red regardless of which
+  team the local player belonged to — so a Team B player saw their
+  own deltas in red. Both labels and numbers now use `txtUs` for
+  the local team and `txtThem` for opponents (or fall back to the
+  legacy A=green/B=red for spectators / pre-join state).
+
 ## v0.4.1 — Saudi Master pro-grade ISMCTS
 
 Major BotMaster.lua upgrade driven by a 25-agent + Codex + Gemini
