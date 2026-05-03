@@ -2000,6 +2000,38 @@ function N.LocalSWAResp(accept)
     -- Host: also process locally for the host's own apply.
     if S.s.isHost then
         N._OnSWAResp("__host__", S.s.localSeat, accept, req.caller)
+    else
+        -- 10th-audit fix: non-host responder must also apply the
+        -- response to their OWN swaRequest. The wire echo loops back
+        -- via _OnSWAResp but the fromSelf gate drops it, leaving the
+        -- responder with stale Accept/Deny buttons (and the
+        -- _OnSWAReq pending-guard rejecting a fresh SWA later in the
+        -- same round). For deny: clear local swaRequest immediately.
+        -- For accept: record our own vote so the UI hides the
+        -- buttons. Host-side resolution still drives the round
+        -- outcome on the wire — this is purely local UI state.
+        if accept then
+            req.responses = req.responses or {}
+            req.responses[S.s.localSeat] = true
+        else
+            S.s.swaRequest = nil
+            S.s.swaDenied = {
+                caller = req.caller,
+                denier = S.s.localSeat,
+                ts     = (GetTime and GetTime()) or 0,
+            }
+            if C_Timer and C_Timer.After then
+                local denyCaller = req.caller
+                C_Timer.After(3.0, function()
+                    if S.s.swaDenied
+                       and S.s.swaDenied.caller == denyCaller then
+                        S.s.swaDenied = nil
+                        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                    end
+                end)
+            end
+        end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
     end
 end
 

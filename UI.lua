@@ -482,6 +482,16 @@ local function buildMain()
                 B._lobbyTicker:Cancel()
                 B._lobbyTicker = nil
             end
+            -- 10th-audit fix: mirror /baloot reset's full cleanup.
+            -- Without bumping _redealGen, an in-flight 3s redeal
+            -- callback would still spawn a ghost round into IDLE.
+            -- Without CancelTurnTimer / CancelLocalWarn, stale AFK
+            -- timer or T-10s pre-warn ping could fire after reset.
+            B._redealGen = (B._redealGen or 0) + 1
+            if B.Net then
+                if B.Net.CancelTurnTimer then B.Net.CancelTurnTimer() end
+                if B.Net.CancelLocalWarn then B.Net.CancelLocalWarn() end
+            end
             S.Reset()
             S.SetLocalName(GetUnitName("player", true))
             U.Refresh()

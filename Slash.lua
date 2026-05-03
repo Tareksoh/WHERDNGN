@@ -115,12 +115,14 @@ local function dispatch(msg)
         -- Same pattern is safe for any future deferred callbacks
         -- gated on B._redealGen.
         B._redealGen = (B._redealGen or 0) + 1
-        -- Cancel host AFK turn timer so it doesn't fire after reset
-        -- on a stale seat (Codex #4 in 9th-wave audit). The local
-        -- pre-warn timer is forward-declared local in Net.lua and
-        -- isn't strictly needed here — its callback re-checks state
-        -- on fire, and reset clears the relevant fields.
-        if B.Net and B.Net.CancelTurnTimer then B.Net.CancelTurnTimer() end
+        -- Cancel host AFK turn timer + local pre-warn timer so they
+        -- don't fire after reset on a stale seat (Codex 9th + 10th
+        -- audit catches). fireLocalWarn() doesn't gate on phase, so
+        -- a stale T-10s ping/pulse could otherwise still fire.
+        if B.Net then
+            if B.Net.CancelTurnTimer then B.Net.CancelTurnTimer() end
+            if B.Net.CancelLocalWarn then B.Net.CancelLocalWarn() end
+        end
         B.State.Reset()
         B.State.SetLocalName(GetUnitName("player", true))
         if B.UI then B.UI.Refresh() end

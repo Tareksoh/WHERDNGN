@@ -429,11 +429,19 @@ function S.ApplyResyncSnapshot(gameID, payload)
     -- has been normalized to "Foo-Realm" (or vice versa). Without
     -- this, the rejoiner gets their hand whisper but localSeat stays
     -- nil, leaving IsMyTurn() and every UI gate dead.
+    --
+    -- 10th-audit fix: clear s.isHost UNCONDITIONALLY when applying a
+    -- snapshot — the rejoiner sent MSG_RESYNC_REQ, so the host is
+    -- whoever is responding (sender), not us. Previously this was
+    -- nested inside `if mySeat`, leaving a stale s.isHost=true if a
+    -- player who was host in a prior session restored that flag and
+    -- then joined a new game where SeatOf failed to match (e.g.
+    -- localName transient nil during the resync window).
+    s.isHost = false
     if s.localName then
         local mySeat = S.SeatOf(s.localName)
         if mySeat then
             s.localSeat = mySeat
-            s.isHost = false  -- we're definitely not host (we asked).
         end
     end
 
