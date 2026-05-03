@@ -78,6 +78,12 @@ local CARD_STYLES = {
         cardBack     = { 0.42, 0.10, 0.16, 1.00 },
         cardBackEdge = { 0.20, 0.04, 0.08, 1.00 },
     },
+    tattoo = {
+        name         = "Tattoo",           -- old-school tattoo SVG deck
+        texSubdir    = "tattoo\\",         -- cards/tattoo/<card>.tga
+        cardBack     = { 0.55, 0.16, 0.16, 1.00 },   -- burgundy back border
+        cardBackEdge = { 0.30, 0.06, 0.06, 1.00 },
+    },
 }
 
 local FELT_THEMES = {

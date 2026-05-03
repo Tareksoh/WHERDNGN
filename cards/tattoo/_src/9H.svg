@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 1050" width="750" height="1050">
+
+<rect width="750" height="1050" fill="#f1e7d0"></rect>
+<rect x="20" y="20" width="710" height="1010" rx="40" ry="40" fill="none" stroke="#1a1612" stroke-width="6"></rect>
+<rect x="35" y="35" width="680" height="980" rx="30" ry="30" fill="none" stroke="#1a1612" stroke-width="2"></rect>
+
+<g font-family="Georgia, &#39;Times New Roman&#39;, serif" font-weight="700" fill="#1a1612">
+  <text x="100" y="180" font-size="124" text-anchor="middle">9</text>
+  <g transform="translate(100 250) scale(0.72)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g>
+</g>
+<g transform="rotate(180 375 525)">
+<g font-family="Georgia, &#39;Times New Roman&#39;, serif" font-weight="700" fill="#1a1612">
+  <text x="100" y="180" font-size="124" text-anchor="middle">9</text>
+  <g transform="translate(100 250) scale(0.72)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g>
+</g></g>
+<g transform="translate(270 290) rotate(0) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(480 290) rotate(0) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(270 420) rotate(0) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(480 420) rotate(0) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(375 525) rotate(0) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(270 630) rotate(180) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(480 630) rotate(180) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(270 760) rotate(180) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g><g transform="translate(480 760) rotate(180) scale(0.65)"><path d="M 0 50 C -10 35 -50 12 -50 -15 C -50 -38 -32 -50 -18 -50 C -8 -50 -2 -42 0 -36 C 2 -42 8 -50 18 -50 C 32 -50 50 -38 50 -15 C 50 12 10 35 0 50 Z" fill="#8a2a26"></path></g>
+</svg>
