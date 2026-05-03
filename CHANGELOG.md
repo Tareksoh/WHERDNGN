@@ -1,10 +1,104 @@
 # Changelog
 
-## v0.3.0 — Visual themes (mix-and-match) + 3-pass audit sweep
+## v0.3.0 — Visual themes (mix-and-match) + deep audit hardening
 
 Wire-format compatible additive release. v0.2.x clients can play with
 v0.3.0 hosts (extra fields are append-only and ignored by older
 parsers); v0.3.0 receivers handle pre-v0.3.0 senders gracefully.
+
+### Deep audit hardening (post-draft, audit waves 6–13)
+
+Eight additional audit waves after the initial v0.3.0 draft, each
+combining Codex CLI + Gemini CLI + 5–10 parallel Claude angle agents
+for cross-source verification. Findings refuted with code-trace
+verification were not applied; only multi-source-confirmed real bugs
+went in.
+
+**36 confirmed bug fixes + 17 defense-in-depth guards** across 10
+commits (e83bf8b, c4964b1, b5d506a, 456dda2, a3e4aa3, c3ecc73,
+0aa496f, 5dbd9d6, 15931cf):
+
+- Host /reload mid-bid soft-lock — `hostDeckRemainder` was wrongly
+  in TRANSIENT_FIELDS; restoring `hostHands` without its remainder
+  short-circuited HostDealRest.
+- 4-play trick stuck on /reload — PLAYER_LOGIN restore now re-fires
+  `_HostStepPlay` if the saved trick is complete.
+- Host's own preempt swallowed by `fromSelf` — LocalPreempt now
+  applies state directly instead of routing through `_OnPreempt`.
+- ApplyContract escalation flags wiped on duplicate broadcast —
+  added (bidder, type, trump) idempotence guard.
+- `scoreUrgency` / `matchPointUrgency` returns had inverted signs vs.
+  their docstring — flipped, near-win is now actually conservative.
+- UI peek-banner could overlay round-end banner — phase-gated on
+  PLAY/DEAL3 and U.Refresh now `clearHand` in SCORE/GAME_END.
+- Reset between games silently reverted user's `/baloot target` and
+  team names — `reset()` now reads from WHEREDNGNDB.
+- SWA permission requests could be clobbered by a second concurrent
+  request — added overwrite guard.
+- Resync roster lookup mishandled cross-realm name suffixes — added
+  `nameEq` normalization on both `info.name` and sender.
+- Remote humans never saw the preempt window — host's seat=0 frame
+  now broadcasts the eligible-seat CSV; receivers seed phase +
+  preemptEligible.
+- Host's own SWA permission claim resolved as empty hand —
+  `encodedHand` now stashed in the local request struct (the
+  `fromSelf` loopback guard had skipped its population path).
+- MaybeRunBot now early-returns while a SWA permission request is
+  in flight; bot play timer also re-checks at fire time so an
+  already-scheduled callback can't slip past the entry guard.
+- Resync snapshot now packs a 4-bit `isBot` mask in field 28; without
+  it, post-resync seats had `isBot=nil` and host-signed bot
+  broadcasts silently failed `authorizeSeat`.
+- Host /reload mid-SWA-vote no longer drops `swaRequest` (removed
+  from TRANSIENT_FIELDS).
+- WHEREDNGNDB type-guarded throughout — corrupted SavedVariables
+  no longer crashes addon load.
+- `lastTrick` cleared in ApplyStart so peek can't display the
+  previous round's final trick.
+- ApplyStart also clears `swaRequest` + `swaDenied` so a Kawesh
+  redeal mid-SWA-vote doesn't leak Accept/Deny buttons into the new
+  round.
+- AFK turn timer now defers when a SWA permission request is active
+  — the SWA caller's hand was being force-played under them while
+  opponents were still voting.
+- SWA bot opponents auto-accept on the host's behalf — bots never
+  send MSG_SWA_RESP, so a host-with-bots game would otherwise
+  deadlock waiting for two votes that never come.
+- Redeal banner C_Timer.After(3.0) now uses a generation token
+  (`B._redealGen`); /baloot reset and the UI reset popup both bump
+  the generation, so an in-flight redeal callback no-ops instead of
+  spawning a ghost round.
+- `ApplyResyncSnapshot` now re-derives `s.localSeat` through
+  `S.SeatOf(s.localName)` (normalized) and clears `s.isHost`
+  unconditionally — same-realm rejoiners with a bare-vs-suffixed
+  name mismatch were being left with `localSeat=nil` and a stale
+  `isHost=true` from a prior session.
+- HostResolveSWA now prefers `S.s.hostHands[callerSeat]` over the
+  wire-supplied hand — a stale or modified client could previously
+  validate impossible claims via the trusted decode path.
+- U.PulseTurn now stores the ticker handle and cancels prior on
+  re-arm — back-to-back calls used to spawn overlapping animations.
+- `/baloot reset` and the UI reset popup now both also call
+  `N.CancelTurnTimer` and `N.CancelLocalWarn` so stale AFK or
+  T-10s pre-warn timers can't fire on the next frame after reset.
+- Non-host SWA responder now applies the response to their own
+  `swaRequest` locally (deny clears + 3s toast, accept records
+  vote). The wire echo via `_OnSWAResp` was being dropped by
+  `fromSelf`, leaving the denier with stale Accept/Deny buttons.
+- `_OnResyncRes` and `_OnLobby` now early-return for an active host
+  — a stale or forged peer broadcast could otherwise demote the
+  host via `ApplyResyncSnapshot`'s `s.isHost = false` or
+  `ApplyLobby`'s "new game" reset path.
+- Defense-in-depth: 13 more host-broadcast handlers (`_OnStart`,
+  `_OnDealPhase`, `_OnHand`, `_OnBidCard`, `_OnTurn`, `_OnContract`,
+  `_OnTrick`, `_OnRound`, `_OnGameEnd`, `_OnPause`, `_OnTeams`,
+  `_OnTakweeshOut`, `_OnSWAOut`) plus 4 branch-specific cases
+  (`_OnPreemptPass` seat=0, replay branches of `_OnMeld`/`_OnPlay`/
+  `_OnAKA`) now have explicit `if S.s.isHost then return end`. Each
+  was already protected by `fromHost`, but local invariants make
+  the protection robust to future refactors.
+
+Tests: 176/176 passing across every commit.
 
 ### Visual themes — split into card style + felt theme axes
 
