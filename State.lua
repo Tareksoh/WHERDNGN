@@ -1284,6 +1284,21 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
        and (sweep ~= nil or bidderMade == false) then
         B.Sound.Cue(K.SND_BALOOT)
     end
+    -- Player-supplied "lost round" stinger. Fires on the losing
+    -- client only. Winning team is inferred from the round deltas:
+    -- the team with the larger delta won (works uniformly for
+    -- normal contract resolution, sweeps, SWA outcomes, and
+    -- Takweesh penalties — none ever leave both deltas equal in
+    -- a non-trivial round). Spectators (no localSeat) and tied
+    -- deltas (rare; e.g. all-pass redeal path) get no stinger.
+    if B.Sound and B.Sound.Cue and s.localSeat and R and R.TeamOf then
+        local winnerTeam
+        if (addA or 0) > (addB or 0) then winnerTeam = "A"
+        elseif (addB or 0) > (addA or 0) then winnerTeam = "B" end
+        if winnerTeam and R.TeamOf(s.localSeat) ~= winnerTeam then
+            B.Sound.Cue(K.SND_LOST_ROUND)
+        end
+    end
     -- Audit Tier 4 (B-83 / B-61): notify the bot style ledger of
     -- per-round outcomes (Gahwa fail, Sun fail). The contract is
     -- still attached to s at this point (cleared later in the

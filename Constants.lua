@@ -221,6 +221,9 @@ K.SND_CARD_SWISH = SND_BASE .. "card_swish.ogg"   -- slide-across-table whoosh
 K.SND_CONTRACT  = SND_BASE .. "contract.ogg"      -- two-note ascending chime
 K.SND_TRICK_WON = SND_BASE .. "trick_won.ogg"     -- triad arpeggio, our team won
 K.SND_BALOOT    = SND_BASE .. "baloot.ogg"        -- four-note fanfare
+K.SND_LOST_ROUND = SND_BASE .. "lost_round.ogg"   -- player-supplied stinger,
+                                                  -- fires when local team
+                                                  -- loses a round
 
 -- Arabic voice cues (Saudi-accented edge-tts) for the bid actions, in
 -- the spirit of the kammelna.com baloot announcer. Fired from the
