@@ -605,6 +605,11 @@ function S.ApplyStart(roundNumber, dealer)
     s.tricks       = {}
     s.meldsByTeam  = { A = {}, B = {} }
     s.meldsDeclared= {}
+    -- Audit C17 fix: peek allowance must reset at NEW round start, not
+    -- only at previous round-end. Without this, abandoned-round and
+    -- mid-reload edge cases could leave peekedThisRound=true when a
+    -- fresh round begins, hiding the peek button.
+    s.peekedThisRound = false
     -- Per-hand played-cards set used by the AKA helper to compute the
     -- highest unplayed card in any non-trump suit. Reset every round.
     s.playedCardsThisRound = {}

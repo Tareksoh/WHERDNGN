@@ -43,6 +43,12 @@ local function dispatch(msg)
         local id = B.State.HostBeginLobby()
         if id then
             B.Net.SendLobby(B.State.s.seats, id)
+            -- Audit C19 fix: cancel any prior ticker before arming a
+            -- new one. Rapid /baloot host invocations could otherwise
+            -- create overlapping tickers, doubling lobby broadcasts.
+            if B._lobbyTicker then
+                B._lobbyTicker:Cancel(); B._lobbyTicker = nil
+            end
             B._lobbyTicker = C_Timer.NewTicker(K.LOBBY_BROADCAST_SEC, function()
                 if B.State.s.isHost and B.State.s.phase == K.PHASE_LOBBY then
                     B.Net.SendHostAnnounce(B.State.s.gameID)

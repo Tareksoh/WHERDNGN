@@ -850,7 +850,11 @@ end
 local function buildTable()
     tablePanel = CreateFrame("Frame", nil, f)
     tablePanel:SetPoint("TOPLEFT", 14, -56)
-    tablePanel:SetPoint("BOTTOMRIGHT", -14, 30)
+    -- Bottom anchor at y=60 instead of 30 so the cards don't reach
+    -- down into the contract banner's vertical strip (y=30..52).
+    -- Contract banner sits cleanly between the table area and the
+    -- score/round line at the very bottom.
+    tablePanel:SetPoint("BOTTOMRIGHT", -14, 60)
 
     -- Top seat (partner across the table)
     seatBadges.top = buildSeatBadge(tablePanel, function(b)
