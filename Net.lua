@@ -2507,6 +2507,14 @@ end
 function N._OnResyncRes(sender, gameID, payload)
     if fromSelf(sender) then return end
     if not gameID or not payload then return end
+    -- 11th-audit fix (Codex catch): the active host must NEVER apply
+    -- a resync snapshot from another peer — we're authoritative,
+    -- not the rejoiner. Without this gate, a stale or buggy peer's
+    -- MSG_RESYNC_RES with a matching lastGameID would route through
+    -- ApplyResyncSnapshot's now-unconditional `s.isHost = false`
+    -- (10th-audit fix) and demote the real host into a soft-locked
+    -- non-host state.
+    if S.s.isHost then return end
     -- Reject snapshots that don't match the gameID we asked about. A
     -- stale response from a slow host (or a snapshot for a different
     -- game we happened to overhear) shouldn't clobber state if we've
