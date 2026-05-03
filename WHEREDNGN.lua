@@ -146,6 +146,42 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                     B.Net.SendLobby(B.State.s.seats, B.State.s.gameID)
                 end
                 if B.Net and B.Net.MaybeRunBot then B.Net.MaybeRunBot() end
+                -- Audit fix: re-arm AFK protection for human seats.
+                -- MaybeRunBot covers bot seats but never arms a turn
+                -- timer; without this re-arm, a player who /reloads
+                -- while it's their turn loses AFK auto-action and
+                -- the table waits forever. Mirror the pause/resume
+                -- code in N.LocalPause: if there's an active human
+                -- turn, start a fresh AFK timer; if there's an
+                -- active escalation window with a human eligible,
+                -- start the corresponding bel-style timer.
+                local s = B.State.s
+                if B.Net and s.turn and s.turnKind and s.seats[s.turn]
+                   and not s.seats[s.turn].isBot then
+                    if (s.turnKind == "bid" or s.turnKind == "play")
+                       and B.Net.StartTurnTimer then
+                        B.Net.StartTurnTimer(s.turn, s.turnKind)
+                    end
+                end
+                if B.Net and s.contract and s.phase and B.Net.StartBelTimer then
+                    -- Bel / Triple / Four / Gahwa eligibility maps to a
+                    -- single seat each; if it's a human, arm a timer.
+                    local bidder = s.contract.bidder
+                    local defSeat = bidder and ((bidder % 4) + 1) or nil
+                    if s.phase == K.PHASE_DOUBLE and defSeat
+                       and s.seats[defSeat] and not s.seats[defSeat].isBot then
+                        B.Net.StartBelTimer(defSeat, "double")
+                    elseif s.phase == K.PHASE_TRIPLE and bidder
+                       and s.seats[bidder] and not s.seats[bidder].isBot then
+                        B.Net.StartBelTimer(bidder, "triple")
+                    elseif s.phase == K.PHASE_FOUR and defSeat
+                       and s.seats[defSeat] and not s.seats[defSeat].isBot then
+                        B.Net.StartBelTimer(defSeat, "four")
+                    elseif s.phase == K.PHASE_GAHWA and bidder
+                       and s.seats[bidder] and not s.seats[bidder].isBot then
+                        B.Net.StartBelTimer(bidder, "gahwa")
+                    end
+                end
             end
             if B.UI and B.UI.Refresh then B.UI.Refresh() end
         end

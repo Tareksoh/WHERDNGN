@@ -228,8 +228,16 @@ function N.SendTrick(winner, points)
         K.MSG_TRICK, winner, points, leadSuit, enc))
 end
 
-function N.SendRound(addA, addB, totA, totB)
-    broadcast(("%s;%d;%d;%d;%d"):format(K.MSG_ROUND, addA, addB, totA, totB))
+function N.SendRound(addA, addB, totA, totB, sweep, bidderMade)
+    -- Audit fix: include sweep + bidderMade flags so non-host clients
+    -- can fire the BALOOT fanfare on AL-KABOOT or failed-contract.
+    -- Previously only the host (via ApplyRoundResult on the
+    -- HostScoreRoundResult struct) heard the fanfare.
+    -- Backwards-compatible: pre-v0.3.0 receivers ignore extra fields.
+    local sweepStr = (sweep == "A" or sweep == "B") and sweep or ""
+    local madeStr  = bidderMade and "1" or "0"
+    broadcast(("%s;%d;%d;%d;%d;%s;%s"):format(
+        K.MSG_ROUND, addA, addB, totA, totB, sweepStr, madeStr))
 end
 
 function N.SendGameEnd(winner)
@@ -303,11 +311,13 @@ function N.SendResyncRes(target, gameID)
         whisper(target, ("%s;%s"):format(K.MSG_BIDCARD, S.s.bidCard))
     end
     -- Replay declared melds (winning team's strip + losing team's
-    -- meld score eligibility both rely on s.meldsByTeam).
+    -- meld score eligibility both rely on s.meldsByTeam). Flag "1"
+    -- in the trailing field tells the receiver to bypass authorizeSeat
+    -- (sender is host, not the original declarer).
     for _, team in ipairs({ "A", "B" }) do
         for _, m in ipairs((S.s.meldsByTeam and S.s.meldsByTeam[team]) or {}) do
             local enc = (m.cards and C.EncodeHand(m.cards)) or ""
-            whisper(target, ("%s;%d;%s;%s;%s;%s"):format(
+            whisper(target, ("%s;%d;%s;%s;%s;%s;1"):format(
                 K.MSG_MELD, m.declaredBy or 0,
                 m.kind or "", m.suit or "", m.top or "", enc))
         end
@@ -348,15 +358,20 @@ function N.SendResyncRes(target, gameID)
             t.leadSuit or "", enc))
     end
     -- Replay in-flight trick plays (so the rejoiner sees the cards
-    -- currently on the table).
+    -- currently on the table). Trailing "1" flags the frame as a
+    -- resync replay so _OnPlay bypasses turn + authority checks
+    -- (the rejoiner's snapshot has s.turn pointing at the LAST seat,
+    -- which would otherwise make every replay except the last drop).
     if S.s.trick and S.s.trick.plays then
         for _, p in ipairs(S.s.trick.plays) do
-            whisper(target, ("%s;%d;%s"):format(K.MSG_PLAY, p.seat or 0, p.card or "??"))
+            whisper(target, ("%s;%d;%s;1"):format(
+                K.MSG_PLAY, p.seat or 0, p.card or "??"))
         end
     end
-    -- Replay AKA banner if active this trick.
+    -- Replay AKA banner if active this trick. Trailing "1" tells
+    -- _OnAKA to bypass authorizeSeat (sender is host, not seat owner).
     if S.s.akaCalled then
-        whisper(target, ("%s;%d;%s"):format(
+        whisper(target, ("%s;%d;%s;1"):format(
             K.MSG_AKA, S.s.akaCalled.seat or 0, S.s.akaCalled.suit or ""))
     end
 end
@@ -436,14 +451,23 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_SKIP_GHW then
         N._OnSkipGahwa(sender, tonumber(fields[2]))
     elseif tag == K.MSG_MELD then
-        N._OnMeld(sender, tonumber(fields[2]), fields[3], fields[4], fields[5], fields[6])
+        -- fields[7] is the optional replay flag ("1" iff this MSG_MELD
+        -- was whispered as part of a resync replay; bypass authorizeSeat).
+        N._OnMeld(sender, tonumber(fields[2]), fields[3], fields[4],
+                  fields[5], fields[6], fields[7])
     elseif tag == K.MSG_PLAY then
-        N._OnPlay(sender, tonumber(fields[2]), fields[3])
+        -- fields[4] is the optional replay flag (see _OnPlay).
+        N._OnPlay(sender, tonumber(fields[2]), fields[3], fields[4])
     elseif tag == K.MSG_TRICK then
         N._OnTrick(sender, tonumber(fields[2]), tonumber(fields[3]),
                    fields[4], fields[5])
     elseif tag == K.MSG_ROUND then
-        N._OnRound(sender, tonumber(fields[2]), tonumber(fields[3]), tonumber(fields[4]), tonumber(fields[5]))
+        local sweep = fields[6]
+        if sweep == "" then sweep = nil end
+        local bidderMade = (fields[7] == "1")
+        N._OnRound(sender, tonumber(fields[2]), tonumber(fields[3]),
+                   tonumber(fields[4]), tonumber(fields[5]),
+                   sweep, bidderMade)
     elseif tag == K.MSG_GAMEEND then
         N._OnGameEnd(sender, fields[2])
     elseif tag == K.MSG_TAKWEESH then
@@ -459,7 +483,8 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_TEAMS then
         N._OnTeams(sender, fields[2], fields[3])
     elseif tag == K.MSG_AKA then
-        N._OnAKA(sender, tonumber(fields[2]), fields[3])
+        -- fields[4] is the optional replay flag (see _OnAKA).
+        N._OnAKA(sender, tonumber(fields[2]), fields[3], fields[4])
     elseif tag == K.MSG_SWA then
         N._OnSWA(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_SWA_OUT then
@@ -674,7 +699,9 @@ function N._OnDouble(sender, seat, openField)
     local open = (openField == nil) or (openField ~= "0")
     local wasSun = S.s.contract.type == K.BID_SUN
     S.ApplyDouble(seat, open)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
+    -- Audit fix: pass rung kind so the bot style ledger tracks Bel
+    -- separately from Triple/Four/Gahwa.
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "double") end
     -- Sun: ApplyDouble already set phase=PLAY (Sun has no Triple).
     -- Closed Bel: ApplyDouble set phase=PLAY too.
     -- Open Bel in Hokm: phase=TRIPLE, defer to bot dispatcher.
@@ -697,7 +724,7 @@ function N._OnTriple(sender, seat, openField)
     if not authorizeSeat(seat, sender) then return end
     local open = (openField == nil) or (openField ~= "0")
     S.ApplyTriple(seat, open)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "triple") end
     if S.s.isHost then
         if open then N.MaybeRunBot() else N.HostFinishDeal() end
     end
@@ -714,7 +741,7 @@ function N._OnFour(sender, seat, openField)
     if not authorizeSeat(seat, sender) then return end
     local open = (openField == nil) or (openField ~= "0")
     S.ApplyFour(seat, open)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "four") end
     if S.s.isHost then
         if open then N.MaybeRunBot() else N.HostFinishDeal() end
     end
@@ -729,7 +756,7 @@ function N._OnGahwa(sender, seat)
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyGahwa(seat)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat) end
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "gahwa") end
     -- Terminal: no further window. Move into PLAY.
     if S.s.isHost then N.HostFinishDeal() end
 end
@@ -843,25 +870,40 @@ function N._OnSkipGahwa(sender, seat)
     if S.s.isHost then N.HostFinishDeal() end
 end
 
-function N._OnMeld(sender, seat, kind, suit, top, encodedCards)
+function N._OnMeld(sender, seat, kind, suit, top, encodedCards, replayFlag)
     if fromSelf(sender) then return end
     if not seat or not kind then return end
+    -- Audit fix: replay-frame bypass. Resync whispers a marker "1" in
+    -- the trailing field; with fromHost(sender) verified we trust the
+    -- frame and skip the per-seat authorizeSeat (which would reject
+    -- because sender is the HOST, not the seat owner).
+    local isReplay = (replayFlag == "1") and fromHost(sender)
     -- Phase: melds are declarable in DEAL3 / PLAY only. ApplyMeld already
     -- dedupes by (seat, kind, top, suit), but we still gate phase + author
     -- here so a stale message from a previous round can't poison the
     -- meldsByTeam table.
     if S.s.phase ~= K.PHASE_PLAY and S.s.phase ~= K.PHASE_DEAL3 then return end
-    if not authorizeSeat(seat, sender) then return end
+    if not isReplay and not authorizeSeat(seat, sender) then return end
     S.ApplyMeld(seat, kind, suit, top, encodedCards)
 end
 
-function N._OnPlay(sender, seat, card)
+function N._OnPlay(sender, seat, card, replayFlag)
     if fromSelf(sender) then return end
     if not seat or not card then return end
     -- Phase: plays only land during PLAY.
     if S.s.phase ~= K.PHASE_PLAY then return end
-    -- Turn: only the seat whose turn it is may play.
-    if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+    -- Audit fix: replay-frame bypass. During a resync replay the host
+    -- whispers each in-flight play in turn-order; the rejoiner's
+    -- snapshot has s.turn set to the seat about to act NEXT (the last
+    -- in the trick), so the standard turn-check rejects every replay
+    -- except the very last one. With fromHost(sender) verified, we
+    -- trust the frame and skip turn + authority checks. Idempotence
+    -- still applies — never double-add a seat to the same trick.
+    local isReplay = (replayFlag == "1") and fromHost(sender)
+    if not isReplay then
+        -- Turn: only the seat whose turn it is may play.
+        if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+    end
     -- Idempotence: that seat must not have already played this trick.
     if S.s.trick and S.s.trick.plays then
         for _, p in ipairs(S.s.trick.plays) do
@@ -869,7 +911,7 @@ function N._OnPlay(sender, seat, card)
         end
     end
     -- Authority: sender must own the seat (or host if it's a bot).
-    if not authorizeSeat(seat, sender) then return end
+    if not isReplay and not authorizeSeat(seat, sender) then return end
     -- Capture lead suit BEFORE ApplyPlay so the bot memory observer
     -- knows whether `card` followed suit or was off-suit (a void tell).
     local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
@@ -877,8 +919,13 @@ function N._OnPlay(sender, seat, card)
     if B.Bot and B.Bot.OnPlayObserved then
         B.Bot.OnPlayObserved(seat, card, leadBefore)
     end
-    N.CancelTurnTimer()
-    if S.s.isHost then N._HostStepPlay() end
+    -- Don't advance host's turn machinery on a replay frame — those
+    -- are reconstructive, not new plays. (Host shouldn't be the
+    -- replay TARGET anyway; this is belt-and-braces.)
+    if not isReplay then
+        N.CancelTurnTimer()
+        if S.s.isHost then N._HostStepPlay() end
+    end
 end
 
 function N._OnTrick(sender, winner, points, leadSuit, encPlays)
@@ -909,10 +956,10 @@ function N._OnTrick(sender, winner, points, leadSuit, encPlays)
     if S.s.isHost then N._HostStepAfterTrick() end
 end
 
-function N._OnRound(sender, addA, addB, totA, totB)
+function N._OnRound(sender, addA, addB, totA, totB, sweep, bidderMade)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
-    S.ApplyRoundEnd(addA, addB, totA, totB)
+    S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
 end
 
 function N._OnGameEnd(sender, winner)
@@ -990,7 +1037,7 @@ function N._HostStepBid()
         N.SendTurn(first, "bid")
         N.MaybeRunBot()
     elseif action == "redeal" then
-        N._HostRedeal()
+        N._HostRedeal("allpass")
     end
 end
 
@@ -1048,8 +1095,8 @@ function N._HostStepAfterTrick()
         end
         local totA = S.s.cumulative.A + addA
         local totB = S.s.cumulative.B + addB
-        S.ApplyRoundEnd(addA, addB, totA, totB)
-        N.SendRound(addA, addB, totA, totB)
+        S.ApplyRoundEnd(addA, addB, totA, totB, res.sweep, res.bidderMade)
+        N.SendRound(addA, addB, totA, totB, res.sweep, res.bidderMade)
         if totA >= S.s.target or totB >= S.s.target then
             -- Saudi convention: on an exact tie at the target, the
             -- BIDDING team wins — they took the contract risk and
@@ -1072,10 +1119,15 @@ function N._HostStepAfterTrick()
     N.MaybeRunBot()
 end
 
-function N._HostRedeal()
+function N._HostRedeal(reason)
     -- All-pass / Kawesh redeal: per Saudi rule, the deal moves to the
     -- next dealer (no team scored, but the seat rotates). Round number
     -- stays the same since no real round was played.
+    --
+    -- Audit fix: caller passes a reason ("allpass" | "kawesh") so the
+    -- print accurately reflects which path triggered the redeal.
+    -- Previously always printed "all passed", contradicting the
+    -- already-printed "X called Kawesh" line on the host's chat.
     local nextDealer = (S.s.dealer % 4) + 1
     -- Surface a "redeal" banner with the next-dealer name on every
     -- client for 3 seconds before the actual deal lands. The host
@@ -1083,7 +1135,12 @@ function N._HostRedeal()
     -- show the same banner; everyone counts down off their own clock.
     S.ApplyRedealAnnouncement(nextDealer)
     broadcast(("%s;redeal;%d"):format(K.MSG_DEAL, nextDealer))
-    print("|cffaaaaaaWHEREDNGN|r all passed — redealing with next dealer.")
+    if reason == "kawesh" then
+        -- Caller (LocalKawesh / _OnKawesh / HostHandleKawesh) already
+        -- printed the seat-attributed announcement; stay silent here.
+    else
+        print("|cffaaaaaaWHEREDNGN|r all passed — redealing with next dealer.")
+    end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 
     C_Timer.After(3.0, function()
@@ -2050,14 +2107,17 @@ function N.HostResolveSWA(callerSeat, callerHand)
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
-function N._OnAKA(sender, seat, suit)
+function N._OnAKA(sender, seat, suit, replayFlag)
     if fromSelf(sender) then return end
     if not seat or seat < 1 or seat > 4 then return end
     if not suit or suit == "" then return end
+    -- Audit fix: replay bypass — host whispers AKA replay during
+    -- resync; sender is host, not the seat owner.
+    local isReplay = (replayFlag == "1") and fromHost(sender)
     -- Authority: only the seat itself can call AKA on its own behalf.
     -- Cosmetic protection — a spoofed AKA wouldn't change scoring,
     -- but it would mislead a partner's play decision.
-    if not authorizeSeat(seat, sender) then return end
+    if not isReplay and not authorizeSeat(seat, sender) then return end
     -- Only meaningful during play; ignore stragglers from a previous
     -- hand that arrive after PHASE_SCORE.
     if S.s.phase ~= K.PHASE_PLAY then return end
@@ -2192,8 +2252,9 @@ local function fireLocalWarn()
 end
 
 -- Arm only if the local player is the one we're actually waiting on.
--- `kind` is "bid" / "play" for normal turns, or "bel" / "belre" for the
--- contract decision windows.
+-- `kind` is "bid" / "play" for normal turns, or "bel" / "triple" /
+-- "four" / "gahwa" for the contract decision windows. Each window has
+-- a different eligibility rule (seat that's allowed to act).
 function N.StartLocalWarn(kind)
     cancelLocalWarn()
     if S.s.paused then return end
@@ -2205,10 +2266,20 @@ function N.StartLocalWarn(kind)
     if kind == "bid" or kind == "play" then
         mine = (S.s.turn == S.s.localSeat) and (S.s.turnKind == kind)
     elseif kind == "bel" then
+        -- Defender (bidder+1, the seat after bidder) considers Bel.
         mine = S.s.contract and S.s.localSeat
                and S.s.localSeat == ((S.s.contract.bidder % 4) + 1)
     elseif kind == "triple" then
         -- v0.2.0: Triple is bidder's response to Bel.
+        mine = S.s.contract and S.s.localSeat
+               and S.s.localSeat == S.s.contract.bidder
+    elseif kind == "four" then
+        -- Audit fix: Four is the DEFENDER's response to Triple.
+        -- Same eligible seat as Bel (defender at bidder+1).
+        mine = S.s.contract and S.s.localSeat
+               and S.s.localSeat == ((S.s.contract.bidder % 4) + 1)
+    elseif kind == "gahwa" then
+        -- Audit fix: Gahwa is the BIDDER's terminal escalation.
         mine = S.s.contract and S.s.localSeat
                and S.s.localSeat == S.s.contract.bidder
     end
@@ -2324,7 +2395,7 @@ function N.HostHandleKawesh(seat)
     end
     -- _HostRedeal advances the dealer itself; do NOT pre-rotate here
     -- or we'd skip a seat (was a bug — rotated twice).
-    N._HostRedeal()
+    N._HostRedeal("kawesh")
 end
 
 -- ---------------------------------------------------------------------
@@ -2421,19 +2492,30 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                if S.s.paused then return end
-                if S.s.phase ~= K.PHASE_TRIPLE then return end
-                local yes, wantOpen = false, true
-                if B.Bot.PickTriple then
-                    yes, wantOpen = B.Bot.PickTriple(bidder)
-                end
-                if yes then
-                    S.ApplyTriple(bidder, wantOpen)
-                    N.SendTriple(bidder, wantOpen)
-                    if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
-                else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
-                    N.HostFinishDeal()
+                -- Audit fix: pcall the body so a Bot.PickTriple error
+                -- doesn't freeze the deal (bots have no AFK timer).
+                local ok, err = pcall(function()
+                    if S.s.paused then return end
+                    if S.s.phase ~= K.PHASE_TRIPLE then return end
+                    local yes, wantOpen = false, true
+                    if B.Bot.PickTriple then
+                        yes, wantOpen = B.Bot.PickTriple(bidder)
+                    end
+                    if yes then
+                        S.ApplyTriple(bidder, wantOpen)
+                        N.SendTriple(bidder, wantOpen)
+                        if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
+                    else
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
+                        N.HostFinishDeal()
+                    end
+                end)
+                if not ok then
+                    log("Error", "triple-decision callback failed: %s", tostring(err))
+                    if S.s.phase == K.PHASE_TRIPLE then
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
+                        N.HostFinishDeal()
+                    end
                 end
                 if B.UI then B.UI.Refresh() end
             end)
@@ -2449,19 +2531,28 @@ function N.MaybeRunBot()
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                if S.s.paused then return end
-                if S.s.phase ~= K.PHASE_FOUR then return end
-                local yes, wantOpen = false, true
-                if B.Bot.PickFour then
-                    yes, wantOpen = B.Bot.PickFour(defSeat)
-                end
-                if yes then
-                    S.ApplyFour(defSeat, wantOpen)
-                    N.SendFour(defSeat, wantOpen)
-                    if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
-                else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
-                    N.HostFinishDeal()
+                local ok, err = pcall(function()
+                    if S.s.paused then return end
+                    if S.s.phase ~= K.PHASE_FOUR then return end
+                    local yes, wantOpen = false, true
+                    if B.Bot.PickFour then
+                        yes, wantOpen = B.Bot.PickFour(defSeat)
+                    end
+                    if yes then
+                        S.ApplyFour(defSeat, wantOpen)
+                        N.SendFour(defSeat, wantOpen)
+                        if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
+                    else
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
+                        N.HostFinishDeal()
+                    end
+                end)
+                if not ok then
+                    log("Error", "four-decision callback failed: %s", tostring(err))
+                    if S.s.phase == K.PHASE_FOUR then
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
+                        N.HostFinishDeal()
+                    end
                 end
                 if B.UI then B.UI.Refresh() end
             end)
@@ -2477,15 +2568,28 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                if S.s.paused then return end
-                if S.s.phase ~= K.PHASE_GAHWA then return end
-                if B.Bot.PickGahwa and B.Bot.PickGahwa(bidder) then
-                    S.ApplyGahwa(bidder)
-                    N.SendGahwa(bidder)
-                else
-                    broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
+                local ok, err = pcall(function()
+                    if S.s.paused then return end
+                    if S.s.phase ~= K.PHASE_GAHWA then return end
+                    local yes = false
+                    if B.Bot.PickGahwa then
+                        yes = B.Bot.PickGahwa(bidder)
+                    end
+                    if yes then
+                        S.ApplyGahwa(bidder)
+                        N.SendGahwa(bidder)
+                    else
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
+                    end
+                    N.HostFinishDeal()
+                end)
+                if not ok then
+                    log("Error", "gahwa-decision callback failed: %s", tostring(err))
+                    if S.s.phase == K.PHASE_GAHWA then
+                        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
+                        N.HostFinishDeal()
+                    end
                 end
-                N.HostFinishDeal()
                 if B.UI then B.UI.Refresh() end
             end)
             return
@@ -2502,32 +2606,56 @@ function N.MaybeRunBot()
         for _, seat in ipairs(S.s.preemptEligible) do
             if isBotSeat(seat) then
                 C_Timer.After(BOT_DELAY_BEL, function()
-                    if S.s.paused then return end
-                    if S.s.phase ~= K.PHASE_PREEMPT then return end
-                    -- Re-check eligibility (another bot may have
-                    -- claimed in the meantime).
-                    if not S.s.preemptEligible then return end
-                    local stillEligible = false
-                    for _, s2 in ipairs(S.s.preemptEligible) do
-                        if s2 == seat then stillEligible = true; break end
-                    end
-                    if not stillEligible then return end
-                    if B.Bot.PickPreempt and B.Bot.PickPreempt(seat) then
-                        N.SendPreempt(seat)
-                        N._OnPreempt("__host__", seat)
-                    else
-                        N.SendPreemptPass(seat)
-                        S.ApplyPreemptPass(seat)
-                        if not S.s.preemptEligible then
-                            -- All eligible seats waived → finalize the
-                            -- original buyer's contract.
-                            N._FinalizePreempt()
+                    local ok, err = pcall(function()
+                        if S.s.paused then return end
+                        if S.s.phase ~= K.PHASE_PREEMPT then return end
+                        -- Re-check eligibility (another bot may have
+                        -- claimed in the meantime).
+                        if not S.s.preemptEligible then return end
+                        local stillEligible = false
+                        for _, s2 in ipairs(S.s.preemptEligible) do
+                            if s2 == seat then stillEligible = true; break end
+                        end
+                        if not stillEligible then return end
+                        if B.Bot.PickPreempt and B.Bot.PickPreempt(seat) then
+                            N.SendPreempt(seat)
+                            -- Audit fix: in solo-bot games, broadcast()
+                            -- short-circuits when not in a party, so the
+                            -- normal SendPreempt loopback never fires.
+                            -- _OnPreempt's authorizeSeat normalizes
+                            -- "__host__" to "__host__-Realm", which
+                            -- never matches the host's real name. Use
+                            -- the host's actual local name so the
+                            -- claim doesn't silently disappear and the
+                            -- round stalls on the original buyer.
+                            N._OnPreempt(S.s.localName or "__host__", seat)
                         else
-                            -- Non-final pass: redispatch the next
-                            -- eligible seat. Without this, the chain
-                            -- stalls until something else calls
-                            -- MaybeRunBot (Codex #2 audit catch).
-                            N.MaybeRunBot()
+                            N.SendPreemptPass(seat)
+                            S.ApplyPreemptPass(seat)
+                            if not S.s.preemptEligible then
+                                -- All eligible seats waived → finalize the
+                                -- original buyer's contract.
+                                N._FinalizePreempt()
+                            else
+                                -- Non-final pass: redispatch the next
+                                -- eligible seat. Without this, the chain
+                                -- stalls until something else calls
+                                -- MaybeRunBot (Codex #2 audit catch).
+                                N.MaybeRunBot()
+                            end
+                        end
+                    end)
+                    if not ok then
+                        log("Error", "preempt-decision callback failed: %s", tostring(err))
+                        if S.s.phase == K.PHASE_PREEMPT then
+                            -- Force-pass on error so the chain advances.
+                            N.SendPreemptPass(seat)
+                            S.ApplyPreemptPass(seat)
+                            if not S.s.preemptEligible then
+                                N._FinalizePreempt()
+                            else
+                                N.MaybeRunBot()
+                            end
                         end
                     end
                     if B.UI then B.UI.Refresh() end
@@ -2550,15 +2678,30 @@ function N.MaybeRunBot()
        and S.s.turn and S.s.turnKind == "bid" and isBotSeat(S.s.turn) then
         local seat = S.s.turn
         C_Timer.After(BOT_DELAY_BID, function()
-            if not S.s.isHost then return end
-            if S.s.paused then return end
-            if S.s.phase ~= K.PHASE_DEAL1 and S.s.phase ~= K.PHASE_DEAL2BID then return end
-            if S.s.turn ~= seat or S.s.turnKind ~= "bid" then return end
-            if S.s.bids[seat] ~= nil then return end
-            local bid = B.Bot.PickBid(seat)
-            S.ApplyBid(seat, bid)
-            N.SendBid(seat, bid)
-            N._HostStepBid()
+            -- Audit fix: pcall to prevent a Bot.PickBid error from
+            -- freezing the bid loop. Recovery: force-pass.
+            local ok, err = pcall(function()
+                if not S.s.isHost then return end
+                if S.s.paused then return end
+                if S.s.phase ~= K.PHASE_DEAL1 and S.s.phase ~= K.PHASE_DEAL2BID then return end
+                if S.s.turn ~= seat or S.s.turnKind ~= "bid" then return end
+                if S.s.bids[seat] ~= nil then return end
+                local bid = B.Bot.PickBid(seat)
+                S.ApplyBid(seat, bid)
+                N.SendBid(seat, bid)
+                N._HostStepBid()
+            end)
+            if not ok then
+                log("Error", "bid-decision callback failed: %s", tostring(err))
+                -- Recovery: force-pass so the bid loop advances. Same
+                -- shape as the AFK-timeout auto-pass for human seats.
+                if S.s.turn == seat and S.s.turnKind == "bid"
+                   and S.s.bids and S.s.bids[seat] == nil then
+                    S.ApplyBid(seat, K.BID_PASS)
+                    N.SendBid(seat, K.BID_PASS)
+                    N._HostStepBid()
+                end
+            end
             if B.UI then B.UI.Refresh() end
         end)
         return
@@ -2569,56 +2712,82 @@ function N.MaybeRunBot()
        and S.s.turn and S.s.turnKind == "play" and isBotSeat(S.s.turn) then
         local seat = S.s.turn
         C_Timer.After(BOT_DELAY_PLAY, function()
-            if not S.s.isHost then return end
-            if S.s.paused then return end
-            if S.s.phase ~= K.PHASE_PLAY then return end
-            if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
-            -- Takweesh check before the play. A bot scans for an
-            -- opponent illegal play and rolls per-trick probability.
-            -- If it decides to call, the round resolves immediately
-            -- and we never schedule the play.
-            if B.Bot.PickTakweesh and B.Bot.PickTakweesh(seat) then
-                broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
-                N.HostResolveTakweesh(seat)
-                if B.UI then B.UI.Refresh() end
-                return
-            end
-            if not S.s.meldsDeclared[seat] then
-                local melds = B.Bot.PickMelds(seat)
-                for _, m in ipairs(melds) do
-                    S.ApplyMeld(seat, m.kind, m.suit, m.top, C.EncodeHand(m.cards or {}))
-                    N.SendMeld(seat, m)
+            -- Audit fix: pcall the play body. A Bot.PickPlay /
+            -- BotMaster.PickPlay / PickMelds error otherwise leaves
+            -- the bot's turn permanently — bots have no AFK timer
+            -- (StartTurnTimer skips bot seats). Recovery: pick the
+            -- lowest-rank legal play, mirroring _HostTurnTimeout.
+            local ok, err = pcall(function()
+                if not S.s.isHost then return end
+                if S.s.paused then return end
+                if S.s.phase ~= K.PHASE_PLAY then return end
+                if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+                -- Takweesh check before the play. A bot scans for an
+                -- opponent illegal play and rolls per-trick probability.
+                -- If it decides to call, the round resolves immediately
+                -- and we never schedule the play.
+                if B.Bot.PickTakweesh and B.Bot.PickTakweesh(seat) then
+                    broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
+                    N.HostResolveTakweesh(seat)
+                    return
                 end
-                S.s.meldsDeclared[seat] = true
-            end
-            -- Saudi Master tier picks via determinization sampling
-            -- and falls through to Bot.PickPlay if it bails (e.g.,
-            -- single legal play). Lower tiers go straight to PickPlay.
-            local card = nil
-            if B.BotMaster and B.BotMaster.PickPlay
-               and B.Bot.IsSaudiMaster and B.Bot.IsSaudiMaster() then
-                card = B.BotMaster.PickPlay(seat)
-            end
-            if not card then card = B.Bot.PickPlay(seat) end
-            if not card then return end
-            -- Advanced bot: if we're leading and the chosen lead card
-            -- IS the AKA (highest unplayed) of a non-trump suit, fire
-            -- the partner-coordination signal BEFORE the actual card.
-            -- PickAKA is now passed the chosen card so it only signals
-            -- on the suit being led (was iterating the whole hand and
-            -- announcing whichever AKA-suit it found first, regardless
-            -- of the lead). Per-suit dedup inside PickAKA prevents
-            -- repeating on the same suit later in the round.
-            if B.Bot.PickAKA then
-                local akaSuit = B.Bot.PickAKA(seat, card)
-                if akaSuit then
-                    S.ApplyAKA(seat, akaSuit)
-                    N.SendAKA(seat, akaSuit)
+                if not S.s.meldsDeclared[seat] then
+                    local melds = B.Bot.PickMelds(seat)
+                    for _, m in ipairs(melds) do
+                        S.ApplyMeld(seat, m.kind, m.suit, m.top, C.EncodeHand(m.cards or {}))
+                        N.SendMeld(seat, m)
+                    end
+                    S.s.meldsDeclared[seat] = true
+                end
+                -- Saudi Master tier picks via determinization sampling
+                -- and falls through to Bot.PickPlay if it bails (e.g.,
+                -- single legal play). Lower tiers go straight to PickPlay.
+                local card = nil
+                if B.BotMaster and B.BotMaster.PickPlay
+                   and B.Bot.IsSaudiMaster and B.Bot.IsSaudiMaster() then
+                    card = B.BotMaster.PickPlay(seat)
+                end
+                if not card then card = B.Bot.PickPlay(seat) end
+                if not card then return end
+                -- Advanced bot: if we're leading and the chosen lead card
+                -- IS the AKA (highest unplayed) of a non-trump suit, fire
+                -- the partner-coordination signal BEFORE the actual card.
+                if B.Bot.PickAKA then
+                    local akaSuit = B.Bot.PickAKA(seat, card)
+                    if akaSuit then
+                        S.ApplyAKA(seat, akaSuit)
+                        N.SendAKA(seat, akaSuit)
+                    end
+                end
+                S.ApplyPlay(seat, card)
+                N.SendPlay(seat, card)
+                N._HostStepPlay()
+            end)
+            if not ok then
+                log("Error", "play-decision callback failed: %s", tostring(err))
+                if S.s.phase == K.PHASE_PLAY
+                   and S.s.turn == seat and S.s.turnKind == "play" then
+                    local hand = S.s.hostHands and S.s.hostHands[seat]
+                    if hand and S.s.contract then
+                        local legal = {}
+                        for _, c in ipairs(hand) do
+                            if R.IsLegalPlay(c, hand, S.s.trick, S.s.contract, seat) then
+                                legal[#legal + 1] = c
+                            end
+                        end
+                        if #legal > 0 then
+                            local best, bestRank = legal[1], math.huge
+                            for _, c in ipairs(legal) do
+                                local r = C.TrickRank(c, S.s.contract)
+                                if r < bestRank then best, bestRank = c, r end
+                            end
+                            S.ApplyPlay(seat, best)
+                            N.SendPlay(seat, best)
+                            N._HostStepPlay()
+                        end
+                    end
                 end
             end
-            S.ApplyPlay(seat, card)
-            N.SendPlay(seat, card)
-            N._HostStepPlay()
             if B.UI then B.UI.Refresh() end
         end)
         return

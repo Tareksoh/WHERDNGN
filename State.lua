@@ -73,6 +73,28 @@ local function reset()
     -- pause: host-driven freeze that suspends bot scheduling and AFK
     -- timers without dropping any in-flight state. Network-mirrored.
     s.paused      = false
+    -- Audit fix: explicitly clear all per-trick / per-round transient
+    -- fields so a Reset between games doesn't leave stale banners or
+    -- intermediate-state structs alive. Each of these is mutated in
+    -- regular gameplay; reset() is the only safe place that knows
+    -- nothing is in flight.
+    s.redealing             = nil
+    s.lastTrick             = nil
+    s.peekedThisRound       = nil
+    s.pendingPreemptContract= nil
+    s.handRound             = nil
+    s.meldHoldUntil         = nil
+    s.localPlayedThisTrick  = nil
+    s.akaCalled             = nil
+    s.playedCardsThisRound  = {}
+    s.lastRoundResult       = nil
+    s.lastRoundDelta        = nil
+    s.takweeshResult        = nil
+    s.swaResult             = nil
+    s.swaRequest            = nil
+    s.swaDenied             = nil
+    s.pendingHost           = nil
+    s.hostDeckRemainder     = nil
     -- Clear persisted resync hint and session so we don't re-request
     -- or restore a finished game after the next /reload.
     if WHEREDNGNDB then
@@ -386,6 +408,23 @@ function S.ApplyResyncSnapshot(gameID, payload)
     s.meldsByTeam  = { A = {}, B = {} }
     s.meldsDeclared= {}
     s.playedCardsThisRound = {}
+
+    -- Audit fix: clear remaining transient round state so stale
+    -- per-trick banners (AKA, Takweesh outcome, SWA result, redeal
+    -- announcement) and pre-emption state from before the rejoin
+    -- don't leak through the snapshot. The host will re-broadcast any
+    -- of these that are still active right after the snapshot.
+    s.akaCalled             = nil
+    s.lastTrick             = nil
+    s.takweeshResult        = nil
+    s.swaResult             = nil
+    s.swaRequest            = nil
+    s.swaDenied             = nil
+    s.redealing             = nil
+    s.pendingPreemptContract= nil
+    s.preemptEligible       = nil
+    s.lastRoundResult       = nil
+    s.lastRoundDelta        = nil
 
     -- Trick / hand are not snapshotted; they'll arrive via the next
     -- play broadcast and the re-whispered MSG_HAND respectively.
@@ -827,6 +866,8 @@ function S.ApplyTriple(seat, open)
         s.phase = K.PHASE_PLAY
     else
         s.phase = K.PHASE_FOUR
+        -- Audit fix: AFK pre-warn for the Four decision (defender).
+        if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("four") end
     end
 end
 
@@ -843,6 +884,8 @@ function S.ApplyFour(seat, open)
         s.phase = K.PHASE_PLAY
     else
         s.phase = K.PHASE_GAHWA
+        -- Audit fix: AFK pre-warn for the Gahwa decision (bidder).
+        if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("gahwa") end
     end
 end
 
@@ -970,6 +1013,15 @@ end
 
 function S.ApplyTrickEnd(winner, points)
     if not s.trick or not s.trick.plays or #s.trick.plays == 0 then return end
+    -- Audit fix: only accept a complete 4-play trick. A malformed or
+    -- partial broadcast (e.g. host bug, replayed mid-trick frame
+    -- arriving out of order) would otherwise stamp a 1/2/3-play trick
+    -- into s.tricks, corrupting trick history + ScoreRound math.
+    if #s.trick.plays ~= 4 then
+        L.Debug("state", "ApplyTrickEnd ignored partial trick (%d plays)",
+                #s.trick.plays)
+        return
+    end
     s.trick.winner = winner
     s.trick.points = points
     table.insert(s.tricks, s.trick)
@@ -1107,7 +1159,7 @@ function S.MeldVerdict()
     return R.CompareMelds(s.meldsByTeam.A, s.meldsByTeam.B, s.contract)
 end
 
-function S.ApplyRoundEnd(addA, addB, totA, totB)
+function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     s.cumulative.A = totA
     s.cumulative.B = totB
     s.phase = K.PHASE_SCORE
@@ -1118,21 +1170,25 @@ function S.ApplyRoundEnd(addA, addB, totA, totB)
     -- seat won the last trick.
     s.turn = nil
     s.turnKind = nil
+    -- Audit fix: BALOOT fanfare for AL-KABOOT (sweep) or contract
+    -- failure now fires on EVERY client, not just the host. The
+    -- sweep / bidderMade flags arrive via MSG_ROUND (broadcast by
+    -- the host's SendRound). Pre-v0.3.0 hosts won't supply the
+    -- flags; treat absent as no-fanfare for back-compat.
+    if B.Sound and B.Sound.Cue
+       and (sweep or bidderMade == false) then
+        B.Sound.Cue(K.SND_BALOOT)
+    end
 end
 
 -- Stash the full round-result object on the host so the round-end
 -- summary panel can show details (cards, melds, multiplier, sweep, etc.)
--- The wire still only carries the four totals via MSG_ROUND.
+-- The wire carries the headline totals + sweep/bidderMade flags via
+-- MSG_ROUND; this struct is host-only state.
 function S.ApplyRoundResult(result)
     s.lastRoundResult = result
-    -- Audio fanfare for AL-KABOOT (sweep) or contract failure (BALOOT).
-    -- Only the host has lastRoundResult; non-hosts get the cue via the
-    -- regular trick-won pings during the hand.
-    if result and B.Sound and B.Sound.Cue then
-        if result.sweep or result.bidderMade == false then
-            B.Sound.Cue(K.SND_BALOOT)
-        end
-    end
+    -- Fanfare moved to S.ApplyRoundEnd so every client hears it on
+    -- MSG_ROUND receipt — see audit fix above.
 end
 
 function S.ApplyGameEnd(winnerTeam)

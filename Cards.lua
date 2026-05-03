@@ -181,7 +181,13 @@ function M.SortHand(cards, contract)
     contract = contract or { type = K.BID_SUN }
     table.sort(cards, function(a, b)
         local sa, sb = M.Suit(a), M.Suit(b)
-        if sa ~= sb then return SUIT_DISPLAY[sa] < SUIT_DISPLAY[sb] end
+        -- Audit fix: nil-safe SUIT_DISPLAY lookup. An invalid card with
+        -- an unknown suit char would otherwise return nil here and Lua
+        -- raises a "compare nil with number" runtime error inside
+        -- table.sort. Coerce unknowns to a sentinel that sorts last.
+        if sa ~= sb then
+            return (SUIT_DISPLAY[sa] or 99) < (SUIT_DISPLAY[sb] or 99)
+        end
         return M.TrickRank(a, contract) > M.TrickRank(b, contract)
     end)
     return cards

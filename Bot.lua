@@ -127,7 +127,10 @@ end
 -- known partner / opponent behaviour. Reset on Reset() / new game.
 --
 -- Counters:
---   bels       — how often this seat has Beled
+--   bels       — how often this seat has Beled  (defender, ×2)
+--   triples    — how often this seat has Tripled (bidder,   ×3)
+--   fours      — how often this seat has Foured  (defender, ×4)
+--   gahwas     — how often this seat has Gahwa'd (bidder,   match-win)
 --   trumpEarly — trump LEAD before trick 5 (aggressive tempo)
 --   trumpLate  — trump LEAD from trick 5 onwards (saver style)
 Bot._partnerStyle = nil
@@ -136,7 +139,7 @@ local function emptyStyle()
     local m = {}
     for s = 1, 4 do
         m[s] = {
-            bels = 0,
+            bels = 0, triples = 0, fours = 0, gahwas = 0,
             trumpEarly = 0, trumpLate = 0,
         }
     end
@@ -147,14 +150,25 @@ function Bot.ResetStyle()
     Bot._partnerStyle = emptyStyle()
 end
 
--- Hook into Net.lua at contract finalization so the seat that Beled
--- this round adds to their lifetime counter. Net.lua calls this from
--- _OnDouble / _OnTriple / _OnFour / _OnGahwa.
-function Bot.OnEscalation(seat)
+-- Hook into Net.lua at contract finalization so the seat that
+-- escalated this round adds to their per-rung lifetime counter.
+-- Net.lua calls this from _OnDouble / _OnTriple / _OnFour / _OnGahwa
+-- with the rung kind ∈ {"double","triple","four","gahwa"}.
+--
+-- Audit fix: previous version always incremented `m.bels` regardless
+-- of rung — a seat that Tripled or Gahwa'd inflated the bel counter
+-- and styleBelTendency misclassified aggressive bidders as Bel-prone
+-- defenders. Each rung now has its own counter.
+function Bot.OnEscalation(seat, kind)
     if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
     local m = Bot._partnerStyle[seat]
     if not m then return end
-    m.bels = m.bels + 1
+    if     kind == "double" then m.bels    = m.bels    + 1
+    elseif kind == "triple" then m.triples = m.triples + 1
+    elseif kind == "four"   then m.fours   = m.fours   + 1
+    elseif kind == "gahwa"  then m.gahwas  = m.gahwas  + 1
+    else                         m.bels    = m.bels    + 1   -- legacy
+    end
 end
 
 -- Convenience derived metrics. All return nil if we haven't seen
@@ -220,18 +234,38 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- a trick. A trump-RUFF in response to a non-trump lead by
     -- another seat is defensive, not tempo-spending — must NOT
     -- be counted here.
+    --
+    -- Audit fix: drop `leadSuit == contract.trump` from the conditions.
+    -- On a LEAD play, leadSuit is nil (the seat opens a fresh trick),
+    -- so the check was unreachable and the counters never moved.
+    -- `#trickPlays == 1` after ApplyPlay already identifies a lead;
+    -- combined with `cardSuit == contract.trump` we know it's a
+    -- trump-LED trick.
     local contract = S.s and S.s.contract
     local trickPlays = (S.s.trick and S.s.trick.plays) or {}
     if contract and contract.type == K.BID_HOKM and contract.trump
        and cardSuit == contract.trump
-       and (#trickPlays == 1)  -- this is the LEAD (we're the only play in)
-       and leadSuit == contract.trump then
+       and (#trickPlays == 1) then
         local trickNum = #(S.s.tricks or {}) + 1
         if trickNum <= 4 then
             style.trumpEarly = style.trumpEarly + 1
         else
             style.trumpLate = style.trumpLate + 1
         end
+    end
+
+    -- Audit fix #22: when the off-suit play was a TRUMP RUFF in a
+    -- Hokm contract (forced or chosen), it's not a "preference signal"
+    -- — the seat had no choice. Don't poison the Fzloky firstDiscard
+    -- ladder with this. Roll back the firstDiscard if it was set above
+    -- AND the played card is trump.
+    if not wasIllegal and leadSuit and cardSuit ~= leadSuit
+       and contract and contract.type == K.BID_HOKM
+       and contract.trump and cardSuit == contract.trump
+       and mem.firstDiscard
+       and mem.firstDiscard.suit == cardSuit
+       and mem.firstDiscard.rank == C.Rank(card) then
+        mem.firstDiscard = nil
     end
 end
 
@@ -415,29 +449,39 @@ end
 --
 -- Returns a strength bonus to add (positive = more aggressive).
 local function partnerEscalatedBonus(seat, contract)
-    if not Bot.IsM3lm() then return 0 end
+    -- Audit fix #8: gate on IsAdvanced rather than IsM3lm. Reading
+    -- the contract escalation flags is structural state inspection,
+    -- not a tier-3 partner-style model — Advanced bots should benefit
+    -- too. (M3lm-specific style modeling lives in styleBelTendency etc.)
+    if not Bot.IsAdvanced() then return 0 end
     if not contract then return 0 end
     local p = R.Partner(seat)
+    if not p or not contract.bidder then return 0 end
     -- v0.2.0: contract escalation roles have flipped from the 5-rung
     -- chain. Mapping:
     --   contract.doubled — set by the defender (Bel)
     --   contract.tripled — set by the bidder (Triple)
     --   contract.foured  — set by the defender (Four)
     --   contract.gahwa   — set by the bidder (Gahwa, match-win)
-    local bidder = contract.bidder
-    local defender = bidder and ((bidder % 4) + 1) or nil
+    --
+    -- Audit fix #24: previous code did `p == defender` where
+    -- `defender = bidder+1`. Since defenders are at bidder+1 AND
+    -- bidder+3, the check missed the case where p == bidder+3, so
+    -- only one of the two defender seats received the bonus. Use
+    -- team membership: p is on defender team iff R.TeamOf(p) differs
+    -- from R.TeamOf(bidder).
+    local pTeam       = R.TeamOf(p)
+    local bidderTeam  = R.TeamOf(contract.bidder)
+    local pIsDefender = pTeam and bidderTeam and pTeam ~= bidderTeam
+    local pIsBidderTeam = pTeam and bidderTeam and pTeam == bidderTeam
     local bonus = 0
-    -- If partner is the DEFENDER and they Beled or Foured, that's a
-    -- positive signal for us (the defender team) — escalation chain
-    -- says we're confident in breaking the contract. Bidder team
-    -- shouldn't read this as a positive for them.
-    if p == defender then
+    -- Defender-team partner: their team has been escalating (Bel/Four).
+    if pIsDefender then
         if contract.doubled then bonus = bonus + 5  end
         if contract.foured  then bonus = bonus + 8  end
     end
-    -- If partner is the BIDDER and they Tripled, that's a positive
-    -- signal for us (the bidder team) — they're confident in making.
-    if p == bidder then
+    -- Bidder-team partner: their team has been escalating (Triple/Gahwa).
+    if pIsBidderTeam then
         if contract.tripled then bonus = bonus + 5  end
         if contract.gahwa   then bonus = bonus + 12 end
     end
@@ -1100,12 +1144,18 @@ function Bot.PickGahwa(seat)
     -- v0.2.0: Gahwa is the BIDDER's terminal — match-win or match-loss.
     -- Bot only fires this on a near-certain hand: the entire match
     -- hangs on the next 8 tricks.
+    --
+    -- Audit fix #9: align return arity with PickTriple/PickFour, which
+    -- both return (yes, wantOpen). Gahwa is terminal so wantOpen is
+    -- moot, but matching the signature avoids any caller pattern-match
+    -- destructure dropping a nil into the "wantOpen" slot.
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
-    if not hand or not contract then return false end
+    if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     local th = K.BOT_GAHWA_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
-    return strength >= jitter(th, BEL_JITTER)
+    local yes = strength >= jitter(th, BEL_JITTER)
+    return yes, false
 end
 
 -- Triple-on-Ace pre-emption (الثالث) — bot decision for an earlier

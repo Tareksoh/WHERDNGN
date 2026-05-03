@@ -662,12 +662,17 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- Belote: independent +20 raw, applied AFTER the multiplier.
     -- Pagat: "Baloot always 2 points unaffected" — Bel/Triple/Four/Sun multipliers
     -- do NOT scale the Belote bonus. Always +2 game points to that team.
+    --
+    -- Audit fix: do NOT mutate meldPoints with the belote bonus.
+    -- meldPoints is exported in the result struct; if any caller
+    -- recomputes a per-team total from (cardPts + meldPoints) * mult,
+    -- a mutated meldPoints would double-apply the belote AND scale it
+    -- by the multiplier, contradicting the "unaffected" rule above.
+    -- The belote winner is exposed separately as result.belote.
     if belote == "A" then
         rawA = rawA + K.MELD_BELOTE
-        meldPoints.A = meldPoints.A + K.MELD_BELOTE  -- diagnostic only
     elseif belote == "B" then
         rawB = rawB + K.MELD_BELOTE
-        meldPoints.B = meldPoints.B + K.MELD_BELOTE
     end
 
     -- Saudi convention: round to nearest 10, "5 rounds down", then /10.

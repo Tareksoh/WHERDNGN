@@ -33,12 +33,13 @@ local scoreText, contractText, roundText, gameIDText
 local hostStartBtn
 local joinBtn
 
--- Theme refresh: card-back textures live deep inside child frames
--- built by helpers (one per seat-badge stack). Collected into a
--- module-local list at construction so SetCardStyle() can re-bind
--- their texture paths without rebuilding the whole window.
+-- Theme refresh: card-back stack frames + tex pairs live deep inside
+-- child frames built by helpers (one per seat-badge slot). Collected
+-- into a module-local list at construction so SetCardStyle() can
+-- re-bind their texture path AND re-apply the backdrop tint without
+-- rebuilding the whole window.
 -- (Glow textures are theme-independent; no tracking needed.)
-local cardBackTextures = {}
+local cardBackEntries = {}   -- { { frame = <Frame>, tex = <Texture> }, ... }
 
 -- Forward declaration: buildTable wires this into a button OnClick,
 -- but the implementation lives later in the file. Without forward-
@@ -154,10 +155,15 @@ local function migrateLegacyTheme()
     if not WHEREDNGNDB then return end
     if WHEREDNGNDB.cardStyle and WHEREDNGNDB.feltTheme then return end
     local legacy = WHEREDNGNDB.cardTheme
+    -- Audit fix: only migrate when legacy is non-nil. Fresh installs
+    -- (no prior cardTheme) should fall through to the runtime defaults
+    -- in activeCardStyleName/activeFeltThemeName so future default
+    -- changes still reach those users.
+    if legacy == nil then return end
     if legacy == "burgundy" then
         WHEREDNGNDB.cardStyle = WHEREDNGNDB.cardStyle or "burgundy"
         WHEREDNGNDB.feltTheme = WHEREDNGNDB.feltTheme or "burgundy"
-    elseif legacy == "classic" or legacy == nil then
+    elseif legacy == "classic" then
         WHEREDNGNDB.cardStyle = WHEREDNGNDB.cardStyle or "classic"
         WHEREDNGNDB.feltTheme = WHEREDNGNDB.feltTheme or "green"
     end
@@ -320,7 +326,9 @@ local function makeCardBack(parent, w, h)
     tex:SetPoint("TOPLEFT", 2, -2)
     tex:SetPoint("BOTTOMRIGHT", -2, 2)
     tex:SetTexture(cardTexturePath(nil))   -- theme-aware "back" path
-    cardBackTextures[#cardBackTextures + 1] = tex   -- track for SetTheme
+    -- Track frame+tex so SetCardStyle can re-bind both the texture
+    -- path AND the solid backdrop tint (was tex-only previously).
+    cardBackEntries[#cardBackEntries + 1] = { frame = frame, tex = tex }
     return frame
 end
 
@@ -364,10 +372,13 @@ local function buildMain()
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        if WHEREDNGNDB then
-            local p, _, rp, x, y = self:GetPoint()
-            WHEREDNGNDB.framePos = { p, rp, x, y }
-        end
+        -- Audit fix: nil-safe init. The previous `if WHEREDNGNDB then`
+        -- silently dropped the first drag on a fresh install before
+        -- any other write site had created the table. This ensures
+        -- the dragged position is always saved.
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        local p, _, rp, x, y = self:GetPoint()
+        WHEREDNGNDB.framePos = { p, rp, x, y }
     end)
     f:SetClampedToScreen(true)
     f:SetFrameStrata("HIGH")
@@ -839,8 +850,10 @@ local function buildLobby()
             local active = getActiveFn()
             local idx = 1
             for i, t in ipairs(list) do if t.id == active then idx = i end end
-            local next = list[(idx % #list) + 1]
-            if setFn(next.id) then refresh() end
+            -- Audit fix: avoid shadowing the `next` builtin (foot-gun
+            -- if any future edit calls `next(t, k)` in this closure).
+            local nextEntry = list[(idx % #list) + 1]
+            if setFn(nextEntry.id) then refresh() end
         end)
         b:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -1154,6 +1167,12 @@ local function buildTable()
     akaBanner:SetPoint("TOP", centerPad, "TOP", 0, -4)
     setBackdrop(akaBanner, true,
         { 0.05, 0.10, 0.05, 0.90 }, COL.legalEdge, 8, "solid")
+    -- Audit fix: bump frame-level above the centre-cross trick cards.
+    -- AKA banner inside centerPad's top edge (y≈+89..+111 from centre)
+    -- otherwise overlaps centerCards.top (90 tall at +58, top edge
+    -- at +103) by ~14 px, partially obscuring the banner text right
+    -- when the partner needs to read it.
+    akaBanner:SetFrameLevel(centerPad:GetFrameLevel() + 50)
     akaBanner:Hide()
     akaBanner.text = makeText(akaBanner, 13, "CENTER")
     akaBanner.text:SetPoint("CENTER", 0, 0)
@@ -1223,7 +1242,12 @@ local function buildTable()
     -- the name label for horizontal space. Same 5-card layout as the
     -- seat badges, hidden until melds are declared.
     localBar.meldStrip = buildMeldStrip(localBar)
-    localBar.meldStrip:SetPoint("BOTTOM", localBar, "TOP", 0, 4)
+    -- Audit fix: anchor INSIDE localBar so the strip doesn't extend
+    -- 36 px into the centerPad/trick area when shown during the
+    -- trick-1 meld-declaration window. The strip overlays the
+    -- localBar's name/score text — acceptable since melds and
+    -- per-seat score never need to be read together.
+    localBar.meldStrip:SetPoint("BOTTOM", localBar, "BOTTOM", 0, 0)
     -- Turn glow overlay matching the other seat badges. Shown only
     -- when it's our turn so the highlight reads as strongly as the
     -- other three seats' glow when they're up.
@@ -2290,10 +2314,20 @@ local function statusFor(phase)
     end
     if phase == K.PHASE_SCORE then
         local d = S.s.lastRoundDelta or { A = 0, B = 0 }
-        return ("Round done: A +%d, B +%d"):format(d.A or 0, d.B or 0)
+        -- Audit fix: use custom team names where set, falling back to
+        -- generic "A"/"B". Mirrors the round-end banner (commit ed9181e).
+        local nm = (S.s.teamNames or { A = "A", B = "B" })
+        local nA = (nm.A and nm.A ~= "") and nm.A or "A"
+        local nB = (nm.B and nm.B ~= "") and nm.B or "B"
+        return ("Round done: %s +%d, %s +%d")
+                  :format(nA, d.A or 0, nB, d.B or 0)
     end
     if phase == K.PHASE_GAME_END then
-        return ("Game over — Team %s wins"):format(S.s.winner or "?")
+        local nm = (S.s.teamNames or { A = "A", B = "B" })
+        local team = S.s.winner
+        local label = team and ((nm[team] and nm[team] ~= "" and nm[team])
+                                  or ("Team " .. team)) or "?"
+        return ("Game over — %s wins"):format(label)
     end
     return ""
 end
@@ -2681,9 +2715,23 @@ function U.SetCardStyle(name)
     WHEREDNGNDB = WHEREDNGNDB or {}
     WHEREDNGNDB.cardStyle = name
     applyThemeColors()
-    -- Rebind every tracked card-back texture (one per seat-badge slot).
-    for _, tex in ipairs(cardBackTextures) do
-        tex:SetTexture(cardTexturePath(nil))
+    -- Audit fix: rebind BOTH the card-back texture path AND the solid
+    -- backdrop tint of every tracked card-back stack frame. The
+    -- previous version only updated the texture, leaving the
+    -- pre-switch cardBack/cardBackEdge color visible at the frame
+    -- edges (and as a fallback when the new texture hadn't loaded).
+    local back, edge = COL.cardBack, COL.cardBackEdge
+    local newPath = cardTexturePath(nil)
+    for _, entry in ipairs(cardBackEntries) do
+        if entry.tex   then entry.tex:SetTexture(newPath) end
+        if entry.frame then
+            if entry.frame.SetBackdropColor then
+                entry.frame:SetBackdropColor(back[1], back[2], back[3], back[4])
+            end
+            if entry.frame.SetBackdropBorderColor then
+                entry.frame:SetBackdropBorderColor(edge[1], edge[2], edge[3], edge[4])
+            end
+        end
     end
     -- Refresh redraws every face card via setCardSlot, which calls
     -- cardTexturePath again and picks up the new subdir automatically.
@@ -2710,6 +2758,35 @@ function U.SetFeltTheme(name)
         local c = COL.centerPad
         tablePanel.centerPad:SetBackdropColor(c[1], c[2], c[3], c[4])
     end
+    -- Audit fix: re-apply COL.feltDark / COL.feltLight to every other
+    -- frame whose backdrop tint was captured at construction. Without
+    -- this, switching felt while the window is open leaves stale
+    -- tints on the seat badges, the localBar, the party panel, and
+    -- the main frame's outer rim until the next /reload.
+    local function reTintFL(frame)   -- felt-light frames
+        if frame and frame.SetBackdropColor then
+            local c = COL.feltLight
+            frame:SetBackdropColor(c[1], c[2], c[3], c[4])
+        end
+    end
+    local function reTintFD(frame)   -- felt-dark frames (main rim)
+        if frame and frame.SetBackdropColor then
+            local c = COL.feltDark
+            frame:SetBackdropColor(c[1], c[2], c[3], c[4])
+        end
+    end
+    if seatBadges then
+        for _, b in pairs(seatBadges) do
+            if type(b) == "table" then reTintFL(b.frame) end
+        end
+    end
+    if tablePanel and tablePanel.localBar then reTintFL(tablePanel.localBar) end
+    if lobbyPanel and lobbyPanel.partyPanel then reTintFL(lobbyPanel.partyPanel) end
+    -- Outer rim of the main frame uses the dark default from setBackdrop.
+    -- Note: the turn-glow renderer in Refresh re-derives this from
+    -- COL.feltDark every tick, so we don't strictly need to touch f
+    -- here — but doing so makes the switch instantaneous.
+    reTintFD(f)
     if U.Refresh then U.Refresh() end
     return true
 end
