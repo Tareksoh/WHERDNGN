@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.4.8 — Three small UI fixes (player feedback)
+
+### Fixed
+
+- **Lobby checkbox overlap:** the 4-tier bot checkbox stack
+  (Advanced / M3lm / Fzloky / Saudi Master) had its bottom row at
+  `y=12`, the same vertical band as the centred Host Game / Start
+  Round / Fill Bots buttons. The "Saudi Master" label visually
+  overlapped Host Game. Shift the entire stack up by 30 (new
+  `y={108, 86, 64, 42}`) and bump the right-column Cards/Felt cycle
+  buttons to match (`y={108, 86}`) so the top two rows still pair.
+
+- **Pass label rendered as empty boxes for opponents:**
+  `bidLabelForSeat` returned `"بس"` (Arabic colloquial "Pass") for
+  the per-seat bid display below other players' names. WoW's bundled
+  fonts (Arial Narrow / Frizz / Skurri) don't include Arabic glyphs
+  — same constraint already documented for the AKA button — so the
+  label rendered as empty boxes / glyph errors. Match the local-side
+  bid-button convention: `"wla"` (Latin transliteration of ولا) in
+  R2, `"Pass"` in R1.
+
+- **Round-end banner: WIN / LOST headline:** the score banner showed
+  "AL-KABOOT! / BALOOT! / ALLY B3DO" with YA MRW7 pointing at the
+  losing team, but players had to mentally translate that contract
+  framing into their own team's outcome. Added a large-font headline
+  above the contract title showing "WIN" (green) or "LOST" (red)
+  from the local player's perspective. Logic covers all branches:
+  - Sweep → sweeping team wins
+  - Contract made → bidder team wins
+  - Contract failed → defender team wins
+  - SWA valid → caller's team wins; invalid → opp wins
+  - Takweesh caught → caller's team wins; false call → opp wins
+  - Match end → S.s.winner team wins
+  - Non-host degraded view → infer from delta sign
+
+  Banner height bumped from 170 → 196 to fit. Spectators (no
+  localSeat) get an empty headline, falling back to the existing
+  contract-title context.
+
 ## v0.4.7 — 50-agent empirical + codebase audit (5 critical bugs found)
 
 A second 50-agent ruflo-swarm audit, this time split 20 agents on

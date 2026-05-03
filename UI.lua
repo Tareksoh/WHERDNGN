@@ -825,8 +825,17 @@ local function buildLobby()
         end
         return cb
     end
+    -- Player-reported UI fix: 4-tier checkbox stack at y={78,56,34,12}
+    -- placed Saudi Master at y=12, the same vertical band as the
+    -- "Start Round" / "Host Game" / "Fill Bots" button row (y=12,
+    -- height 26). The Saudi Master label visually overlapped the
+    -- centred Host Game button. Shift the entire stack up by 30
+    -- (new y={108,86,64,42}) so Saudi Master clears the button row
+    -- with ~24px breathing room. Cards/Felt cycle buttons in the
+    -- right column are bumped to match (line 908/974) so the top
+    -- pair (Advanced+Cards, M3lm+Felt) stays visually aligned.
     lobbyPanel.advancedCheck = makeBotDifficultyCheck(
-        "Advanced", 78, true,
+        "Advanced", 108, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.advancedBots end,
         function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.advancedBots = v end,
         "Bots use human-style heuristics: partner-bid reads, "
@@ -834,7 +843,7 @@ local function buildLobby()
             .. "threshold modifiers. Host only — affects bots in "
             .. "this game.")
     lobbyPanel.m3lmCheck = makeBotDifficultyCheck(
-        "M3lm", 56, true,
+        "M3lm", 86, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.m3lmBots end,
         function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.m3lmBots = v end,
         "Master tier (pro level). Layers on top of Advanced: "
@@ -844,7 +853,7 @@ local function buildLobby()
             .. "and ramps escalations faster when partner has already "
             .. "Beled / Tripled.")
     lobbyPanel.fzlokyCheck = makeBotDifficultyCheck(
-        "Fzloky", 34, true,
+        "Fzloky", 64, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.fzlokyBots end,
         function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.fzlokyBots = v end,
         "Signal-aware tier on top of M3lm. Reads partner's first "
@@ -853,7 +862,7 @@ local function buildLobby()
             .. "a low discard (7/8) means \"avoid this\". Bot biases "
             .. "lead choice accordingly.")
     lobbyPanel.saudiMasterCheck = makeBotDifficultyCheck(
-        "Saudi Master", 12, true,
+        "Saudi Master", 42, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots end,
         function(v) WHEREDNGNDB = WHEREDNGNDB or {}; WHEREDNGNDB.saudiMasterBots = v end,
         "Top tier (ISMCTS-flavoured). At each play decision, the "
@@ -904,8 +913,11 @@ local function buildLobby()
         return b, refresh
     end
 
+    -- Player-reported UI fix: bumped Cards/Felt y to match the new
+    -- bot checkbox stack (Advanced=108, M3lm=86) so the top two rows
+    -- still pair visually. Was: Cards=78, Felt=56.
     local cardsBtn, cardsRefresh = makeCycleBtn(
-        "Cards", 78,
+        "Cards", 108,
         U.GetActiveCardStyle, U.GetCardStyles, U.SetCardStyle,
         "Card face / back art set. Independent of the felt — mix a "
             .. "burgundy deck with a green felt if you like. "
@@ -971,7 +983,7 @@ local function buildLobby()
     end)
 
     local feltBtn, feltRefresh = makeCycleBtn(
-        "Felt", 56,
+        "Felt", 86,
         U.GetActiveFeltTheme, U.GetFeltThemes, U.SetFeltTheme,
         "Table felt texture + the backdrop colors around it. "
             .. "Independent of the card style. Persists in saved "
@@ -1344,21 +1356,30 @@ local function buildTable()
     -- BALOOT! / contract result banner with full breakdown (shown
     -- during PHASE_SCORE / PHASE_GAME_END). Title at top, then per-team
     -- breakdown lines, multiplier, Belote, and final delta.
+    --
+    -- Player-reported UI fix: prepend a large WIN / LOST headline
+    -- above the title so the local player sees their own outcome at
+    -- a glance regardless of the contract framing (made/failed/sweep
+    -- all map to a clear win/lose for their team). The existing title
+    -- (BALOOT / ALLY B3DO / AL-KABOOT) stays as the contextual
+    -- detail line. Banner height bumped from 170 to 196 to fit.
     local banner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
-    banner:SetSize(270, 170)
+    banner:SetSize(270, 196)
     banner:SetPoint("CENTER", 0, 0)
     setBackdrop(banner, true, { 0.04, 0.04, 0.05, 0.96 }, COL.legalEdge, 12, "solid")
     banner:Hide()
-    banner.title = makeText(banner, 16, "CENTER")
-    banner.title:SetPoint("TOP", 0, -10)
+    banner.outcome = makeText(banner, 22, "CENTER")
+    banner.outcome:SetPoint("TOP", 0, -10)
+    banner.title = makeText(banner, 14, "CENTER")
+    banner.title:SetPoint("TOP", 0, -38)
     banner.bidder = makeText(banner, 11, "CENTER")
-    banner.bidder:SetPoint("TOP", 0, -36)
+    banner.bidder:SetPoint("TOP", 0, -62)
     banner.defender = makeText(banner, 11, "CENTER")
-    banner.defender:SetPoint("TOP", 0, -54)
+    banner.defender:SetPoint("TOP", 0, -80)
     banner.modifiers = makeText(banner, 11, "CENTER")
-    banner.modifiers:SetPoint("TOP", 0, -76)
+    banner.modifiers:SetPoint("TOP", 0, -102)
     banner.belote = makeText(banner, 11, "CENTER")
-    banner.belote:SetPoint("TOP", 0, -94)
+    banner.belote:SetPoint("TOP", 0, -120)
     banner.belote:SetTextColor(1, 0.84, 0.30)
     banner.final = makeText(banner, 14, "CENTER")
     banner.final:SetPoint("BOTTOM", 0, 14)
@@ -2043,7 +2064,15 @@ local function bidLabelForSeat(seat)
     local b = S.s.bids and S.s.bids[seat]
     if not b or b == "" then return "" end
     if b == K.BID_PASS then
-        return "|cff888888بس|r"  -- "Pass" — soft grey, low emphasis
+        -- Player-reported UI fix: was "|cff888888بس|r" (Arabic
+        -- "Pass") but WoW's bundled fonts (Arial Narrow / Frizz /
+        -- Skurri) don't include Arabic glyphs — the label rendered
+        -- as empty boxes under other players' names. Same constraint
+        -- documented on the AKA button. Match the local-side label
+        -- convention: "wla" in R2 (transliteration of ولا), "Pass"
+        -- in R1.
+        local label = (S.s.phase == K.PHASE_DEAL2BID) and "wla" or "Pass"
+        return ("|cff888888%s|r"):format(label)
     elseif b == K.BID_SUN then
         return "|cffffd055SUN|r"
     elseif b == K.BID_ASHKAL then
@@ -2609,6 +2638,7 @@ local function renderBanner()
         local nm = (info and info.name) and shortName(info.name) or ("seat " .. seat)
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.legalEdge))
+        if banner.outcome then banner.outcome:SetText("") end
         banner.bidder:SetText(""); banner.defender:SetText("")
         banner.modifiers:SetText("|cffaaaaaaShuffling…|r")
         banner.belote:SetText("")
@@ -2621,12 +2651,37 @@ local function renderBanner()
         banner:Hide(); return
     end
 
+    -- Player-reported UI fix: WIN / LOST headline above the contract
+    -- title. Computes the local player's team outcome per round end:
+    --   sweep   → sweepTeam wins
+    --   made    → bidderTeam wins
+    --   failed  → oppTeam (defenders) wins
+    --   takeBranch (Bel'd-tie inversion)  → bidderTeam wins
+    -- Spectators (no localSeat) get an empty outcome line, falling
+    -- back to the existing color-coded title for context.
+    local function setOutcome(winningTeam)
+        if not banner.outcome then return end
+        if not winningTeam or not S.s.localSeat then
+            banner.outcome:SetText(""); return
+        end
+        local myTeam = R.TeamOf(S.s.localSeat)
+        if myTeam == winningTeam then
+            banner.outcome:SetText("|cff66ff88WIN|r")
+        else
+            banner.outcome:SetText("|cffff5544LOST|r")
+        end
+    end
+    if banner.outcome then banner.outcome:SetText("") end
+
     -- Hide subline elements by default; we re-show what's relevant.
     banner.bidder:SetText(""); banner.defender:SetText("")
     banner.modifiers:SetText(""); banner.belote:SetText("")
     banner.final:SetText("")
 
     if S.s.phase == K.PHASE_GAME_END then
+        -- Match-end WIN/LOST headline (re-uses round-end outcome
+        -- styling for consistency).
+        setOutcome(S.s.winner)
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.legalEdge))
         banner.title:SetText(("|cffffd0558amt!! go play something else|r"))
@@ -2653,11 +2708,15 @@ local function renderBanner()
         local oppTeam = callerTeam and ((callerTeam == "A") and "B" or "A") or nil
         banner:Show()
         if sw.valid then
+            -- valid SWA → caller's team wins
+            setOutcome(callerTeam)
             banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
             banner.title:SetText(("|cffffd055SWA!|r %s claimed the rest%s"):format(
                 cName, yaMrw7(oppTeam)))
             banner.bidder:SetText("Claim verified — all remaining tricks awarded.")
         else
+            -- invalid SWA → opp team wins (penalty paid by caller)
+            setOutcome(oppTeam)
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
             banner.title:SetText(("|cffff5544SWA failed|r — %s claimed wrongly%s"):format(
                 cName, yaMrw7(callerTeam)))
@@ -2678,6 +2737,8 @@ local function renderBanner()
         local offenderTeam = tk.offender and R.TeamOf(tk.offender)
         banner:Show()
         if tk.caught then
+            -- Takweesh caught → caller's team wins
+            setOutcome(callerTeam)
             local oName = (tk.offender and S.s.seats[tk.offender]
                            and shortName(S.s.seats[tk.offender].name)) or "?"
             local rankG, glyph = "?", "?"
@@ -2691,6 +2752,9 @@ local function renderBanner()
             banner.bidder:SetText(("Played |cffffd055%s%s|r — %s"):format(
                 rankG, glyph, tk.reason or "illegal"))
         else
+            -- Takweesh false call → opp team wins (caller penalised)
+            local callerOpp = callerTeam and ((callerTeam == "A") and "B" or "A") or nil
+            setOutcome(callerOpp)
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
             banner.title:SetText(("|cffff5544TAKWEESH!|r %s called incorrectly%s"):format(
                 cName, yaMrw7(callerTeam)))
@@ -2709,9 +2773,13 @@ local function renderBanner()
         -- Non-host: degraded view, just the delta. Loser inferred from
         -- the broadcast delta (lower delta = the team that took the
         -- penalty side of this round). Tied deltas (rare) get no tease.
-        local nonHostLoser = nil
-        if (d.A or 0) > (d.B or 0) then nonHostLoser = "B"
-        elseif (d.B or 0) > (d.A or 0) then nonHostLoser = "A" end
+        local nonHostLoser, nonHostWinner = nil, nil
+        if (d.A or 0) > (d.B or 0) then
+            nonHostLoser, nonHostWinner = "B", "A"
+        elseif (d.B or 0) > (d.A or 0) then
+            nonHostLoser, nonHostWinner = "A", "B"
+        end
+        setOutcome(nonHostWinner)
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.woodEdge))
         banner.title:SetText("Round done" .. yaMrw7(nonHostLoser))
@@ -2732,13 +2800,16 @@ local function renderBanner()
     -- failed); ALLY B3DO loser = defender team (contract made).
     if r.sweep then
         local sweepLoser = (r.sweep == "A") and "B" or "A"
+        setOutcome(r.sweep)  -- sweeping team wins
         banner:SetBackdropBorderColor(1.0, 0.84, 0.30, 1)
         banner.title:SetText(("|cffffd055AL-KABOOT!|r %s sweeps%s"):format(
             teamLabel(r.sweep), yaMrw7(sweepLoser)))
     elseif not r.bidderMade then
+        setOutcome(oppT)  -- contract failed → defenders win
         banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
         banner.title:SetText("|cffff5544BALOOT!|r contract failed" .. yaMrw7(bidT))
     else
+        setOutcome(bidT)  -- contract made → bidder team wins
         banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
         banner.title:SetText("|cff66ff88ALLY B3DO|r" .. yaMrw7(oppT))
     end
