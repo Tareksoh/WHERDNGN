@@ -196,10 +196,20 @@ local function dispatch(msg)
 
     local tNum = msg:match("^target%s+(%d+)$")
     if tNum then
+        -- 8th-audit fix: reject target=0. The pattern matches /baloot
+        -- target 0, which used to land in the score-target check
+        -- (`totA >= s.target`) — true for any non-negative total — and
+        -- ended the next round resolution as an instant game-end.
+        -- Reject anything below the minimum sensible Saudi target.
+        local n = tonumber(tNum) or 0
+        if n < 21 then
+            say("target must be at least 21 (Saudi sub-game minimum)")
+            return
+        end
         WHEREDNGNDB = WHEREDNGNDB or {}
-        WHEREDNGNDB.target = tonumber(tNum)
-        B.State.s.target = WHEREDNGNDB.target
-        say("target = " .. WHEREDNGNDB.target)
+        WHEREDNGNDB.target = n
+        B.State.s.target = n
+        say("target = " .. n)
         return
     end
 

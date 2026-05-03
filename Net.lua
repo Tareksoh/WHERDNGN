@@ -2035,6 +2035,23 @@ function N._OnSWAResp(sender, responder, accept, caller)
             end)
         end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        -- 8th-audit fix: resume bot dispatch / re-arm turn timer.
+        -- The SWA pending guard at MaybeRunBot's entry caused a soft-
+        -- lock when a bot's turn was waiting and the SWA was denied
+        -- — without re-pumping, the table sits with no scheduled bot
+        -- action until something else (a human play, /pause toggle)
+        -- nudges the dispatcher.
+        if S.s.isHost then
+            if S.s.phase == K.PHASE_PLAY and S.s.turn and S.s.turnKind then
+                if N.StartTurnTimer
+                   and S.s.seats[S.s.turn] and not S.s.seats[S.s.turn].isBot
+                then
+                    -- Refresh the human turn's AFK timer with full budget.
+                    N.StartTurnTimer(S.s.turn, S.s.turnKind)
+                end
+                N.MaybeRunBot()
+            end
+        end
         return
     end
 
@@ -2327,6 +2344,14 @@ end
 -- Resync request (broadcast). Only the host responds, and only if the
 -- requester is in our seat roster — otherwise spurious requests from
 -- unrelated party members would leak game state.
+-- 8th-audit fix: per-sender resync cooldown. Without throttling, a
+-- buggy or hostile peer can spam MSG_RESYNC_REQ and force the host
+-- to whisper a multi-frame snapshot (snapshot + bidcard + N melds +
+-- N tricks + in-flight plays + hand) on every request — saturating
+-- the addon channel rate limit and wasting host CPU.
+local _resyncCooldown = {}
+local RESYNC_COOLDOWN_SEC = 5
+
 function N._OnResyncReq(sender, gameID)
     if fromSelf(sender) then return end
     if not S.s.isHost then return end
@@ -2341,6 +2366,19 @@ function N._OnResyncReq(sender, gameID)
     -- Use the same normalization helper that fromSelf / fromHost /
     -- authorizeSeat already share.
     local nsender = normSender(sender)
+    -- 8th-audit fix: per-sender cooldown gate. Reject repeated
+    -- requests from the same peer within RESYNC_COOLDOWN_SEC so a
+    -- spammy / hostile client cannot saturate the addon channel by
+    -- forcing the host to re-whisper a 50+ message replay on every
+    -- request. Use the normalized sender as the key so realm-suffix
+    -- variants don't dodge the cooldown.
+    do
+        local key = nsender or sender
+        local now = (GetTime and GetTime()) or 0
+        local last = _resyncCooldown[key] or 0
+        if (now - last) < RESYNC_COOLDOWN_SEC then return end
+        _resyncCooldown[key] = now
+    end
     -- 7th-audit fix: also normalize info.name. The previous fix
     -- normalized `sender` but compared against `info.name` raw. If
     -- the seat roster was populated from a saved-session restore
@@ -3094,6 +3132,15 @@ function N.MaybeRunBot()
                 if S.s.paused then return end
                 if S.s.phase ~= K.PHASE_PLAY then return end
                 if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+                -- 8th-audit fix: re-check swaRequest at fire time.
+                -- MaybeRunBot's entry guard catches the SWA-pending case
+                -- when DISPATCHING, but a play timer that was already
+                -- in flight when a human called SWA would otherwise
+                -- still call ApplyPlay, advancing the trick state under
+                -- the SWA caller. When the request finally resolves,
+                -- IsValidSWA validates against the encoded pre-play
+                -- hand vs. trick history that has since moved on.
+                if S.s.swaRequest and S.s.swaRequest.caller then return end
                 -- Takweesh check before the play. A bot scans for an
                 -- opponent illegal play and rolls per-trick probability.
                 -- If it decides to call, the round resolves immediately
@@ -3138,7 +3185,11 @@ function N.MaybeRunBot()
             if not ok then
                 log("Error", "play-decision callback failed: %s", tostring(err))
                 if S.s.phase == K.PHASE_PLAY
-                   and S.s.turn == seat and S.s.turnKind == "play" then
+                   and S.s.turn == seat and S.s.turnKind == "play"
+                   -- 8th-audit fix: skip the fallback auto-play if SWA
+                   -- voting is still in flight (same reason as the
+                   -- guard in the success path above).
+                   and not (S.s.swaRequest and S.s.swaRequest.caller) then
                     -- Re-audit V9 fix: if PickMelds errored mid-loop,
                     -- partial melds may have already broadcast but
                     -- meldsDeclared[seat] stayed false. Mark it true
