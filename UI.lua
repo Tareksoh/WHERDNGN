@@ -2155,8 +2155,12 @@ local function renderBanner()
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.legalEdge))
         banner.title:SetText(("|cffffd0558amt!! go play something else|r"))
-        banner.final:SetText(("Team %s wins  —  %d / %d"):format(
-            S.s.winner or "?", S.s.cumulative.A or 0, S.s.cumulative.B or 0))
+        -- Audit C30 fix: use teamLabel for custom team-name display.
+        -- Previously showed "Team A wins" even when host had set custom
+        -- names like "Champs" / "Rivals".
+        local winLabel = S.s.winner and teamLabel(S.s.winner) or "?"
+        banner.final:SetText(("%s wins  —  %d / %d"):format(
+            winLabel, S.s.cumulative.A or 0, S.s.cumulative.B or 0))
         return
     end
 

@@ -36,6 +36,7 @@ local function reset()
     s.localName   = nil
     s.localSeat   = nil
     s.gameID      = nil
+    s.winner      = nil  -- Audit C30 fix: clear stale winner from prior game
     s.seats       = { [1]=nil, [2]=nil, [3]=nil, [4]=nil }
     -- round
     s.dealer      = 1
