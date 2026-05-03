@@ -1,5 +1,150 @@
 # Changelog
 
+## v0.3.0 — Visual themes (mix-and-match) + 3-pass audit sweep
+
+Wire-format compatible additive release. v0.2.x clients can play with
+v0.3.0 hosts (extra fields are append-only and ignored by older
+parsers); v0.3.0 receivers handle pre-v0.3.0 senders gracefully.
+
+### Visual themes — split into card style + felt theme axes
+
+Card art and table felt are now two independent saved variables you
+can mix and match: 4 card styles × 4 felt themes = 16 combinations.
+
+**Card styles** (`/baloot cards <name>` or lobby `Cards: ...`):
+- `classic` — hayeah Vector Playing Cards (the original)
+- `burgundy` — SVGCards 4-color deck with red lattice back
+- `tattoo` — old-school SVG art with rose decorations + portrait face
+  cards + burgundy mandala back
+- `royal_noir` — gold-on-charcoal SVG deck with crown face cards
+
+**Felt themes** (`/baloot felt <name>` or lobby `Felt: ...`):
+- `green` — classic forest-green felt
+- `burgundy` — deep wine-red felt
+- `vintage` — saddle-brown leather felt
+- `midnight` — near-black felt with indigo undertone
+
+The previous single-axis `WHEREDNGNDB.cardTheme` is migrated on first
+load to the appropriate `cardStyle` + `feltTheme` pair.
+
+### Asset pipeline
+
+Three SVG-based decks (`burgundy`, `tattoo`, `royal_noir`) are
+rasterized to TGA via `resvg_py` (Rust-based, no system cairo). One
+procedural felt generator per theme produces the 128×128 tileable
+fabric. Source SVGs preserved under `cards/<theme>/_src/` for
+reproducibility.
+
+### Test harness
+
+New `tests/test_rules.lua` (120 assertions) and `tests/test_state_bot.lua`
+(56 assertions) covering Constants/Cards/Rules/State/Bot. Driven by
+`tests/run.py` via Python lupa. 176/176 passing across all the
+audit-sweep changes below.
+
+### Bug-fix sweep — three audit passes (~40 real bugs)
+
+Three rounds of 20-agent parallel audits before release. Categorised:
+
+**Critical (gameplay-blocking):**
+- Resync replay frames (MSG_PLAY/AKA/MELD whispered during rejoin) now
+  carry a "1" flag the receiver uses to bypass turn + authorizeSeat
+  gates. Mid-trick rejoin reconstructs the table correctly. The
+  earlier "fix" that just appended replay messages was silently
+  filtered by those gates.
+- Every bot decision callback in MaybeRunBot is now wrapped in pcall
+  with phase-appropriate recovery (force-pass / force-skip / lowest-
+  legal-play). A `Bot.PickX` error no longer freezes the deal — bots
+  have no AFK timer otherwise.
+- Each escalation pcall tracks `applied` AND `skipSent` so recovery
+  can branch on real state vs. unreachable state, avoiding both stalls
+  (when phase has advanced past the simple guard) AND double SKIP_X
+  broadcasts (when the body completed the skip then HostFinishDeal
+  errored).
+- Bel-decision recovery on `applied=true` calls MaybeRunBot for open
+  Bel in Hokm (correctly running the bidder's Triple decision)
+  instead of HostFinishDeal which would skip the entire chain.
+- Solo-bot preempt path no longer routes through `_OnPreempt` — that
+  handler short-circuits on `fromSelf(sender)` before authorizeSeat,
+  silently dropping the claim. Bots now apply directly + run the
+  host post-apply block.
+- WHEREDNGN.lua PLAYER_LOGIN restore re-arms StartTurnTimer +
+  StartBelTimer + StartLocalWarn for human seats. /reload mid-turn no
+  longer leaves the table waiting forever.
+- `_HostTurnTimeout` and `_HostBelTimeout` now respect `S.s.paused` —
+  C_Timer:Cancel() doesn't catch already-queued callbacks, so a
+  pause-during-fire would otherwise let auto-actions run mid-pause.
+- `_OnKawesh` and `HostHandleKawesh` likewise respect paused.
+
+**Wire format:**
+- `MSG_ROUND` now includes `sweep` ("A"/"B"/"") + `bidderMade` (""/0/1).
+  BALOOT fanfare fires on every client, not just the host. Three-state
+  bidderMade encoding distinguishes "absent" (legacy / SWA / Takweesh)
+  from "explicit failure" so legacy hosts and per-feature paths don't
+  trigger false-positive fanfares.
+- `MSG_PLAY` / `MSG_AKA` / `MSG_MELD` extended with optional trailing
+  "1" flag for resync replay (see Critical above).
+
+**Theme system:**
+- Split `cardTheme` → `cardStyle` + `feltTheme` (mix-and-match).
+- Theme refresh re-applies backdrop colors to seat badges, localBar,
+  party panel, lobby seat-rows, and the main outer rim. Was tex-only
+  previously; corner tints stayed stale until /reload.
+- `migrateLegacyTheme` runs only when legacy is non-nil so fresh
+  installs fall through to runtime defaults.
+
+**Scoring & game logic:**
+- `R.IsValidSWA` resolves complete tricks before the caller-empty
+  short-circuit. Caller playing their last card to a trick they
+  would lose now correctly fails the claim.
+- `R.IsValidSWA` rejects top-level entry with caller-empty + no plays
+  (corrupted-state guard).
+- `R.ScoreRound` no longer mutates `meldPoints` with the +20 belote
+  bonus. Belote is exposed separately on the result struct; UI shows
+  it on its own line.
+- `S.ApplyTrickEnd` rejects partial tricks (`#plays != 4`); malformed
+  broadcasts no longer corrupt history.
+- `S.reset()` and `S.ApplyResyncSnapshot` explicitly clear all
+  per-trick / per-round transient fields (akaCalled, lastTrick,
+  redealing, takweeshResult, swaResult/Request/Denied, ...). Stale
+  banners no longer leak across game boundaries or resync.
+
+**Bot AI:**
+- `Bot.OnEscalation` accepts a rung kind ("double"/"triple"/"four"/
+  "gahwa"); per-rung counters in the style ledger. Previously every
+  rung incremented `m.bels`, misclassifying aggressive bidders.
+- `partnerEscalatedBonus` gated on `IsAdvanced` (was IsM3lm); team-
+  membership check covers BOTH defender seats (was only bidder+1).
+- `Bot.PickGahwa` returns `(yes, false)` matching PickTriple/PickFour.
+- `OnPlayObserved` trumpEarly/Late counter no longer requires
+  `leadSuit == contract.trump` (was unreachable on lead plays).
+- `firstDiscard` rolled back when the off-suit play was a forced
+  trump ruff (Fzloky no longer misreads forced ruffs as preference).
+
+**UX & polish:**
+- StartLocalWarn supports "four" / "gahwa" / "preempt" kinds; State
+  arms them in the open path of each escalation.
+- AKA banner frame-level bumped above center trick cards.
+- localBar.meldStrip anchored INSIDE localBar so it no longer
+  extends 36 px into the centerPad/trick area.
+- statusFor PHASE_SCORE / PHASE_GAME_END use custom team names.
+- Sound throttle classification: VOICE interval applies only to
+  `K.SND_VOICE_*` paths; everything else (BALOOT, CARD_PLAY,
+  TURN_PING, ...) uses the SFX interval. Previously the SFX-paths-
+  as-strings were bucketed as voice and suppressed.
+- `_HostRedeal` accepts a reason ("allpass" / "kawesh"); Kawesh path
+  no longer also prints "all passed".
+- `framePos` drag-stop persists on first drag (nil-safe init).
+- Cards.lua SortHand nil-safe SUIT_DISPLAY lookup.
+
+### Notes for upgraders
+
+Pre-v0.2.0 → v0.3.0 still requires a coordinated bump (escalation
+chain change). v0.2.x → v0.3.0 is wire-compatible: a v0.2.x client
+in a v0.3.0 host party will not hear the BALOOT fanfare on remote
+sweeps/failures (no MSG_ROUND extra-fields parser), but everything
+else works including the resync flow.
+
 ## v0.2.0 — Canonical 4-rung escalation + Triple-on-Ace pre-emption
 
 This release applies the remaining canonical Saudi rules from the

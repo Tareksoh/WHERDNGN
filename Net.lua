@@ -1978,7 +1978,17 @@ function N.HostResolveSWA(callerSeat, callerHand)
         leadSuit = trickLead, leader = trickLeader, plays = trickPlays,
     }
 
-    local valid = R.IsValidSWA(callerSeat, hands, c, trickState)
+    -- Re-audit W7 fix: reject claims with no cards in caller's hand
+    -- AND no in-flight plays. R.IsValidSWA's caller-empty short-
+    -- circuit returns true in that case (legitimate when reached
+    -- recursively at end-of-claim) but at top-level entry it's a
+    -- corrupted-state signature — meaningless claim.
+    local valid
+    if (#(hands[callerSeat] or {})) == 0 and #trickPlays == 0 then
+        valid = false
+    else
+        valid = R.IsValidSWA(callerSeat, hands, c, trickState)
+    end
 
     local addA, addB, sweepTeam, contractMade
 
@@ -2106,7 +2116,17 @@ function N.HostResolveSWA(callerSeat, callerHand)
     }
     S.s.lastRoundResult = nil
     S.s.trick = nil
-    S.ApplyRoundEnd(addA, addB, totA, totB)
+    -- Re-audit W1 fix: pass sweepTeam + contractMade through so the
+    -- BALOOT fanfare fires on host AND on remote clients (via the
+    -- MSG_SWA_OUT replay below). Without this the host's own
+    -- ApplyRoundEnd has no flags and the fanfare is suppressed.
+    -- Note: receivers go through _OnSWAOut which doesn't carry the
+    -- flags on the wire — they call ApplyRoundEnd with nil. To fix
+    -- the receiver-side fanfare we'd need to extend MSG_SWA_OUT.
+    -- For now host hears it; remote clients will fire on the
+    -- subsequent MSG_ROUND if any (none for SWA, so this is a
+    -- known limitation tracked for v0.3.1).
+    S.ApplyRoundEnd(addA, addB, totA, totB, sweepTeam, contractMade)
     N.SendSWAOut(callerSeat, valid, addA, addB, totA, totB)
 
     if totA >= S.s.target or totB >= S.s.target then
@@ -2210,6 +2230,12 @@ end
 function N._OnKawesh(sender, seat)
     if fromSelf(sender) then return end
     if not seat then return end
+    -- Re-audit W8 fix: respect S.s.paused. Without this, a remote
+    -- Kawesh announcement during a paused game would print + trigger
+    -- a redeal banner; the actual deal aborts (the timer body checks
+    -- paused) but the UI is left with a stale redeal banner until
+    -- the 3.5s auto-clear, and the dealer rotation is silently lost.
+    if S.s.paused then return end
     -- Phase: Kawesh is only available during round-1 bidding.
     if S.s.phase ~= K.PHASE_DEAL1 then return end
     -- Authority: sender must own the seat. (Host's HostHandleKawesh
@@ -2297,6 +2323,14 @@ function N.StartLocalWarn(kind)
         -- Audit fix: Gahwa is the BIDDER's terminal escalation.
         mine = S.s.contract and S.s.localSeat
                and S.s.localSeat == S.s.contract.bidder
+    elseif kind == "preempt" then
+        -- Re-audit W6 fix: pre-emption window has multiple eligible
+        -- seats; check membership in S.s.preemptEligible.
+        if S.s.localSeat and S.s.preemptEligible then
+            for _, eseat in ipairs(S.s.preemptEligible) do
+                if eseat == S.s.localSeat then mine = true; break end
+            end
+        end
     end
     if not mine then return end
 
@@ -2317,6 +2351,11 @@ end
 
 function N._HostTurnTimeout(seat, kind)
     if not S.s.isHost then return end
+    -- Re-audit W13 fix: respect S.s.paused. C_Timer:Cancel() doesn't
+    -- catch a callback already queued for this frame, so a pause
+    -- applied between fire and execution would otherwise let the
+    -- auto-action run mid-pause.
+    if S.s.paused then return end
     if S.s.turn ~= seat or S.s.turnKind ~= kind then return end
     log("Info", "AFK timeout for seat %d kind=%s", seat, tostring(kind))
     if kind == "bid" then
@@ -2365,6 +2404,8 @@ end
 
 function N._HostBelTimeout(seat, kind)
     if not S.s.isHost or not S.s.contract then return end
+    -- Re-audit W13 fix: respect pause same as _HostTurnTimeout.
+    if S.s.paused then return end
     if kind == "double" and S.s.phase == K.PHASE_DOUBLE then
         log("Info", "AFK timeout: bel skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
@@ -2400,6 +2441,11 @@ end
 
 function N.HostHandleKawesh(seat)
     if not S.s.isHost then return end
+    -- Re-audit W8 fix: don't process Kawesh while paused. _HostRedeal
+    -- arms a 3-second timer; if pause was applied between the
+    -- announcement and this handler, the timer body would still try
+    -- to deal cards into a paused state.
+    if S.s.paused then return end
     if S.s.phase ~= K.PHASE_DEAL1 then return end
     -- Validate: only the caller's seat can prove the hand from hostHands
     if S.s.hostHands and S.s.hostHands[seat] then
@@ -2452,11 +2498,11 @@ function N.MaybeRunBot()
         if isBotSeat(belSeat) then
             log("Info", "schedule bel-decision for bot seat=%d", belSeat)
             C_Timer.After(BOT_DELAY_BEL, function()
-                -- Re-audit fix: track whether ApplyDouble fired before
-                -- the error. If it did, the phase has already advanced
-                -- past PHASE_DOUBLE, so the simple phase guard in
-                -- recovery would skip and the deal would stall.
-                local applied = false
+                -- Re-re-audit W2/W5 fix: track BOTH `applied` (ApplyX
+                -- ran) and `skipSent` (broadcast SKIP_X already done)
+                -- so recovery doesn't double-broadcast OR stall when
+                -- ApplyX advanced phase past the simple PHASE check.
+                local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_DOUBLE then
@@ -2480,14 +2526,25 @@ function N.MaybeRunBot()
                         end
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
+                        skipSent = true
                         N.HostFinishDeal()
                     end
                 end)
                 if not ok then
                     log("Error", "bel-decision callback failed: %s", tostring(err))
                     if applied then
-                        -- ApplyDouble already advanced phase; just push
-                        -- the deal forward without re-broadcasting skip.
+                        -- ApplyDouble advanced phase. For an open Bel
+                        -- in Hokm phase is now PHASE_TRIPLE — must
+                        -- run MaybeRunBot for the bidder's Triple
+                        -- decision, NOT HostFinishDeal which would
+                        -- skip the entire Triple/Four/Gahwa chain.
+                        if S.s.phase == K.PHASE_PLAY then
+                            N.HostFinishDeal()
+                        else
+                            N.MaybeRunBot()
+                        end
+                    elseif skipSent then
+                        -- broadcast already happened; just advance.
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_DOUBLE then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
@@ -2513,7 +2570,7 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                local applied = false
+                local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_TRIPLE then return end
@@ -2528,12 +2585,22 @@ function N.MaybeRunBot()
                         if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
+                        skipSent = true
                         N.HostFinishDeal()
                     end
                 end)
                 if not ok then
                     log("Error", "triple-decision callback failed: %s", tostring(err))
                     if applied then
+                        -- After ApplyTriple, phase is PHASE_FOUR (open)
+                        -- or PHASE_PLAY (closed). For open: must run
+                        -- defenders' Four decision via MaybeRunBot.
+                        if S.s.phase == K.PHASE_PLAY then
+                            N.HostFinishDeal()
+                        else
+                            N.MaybeRunBot()
+                        end
+                    elseif skipSent then
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_TRIPLE then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
@@ -2554,7 +2621,7 @@ function N.MaybeRunBot()
         local defSeat = (S.s.contract.bidder % 4) + 1
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                local applied = false
+                local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_FOUR then return end
@@ -2569,12 +2636,22 @@ function N.MaybeRunBot()
                         if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
+                        skipSent = true
                         N.HostFinishDeal()
                     end
                 end)
                 if not ok then
                     log("Error", "four-decision callback failed: %s", tostring(err))
                     if applied then
+                        -- After ApplyFour, phase is PHASE_GAHWA (open)
+                        -- or PHASE_PLAY (closed). For open: must run
+                        -- bidder's Gahwa decision via MaybeRunBot.
+                        if S.s.phase == K.PHASE_PLAY then
+                            N.HostFinishDeal()
+                        else
+                            N.MaybeRunBot()
+                        end
+                    elseif skipSent then
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_FOUR then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
@@ -2595,7 +2672,7 @@ function N.MaybeRunBot()
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
             C_Timer.After(BOT_DELAY_BEL, function()
-                local applied = false
+                local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
                     if S.s.phase ~= K.PHASE_GAHWA then return end
@@ -2609,16 +2686,16 @@ function N.MaybeRunBot()
                         N.SendGahwa(bidder)
                     else
                         broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
+                        skipSent = true
                     end
                     N.HostFinishDeal()
                 end)
                 if not ok then
                     log("Error", "gahwa-decision callback failed: %s", tostring(err))
-                    if applied then
-                        -- ApplyGahwa doesn't change phase, but the
-                        -- subsequent SendGahwa or HostFinishDeal could
-                        -- have errored. Just push the deal forward
-                        -- without re-broadcasting a contradictory skip.
+                    -- Gahwa doesn't advance phase by itself; HostFinishDeal
+                    -- always advances to PLAY. Recovery just pushes
+                    -- forward. No double-skip because skipSent is tracked.
+                    if applied or skipSent then
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_GAHWA then
                         broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
@@ -2654,16 +2731,27 @@ function N.MaybeRunBot()
                         if not stillEligible then return end
                         if B.Bot.PickPreempt and B.Bot.PickPreempt(seat) then
                             N.SendPreempt(seat)
-                            -- Audit fix: in solo-bot games, broadcast()
-                            -- short-circuits when not in a party, so the
-                            -- normal SendPreempt loopback never fires.
-                            -- _OnPreempt's authorizeSeat normalizes
-                            -- "__host__" to "__host__-Realm", which
-                            -- never matches the host's real name. Use
-                            -- the host's actual local name so the
-                            -- claim doesn't silently disappear and the
-                            -- round stalls on the original buyer.
-                            N._OnPreempt(S.s.localName or "__host__", seat)
+                            -- Re-audit W5 fix: don't route the bot's
+                            -- claim through _OnPreempt — it short-
+                            -- circuits on `fromSelf(sender)` long
+                            -- before authorizeSeat, so any sender
+                            -- equal to S.s.localName silently drops.
+                            -- Apply locally + run the host-side
+                            -- post-apply block directly.
+                            S.ApplyPreempt(seat)
+                            if S.s.isHost then
+                                S.s.pendingPreemptContract = nil
+                                S.ApplyContract(seat, K.BID_SUN, nil)
+                                N.SendContract(seat, K.BID_SUN, "")
+                                local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+                                local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+                                if cumA < 101 and cumB < 101 then
+                                    S.s.belPending = nil
+                                    N.HostFinishDeal()
+                                else
+                                    N.MaybeRunBot()
+                                end
+                            end
                         else
                             N.SendPreemptPass(seat)
                             S.ApplyPreemptPass(seat)

@@ -201,6 +201,12 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                     B.Net.StartLocalWarn("four")
                 elseif s.phase == K.PHASE_GAHWA then
                     B.Net.StartLocalWarn("gahwa")
+                elseif s.phase == K.PHASE_PREEMPT then
+                    -- Re-audit W6 fix: also pre-warn pre-empters on
+                    -- /reload. StartLocalWarn self-gates on the
+                    -- local seat being eligible, so calling on every
+                    -- client is safe — only eligible local seats arm.
+                    B.Net.StartLocalWarn("preempt")
                 end
             end
             if B.UI and B.UI.Refresh then B.UI.Refresh() end
