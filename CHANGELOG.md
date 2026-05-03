@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.4.11 — Spectator mode + WoW deck
+
+### Added
+
+- **WoW card deck** ("Battle of Heroes" PNG set, 32 face cards at
+  512×768 + synthesized purple/gold back). Sources placed in
+  `cards/wow/_src/` (PNG), rasterized to 128×192 TGAs by the new
+  `cards/_make_wow.py` script using LANCZOS resampling. Registered
+  as `wow` in `CARD_STYLES` (UI.lua); cycle in via `/baloot cards`
+  or the lobby Cards: button. The zip ships no back image so we
+  synthesize one matching the deck theme: charcoal-violet body
+  with diagonal violet lattice + warm-gold border.
+
+- **Spectator support.** A 5th+ party member with no seat now sees
+  the full table:
+  - Three seat badges (top/left/right) populated using a fixed
+    seat-1 anchor, mapping seats 2/3/4 to right/top/left.
+  - A new "Spectating" info line in the hand-row area showing
+    seat 1's name + card count (the seat that doesn't get a badge).
+  - Banner (round-end / game-end) renders normally; the v0.4.8
+    WIN/LOST headline correctly stays empty for spectators.
+  - All player-action paths still gate on `S.s.localSeat`:
+    `renderHand`, `renderActions`, `LocalPlay`, `LocalBid`,
+    `LocalSWA`, `LocalTakweesh`, `IsMyTurn`, etc. all return early
+    when there's no seat — spectators cannot interfere.
+  - The v0.4.10 lost-round stinger and v0.4.8 WIN/LOST headline
+    are also correctly suppressed for spectators (existing
+    `s.localSeat` guards in `S.ApplyRoundEnd` and `setOutcome`).
+  - Team coloring on the badges falls back to absolute team
+    (A=green / B=red) for spectators — they don't have a partner
+    relationship to claim "us-vs-them" against.
+
 ## v0.4.8 — Three small UI fixes (player feedback)
 
 ### Fixed

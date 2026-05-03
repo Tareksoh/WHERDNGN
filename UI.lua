@@ -97,6 +97,12 @@ local CARD_STYLES = {
         cardBack     = { 0.10, 0.09, 0.12, 1.00 },   -- charcoal back body
         cardBackEdge = { 0.55, 0.43, 0.18, 1.00 },   -- warm gold edge
     },
+    wow = {
+        name         = "WoW",              -- "Battle of Heroes" PNG deck
+        texSubdir    = "wow\\",            -- cards/wow/<card>.tga
+        cardBack     = { 0.06, 0.05, 0.11, 1.00 },   -- charcoal violet body
+        cardBackEdge = { 0.86, 0.70, 0.39, 1.00 },   -- warm gold edge
+    },
 }
 
 local FELT_THEMES = {
@@ -205,9 +211,14 @@ end
 applyThemeColors()
 
 -- Map a position label (relative to local player) to absolute seat.
+-- Spectators (5+ party members with no seat) anchor at seat 1 — the
+-- badges show seats 2/3/4 in the right/top/left slots, and seat 1's
+-- info renders in a compact spectator-info line where the hand row
+-- would otherwise be. This is a display-only fallback; no player
+-- action paths read these for spectators (they all gate on
+-- S.s.localSeat).
 local function seatAtPos(pos)
-    local me = S.s.localSeat
-    if not me then return nil end
+    local me = S.s.localSeat or 1   -- spectator anchor
     if pos == "bottom" then return me end
     if pos == "top"    then return R.Partner(me) end
     if pos == "right"  then return R.NextSeat(me) end
@@ -215,8 +226,8 @@ local function seatAtPos(pos)
 end
 
 local function posOfSeat(seat)
-    local me = S.s.localSeat
-    if not me or not seat then return nil end
+    local me = S.s.localSeat or 1
+    if not seat then return nil end
     if seat == me then return "bottom" end
     if seat == R.Partner(me) then return "top" end
     if seat == R.NextSeat(me) then return "right" end
@@ -1402,6 +1413,22 @@ local function buildTable()
     handRow:SetPoint("BOTTOM", 0, 10)
     tablePanel.handRow = handRow
 
+    -- Spectator info line: occupies the handRow space when localSeat
+    -- is nil. Shows the bottom-anchor seat (seat 1) name + card count
+    -- and a small "Spectating" tag. Hidden for seated players —
+    -- handRow renders cards there. Adds NO action paths; spectators
+    -- remain pure observers.
+    local specInfo = CreateFrame("Frame", nil, tablePanel)
+    specInfo:SetAllPoints(handRow)
+    specInfo:Hide()
+    specInfo.tag = makeText(specInfo, 11, "CENTER")
+    specInfo.tag:SetPoint("TOP", 0, -8)
+    specInfo.tag:SetTextColor(0.85, 0.85, 0.55)
+    specInfo.tag:SetText("|cffe0d588Spectating|r")
+    specInfo.bottomSeat = makeText(specInfo, 13, "CENTER")
+    specInfo.bottomSeat:SetPoint("TOP", 0, -28)
+    tablePanel.specInfo = specInfo
+
     -- Action panel sits just above the hand row
     actionPanel = CreateFrame("Frame", nil, tablePanel)
     actionPanel:SetSize(680, 28)
@@ -2088,19 +2115,34 @@ local function bidLabelForSeat(seat)
 end
 
 local function renderSeats()
-    if not S.s.localSeat then return end
+    -- Spectators (no localSeat) anchor at seat 1 — the right/top/left
+    -- badges show seats 2/3/4. Seat 1 is rendered in a separate
+    -- spectator-info line (see renderSpectatorInfo). For seated
+    -- players this branch is unchanged.
+    --
+    -- Team coloring: for seated players, top = partner (Us, green),
+    -- left/right = opponents (Them, red). For spectators (no team
+    -- identity), all three badges fall back to neutral A/B coloring
+    -- via teamColor() so they don't claim partner-of-anyone status.
 
     -- Top, left, right are seat badges (other players). Bottom is the
     -- local-player bar (no card-back row; the hand below shows everything).
-    -- Team coloring: top = partner (Us, green), left/right = opponents
-    -- (Them, red).
     for _, pos in ipairs({ "top", "left", "right" }) do
         local seat = seatAtPos(pos)
         local b = seatBadges[pos]
         if seat and b then
             local info = S.s.seats[seat]
             local nm = info and shortName(info.name) or "(empty)"
-            local teamCol = (pos == "top") and COL.txtUs or COL.txtThem
+            -- For seated players: top = partner (us-green), left/right
+            -- = opponents (them-red). For spectators: no team identity,
+            -- so render names by absolute team (A green / B red) using
+            -- the same neutral fallback applied elsewhere.
+            local teamCol
+            if S.s.localSeat then
+                teamCol = (pos == "top") and COL.txtUs or COL.txtThem
+            else
+                teamCol = (R.TeamOf(seat) == "A") and COL.txtUs or COL.txtThem
+            end
             b.nameText:SetText("|c" .. teamCol .. nm .. "|r")
             local cnt = cardCountForSeat(seat)
             for i = 1, 8 do
@@ -2152,9 +2194,31 @@ local function renderSeats()
         end
     end
 
+    -- Spectator branch: hide the local bar (we have no seat to display)
+    -- and show the specInfo line in its place with seat 1's name +
+    -- card count. Players' rendering below is fully gated on
+    -- S.s.localSeat so we early-return here for spectators without
+    -- side-effects on player paths.
+    local lb = tablePanel.localBar
+    local specInfo = tablePanel.specInfo
+    if not S.s.localSeat then
+        if lb then lb:Hide() end
+        if specInfo then
+            local info = S.s.seats and S.s.seats[1]
+            local nm = (info and info.name) and shortName(info.name) or "(empty)"
+            local cnt = cardCountForSeat(1)
+            local teamCol = (R.TeamOf(1) == "A") and COL.txtUs or COL.txtThem
+            specInfo.bottomSeat:SetText(("|c%s%s|r |c%s(%d)|r"):format(
+                teamCol, nm, COL.txtSoft, cnt))
+            specInfo:Show()
+        end
+        return
+    end
+    if specInfo then specInfo:Hide() end
+    if lb then lb:Show() end
+
     -- Local bar — fall back to S.s.localName if the seat record was
     -- somehow stripped of its name (e.g. an empty SendLobby payload).
-    local lb = tablePanel.localBar
     local me = S.s.localSeat
     local meInfo = S.s.seats[me]
     local rawName = (meInfo and meInfo.name) or S.s.localName
