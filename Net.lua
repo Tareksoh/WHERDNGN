@@ -293,6 +293,16 @@ local function packSnapshot()
     end
     local bids = {}
     for i = 1, 4 do bids[i] = nz(s.bids and s.bids[i]) end
+    -- 7th-audit fix: pack a 4-bit isBot mask into a single field.
+    -- Without it, ApplyResyncSnapshot rebuilds seats with isBot=nil,
+    -- so subsequent host-signed bot broadcasts fail the rejoiner's
+    -- authorizeSeat check (the rejoiner thinks the seat is human and
+    -- expects the message to be signed by that name, not the host).
+    local botMask = 0
+    for i = 1, 4 do
+        local info = s.seats[i]
+        if info and info.isBot then botMask = botMask + (2 ^ (i - 1)) end
+    end
     return table.concat({
         nz(s.gameID),
         nz(s.phase),
@@ -315,6 +325,7 @@ local function packSnapshot()
         tostring(s.bidRound or 1),               -- 1 / 2
         seats[1], seats[2], seats[3], seats[4],
         bids[1], bids[2], bids[3], bids[4],
+        tostring(botMask),                       -- 4-bit isBot mask
     }, "|")
 end
 
@@ -344,27 +355,14 @@ function N.SendResyncRes(target, gameID)
         end
     end
     -- Replay pre-emption window state when a rejoiner lands during
-    -- PHASE_PREEMPT — the host's preemptEligible list isn't in the
-    -- packed snapshot (it's host-only state). We re-broadcast the
-    -- window-open ping plus pass-events for any seat that already
-    -- waived. The rejoiner's UI will gate "قبلك" button on whether
-    -- their own seat is still in the freshly-rebuilt eligible list.
-    if S.s.phase == K.PHASE_PREEMPT and S.s.preemptEligible then
-        whisper(target, ("%s;0"):format(K.MSG_PREEMPT_PASS))
-        -- Record the LIVE eligible list seat-by-seat so the rejoiner
-        -- can rebuild it. Reuse a helper field on the wire by sending
-        -- a synthetic MSG_PREEMPT_PASS for each seat NOT in the live
-        -- list (since they already passed). Skips the buyer's partner
-        -- which the rejoiner re-derives via S.PreemptEligibleSeats.
-        -- Simpler: just replay live state as a piped seat list.
-        local live = {}
-        for _, s2 in ipairs(S.s.preemptEligible) do
-            live[s2] = true
-        end
-        -- We can't easily reconstruct PreemptEligibleSeats client-side
-        -- without the buyer info, so just leave the rejoiner with a
-        -- nil preemptEligible list (UI hides the button when nil — the
-        -- live ping is informational only).
+    -- PHASE_PREEMPT. 7th-audit fix: include the LIVE eligible-seat
+    -- CSV in the seat=0 frame so the rejoiner can fully rebuild
+    -- preemptEligible (previously this was admitted-broken — the
+    -- rejoiner was left with a nil list and the UI hid their button).
+    if S.s.phase == K.PHASE_PREEMPT and S.s.preemptEligible
+       and #S.s.preemptEligible > 0 then
+        local eligCsv = table.concat(S.s.preemptEligible, ",")
+        whisper(target, ("%s;0;%s"):format(K.MSG_PREEMPT_PASS, eligCsv))
     end
     -- Replay closed-trick history (fed via MSG_TRICK so the receiver
     -- runs the same ApplyTrickEnd path; we provide the fully-encoded
@@ -462,7 +460,11 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_PREEMPT then
         N._OnPreempt(sender, tonumber(fields[2]))
     elseif tag == K.MSG_PREEMPT_PASS then
-        N._OnPreemptPass(sender, tonumber(fields[2]))
+        -- 7th-audit fix: forward the optional eligible CSV (fields[3])
+        -- so the seat=0 "window open" frame can seed phase + eligible
+        -- list on remote clients. Pre-7th senders won't include it;
+        -- _OnPreemptPass treats nil as "no CSV provided".
+        N._OnPreemptPass(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_SKIP_DBL then
         N._OnSkipDouble(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_TRP then
@@ -851,9 +853,31 @@ function N._OnPreempt(sender, seat)
     end
 end
 
-function N._OnPreemptPass(sender, seat)
+function N._OnPreemptPass(sender, seat, eligCsv)
     if fromSelf(sender) then return end
     if not seat then return end
+    -- 7th-audit fix: seat=0 is the host's "preempt window open" frame.
+    -- The host serializes the eligible-seat list as a CSV in eligCsv;
+    -- receivers seed phase + preemptEligible so the local UI can
+    -- render the claim button. Without this, remote human clients
+    -- never saw their own preempt window — the host's local state
+    -- changed but only the seat=0 ping went over the wire, which
+    -- earlier code dropped as "not in PHASE_PREEMPT yet".
+    if seat == 0 then
+        if not fromHost(sender) then return end
+        if not eligCsv or eligCsv == "" then return end
+        local elig = {}
+        for n in eligCsv:gmatch("(%d+)") do
+            local v = tonumber(n)
+            if v and v >= 1 and v <= 4 then elig[#elig + 1] = v end
+        end
+        if #elig == 0 then return end
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = elig
+        if N.StartLocalWarn then N.StartLocalWarn("preempt") end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
     if S.s.phase ~= K.PHASE_PREEMPT then return end
     if not S.s.preemptEligible then return end
     if not authorizeSeat(seat, sender) then return end
@@ -1066,8 +1090,15 @@ function N._HostStepBid()
                 S.s.phase = K.PHASE_PREEMPT
                 -- Broadcast: re-use MSG_PREEMPT_PASS as a "window open"
                 -- ping with seat=0; clients render UI based on
-                -- s.preemptEligible. Simpler than adding another tag.
-                broadcast(("%s;0"):format(K.MSG_PREEMPT_PASS))
+                -- s.preemptEligible. 7th-audit fix: include the
+                -- eligible-seat CSV. Without it, remote clients only
+                -- received the "0" seat (which their _OnPreemptPass
+                -- dropped — phase was still DEAL2BID), so their phase
+                -- never advanced and their UI never showed the claim
+                -- button. The receiver special-cases seat=0 to bring
+                -- itself into PHASE_PREEMPT and seed preemptEligible.
+                local eligCsv = table.concat(elig, ",")
+                broadcast(("%s;0;%s"):format(K.MSG_PREEMPT_PASS, eligCsv))
                 -- 4th-audit X7 fix: arm the local T-10s pre-warn for
                 -- any human eligible seat. The other escalation
                 -- windows (Bel/Triple/Four/Gahwa) arm their pre-warn
@@ -1902,6 +1933,14 @@ function N.LocalSWA()
             caller    = S.s.localSeat,
             handCount = handCount,
             responses = {},  -- [seat] = true (accept) / false (deny)
+            -- 7th-audit fix: stash the encoded hand locally too. The
+            -- _OnSWAReq self-loopback is dropped by `fromSelf`, so the
+            -- host calling its own SWA never gets encodedHand populated
+            -- via the network path. When opponents accept and the
+            -- host's _OnSWAResp tries `req.encodedHand or ""`, it
+            -- would otherwise resolve as an empty hand (failing
+            -- IsValidSWA and penalising the host).
+            encodedHand = enc,
         }
         N.SendSWAReq(S.s.localSeat, enc)
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -2302,10 +2341,21 @@ function N._OnResyncReq(sender, gameID)
     -- Use the same normalization helper that fromSelf / fromHost /
     -- authorizeSeat already share.
     local nsender = normSender(sender)
+    -- 7th-audit fix: also normalize info.name. The previous fix
+    -- normalized `sender` but compared against `info.name` raw. If
+    -- the seat roster was populated from a saved-session restore
+    -- (where names lacked the realm suffix) and the live sender
+    -- arrives with "Name-Realm", strict equality still fails.
+    local function nameEq(infoName, target)
+        if not infoName or not target then return false end
+        if infoName == target then return true end
+        local n = (S.NormalizeName and S.NormalizeName(infoName)) or infoName
+        return n == target
+    end
     local found = false
     for i = 1, 4 do
         local info = S.s.seats[i]
-        if info and info.name == nsender then found = true; break end
+        if info and nameEq(info.name, nsender) then found = true; break end
     end
     if not found then
         log("Warn", "resync from %s rejected (not in roster)", tostring(sender))
@@ -2314,11 +2364,13 @@ function N._OnResyncReq(sender, gameID)
     log("Info", "resync to %s for game %s", sender, gameID)
     N.SendResyncRes(sender, gameID)
     -- Also re-whisper their hand. The host knows it from hostHands.
-    -- Use the normalized sender for seat lookup — same realm-suffix
-    -- mismatch bug as the roster gate above.
+    -- Use the same nameEq helper so the seat lookup matches the
+    -- normalized roster gate above.
     local seat
     for i = 1, 4 do
-        if S.s.seats[i] and S.s.seats[i].name == nsender then seat = i; break end
+        if S.s.seats[i] and nameEq(S.s.seats[i].name, nsender) then
+            seat = i; break
+        end
     end
     if seat and S.s.hostHands and S.s.hostHands[seat] then
         N.SendHand(sender, S.s.hostHands[seat])
@@ -2626,6 +2678,13 @@ function N.MaybeRunBot()
     if not S.s.isHost then return end
     if not B.Bot then return end
     if S.s.paused then return end
+    -- 7th-audit fix: also pause bot dispatch while a SWA permission
+    -- request is in flight. Otherwise a bot whose play turn arrives
+    -- DURING the human's voting window plays a card, advancing the
+    -- trick state under the SWA caller — when the request finally
+    -- resolves, IsValidSWA validates against the caller's encoded
+    -- pre-play hand but the trick history has moved on.
+    if S.s.swaRequest and S.s.swaRequest.caller then return end
 
     -- Phase-driven dispatch first. After ApplyContract, s.turn still
     -- points at the last bidder (and turnKind is still "bid"), so the

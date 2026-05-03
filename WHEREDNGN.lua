@@ -61,7 +61,12 @@ local DEFAULTS = {
 }
 
 local function ensureDB()
-    WHEREDNGNDB = WHEREDNGNDB or {}
+    -- 7th-audit fix: defensive type guard. SavedVariables files can be
+    -- hand-edited or corrupted (e.g., a manual save where the user
+    -- replaced the table with `WHEREDNGNDB = "bad"`). Indexing a non-
+    -- table here would crash addon load; reset to {} when the saved
+    -- value is unusable.
+    if type(WHEREDNGNDB) ~= "table" then WHEREDNGNDB = {} end
     for k, v in pairs(DEFAULTS) do
         if WHEREDNGNDB[k] == nil then WHEREDNGNDB[k] = v end
     end

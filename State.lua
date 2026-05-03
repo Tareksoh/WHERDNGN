@@ -67,19 +67,24 @@ local function reset()
     -- preferences to the hard-coded defaults. Previously, after the
     -- user set /baloot target 100 and started a new game, the next
     -- reset between games would silently snap target back to 152.
-    s.target      = (WHEREDNGNDB and tonumber(WHEREDNGNDB.target)) or 152
+    --
+    -- 7th-audit fix: read prefs through a local that's nil when the
+    -- DB is corrupted (non-table). Indexing a non-table directly
+    -- would crash on a hand-edited SavedVariables file.
+    local DB = (type(WHEREDNGNDB) == "table") and WHEREDNGNDB or nil
+    s.target      = (DB and tonumber(DB.target)) or 152
     -- Team display names. Default to generic A/B labels but the host
     -- can rename via the lobby inputs (broadcast on MSG_TEAMS so all
     -- clients see the same labels). 20-char max enforced UI-side.
     local tnA, tnB = "Team A", "Team B"
-    if WHEREDNGNDB and type(WHEREDNGNDB.teamNames) == "table" then
-        if type(WHEREDNGNDB.teamNames.A) == "string"
-           and WHEREDNGNDB.teamNames.A ~= "" then
-            tnA = WHEREDNGNDB.teamNames.A
+    if DB and type(DB.teamNames) == "table" then
+        if type(DB.teamNames.A) == "string"
+           and DB.teamNames.A ~= "" then
+            tnA = DB.teamNames.A
         end
-        if type(WHEREDNGNDB.teamNames.B) == "string"
-           and WHEREDNGNDB.teamNames.B ~= "" then
-            tnB = WHEREDNGNDB.teamNames.B
+        if type(DB.teamNames.B) == "string"
+           and DB.teamNames.B ~= "" then
+            tnB = DB.teamNames.B
         end
     end
     s.teamNames   = { A = tnA, B = tnB }
@@ -114,7 +119,7 @@ local function reset()
     s.hostDeckRemainder     = nil
     -- Clear persisted resync hint and session so we don't re-request
     -- or restore a finished game after the next /reload.
-    if WHEREDNGNDB then
+    if type(WHEREDNGNDB) == "table" then
         WHEREDNGNDB.lastGameID = nil
         WHEREDNGNDB.session    = nil
     end
@@ -217,10 +222,12 @@ local TRANSIENT_FIELDS = {
     -- SWA outcome is a per-round banner struct; cleared at next
     -- ApplyStart, no need to persist.
     swaResult = true,
-    -- Pending SWA permission request — ephemeral state alive only
-    -- while opponents are voting. Cleared on accept/deny resolution
-    -- or round transition. Don't persist.
-    swaRequest = true,
+    -- NOTE: swaRequest is NOT transient. If the HOST /reloads while
+    -- opponents are voting, dropping the request struct silently
+    -- breaks the flow: clients still see Accept/Deny buttons, but
+    -- their MSG_SWA_RESP messages hit `if not req` early-return and
+    -- never resolve. Persisting lets the host's _OnSWAResp continue
+    -- collating votes after restore.
     -- Brief "SWA denied" toast struct, cleared by C_Timer 3 seconds
     -- after the deny. UI cue only.
     swaDenied = true,
@@ -362,7 +369,7 @@ function S.ApplyResyncSnapshot(gameID, payload)
     local i = 1
     for chunk in payload:gmatch("([^|]*)|?") do
         f[i] = chunk; i = i + 1
-        if i > 27 then break end
+        if i > 28 then break end
     end
     if (f[1] or "") ~= gameID then return end
 
@@ -398,14 +405,20 @@ function S.ApplyResyncSnapshot(gameID, payload)
     s.paused       = (f[18] == "1")
     s.bidRound     = tonumber(f[19]) or s.bidRound or 1
 
-    -- Seats: rebuild minimal info; isBot defaults to false here, the
-    -- next SendLobby from the host will overwrite with full info.
+    -- Seats: rebuild minimal info. 7th-audit fix: also rebuild isBot
+    -- flags from the snapshot's bot mask (f[28]). Without it,
+    -- authorizeSeat treats every seat as human and rejects subsequent
+    -- host-signed bot broadcasts (sender=host, expected=seat name).
+    -- Until SendLobby fires, bot moves silently fail on the rejoiner.
+    local botMask = tonumber(f[28]) or 0
     s.seats = s.seats or {}
     for seat = 1, 4 do
         local nm = f[19 + seat] or ""
         if nm ~= "" then
             s.seats[seat] = s.seats[seat] or {}
             s.seats[seat].name = nm
+            local bit = 2 ^ (seat - 1)
+            s.seats[seat].isBot = (botMask % (bit * 2)) >= bit
             -- Re-derive our own seat number now that we know the names.
             if s.localName and nm == s.localName then
                 s.localSeat = seat
@@ -681,6 +694,11 @@ function S.ApplyStart(roundNumber, dealer)
     -- mid-reload edge cases could leave peekedThisRound=true when a
     -- fresh round begins, hiding the peek button.
     s.peekedThisRound = false
+    -- 7th-audit fix: lastTrick belongs to the round that just ended;
+    -- a peek into the next round (where peekedThisRound resets) would
+    -- otherwise display the previous round's final trick over the new
+    -- table.
+    s.lastTrick = nil
     -- Per-hand played-cards set used by the AKA helper to compute the
     -- highest unplayed card in any non-trump suit. Reset every round.
     s.playedCardsThisRound = {}
