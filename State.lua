@@ -419,13 +419,21 @@ function S.ApplyResyncSnapshot(gameID, payload)
             s.seats[seat].name = nm
             local bit = 2 ^ (seat - 1)
             s.seats[seat].isBot = (botMask % (bit * 2)) >= bit
-            -- Re-derive our own seat number now that we know the names.
-            if s.localName and nm == s.localName then
-                s.localSeat = seat
-                s.isHost = false  -- we're definitely not host (we asked).
-            end
         else
             s.seats[seat] = nil
+        end
+    end
+    -- 9th-audit fix: re-derive our own localSeat using the normalized
+    -- SeatOf helper rather than raw string equality. Same-realm names
+    -- can come down from the host as bare "Foo" while our localName
+    -- has been normalized to "Foo-Realm" (or vice versa). Without
+    -- this, the rejoiner gets their hand whisper but localSeat stays
+    -- nil, leaving IsMyTurn() and every UI gate dead.
+    if s.localName then
+        local mySeat = S.SeatOf(s.localName)
+        if mySeat then
+            s.localSeat = mySeat
+            s.isHost = false  -- we're definitely not host (we asked).
         end
     end
 

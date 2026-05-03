@@ -2690,14 +2690,21 @@ end
 -- warn timer when a turn / bel decision has 10s remaining. Uses a
 -- ticker rather than a Blizzard AnimationGroup so the inner color
 -- swap is trivially predictable.
+-- 9th-audit fix: store the active pulse ticker so back-to-back calls
+-- (or window hide while a pulse is mid-flight) can cancel the old one
+-- before arming a new one. Without this, two overlapping animations
+-- could fight over the localBar border color, AND a stale ticker
+-- could keep poking a torn-down frame after U.Hide.
+local _pulseTicker
 function U.PulseTurn()
     if not tablePanel or not tablePanel.localBar then return end
     local lb = tablePanel.localBar
     if not lb.SetBackdropBorderColor then return end
+    if _pulseTicker then _pulseTicker:Cancel(); _pulseTicker = nil end
     local ticks, every = 8, 0.18
     local i = 0
     local on = false
-    C_Timer.NewTicker(every, function()
+    _pulseTicker = C_Timer.NewTicker(every, function()
         i = i + 1
         on = not on
         if on then
@@ -2709,6 +2716,7 @@ function U.PulseTurn()
             -- Final state: leave it on the legal-edge gold; the next
             -- Refresh re-derives the right color from S.s.turn anyway.
             lb:SetBackdropBorderColor(unpack(COL.legalEdge))
+            _pulseTicker = nil
         end
     end, ticks)
 end

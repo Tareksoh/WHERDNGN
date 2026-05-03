@@ -1253,7 +1253,15 @@ function N._HostRedeal(reason)
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 
+    -- 9th-audit fix: capture a generation token so /baloot reset can
+    -- invalidate this in-flight 3s callback. Without this, a reset
+    -- during the redeal countdown would let the timer fire afterward
+    -- and spawn a ghost round into the IDLE state. State.Reset bumps
+    -- _redealGen to invalidate any pending callbacks.
+    B._redealGen = (B._redealGen or 0) + 1
+    local thisGen = B._redealGen
     C_Timer.After(3.0, function()
+        if thisGen ~= B._redealGen then return end
         if not S.s.isHost then return end
         -- Reset / pause guards: if the user reset or paused during
         -- the 3s redeal banner, abort the deal — otherwise we'd
@@ -1952,6 +1960,19 @@ function N.LocalSWA()
             encodedHand = enc,
         }
         N.SendSWAReq(S.s.localSeat, enc)
+        -- 9th-audit fix: same bot auto-accept as the _OnSWAReq path.
+        -- The host's own LocalSWA self-loopback is dropped by
+        -- fromSelf, so without this branch a host calling SWA in a
+        -- bot game would never get the bots to vote.
+        if S.s.isHost then
+            local callerTeam = R.TeamOf(S.s.localSeat)
+            for s2 = 1, 4 do
+                local info = S.s.seats[s2]
+                if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
+                    N._OnSWAResp("__host__", s2, true, S.s.localSeat)
+                end
+            end
+        end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end
@@ -2006,6 +2027,22 @@ function N._OnSWAReq(sender, seat, encodedHand)
         responses = {},
         encodedHand = encodedHand,
     }
+    -- 9th-audit fix (Codex+Gemini consensus): bots never send
+    -- MSG_SWA_RESP, so a host-with-bots game would deadlock here —
+    -- MaybeRunBot's SWA guard blocks bot dispatch waiting for two
+    -- accepts that never come. Auto-vote on behalf of any opponent
+    -- bot (cross-team) by feeding _OnSWAResp the synthetic
+    -- "__host__" sender. Bots default to ACCEPT — they have no
+    -- meta-game read that would justify denial.
+    if S.s.isHost then
+        local callerTeam = R.TeamOf(seat)
+        for s2 = 1, 4 do
+            local info = S.s.seats[s2]
+            if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
+                N._OnSWAResp("__host__", s2, true, seat)
+            end
+        end
+    end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
@@ -2144,9 +2181,17 @@ function N.HostResolveSWA(callerSeat, callerHand)
     local c          = S.s.contract
     local oppOfCaller = (callerTeam == "A") and "B" or "A"
 
-    -- Snapshot all four hands. Caller's hand arrives via the wire;
-    -- the host has the source of truth for the other three.
-    local hands = { [callerSeat] = callerHand }
+    -- 9th-audit fix: prefer the host's authoritative hostHands for the
+    -- caller too. The wire-supplied callerHand was previously trusted
+    -- as-is, which let a stale or modified client validate impossible
+    -- claims and miss real remaining card points in the score
+    -- computation. Falling back to the wire only when hostHands is
+    -- missing keeps the function usable when called from non-host
+    -- contexts (defensive).
+    local authoritative = (S.s.hostHands and S.s.hostHands[callerSeat])
+    -- Snapshot all four hands. Caller's hand: trust the host's record;
+    -- other three: same.
+    local hands = { [callerSeat] = authoritative or callerHand }
     for s2 = 1, 4 do
         if s2 ~= callerSeat then
             hands[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}

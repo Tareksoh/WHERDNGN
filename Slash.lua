@@ -110,6 +110,17 @@ local function dispatch(msg)
 
     if msg == "reset" then
         if B._lobbyTicker then B._lobbyTicker:Cancel(); B._lobbyTicker = nil end
+        -- 9th-audit fix: invalidate any in-flight 3s redeal timer so
+        -- it doesn't fire after the reset and spawn a ghost round.
+        -- Same pattern is safe for any future deferred callbacks
+        -- gated on B._redealGen.
+        B._redealGen = (B._redealGen or 0) + 1
+        -- Cancel host AFK turn timer so it doesn't fire after reset
+        -- on a stale seat (Codex #4 in 9th-wave audit). The local
+        -- pre-warn timer is forward-declared local in Net.lua and
+        -- isn't strictly needed here — its callback re-checks state
+        -- on fire, and reset clears the relevant fields.
+        if B.Net and B.Net.CancelTurnTimer then B.Net.CancelTurnTimer() end
         B.State.Reset()
         B.State.SetLocalName(GetUnitName("player", true))
         if B.UI then B.UI.Refresh() end
