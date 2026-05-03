@@ -1,5 +1,360 @@
 # Changelog
 
+## v0.4.6 — Three player-reported bugs + SWA UX rework + 50-agent audit follow-ups
+
+A 50-agent ruflo-swarm audit on the v0.4.5 + v0.4.6 changes (10 waves
+of 5 agents each, 50 distinct angles) confirmed three follow-up bugs
+in the Tier 4 work; all three are fixed below. The full audit report
+is at `.swarm_findings/v0.4.6_AUDIT_REPORT.md`. The audit also
+re-derived the EV math for B-61 (sunFail) and confirmed the original
+direction is correct (raise Bel threshold against repeat-sunFail
+bidders). Master report's `gahwaFailed` counter was found to be a
+dead increment with no consumer; this release wires it into PickFour.
+
+### Audit-driven fixes (in addition to the v0.4.6 player-reported items below)
+
+- **B-99 likelyKawesh teammate cross-contamination (HIGH):** the
+  `mem.likelyKawesh` flag in `Bot.OnPlayObserved` was being set for
+  the just-played seat regardless of team. The BotMaster sampler
+  consumed the flag uniformly across all seats — when a partner
+  played only 7/8/9 in tricks 1-3 (legitimate signal-suit conservation,
+  not a Kawesh-skip pattern), the sampler cleared the partner's
+  `desire` map, discarding the Fzloky `pSignalSuit` bias that was
+  set just two lines earlier. Fixed by gating the consumer at
+  `BotMaster.lua:226-229`: the desire-clear now only fires when
+  `R.TeamOf(s) ~= R.TeamOf(seat)` (s is an opponent of the calling
+  bot's seat). The flag itself remains descriptive of per-seat
+  behaviour; only the consumption is team-relative. Dead-code
+  `for opp = 1, 4 do ... end` loop in `Bot.OnPlayObserved` removed.
+
+- **B-83 gahwaFailed wired into PickFour (MEDIUM):** the
+  `_partnerStyle.gahwaFailed` counter was incremented in
+  `Bot.OnRoundEnd` (Bot.lua:234) when a Gahwa contract failed but
+  had zero consumers — fully dead instrumentation. Per the master
+  report's B-83 spec, defenders should be more aggressive against
+  reckless Gahwa-callers. Now wired in `Bot.PickFour` (Bot.lua:1670):
+  tiered threshold drop of -5 on `gahwaFailed >= 1` and -8 on
+  `gahwaFailed >= 2` (matching `styleBelTendency`'s magnitude).
+  M3lm-gated.
+
+- **Takweesh now explicitly clears swaRequest (MEDIUM):**
+  `HostResolveTakweesh` previously relied on the SWA 5-sec timer's
+  phase guard to no-op the auto-approve; the timer would find
+  `phase ~= PHASE_PLAY` after Takweesh's `S.ApplyRoundEnd` and
+  return. Worked correctly but left `S.s.swaRequest` stale through
+  PHASE_SCORE, contradicting the changelog claim that "Takweesh
+  during the window clears swaRequest". Now explicit:
+  `S.s.swaRequest = nil` at the top of `HostResolveTakweesh`
+  (Net.lua:1736). Belt-and-braces with `ApplyStart`'s round-start
+  clear; comments in the SWA timer block are now accurate.
+
+### v0.4.6 (original — three player-reported bugs)
+
+
+
+### Fixed
+
+- **Turn desync → illegal play (CRITICAL):** players occasionally got
+  stuck — their UI showed the previous seat highlighted while the host
+  thought it was their turn. AFK auto-play would fire on the host
+  (consuming a card from their authoritative hand), and when the
+  player finally clicked, they hit "illegal play" because their UI
+  still showed the auto-played card but it was no longer in their
+  hand on the host. RCA pinned this to `Net.lua` MSG_PLAY handler:
+  `if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end`
+  silently dropped any MSG_PLAY whose seat didn't match the local
+  turn pointer. CHAT_MSG_ADDON party-channel is at-most-once under
+  server contention; a single dropped MSG_TURN frame made the
+  receiver permanently miss every subsequent play in the trick,
+  including the host's recovery auto-play. Fix: when the seat doesn't
+  match local turn but the sender is the host (or the seat is a bot
+  whose moves the host signs), trust the host's authority and
+  self-heal `s.turn` before applying. Existing idempotence guard
+  prevents double-apply if the missed MSG_TURN arrives later.
+
+- **Hokm Bel scoring zeroed loser's melds (HIGH):** when a Hokm
+  contract was Bel'd (×2) and the bidder team failed, the bidder's
+  declared melds were nullified — a quarte (50 raw) that should
+  have scored 100 raw / 10 gp under Bel ×2 instead scored 0. Same
+  bug in the doubled-tie inversion ("take") branch — a defender
+  team that Bel'd and tied lost ALL their melds. Both contradict
+  the Saudi rule "مشروعي لي ومشروعك لك" (each team keeps their
+  own declared melds; only the qaid penalty handTotal × multiplier
+  flows to the winner). The qaid path was already corrected in
+  v0.4.3; the regular `R.ScoreRound` fail/take branches now match.
+
+### Changed
+
+- **SWA permission window: 5-sec auto-approve + Takweesh counter
+  (UX redesign):** previously a permission-required SWA (≥4 cards
+  remaining) waited indefinitely on Accept/Deny votes from both
+  opponents. Now the host arms a `K.SWA_TIMEOUT_SEC = 5` second
+  auto-approve timer at request-time. During the window:
+  - the SWA-claim banner displays in the centre of the table
+    (caller name + remaining-card count + countdown)
+  - opponents inspect the claim and either let the timer auto-
+    approve, or press the always-visible **TAKWEESH** button to
+    counter (Takweesh scans every prior trick of the SWA caller's
+    team for an illegal play; if found, the qaid penalty applies
+    and SWA is voided)
+  - explicit Accept / Deny still works as a manual override
+  - bots auto-accept (existing behaviour) — the timer is mostly
+    a safety net for human deadlocks
+  Rationale: humans may have played illegal cards in earlier tricks
+  that would invalidate an SWA claim. The 5-sec window gives the
+  opposing team a natural inspection beat to call Takweesh against
+  prior misplays before the SWA resolves.
+
+## v0.4.5 — 200-agent audit Tier 1+2 (critical bot fixes)
+
+Tier 1 (4 confirmed critical bugs) + Tier 2 (style-ledger activation)
+from the 200-agent ruflo-swarm audit campaign. All 5 candidate
+critical findings reviewed; one (C-2 trump-ruff void rollback) was
+re-classified as a false positive — the void flag IS correct in a
+trump-ruff scenario because the seat is genuinely void in lead suit,
+and the existing `wasIllegal` guard at Bot.lua:213-217 already
+prevents void inference on rolled-back illegal plays.
+
+### Fixed (Tier 1 critical bugs)
+
+- **C-1 Bot memory inert for ~half of plays (CRITICAL):**
+  `Bot.OnPlayObserved` was only invoked from the two human-play
+  dispatch sites in `Net.lua`. Bot plays via `MaybeRunBot`, AFK
+  auto-plays via `_HostTurnTimeout`, and bot error-recovery
+  fallbacks all skipped the observer entirely. Result: void
+  inference, `firstDiscard`/Fzloky signals, AKA per-suit dedup,
+  trump-tempo counters (`trumpEarly`/`trumpLate`), and the entire
+  per-seat memory subsystem missed every bot card play. Downstream
+  `suitCardsOutstanding`, `HighestUnplayedRank`, and
+  `opponentsVoidInAll` produced wrong answers all round long.
+  Fix: added `Bot.OnPlayObserved(seat, card, leadBefore)` calls at
+  three sites in `Net.lua` (the bot-play dispatch, the AFK timeout,
+  and the play-decision error-recovery branch), each capturing
+  `leadSuit` BEFORE `S.ApplyPlay` mirrors the human-play pattern.
+
+- **C-3 A/T sure-stopper not gated to Sun (CRITICAL):** The
+  pos-2 "sure stopper" shortcut at `Bot.lua:1003-1012` returned the
+  highest non-trump A/T of the led suit unconditionally. In Hokm,
+  a non-trump Ace is NOT a guaranteed winner — an opponent void in
+  that suit can over-ruff and the bot sacrifices its Ace for
+  nothing. Now gated on `contract.type == K.BID_SUN` where Aces
+  genuinely cannot be over-trumped.
+
+- **C-4 PickDouble trump-weight blocked Hokm Bel (CRITICAL):**
+  `Bot.PickDouble` computed strength as `sunStrength + 0.5 *
+  trumpStr`. The 0.5x discount was inconsistent with the 1.0x
+  weight used by `escalationStrength` (PickTriple/Four/Gahwa). A
+  Hokm defender with J+9+A of trump scored ~42 trump points but
+  only saw 21 in PickDouble — combined hand total mathematically
+  could not reach `BOT_BEL_TH=70`. Strong-trump defenders
+  systematically declined legitimate Bels. Trump weight now 1.0x,
+  aligned with the rest of the escalation pipeline.
+
+- **C-5 heuristicPick rollout selected wrong card (CRITICAL):**
+  `BotMaster.heuristicPick` bidder-lead branch called
+  `highestRank(legal)` then checked `if C.IsTrump(t, contract)`.
+  When the highest legal card by `TrickRank` was NOT trump (e.g.,
+  a side-suit Ace outranking a depleted trump in the cross-scale
+  comparison), the trump check failed and the rollout silently
+  fell through to the side-suit branch — returning a low side-suit
+  card instead of pulling trump. Saudi Master ISMCTS rollouts
+  therefore made the wrong bidder-lead decision in any trump-poor
+  position. Now filters legal to trump cards first, picks
+  `highestRank(trumpCards)`, and only falls through if the trump
+  set is empty.
+
+### Activated (Tier 2 style ledger)
+
+- **`styleBelTendency` wired into `Bot.PickTriple`:** The function
+  was defined at `Bot.lua:181-187` and fed by `OnEscalation` but
+  had zero callers across the codebase. Habitual Belers (`bels >=
+  2`) now drop our Triple threshold by 8 — their Bel signal is
+  noise and we counter more aggressively. M3lm-gated
+  (`Bot.IsM3lm()`).
+
+- **`styleTrumpTempo` wired into `pickLead` defender branch:** The
+  function was defined at `Bot.lua:189-196` and fed by
+  `OnPlayObserved` but had zero callers across the codebase. As a
+  defender against a known aggressive trump-puller (bidder or
+  bidder's partner observed leading trump in early tricks across
+  prior rounds), the bot now saves J/9 of trump from the
+  forced-trump fallback, burning 7/8/Q/K instead so the boss trump
+  is held back to over-ruff their pulled trump tricks. M3lm-gated
+  and Hokm-only.
+
+### Architectural (Tier 3 — human-vs-bot guards)
+
+The 200-agent audit identified that the bot's partner-aware code
+paths (`partnerBidBonus`, `pickLead` Fzloky reads, `PickAKA`)
+applied bot-calibrated logic equally to human partners — a
+systematic mis-calibration unblocked by a single architectural
+helper plus four scoped guards.
+
+- **`Bot.IsBotSeat(seat)` helper added (Bot.lua:80-90):** thin
+  proxy delegating to `S.IsSeatBot`. Replaces every
+  `S.s.seats[seat] and S.s.seats[seat].isBot` open-coded reach
+  into State across the picker code. One-line call sites for the
+  guards below.
+
+- **H-11 / B-09 / B-14: `partnerBidBonus` PASS penalty halved for
+  human partners (Bot.lua:436-437):** bot PASS = calibrated weakness
+  signal (`PickBid` only passes when no Sun-strong / Hokm-strong /
+  Ashkal-eligible hand is present). Human PASS = often overcaution
+  on marginal hands a bot would have bid. Treating both as a -10
+  signal suppressed Triple/Four/Gahwa after a human partner's PASS
+  even when our own hand merited escalation. Bot partner: -10;
+  human partner: -5.
+
+- **H-12 / B-31 / B-87 / B-90: `pickLead` Fzloky guarded on
+  `Bot.IsBotSeat(partner)` (Bot.lua:775-787):** Fzloky is a bot-side
+  convention (bot's first off-suit discard is a deliberate
+  suit-preference signal — high = lead this, low = avoid). A human's
+  first off-suit discard is just whatever they shed (often a high
+  card to dump weakness, often random). Reading a human's discard as
+  a "lead this suit" signal misdirected the bot's lead priority for
+  the rest of the round.
+
+- **B-33 / B-60: `Bot.PickAKA` suppressed when partner is human
+  (Bot.lua:1158-1168):** AKA is a partner-coordination signal —
+  bot partners read the per-round `akaSent` flag and suppress
+  over-trumping the announced suit. Human partners typically don't
+  recognize the AKA banner as a "don't ruff this suit" instruction;
+  at best the signal is wasted, at worst it leaks information to
+  opponents (who see the same banner) and hands them a free read on
+  which suit we hold the boss in.
+
+- **`Bot.PickPreempt` partner-bid bonuses scaled for human partners
+  (Bot.lua:1389-1402):** symmetric with H-11 — a human PASS doesn't
+  imply weakness as reliably as a bot PASS, and a human Hokm bid
+  doesn't imply J/9 as reliably as a bot Hokm bid. PASS penalty
+  -6 → -3, Hokm bonus +5 → +3 when partner is human. Sun bonus
+  unchanged (Sun bid implies real high-card distribution either way).
+
+### Reclassified
+
+- **C-2 trump-ruff void rollback:** the master report flagged this
+  as a critical bug, but on inspection the void inference IS
+  correct — a trump-ruff genuinely implies the seat was void in
+  lead suit (otherwise they'd have been forced to follow). The
+  separate rollback at lines 262-269 is the Fzloky firstDiscard
+  rollback for forced ruffs (the discard isn't a preference signal),
+  and that path correctly nils only `firstDiscard`. The illegal-play
+  case is already gated by `wasIllegal` at Bot.lua:213-217. No
+  change needed.
+
+### Track B (Tier 4 — human-pattern exploitation)
+
+The 200-agent audit catalogued ~25 missing-feature gaps where the
+bot collected data but failed to act on it, or had no way to
+detect a human-specific pattern. Tier 4 adds the foundation
+callbacks plus 11 picker integrations that turn the dormant style
+ledger into actual gameplay decisions. M3lm-gated where the
+counters are involved; Hokm-only / contract-conditioned where
+appropriate. Dropped from scope (per master report's own
+reverse-exploit-risk caveats): B-63/B-93 Bel-timing hesitation,
+B-76 tilt detection, B-85 trump-back context flag, B-88 echo
+convention.
+
+#### Foundation infrastructure
+
+- **`Bot.OnRoundEnd(contract, bidderMade)` callback added
+  (Bot.lua:222-239, State.lua):** wired from `S.ApplyRoundEnd` on
+  every client (mirrors `OnEscalation`'s broadcast pattern). Allows
+  per-round outcome tracking without scattering bookkeeping across
+  multiple Net.lua dispatch sites.
+
+- **`emptyStyle` extended with 4 new counters (Bot.lua:155-180):**
+  `gahwaFailed` (reckless callers — bidder Gahwa'd and failed),
+  `sunFail` (defensive-Sun pattern — bidder Sun'd and failed),
+  `aceLate` (A-hoarder pattern — Ace played at trick 5+),
+  `leadCount[suit]` (per-suit lead frequency for repeat-lead
+  pattern). Maintained on every client; consumed only host-side.
+
+- **`emptyMemory` extended with `likelyKawesh` flag (Bot.lua:117-122):**
+  per-round, per-seat. Set by `OnPlayObserved` after trick 3 if all
+  observed plays are rank 7/8/9. Consumed by BotMaster sampler.
+
+- **`Bot.r1WasAllPass` snapshot (B-80 / H-10):**
+  `S.HostBeginRound2` captures whether R1 ended with all 4 seats
+  passing BEFORE clearing `s.bids`. `S.ApplyStart` resets to false
+  at round start. `Bot.PickBid` R2 reads it to drop `r2Base` by 6
+  in trap-pass rounds (the table is weak overall; a strong R2 bid
+  by a human is more likely overcaution-recovery than genuine
+  combined strength).
+
+#### Style-ledger integrations (8 picker fixes)
+
+- **B-47 / B-50 — `matchPointUrgency` reads opponent escalation
+  history (Bot.lua:563-590):** sums opponent `.gahwas` and
+  `.fours` across both opp-team seats. Gahwa-prone opponent
+  trailing by 50+ → +3 (they may try a desperate Gahwa to spike,
+  Bel them ready). Passive opponent (0 fours, 0 gahwas) when
+  WE are far behind → dampen +3 to +1 (no spike risk to
+  defend against).
+
+- **B-77 — `anyOpponentVoidIn` helper + Ace-lead exploit
+  (Bot.lua:354-368, ~1010):** when one opponent is known void in
+  a side suit AND we hold the boss, lead the boss in priority 1.5
+  of `pickLead`. The single-void variant fires far more often than
+  the both-void shortcut at priority 1, capturing high cards that
+  would otherwise sit unused.
+
+- **B-82 — Trump-drought tell in defender `pickLead`
+  (Bot.lua:1000-1043):** scans the current round's tricks for
+  bidder leads. After 3 tricks, if the bidder has led at least once
+  but never trump, the bidder is trump-poor — defenders cash their
+  highest non-trump A/T immediately (no ruff threat). M3lm-gated.
+
+- **B-98 — J+9 trump-lock in bidder `pickLead`
+  (Bot.lua:951-994):** once both J and 9 of trump are observed
+  played (or held in our own hand), opponent trump strength is
+  spent. Switch to cashing side-suit Aces while still holding
+  reserve trump for defensive ruffs. Advanced+, depends on the
+  C-1 memory population fix from earlier in v0.4.5.
+
+- **B-96 — Ace-exhaustion window in bidder `pickLead`
+  (Bot.lua:935-959):** after trick 3, if all 3 non-trump Aces
+  have been observed played (anywhere, including our own hand), no
+  Ace threats remain — switch to leading our highest non-trump
+  (now bosses) instead of continuing trump-pull.
+
+- **B-99 — `likelyKawesh` inference + BotMaster integration
+  (Bot.lua:367-387, BotMaster.lua:213-228):** `OnPlayObserved` flags
+  a seat as `likelyKawesh` after trick 3 if all their observed plays
+  are rank 7/8/9. The sampler `desire` map is cleared for that seat,
+  so trump J/9/A no longer get pinned to a low-card hand — fixes
+  rollouts that previously mis-modeled Kawesh-skipping opponents
+  as having strong cards.
+
+- **B-67 — `aceLate` counter feeds sampler probability
+  (Bot.lua:359-365, BotMaster.lua:228-234):** seats with
+  `aceLate >= 2` get `pickProb` reduced from 0.7 to 0.5 in the
+  sampler — A-hoarder patterns lower the reliability of bid-strong
+  bias for that seat.
+
+- **B-56 — `leadCount[suit]` accumulation
+  (Bot.lua:351-358):** populated on every lead play in
+  `OnPlayObserved`. Consumed by future repeat-lead exploitation
+  features (placeholder ledger; no current picker integration —
+  data is being captured for downstream use).
+
+- **B-61 — `sunFail` defensive-Sun detection in `PickDouble`
+  (Bot.lua:1597-1611):** when the Sun bidder has failed Sun ≥2
+  times this game, our Bel threshold rises by 8 (defensive Sun
+  has low base score; the 2x Bel reward is small if we win and
+  large if we lose, expected-value math favors letting low Sun
+  play out without Bel risk amplification). M3lm-gated.
+
+#### Wire-protocol fix
+
+- **B-69 — `s.target` added to packSnapshot
+  (Net.lua:351, State.lua:368-373, 461-468):** late-joining /
+  reloaded clients previously defaulted to 152 even when the host
+  had configured a different target via `/baloot target N`. Field
+  29 of the resync snapshot now carries the host's target. Backwards-
+  compatible: pre-v0.4.5 hosts omit field 29 and the receiver
+  preserves its existing `s.target` default.
+
 ## v0.4.4 — Bidding visibility + bigger meld strips (player feedback)
 
 Two cosmetic fixes from player feedback. No rule / wire / scoring

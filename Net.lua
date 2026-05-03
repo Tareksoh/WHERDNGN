@@ -347,6 +347,12 @@ local function packSnapshot()
         seats[1], seats[2], seats[3], seats[4],
         bids[1], bids[2], bids[3], bids[4],
         tostring(botMask),                       -- 4-bit isBot mask
+        -- Audit Tier 4 (B-69): match target gp. Configured via /baloot
+        -- target N on the host; previously absent from the snapshot, so
+        -- late joiners and reloads defaulted to 152 even when the host
+        -- ran a different target. Field 29 (1-indexed). Backwards-
+        -- compatible: pre-v0.4.5 receivers stop reading at field 28.
+        tostring(s.target or 152),
     }, "|")
 end
 
@@ -1048,7 +1054,45 @@ function N._OnPlay(sender, seat, card, replayFlag)
     if isReplay and S.s.isHost then return end
     if not isReplay then
         -- Turn: only the seat whose turn it is may play.
-        if S.s.turn ~= seat or S.s.turnKind ~= "play" then return end
+        --
+        -- Audit fix (turn-desync RCA): the strict turn-equality gate
+        -- below silently dropped any MSG_PLAY whose seat didn't match
+        -- our local turn pointer. Combined with the absence of any
+        -- per-message sequence number AND the fact that S.ApplyPlay
+        -- does NOT advance s.turn, a single dropped MSG_TURN frame
+        -- (CHAT_MSG_ADDON party-channel is at-most-once under server
+        -- contention) made the receiver permanently miss every
+        -- subsequent play in the trick — including the host's AFK
+        -- auto-play that should have recovered the stuck seat.
+        --
+        -- Reported user symptom: "game stuck — player sees previous
+        -- seat highlighted, host shows it's their turn, AFK fires,
+        -- when player finally plays they get illegal-card because
+        -- the auto-played card is no longer in their authoritative
+        -- hand on the host."
+        --
+        -- Self-healing fix: when the seat doesn't match local turn
+        -- BUT the sender is the host AND the seat is properly
+        -- authorized for that sender, trust the host's authority
+        -- and patch our local turn pointer before applying. The
+        -- existing idempotence guard below still prevents double-
+        -- apply if the matching MSG_TURN arrives later.
+        if S.s.turnKind ~= "play" then
+            -- Outside the play turn-kind window, drop as before
+            -- (covers stale frames between phases).
+            return
+        end
+        if S.s.turn ~= seat then
+            -- Self-heal: only accept when the host vouches for the
+            -- seat. authorizeSeat already accepts (sender == host)
+            -- for any seat as long as that seat is human and host-
+            -- delegated, OR the seat is a bot. Same gate as below.
+            if not fromHost(sender) and not authorizeSeat(seat, sender) then
+                return
+            end
+            S.s.turn     = seat
+            S.s.turnKind = "play"
+        end
     end
     -- Idempotence: that seat must not have already played this trick.
     if S.s.trick and S.s.trick.plays then
@@ -1688,6 +1732,16 @@ function N.HostResolveTakweesh(callerSeat)
     -- second call (since the first sets phase=SCORE), but only after the
     -- first one finishes. Cancel any pending turn timer up front.
     N.CancelTurnTimer()
+    -- 50-agent audit fix (Wave 6/9/10 concern): explicitly clear any
+    -- in-flight SWA request. Takweesh is a Saudi-rule preempt of SWA
+    -- (it points to an actual illegal play, which dominates the
+    -- "I claim the rest" SWA). Without this nil, the SWA 5-sec timer
+    -- only no-ops via the phase-guard check (phase ~= PHASE_PLAY) —
+    -- works, but leaves stale `swaRequest` non-nil through PHASE_SCORE
+    -- and contradicts the changelog claim that "Takweesh during the
+    -- window clears swaRequest". Belt-and-braces with ApplyStart's
+    -- round-start clear; harmless if no SWA was pending.
+    S.s.swaRequest = nil
 
     local callerTeam = R.TeamOf(callerSeat)
     local oppTeam = (callerTeam == "A") and "B" or "A"
@@ -2018,6 +2072,9 @@ function N.LocalSWA()
             -- would otherwise resolve as an empty hand (failing
             -- IsValidSWA and penalising the host).
             encodedHand = enc,
+            -- Same 5-sec auto-approve window as _OnSWAReq.
+            ts        = (GetTime and GetTime()) or 0,
+            windowSec = K.SWA_TIMEOUT_SEC or 5,
         }
         N.SendSWAReq(S.s.localSeat, enc)
         -- 9th-audit fix: same bot auto-accept as the _OnSWAReq path.
@@ -2031,6 +2088,27 @@ function N.LocalSWA()
                 if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
                     N._OnSWAResp("__host__", s2, true, S.s.localSeat)
                 end
+            end
+            -- 5-sec auto-approve timer (mirrors _OnSWAReq). If the
+            -- request is still pending when the timer fires, host
+            -- resolves SWA. Takweesh / explicit deny during the
+            -- window clears swaRequest, and the caller-match guard
+            -- below makes the timer a no-op in that case.
+            if C_Timer and C_Timer.After then
+                local windowSec  = K.SWA_TIMEOUT_SEC or 5
+                local mySeat     = S.s.localSeat
+                local pinnedHand = {}
+                for _, c in ipairs(S.s.hand or {}) do
+                    pinnedHand[#pinnedHand + 1] = c
+                end
+                C_Timer.After(windowSec, function()
+                    if not S.s.isHost then return end
+                    local req = S.s.swaRequest
+                    if not req or req.caller ~= mySeat then return end
+                    if S.s.phase ~= K.PHASE_PLAY then return end
+                    S.s.swaRequest = nil
+                    N.HostResolveSWA(mySeat, pinnedHand)
+                end)
             end
         end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -2111,13 +2189,20 @@ function N._OnSWAReq(sender, seat, encodedHand)
     if S.s.swaRequest and S.s.swaRequest.caller then
         return
     end
-    -- Stash the pending request so the UI can render Accept/Deny
-    -- buttons for opponents and the host can collate responses.
+    -- Stash the pending request so the UI can render the SWA-claim
+    -- preview and the TAKWEESH counter button. User-requested change:
+    -- the SWA cards display for 5 seconds and auto-approve on timeout
+    -- — opponents counter exclusively via Takweesh (which scans prior
+    -- tricks for illegal plays). Accept/Deny vote still works as a
+    -- manual override path; bots auto-accept (no Takweesh needed) so
+    -- the timer is mostly a safety net for human deadlocks.
     S.s.swaRequest = {
         caller    = seat,
         handCount = (encodedHand and (#encodedHand / 2)) or 0,
         responses = {},
         encodedHand = encodedHand,
+        ts        = (GetTime and GetTime()) or 0,  -- UI countdown anchor
+        windowSec = K.SWA_TIMEOUT_SEC or 5,
     }
     -- 9th-audit fix (Codex+Gemini consensus): bots never send
     -- MSG_SWA_RESP, so a host-with-bots game would deadlock here —
@@ -2133,6 +2218,26 @@ function N._OnSWAReq(sender, seat, encodedHand)
             if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
                 N._OnSWAResp("__host__", s2, true, seat)
             end
+        end
+        -- Audit (user-requested): 5-second auto-approve timer. If the
+        -- swaRequest is still active and bound to the same caller when
+        -- the timer fires, run HostResolveSWA. Takweesh during the
+        -- window clears swaRequest (existing flow) and the timer
+        -- becomes a no-op via the caller-match guard.
+        if C_Timer and C_Timer.After then
+            local windowSec = K.SWA_TIMEOUT_SEC or 5
+            C_Timer.After(windowSec, function()
+                if not S.s.isHost then return end
+                local req = S.s.swaRequest
+                if not req or req.caller ~= seat then return end
+                if S.s.phase ~= K.PHASE_PLAY then return end
+                -- Decode the caller's hand from the wire (host's
+                -- hostHands is authoritative; HostResolveSWA prefers
+                -- it but falls back to the wire-supplied hand).
+                local hand = (encodedHand and C.DecodeHand(encodedHand)) or {}
+                S.s.swaRequest = nil
+                N.HostResolveSWA(seat, hand)
+            end)
         end
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -2772,7 +2877,14 @@ function N._HostTurnTimeout(seat, kind)
             local r = C.TrickRank(c, S.s.contract)
             if r < bestRank then best, bestRank = c, r end
         end
+        -- Audit C-1: AFK auto-play needs to feed Bot.OnPlayObserved
+        -- like the regular dispatch path, otherwise void inference and
+        -- firstDiscard miss the AFK seat for the rest of the round.
+        local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
         S.ApplyPlay(seat, best)
+        if B.Bot and B.Bot.OnPlayObserved then
+            B.Bot.OnPlayObserved(seat, best, leadBefore)
+        end
         N.SendPlay(seat, best)
         N._HostStepPlay()
     end
@@ -3357,7 +3469,16 @@ function N.MaybeRunBot()
                         N.SendAKA(seat, akaSuit)
                     end
                 end
+                -- Audit C-1: capture leadSuit BEFORE ApplyPlay so the
+                -- bot-memory observer sees whether `card` followed suit.
+                -- Without this, void inference / firstDiscard / Fzloky /
+                -- AKA dedup / trump-tempo counters miss every bot play —
+                -- ~50% of all card observations dropped silently.
+                local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
                 S.ApplyPlay(seat, card)
+                if B.Bot and B.Bot.OnPlayObserved then
+                    B.Bot.OnPlayObserved(seat, card, leadBefore)
+                end
                 N.SendPlay(seat, card)
                 N._HostStepPlay()
             end)
@@ -3391,7 +3512,14 @@ function N.MaybeRunBot()
                                 local r = C.TrickRank(c, S.s.contract)
                                 if r < bestRank then best, bestRank = c, r end
                             end
+                            -- Audit C-1: feed the recovery-path play
+                            -- through the same observer the success path
+                            -- and AFK timeout use.
+                            local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
                             S.ApplyPlay(seat, best)
+                            if B.Bot and B.Bot.OnPlayObserved then
+                                B.Bot.OnPlayObserved(seat, best, leadBefore)
+                            end
                             N.SendPlay(seat, best)
                             N._HostStepPlay()
                         end

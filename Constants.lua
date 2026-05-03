@@ -245,6 +245,14 @@ K.HEARTBEAT_SEC       = 5.0
 K.LAST_TRICK_PEEK_SEC = 3.0   -- duration of the once-per-hand last-trick peek
 K.TRICK_GLOW_SEC      = 1.0   -- length of winner-glow before clearing the trick
 K.CARD_ANIM_SEC       = 0.18  -- duration of the card-land scale+fade animation
+-- User-requested SWA timeout: when a permission-required SWA is in
+-- flight, the host auto-approves after this many seconds unless an
+-- opponent counters with Takweesh (which scans prior tricks for any
+-- illegal play by the SWA caller's team and applies the qaid penalty
+-- instead). Replaces the indefinite Accept/Deny vote wait — humans
+-- now need only inspect the displayed claim and decide whether to
+-- counter via Takweesh; explicit Deny still works as a manual cancel.
+K.SWA_TIMEOUT_SEC     = 5
 
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung

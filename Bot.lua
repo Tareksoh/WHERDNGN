@@ -78,6 +78,17 @@ function Bot.IsSaudiMaster()
     return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots == true
 end
 
+-- Audit Tier 3 helper: is `seat` controlled by a bot? Thin proxy
+-- to S.IsSeatBot (State.lua:624-626) so picker code can write
+-- `if Bot.IsBotSeat(p)` without reaching into State for every
+-- human-vs-bot branch. Used by Fzloky guards (H-12), partner-bid
+-- bonus (H-11), and the human-pattern-exploitation Track-B work.
+-- Returns false if the seats table is missing (defensive).
+function Bot.IsBotSeat(seat)
+    if not S or not S.IsSeatBot then return false end
+    return S.IsSeatBot(seat) == true
+end
+
 local function jitter(base, amp)
     return base + math.random(-amp, amp)
 end
@@ -110,8 +121,20 @@ local function emptyMemory()
             -- knows. Re-announcing on subsequent leads of the same
             -- suit is noise. Reset per round.
             akaSent = { S = false, H = false, D = false, C = false },
+            -- Audit Tier 4 (B-99): hand-annul (Kawesh) inference.
+            -- After trick 3, if all opponent plays are rank 7/8/9, the
+            -- opponent likely has a Kawesh hand they declined to call.
+            -- BotMaster sampler de-weights trump strong-card pinning
+            -- in the opponent slot when this is true.
+            likelyKawesh = false,
         }
     end
+    -- Audit Tier 4 (B-80 / H-10): trap-pass round detection. Captured
+    -- before s.bids is cleared in HostBeginRound2 so bots can check
+    -- whether everyone passed in round 1 — a trap-pass round signals
+    -- weak overall, but a human bidding strong in R2 after a trap-pass
+    -- R1 is often overcaution-recovery rather than genuine strength.
+    m.r1WasAllPass = false
     return m
 end
 
@@ -141,6 +164,26 @@ local function emptyStyle()
         m[s] = {
             bels = 0, triples = 0, fours = 0, gahwas = 0,
             trumpEarly = 0, trumpLate = 0,
+            -- Audit Tier 4 counters (B-83, B-61, B-67, B-56):
+            -- gahwaFailed: how often this seat called Gahwa and failed
+            --   the contract. Reckless callers raise the bot's
+            --   PickFour aggression against them.
+            -- sunFail: how often this seat's Sun bid failed. Marker
+            --   for defensive-Sun players (bidding Sun to block
+            --   opponent Hokm rather than for genuine score). Raises
+            --   PickDouble Bel threshold against repeat sunFailers.
+            -- aceLate: late-trick (trick 5+) Ace plays. A-hoarder
+            --   pattern — humans hold Aces to "save" them, often
+            --   never spending. Sampler can de-prioritize A-pinning
+            --   for high-aceLate seats.
+            -- leadCount[suit]: how often this seat led the suit
+            --   across the game. Repeat-lead suit is a partner
+            --   convention signal; opponents can be over-trumped on
+            --   their habitual lead suit.
+            gahwaFailed = 0,
+            sunFail     = 0,
+            aceLate     = 0,
+            leadCount   = { S = 0, H = 0, D = 0, C = 0 },
         }
     end
     return m
@@ -168,6 +211,30 @@ function Bot.OnEscalation(seat, kind)
     elseif kind == "four"   then m.fours   = m.fours   + 1
     elseif kind == "gahwa"  then m.gahwas  = m.gahwas  + 1
     else                         m.bels    = m.bels    + 1   -- legacy
+    end
+end
+
+-- Audit Tier 4 (B-83 / B-61): per-round outcome callback. Invoked
+-- from S.ApplyRoundEnd on every client (host bot decisions are the
+-- only consumers, but maintaining the counters everywhere matches
+-- how OnEscalation is wired). bidderMade may be true / false / nil
+-- (nil when the round ended via Takweesh/SWA cancellation — no
+-- contract outcome to record).
+--
+-- Updates:
+--   gahwaFailed[bidder]: bidder called Gahwa AND failed → reckless
+--   sunFail[bidder]:     Sun bidder failed → defensive-Sun marker
+function Bot.OnRoundEnd(contract, bidderMade)
+    if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
+    if not contract or not contract.bidder then return end
+    if bidderMade ~= false then return end  -- only count actual fails
+    local m = Bot._partnerStyle[contract.bidder]
+    if not m then return end
+    if contract.gahwa then
+        m.gahwaFailed = (m.gahwaFailed or 0) + 1
+    end
+    if contract.type == K.BID_SUN then
+        m.sunFail = (m.sunFail or 0) + 1
     end
 end
 
@@ -267,6 +334,51 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
        and mem.firstDiscard.rank == C.Rank(card) then
         mem.firstDiscard = nil
     end
+
+    -- Audit Tier 4 (B-56): per-suit lead counter. Accumulated on every
+    -- LEAD play (trickPlays count was 1 after ApplyPlay since this is
+    -- the first card of the trick). Used for repeat-lead pattern
+    -- detection — a seat that habitually leads suit X is exploitable
+    -- by opponents who hoard high cards in X waiting to over-trump.
+    if (#trickPlays == 1) and style.leadCount then
+        style.leadCount[cardSuit] = (style.leadCount[cardSuit] or 0) + 1
+    end
+
+    -- Audit Tier 4 (B-67): late-trick Ace counter. Aces played at
+    -- trick 5 or later are A-hoarder pattern — humans tend to "save"
+    -- Aces and never spend them, ending up forced to dump them late.
+    -- Sampler de-prioritizes Ace pinning for high-aceLate seats.
+    if C.Rank(card) == "A" then
+        local trickNum = #(S.s.tricks or {}) + 1
+        if trickNum >= 5 and style.aceLate ~= nil then
+            style.aceLate = style.aceLate + 1
+        end
+    end
+
+    -- Audit Tier 4 (B-99): missed-Kawesh inference. After trick 3+, if
+    -- ALL of this seat's plays so far have been rank 7/8/9, they
+    -- likely held a Kawesh hand (5+ low cards) but declined to call
+    -- hand-annul — playing the round out with low cards expecting
+    -- cheap captures. The flag is descriptive (per-seat behavior
+    -- pattern); the team-relative gating (only consult flag for
+    -- opponents, not partners) lives at the BotMaster sampler
+    -- consumer site to avoid losing partner Fzloky-signal bias.
+    if not wasIllegal then
+        local trickNum = #(S.s.tricks or {}) + 1
+        if trickNum >= 3 then
+            local allLow = true
+            local anyPlay = false
+            for c2 in pairs(mem.played) do
+                anyPlay = true
+                local r = C.Rank(c2)
+                if r ~= "7" and r ~= "8" and r ~= "9" then
+                    allLow = false
+                    break
+                end
+            end
+            mem.likelyKawesh = anyPlay and allLow
+        end
+    end
 end
 
 local function opponentsVoidInAll(seat, suit)
@@ -279,6 +391,24 @@ local function opponentsVoidInAll(seat, suit)
         end
     end
     return true
+end
+
+-- Audit Tier 4 (B-77): is ANY opponent (not all) known void in `suit`?
+-- Used by pickLead's Ace-lead opportunist branch — if one opponent is
+-- void, our high card faces only one possible defender, dramatically
+-- reducing over-trump risk in Hokm. (Without this helper the bot was
+-- only willing to lead a high non-trump when BOTH opponents were void
+-- — a much rarer condition.)
+local function anyOpponentVoidIn(seat, suit)
+    if not Bot._memory then return false end
+    for opp = 1, 4 do
+        if R.TeamOf(opp) ~= R.TeamOf(seat) then
+            if Bot._memory[opp] and Bot._memory[opp].void[suit] then
+                return true
+            end
+        end
+    end
+    return false
 end
 
 -- ---------------------------------------------------------------------
@@ -405,8 +535,15 @@ end
 --   • partner HOKM other suit         → +10 (general strong hand)
 --   • partner SUN                     → +15 (lots of A/T)
 --   • partner ASHKAL (forced Sun)     → +15 (similar to SUN above)
---   • partner PASS both rounds        → -10 (weak)
+--   • partner PASS (bot)              → -10 (calibrated weakness)
+--   • partner PASS (human)            →  -5 (may be overcaution)
 --   • no info / unknown               →  0
+--
+-- Audit Tier 3 (H-11): bot PASS = calibrated bot-side weakness signal.
+-- Human PASS = often overcaution: humans pass marginal hands a bot
+-- would have bid. Treating them identically suppresses Triple/Four/
+-- Gahwa after a human partner's PASS even when our own hand merits
+-- escalation. Halve the penalty for human partners.
 local function partnerBidBonus(seat, contract)
     if not Bot.IsAdvanced() then return 0 end
     if not S.s.bids then return 0 end
@@ -415,7 +552,9 @@ local function partnerBidBonus(seat, contract)
     if not b then return 0 end
     if b == K.BID_SUN then return 15 end
     if b == K.BID_ASHKAL then return 15 end
-    if b == K.BID_PASS then return -10 end
+    if b == K.BID_PASS then
+        return Bot.IsBotSeat(partner) and -10 or -5
+    end
     if b:sub(1, #K.BID_HOKM) == K.BID_HOKM then
         local bidTrump = b:sub(#K.BID_HOKM + 2, #K.BID_HOKM + 2)
         if contract and contract.trump and bidTrump == contract.trump then
@@ -477,6 +616,40 @@ local function matchPointUrgency(myTeam)
     if me  >= target - 15 then mod = mod - 5 end
     local diff = opp - me
     if diff > 50 and diff <= 80 then mod = mod + 3 end
+
+    -- Audit Tier 4 (B-47, B-50): factor opponent escalation history
+    -- into the score-urgency modifier. The data is per-seat, so we
+    -- aggregate across both opponent seats on the opp team.
+    if Bot._partnerStyle then
+        local oppTeam = (myTeam == "A") and "B" or "A"
+        local oppGahwas, oppFours = 0, 0
+        for s2 = 1, 4 do
+            if R.TeamOf(s2) == oppTeam then
+                local m = Bot._partnerStyle[s2]
+                if m then
+                    oppGahwas = oppGahwas + (m.gahwas or 0)
+                    oppFours  = oppFours  + (m.fours  or 0)
+                end
+            end
+        end
+        -- B-47: gahwa-prone opponent who is now trailing by 50+ may
+        -- attempt a desperate Gahwa to spike. Add +3 so our defensive
+        -- Bel threshold drops; we're ready to counter-escalate.
+        -- Note `diff = opp - me` so diff < -50 means OPP is trailing.
+        if oppGahwas >= 2 and diff <= -50 then
+            mod = mod + 3
+        end
+        -- B-50: opponent has never escalated (no Fours, no Gahwas).
+        -- Passive players don't spike points via hand-killers, so the
+        -- "we're far behind, take risks" branch should be dampened —
+        -- we won't lose to a desperate opponent escalation that won't
+        -- come. Replace +3 with +1 in the diff > 50 branch when both
+        -- are zero.
+        if oppFours == 0 and oppGahwas == 0 and diff > 50 and diff <= 80 then
+            mod = mod - 2  -- net effect: +3 → +1
+        end
+    end
+
     -- 13th-bot-audit fix (Codex catch): cap output so stacking with
     -- scoreUrgency doesn't drop thresholds past 50% (Bel 70→50 etc).
     -- Saudi tournament play uses target-15 as the canonical "near"
@@ -570,6 +743,14 @@ function Bot.PickBid(seat)
     local r1Base = TH_HOKM_R1_BASE
     local r2Base = TH_HOKM_R2_BASE
     if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base - 4) end
+    -- Audit Tier 4 (B-80 / H-10): trap-pass detection. When R1 was
+    -- all-pass (every seat declined the flipped suit), the table is
+    -- weak overall — R2 thresholds should drop slightly so we don't
+    -- under-bid back into a redeal. M3lm-gated since the data only
+    -- becomes meaningful when partner-style differentiation is on.
+    if round == 2 and Bot.IsM3lm() and Bot.r1WasAllPass then
+        r2Base = r2Base - 6
+    end
     local thHokmR1 = jitter(r1Base    - urgency, BID_JITTER)
     local thHokmR2 = jitter(r2Base    - urgency, BID_JITTER)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
@@ -745,15 +926,24 @@ local function pickLead(legal, contract, seat)
     -- pick a suit, then fall through to the existing low-from-
     -- longest logic to choose the actual card.
     local fzlokyPrefSuit, fzlokyAvoidSuit = nil, nil
+    -- Audit Tier 3 (H-12): Fzloky is a BOT-vs-BOT convention signal.
+    -- A bot's first off-suit discard is a deliberate suit-preference
+    -- communication; a HUMAN's first off-suit discard is just whatever
+    -- card they shed (often a high card to dump weakness, often random).
+    -- Reading a human's discard as a "lead this suit" signal misdirects
+    -- the bot's lead priority for the rest of the round. Only honour
+    -- the signal when the partner is also a bot.
     if Bot.IsFzloky() and Bot._memory then
         local p = R.Partner(seat)
-        local sig = Bot._memory[p] and Bot._memory[p].firstDiscard
-        if sig and sig.suit then
-            local r = sig.rank
-            if r == "A" or r == "T" or r == "K" then
-                fzlokyPrefSuit = sig.suit
-            elseif r == "7" or r == "8" then
-                fzlokyAvoidSuit = sig.suit
+        if Bot.IsBotSeat(p) then
+            local sig = Bot._memory[p] and Bot._memory[p].firstDiscard
+            if sig and sig.suit then
+                local r = sig.rank
+                if r == "A" or r == "T" or r == "K" then
+                    fzlokyPrefSuit = sig.suit
+                elseif r == "7" or r == "8" then
+                    fzlokyAvoidSuit = sig.suit
+                end
             end
         end
     end
@@ -788,12 +978,91 @@ local function pickLead(legal, contract, seat)
         for _, c in ipairs(legal) do
             if C.IsTrump(c, contract) then trumpCount = trumpCount + 1 end
         end
+        -- Audit Tier 4 (B-96): Ace-exhaustion window. After trick 3,
+        -- if all 3 NON-trump Aces have been observed played (anyone's
+        -- played pile contains the Ace, OR the Ace is in our own
+        -- legal cards still), opponents have no Ace threats left.
+        -- Continued trump-pull only spends our trump for 7/8/Q
+        -- captures — wasteful. Switch to cashing side-suit length
+        -- (we hold mid-cards K/Q/J in non-trump that are now bosses).
+        -- Advanced+, requires C-1 memory population.
+        if Bot.IsAdvanced() and S.s.tricks and #S.s.tricks >= 3
+           and contract.trump and Bot._memory then
+            local sideAcesLeft = 0
+            for _, su in ipairs({ "S", "H", "D", "C" }) do
+                if su ~= contract.trump then
+                    -- Check if Ace of this suit has been played OR is in our hand.
+                    local aceCard = "A" .. su
+                    local seen = false
+                    for s2 = 1, 4 do
+                        local m = Bot._memory[s2]
+                        if m and m.played[aceCard] then seen = true; break end
+                    end
+                    if not seen then
+                        for _, c in ipairs(legal) do
+                            if c == aceCard then seen = true; break end
+                        end
+                    end
+                    if not seen then sideAcesLeft = sideAcesLeft + 1 end
+                end
+            end
+            if sideAcesLeft == 0 then
+                -- Lead our highest non-trump (unblocked tricks).
+                local bestSide, bestSideR = nil, -1
+                for _, c in ipairs(legal) do
+                    if not C.IsTrump(c, contract) then
+                        local r = C.TrickRank(c, contract)
+                        if r > bestSideR then bestSide, bestSideR = c, r end
+                    end
+                end
+                if bestSide then return bestSide end
+            end
+        end
         -- Advanced: trump-poor (<4) AND we have a non-trump A → cash
         -- the Ace first; trump-pull on the next round.
         if Bot.IsAdvanced() and trumpCount < 4 then
             for _, c in ipairs(legal) do
                 if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
                     return c
+                end
+            end
+        end
+        -- Audit Tier 4 (B-98): J+9 trump-lock detection. Once BOTH
+        -- the Jack and 9 of trump have been observed played (or are
+        -- in our own hand still), opponent trump strength is nearly
+        -- spent — pulling more trump only burns our high trump for
+        -- 7/8 captures. Switch to cashing side-suit Aces while we
+        -- still have trump in reserve to ruff returns. Advanced+ since
+        -- it relies on Bot._memory.played tracking which is itself
+        -- conditioned on memory population (post-Tier-1 C-1 fix).
+        if Bot.IsAdvanced() and S.HighestUnplayedRank
+           and S.HighestUnplayedRank(contract.trump) ~= "J" then
+            local trumpJSeen, trump9Seen = false, false
+            -- Build the union of "played" and "in our hand" — both
+            -- count as out-of-pool for opponent trump strength.
+            local out = {}
+            if Bot._memory then
+                for s2 = 1, 4 do
+                    local m = Bot._memory[s2]
+                    if m then
+                        for card in pairs(m.played) do out[card] = true end
+                    end
+                end
+            end
+            for _, c in ipairs(legal) do out[c] = true end
+            for card in pairs(out) do
+                if C.Suit(card) == contract.trump then
+                    if C.Rank(card) == "J" then trumpJSeen = true
+                    elseif C.Rank(card) == "9" then trump9Seen = true end
+                end
+            end
+            if trumpJSeen and trump9Seen then
+                -- Both gone from pool. Cash a side-suit Ace if we
+                -- have one; otherwise fall through to highestTrump.
+                for _, c in ipairs(legal) do
+                    if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
+                        return c
+                    end
                 end
             end
         end
@@ -811,12 +1080,73 @@ local function pickLead(legal, contract, seat)
     --      cards for capture, give partner room to win).
     --   4. Otherwise: lowest non-trump.
     --   5. No non-trump option: lowest legal trump.
+    --
+    -- Audit Tier 2: M3lm-gated tempo read. When the BIDDER has been
+    -- observed leading trump aggressively in early tricks across
+    -- prior rounds (styleTrumpTempo == 1), they will likely pull
+    -- trump fast in this round too. As a defender we must NOT spend
+    -- our high trump in a casual cross-ruff — save it to over-ruff
+    -- their trump leads. We flag this for the trump fallback at
+    -- step 5 (lowest legal trump) and bias side-suit length leads
+    -- away from suits where we hold a singleton high card that the
+    -- aggressive bidder would happily capture with their pulled
+    -- trump on trick 2-3.
+    local saveHighTrump = false
+    if Bot.IsM3lm() and contract.type == K.BID_HOKM
+       and not isBidderTeam then
+        local bidderTempo = styleTrumpTempo(contract.bidder)
+        local partnerTempo = styleTrumpTempo(R.Partner(contract.bidder))
+        if bidderTempo == 1 or partnerTempo == 1 then
+            saveHighTrump = true
+        end
+    end
+
+    -- Audit Tier 4 (B-82): trump-drought tell. After 3 tricks, if the
+    -- bidder has LED at least once and NEVER led trump, the bidder is
+    -- trump-poor (they're out of trump or never had it). As a defender
+    -- we should aggressively cash high-point side-suit cards before
+    -- the bidder finds something to ruff with. M3lm-gated and Hokm-only.
+    local bidderTrumpDrought = false
+    if Bot.IsM3lm() and contract.type == K.BID_HOKM and not isBidderTeam
+       and S.s.tricks and #S.s.tricks >= 3 and contract.bidder
+       and contract.trump then
+        local bidderLeadCount, bidderTrumpLeadCount = 0, 0
+        for _, t in ipairs(S.s.tricks) do
+            if t.plays and t.plays[1] and t.plays[1].seat == contract.bidder then
+                bidderLeadCount = bidderLeadCount + 1
+                if C.Suit(t.plays[1].card) == contract.trump then
+                    bidderTrumpLeadCount = bidderTrumpLeadCount + 1
+                end
+            end
+        end
+        if bidderLeadCount >= 1 and bidderTrumpLeadCount == 0 then
+            bidderTrumpDrought = true
+        end
+    end
+
     local nonTrumps = {}
     local suitCount = { S = 0, H = 0, D = 0, C = 0 }
     for _, c in ipairs(legal) do
         if not C.IsTrump(c, contract) then
             nonTrumps[#nonTrumps + 1] = c
             suitCount[C.Suit(c)] = suitCount[C.Suit(c)] + 1
+        end
+    end
+
+    -- Audit Tier 4 (B-82): on trump-drought, lead our HIGHEST point
+    -- non-trump (T or A) — bidder can't ruff so the points fall to
+    -- our team or partner. Beats the standard "low from longest"
+    -- defender priority. Skip if no point-card non-trump available.
+    if bidderTrumpDrought then
+        local pointCard = nil
+        local pointVal  = -1
+        for _, c in ipairs(nonTrumps) do
+            local r = C.Rank(c)
+            local v = (r == "A" and 11) or (r == "T" and 10) or 0
+            if v > pointVal then pointCard, pointVal = c, v end
+        end
+        if pointCard and pointVal >= 10 then
+            return pointCard
         end
     end
 
@@ -834,6 +1164,28 @@ local function pickLead(legal, contract, seat)
                 end
             end
             return best
+        end
+    end
+
+    -- Audit Tier 4 (B-77): single-opponent void exploit. If we hold
+    -- the BOSS (highest unplayed) of a non-trump suit AND exactly one
+    -- opponent is void in it, the opponent's defense is reduced to
+    -- one possible over-trumper. In Hokm-only this is enough leverage
+    -- to lead the high card — partner sits between the void opp and
+    -- the other opp in seat order roughly half the time, the boss
+    -- wins outright the other half. Sun is already covered by the
+    -- general Sun-led-Ace heuristic. Advanced+ since it relies on
+    -- HighestUnplayedRank tracking.
+    if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+       and S.HighestUnplayedRank then
+        for _, c in ipairs(nonTrumps) do
+            local su = C.Suit(c)
+            if su ~= contract.trump
+               and S.HighestUnplayedRank(su) == C.Rank(c)
+               and anyOpponentVoidIn(seat, su)
+               and not opponentsVoidInAll(seat, su) then
+                return c
+            end
         end
     end
 
@@ -887,7 +1239,23 @@ local function pickLead(legal, contract, seat)
         return lowestByRank(nonTrumps, contract)
     end
 
-    -- 5: no non-trump — lowest trump.
+    -- 5: no non-trump — lowest trump. When saveHighTrump is set
+    -- (M3lm: aggressive opposing bidder), prefer the LOWEST trump
+    -- that isn't J/9 — we want to burn 7/8/Q/K first and hold the
+    -- top trump for over-ruff capture later. If only J/9 are legal,
+    -- fall through to the regular lowest pick.
+    if saveHighTrump then
+        local lowTrump = {}
+        for _, c in ipairs(legal) do
+            local r = C.Rank(c)
+            if r ~= "J" and r ~= "9" then
+                lowTrump[#lowTrump + 1] = c
+            end
+        end
+        if #lowTrump > 0 then
+            return lowestByRank(lowTrump, contract)
+        end
+    end
     return lowestByRank(legal, contract)
 end
 
@@ -994,13 +1362,20 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
                 -- 13th-bot-audit fix (Codex+Gemini+pickFollow agent):
                 -- in Sun, an Ace of the led suit is unbeatable AND a
-                -- point card (11). Don't duck it. Same for any A/T of
-                -- the led suit in any contract — those are the high-
-                -- value point cards we'd be voluntarily losing if we
-                -- ducked. (Position-2-low only makes sense when the
-                -- card we'd take with is a low-point K/Q/J — saving
-                -- it for partner doesn't apply to A/T.)
-                if not sureStopper and trick.leadSuit then
+                -- point card (11). Don't duck it. Same for the T (10)
+                -- of led suit. (Position-2-low only makes sense when
+                -- the card we'd take with is a low-point K/Q/J —
+                -- saving it for partner doesn't apply to A/T.)
+                --
+                -- Audit C-3: this shortcut MUST be Sun-only. In Hokm,
+                -- a non-trump Ace is NOT a sure stopper — an opponent
+                -- void in that suit can over-ruff it, sacrificing the
+                -- Ace for nothing. Restricting to Sun also makes
+                -- "leadSuit == cardSuit" universally true (Sun has no
+                -- trump to ruff with), so a side-suit Ace is genuinely
+                -- unbeatable in that contract.
+                if not sureStopper and trick.leadSuit
+                   and contract.type == K.BID_SUN then
                     for _, c in ipairs(winners) do
                         local r = C.Rank(c)
                         if C.Suit(c) == trick.leadSuit
@@ -1083,6 +1458,16 @@ function Bot.PickAKA(seat, leadCard)
     if not S.HighestUnplayedRank then return nil end
     local trump = S.s.contract.trump
     if not trump then return nil end
+    -- Audit Tier 3 (B-33 / B-60): AKA is a bot-side coordination
+    -- convention. The signal coordinates with bot partners who read
+    -- the per-round `akaSent` flag and suppress over-trumping the
+    -- announced suit. Human partners typically don't recognize the
+    -- AKA banner as a "don't ruff this suit" instruction — at best
+    -- the signal is wasted, at worst it leaks information to
+    -- opponents (who see the banner too) and gives them a free read
+    -- on which suit we hold the boss in. Suppress AKA when the
+    -- partner is human.
+    if not Bot.IsBotSeat(R.Partner(seat)) then return nil end
     local r = C.Rank(leadCard)
     local su = C.Suit(leadCard)
     -- AKA is non-trump only.
@@ -1157,9 +1542,15 @@ function Bot.PickDouble(seat)
 
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
-        -- Trump cards are an extra defensive resource.
+        -- Trump cards are an extra defensive resource. Audit C-4 fix:
+        -- previous 0.5x discount was inconsistent with the 1.0x weight
+        -- used by escalationStrength (PickTriple/Four/Gahwa). A Hokm
+        -- defender with J+9+A of trump (~42 trump points) was scored
+        -- at 21 here, never reaching BOT_BEL_TH=70 — legitimate Bels
+        -- structurally blocked. Aligned to the same scale escalation
+        -- already uses.
         local trumpStr = suitStrengthAsTrump(hand, contract.trump)
-        strength = strength + trumpStr * 0.5
+        strength = strength + trumpStr
     end
     if contract.type == K.BID_SUN then
         strength = strength + 10   -- bias: Sun is harder for the bidder
@@ -1169,6 +1560,23 @@ function Bot.PickDouble(seat)
     strength = strength + partnerBidBonus(seat, contract)
                        + partnerEscalatedBonus(seat, contract)
     local th = K.BOT_BEL_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
+
+    -- Audit Tier 4 (B-61): defensive-Sun detection. If the Sun bidder
+    -- has failed Sun >=2 times this game, they're a known defensive-Sun
+    -- caller (bidding marginal Sun to block opponent Hokm rather than
+    -- for genuine score). Raise our Bel threshold by 8 — defensive Sun
+    -- has low base score, so the 2x Bel reward is small if we win the
+    -- Bel and large if we lose. The expected-value math favors letting
+    -- a low Sun play out and capturing the small score directly without
+    -- the Bel risk amplification. M3lm-gated.
+    if Bot.IsM3lm() and contract.type == K.BID_SUN and contract.bidder
+       and Bot._partnerStyle then
+        local m = Bot._partnerStyle[contract.bidder]
+        if m and (m.sunFail or 0) >= 2 then
+            th = th + 8
+        end
+    end
+
     local jth = jitter(th, BEL_JITTER)
     if strength < jth then return false, false end
     -- Sun: open is moot (no Triple rung).
@@ -1221,6 +1629,24 @@ function Bot.PickTriple(seat)
     if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     local th = K.BOT_TRIPLE_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
+    -- Audit Tier 2: M3lm-gated style read. A defender that has Beled
+    -- ≥2 times this game is a habitual Beler — their current Bel is
+    -- less informative about hand strength, and our Triple response
+    -- can be more aggressive. Drop the Triple threshold by 8 against
+    -- a known habitual Beler. Style metric returns nil with <2 Bels
+    -- in the ledger; threshold change only fires when there's enough
+    -- data to be meaningful.
+    if Bot.IsM3lm() then
+        local myTeam = R.TeamOf(seat)
+        for opp = 1, 4 do
+            if R.TeamOf(opp) ~= myTeam then
+                if styleBelTendency(opp) == 1 then
+                    th = th - 8
+                    break
+                end
+            end
+        end
+    end
     return escalateDecision(strength, th)
 end
 
@@ -1233,6 +1659,23 @@ function Bot.PickFour(seat)
     if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     local th = K.BOT_FOUR_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
+    -- 50-agent audit fix (B-83 wiring): the gahwaFailed counter on
+    -- the bidder's _partnerStyle was incremented by Bot.OnRoundEnd
+    -- but never read by any picker — a dead-counter feature gap. A
+    -- bidder who has called Gahwa and failed is a reckless caller;
+    -- defenders should be more willing to Four against them. Tiered
+    -- threshold drop: -5 on first fail (one data point, modest), -8
+    -- on 2+ fails (matches PickTriple's styleBelTendency magnitude).
+    -- M3lm-gated since the counter is a style-ledger derivative.
+    if Bot.IsM3lm() and contract.bidder and Bot._partnerStyle then
+        local m = Bot._partnerStyle[contract.bidder]
+        local fails = m and (m.gahwaFailed or 0) or 0
+        if fails >= 2 then
+            th = th - 8
+        elseif fails >= 1 then
+            th = th - 5
+        end
+    end
     return escalateDecision(strength, th)
 end
 
@@ -1279,11 +1722,21 @@ function Bot.PickPreempt(seat)
     -- Partner who already passed (Sun option declined) → preempt is
     -- riskier (no fallback if our Sun fails). Partner who bid Sun or
     -- Hokm → side-suit coverage already implied → safer to preempt.
-    local pBid = S.s.bids and S.s.bids[R.Partner(seat)]
-    if pBid == K.BID_PASS then strength = strength - 6
-    elseif pBid == K.BID_SUN then strength = strength + 8
+    --
+    -- Audit Tier 3: a human PASS may be overcaution (humans pass
+    -- marginal hands a bot would have bid). Halving the penalty
+    -- prevents over-suppression of preempt after a human pass.
+    -- Hokm bonus also halved for human partners since human Hokm bids
+    -- have wider variance than bot bids (no J/9 guarantee).
+    local partner = R.Partner(seat)
+    local pBid = S.s.bids and S.s.bids[partner]
+    local pIsBot = Bot.IsBotSeat(partner)
+    if pBid == K.BID_PASS then
+        strength = strength + (pIsBot and -6 or -3)
+    elseif pBid == K.BID_SUN then
+        strength = strength + 8
     elseif pBid and pBid:sub(1, #K.BID_HOKM) == K.BID_HOKM then
-        strength = strength + 5
+        strength = strength + (pIsBot and 5 or 3)
     end
     strength = strength + scoreUrgency(R.TeamOf(seat))
                        + matchPointUrgency(R.TeamOf(seat))

@@ -213,12 +213,42 @@ local function sampleConsistentDeal(seat, unseen)
                 local desire = (s == bidder) and strong or {}
                 if s == partner and pSignalSuit then desire[pSignalSuit] = 1 end
 
+                -- Audit Tier 4 (B-99): if this seat is `likelyKawesh`
+                -- (all observed plays were rank 7/8/9), they probably
+                -- DON'T hold strong cards — clear the desire map so
+                -- the sampler doesn't pin J/9/A to a low-card hand.
+                -- Audit Tier 4 (B-67): high aceLate count means the
+                -- seat is an A-hoarder; sampling ALL Aces to them is
+                -- still plausible (they hoard them), but we down-weight
+                -- the trump-J/9 pinning since they prefer side-suit
+                -- hoarding. Keep desire intact but reduce desire weight
+                -- by half via a flag below.
+                --
+                -- 50-agent audit fix (Wave 5/7/10 critical): only apply
+                -- the desire-clear for OPPONENT seats. A teammate playing
+                -- only 7/8/9 in tricks 1-3 is likely conserving cards
+                -- (Fzloky low-discard signal), not signalling Kawesh —
+                -- and clearing desire for the partner discards the
+                -- Fzloky signal-suit bias (line 214 above) that the
+                -- sampler depends on for partner-bias rollouts.
+                local mem = B.Bot._memory and B.Bot._memory[s]
+                local sIsOpponent = R.TeamOf(s) ~= R.TeamOf(seat)
+                if mem and mem.likelyKawesh and sIsOpponent then
+                    desire = {}
+                end
+                local style = B.Bot._partnerStyle and B.Bot._partnerStyle[s]
+                local pickProb = 0.7
+                if style and style.aceLate and style.aceLate >= 2 then
+                    pickProb = 0.5  -- A-hoarder: less reliable strong-bias
+                end
+
                 local remainingInPool = {}
                 for _, c in ipairs(pool) do
                     if #hand < n and not used[c] and not voids[C.Suit(c)] then
                         local weight = desire[c] or (desire[C.Suit(c)] and 20) or 0
-                        -- 70% chance to take a "desired" card if weight exists.
-                        if weight > 0 and math.random() < 0.7 then
+                        -- 70% chance to take a "desired" card if weight exists
+                        -- (50% if seat is A-hoarder).
+                        if weight > 0 and math.random() < pickProb then
                             hand[#hand + 1] = c
                             used[c] = true
                         else
@@ -423,10 +453,25 @@ local function rolloutValue(seat, card, world, contract)
         end
 
         -- Lead heuristics (Advanced-mirror).
+        --
+        -- Audit C-5 fix: bidder-lead branch must select the highest TRUMP,
+        -- not the highest legal card. `highestRank(legal)` returns whatever
+        -- card has the highest TrickRank — and a non-trump Ace can outrank
+        -- a depleted trump in the cross-scale comparison. The downstream
+        -- `if C.IsTrump(t, contract)` check then fails silently and the
+        -- rollout falls through to the side-suit branch, returning a
+        -- random low side-suit card instead of pulling trump.
         local bidderTeam = R.TeamOf(contract.bidder)
         if contract.type == K.BID_HOKM and R.TeamOf(s) == bidderTeam then
-            local t = highestRank(legal) -- placeholder: lead high trump
-            if C.IsTrump(t, contract) then return t end
+            local trumpCards = {}
+            for _, c in ipairs(legal) do
+                if C.IsTrump(c, contract) then
+                    trumpCards[#trumpCards + 1] = c
+                end
+            end
+            if #trumpCards > 0 then
+                return highestRank(trumpCards)
+            end
         end
         local nonTrumps = {}
         for _, c in ipairs(legal) do

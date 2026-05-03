@@ -619,19 +619,36 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         meldPoints.A = (sweepTeam == "A") and meldA or 0
         meldPoints.B = (sweepTeam == "B") and meldB or 0
     elseif outcome_kind == "fail" then
-        -- "WHEREDNGN" / failed contract: defenders take all card points AND
-        -- ALL melds (regardless of who declared). Bidder team scores 0.
+        -- Failed contract: defender team takes the handTotal qaid
+        -- penalty. Per Saudi rule "مشروعي لي ومشروعك لك" each team
+        -- KEEPS their own declared melds (the same rule we already
+        -- apply to qaid/takweesh and invalid-SWA per v0.4.3). The
+        -- penalty is the handTotal × multiplier awarded to the
+        -- winner; the loser's melds are NOT confiscated.
+        --
+        -- User-reported bug RCA: with Hokm Bel'd (×2) and the bidder
+        -- team failing, the bidder team showed final = 0 even when
+        -- they had declared a quarte (50 raw × 2 = 100 raw = 10 gp).
+        -- Aligns this branch with the qaid path in Net.lua's
+        -- HostResolveTakweesh / HostResolveSWA-invalid which already
+        -- preserves each team's own melds.
         cardA = (oppTeam == "A") and handTotal or 0
         cardB = (oppTeam == "B") and handTotal or 0
-        meldPoints[oppTeam]   = meldA + meldB
-        meldPoints[bidderTeam] = 0
+        meldPoints.A = meldA
+        meldPoints.B = meldB
     elseif outcome_kind == "take" then
         -- Doubled tie: rule 4-10 inversion. Bidder takes the entire
-        -- handTotal + all melds × mult.
+        -- handTotal — the doubler/buyer failed their commitment. Same
+        -- meld-attribution rule as the fail branch above: each team
+        -- keeps their own declared melds; only the handTotal qaid
+        -- penalty flows to the winner. Without this, a defender that
+        -- Bel'd and tied (rule 4-10 says they failed) lost ALL their
+        -- declared melds — the user-reported "loser team gets 0
+        -- should be 10" pattern.
         cardA = (bidderTeam == "A") and handTotal or 0
         cardB = (bidderTeam == "B") and handTotal or 0
-        meldPoints[bidderTeam] = meldA + meldB
-        meldPoints[oppTeam]    = 0
+        meldPoints.A = meldA
+        meldPoints.B = meldB
     else
         -- Made: each team gets their card points. Meld winner-takes-all
         -- by best-meld comparison (now contract-aware so trump-suit

@@ -1292,6 +1292,55 @@ local function buildTable()
     akaBanner.text:SetTextColor(0.40, 1.00, 0.55)
     tablePanel.akaBanner = akaBanner
 
+    -- SWA pending preview banner. Visible during the 5-sec
+    -- auto-approve window after a permission-required SWA call:
+    -- shows the caller's name + remaining-card count + countdown,
+    -- prompting the opponent team to inspect and decide whether to
+    -- press the always-visible TAKWEESH button (illegal-play counter)
+    -- or just let the timer auto-approve. Anchored below the AKA
+    -- slot so both can coexist.
+    local swaBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
+    swaBanner:SetSize(280, 38)
+    swaBanner:SetPoint("TOP", centerPad, "TOP", 0, -32)
+    setBackdrop(swaBanner, true,
+        { 0.10, 0.07, 0.04, 0.94 }, { 1.0, 0.85, 0.30, 1 }, 8, "solid")
+    swaBanner:SetFrameLevel(centerPad:GetFrameLevel() + 50)
+    swaBanner:Hide()
+    swaBanner.title = makeText(swaBanner, 12, "CENTER")
+    swaBanner.title:SetPoint("TOP", 0, -3)
+    swaBanner.title:SetTextColor(1.00, 0.85, 0.30)
+    swaBanner.body = makeText(swaBanner, 11, "CENTER")
+    swaBanner.body:SetPoint("BOTTOM", 0, 4)
+    swaBanner.body:SetTextColor(0.95, 0.95, 0.85)
+    -- Self-ticking countdown: while shown, OnUpdate refreshes ~3x/sec
+    -- so the "auto-approve in N s" digit decrements smoothly without
+    -- needing the rest of U.Refresh to fire.
+    swaBanner._tickAccum = 0
+    swaBanner:SetScript("OnUpdate", function(self, elapsed)
+        self._tickAccum = (self._tickAccum or 0) + (elapsed or 0)
+        if self._tickAccum < 0.33 then return end
+        self._tickAccum = 0
+        local req = S.s.swaRequest
+        if not req or not req.caller or S.s.phase ~= K.PHASE_PLAY then
+            self:Hide(); return
+        end
+        local windowSec = req.windowSec or K.SWA_TIMEOUT_SEC or 5
+        local now = (GetTime and GetTime()) or 0
+        local elapsed2 = (req.ts and now and (now - req.ts)) or 0
+        local remain = math.max(0, math.ceil(windowSec - elapsed2))
+        local sameTeam = S.s.localSeat
+                     and R.TeamOf(S.s.localSeat) == R.TeamOf(req.caller)
+        local handCount = req.handCount or 0
+        local cardLine = ("%d card%s remaining"):format(
+            handCount, handCount == 1 and "" or "s")
+        if sameTeam then
+            self.body:SetText(("%s · auto-approve in %ds"):format(cardLine, remain))
+        else
+            self.body:SetText(("%s · %ds — Takweesh to counter"):format(cardLine, remain))
+        end
+    end)
+    tablePanel.swaBanner = swaBanner
+
     -- BALOOT! / contract result banner with full breakdown (shown
     -- during PHASE_SCORE / PHASE_GAME_END). Title at top, then per-team
     -- breakdown lines, multiplier, Belote, and final delta.
@@ -2723,6 +2772,41 @@ end
 -- (cleared in State.ApplyTrickEnd). Label uses Latin "AKA" because the
 -- bundled WoW fonts can't render Arabic glyphs — the voice cue handles
 -- the إكَهْ pronunciation.
+-- SWA pending preview banner. Visible during the 5-sec auto-approve
+-- window so opponents can inspect the claim, then either let the
+-- timer auto-approve, press the always-visible TAKWEESH button to
+-- counter, or use the Accept/Deny manual override. Hidden once the
+-- request resolves (timer fires, takweesh fires, or accept/deny).
+local function renderSWABanner()
+    local b = tablePanel and tablePanel.swaBanner
+    if not b then return end
+    local req = S.s.swaRequest
+    if not req or not req.caller or S.s.phase ~= K.PHASE_PLAY then
+        b:Hide(); return
+    end
+    local info = S.s.seats and S.s.seats[req.caller]
+    local nm = (info and info.name) and shortName(info.name) or ("seat " .. req.caller)
+    -- Countdown — graceful degradation if GetTime/ts missing.
+    local windowSec = req.windowSec or K.SWA_TIMEOUT_SEC or 5
+    local now = (GetTime and GetTime()) or 0
+    local elapsed = (req.ts and now and (now - req.ts)) or 0
+    local remain = math.max(0, math.ceil(windowSec - elapsed))
+    -- Recolour title based on caller team vs us.
+    local me = S.s.localSeat
+    local cTeam = R.TeamOf(req.caller)
+    local sameTeam = me and (R.TeamOf(me) == cTeam)
+    local cardLine = ("%d card%s remaining"):format(
+        req.handCount or 0, (req.handCount or 0) == 1 and "" or "s")
+    if sameTeam then
+        b.title:SetText(("|cffffd055SWA|r — %s claims the rest"):format(nm))
+        b.body:SetText(("%s · auto-approve in %ds"):format(cardLine, remain))
+    else
+        b.title:SetText(("|cffff5544SWA from %s|r"):format(nm))
+        b.body:SetText(("%s · %ds — Takweesh to counter"):format(cardLine, remain))
+    end
+    b:Show()
+end
+
 local function renderAKABanner()
     local b = tablePanel and tablePanel.akaBanner
     if not b then return end
@@ -2861,6 +2945,7 @@ function U.Refresh()
         end
         renderBanner()
         renderAKABanner()
+        renderSWABanner()
         renderPeekButton()
         renderPauseControls()
     end

@@ -365,11 +365,13 @@ function S.ApplyResyncSnapshot(gameID, payload)
     --  19  bidRound
     --  20..23 seat names
     --  24..27 bids
+    --  28     botMask
+    --  29     target gp (Audit Tier 4 / B-69; pre-v0.4.5 hosts omit)
     local f = {}
     local i = 1
     for chunk in payload:gmatch("([^|]*)|?") do
         f[i] = chunk; i = i + 1
-        if i > 28 then break end
+        if i > 29 then break end
     end
     if (f[1] or "") ~= gameID then return end
 
@@ -449,6 +451,14 @@ function S.ApplyResyncSnapshot(gameID, payload)
     for seat = 1, 4 do
         local b = f[23 + seat]
         if b and b ~= "" then s.bids[seat] = b end
+    end
+
+    -- Audit Tier 4 (B-69): decode match target if present (field 29).
+    -- Pre-v0.4.5 hosts omit this field; preserve the existing s.target
+    -- (or default 152 from initState) when missing or zero.
+    local targetField = tonumber(f[29])
+    if targetField and targetField > 0 then
+        s.target = targetField
     end
 
     -- Round history is not snapshotted; it arrives via replayed
@@ -727,6 +737,9 @@ function S.ApplyStart(roundNumber, dealer)
     -- otherwise display the previous round's final trick over the new
     -- table.
     s.lastTrick = nil
+    -- Audit Tier 4 (B-80 / H-10): clear the trap-pass flag at round
+    -- start. HostBeginRound2 will set it if R1 ends with all 4 PASSes.
+    if B.Bot then B.Bot.r1WasAllPass = false end
     -- Per-hand played-cards set used by the AKA helper to compute the
     -- highest unplayed card in any non-trump suit. Reset every round.
     s.playedCardsThisRound = {}
@@ -1271,6 +1284,14 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
        and (sweep ~= nil or bidderMade == false) then
         B.Sound.Cue(K.SND_BALOOT)
     end
+    -- Audit Tier 4 (B-83 / B-61): notify the bot style ledger of
+    -- per-round outcomes (Gahwa fail, Sun fail). The contract is
+    -- still attached to s at this point (cleared later in the
+    -- start-next-round flow). Mirrors OnEscalation's "fire on all
+    -- clients" pattern; bot decisions consume the counters host-side.
+    if B.Bot and B.Bot.OnRoundEnd and s.contract then
+        B.Bot.OnRoundEnd(s.contract, bidderMade)
+    end
 end
 
 -- Stash the full round-result object on the host so the round-end
@@ -1500,6 +1521,28 @@ function S.HostAdvanceBidding()
 end
 
 function S.HostBeginRound2()
+    -- Audit Tier 4 (B-80 / H-10): snapshot whether R1 was an
+    -- all-pass round BEFORE clearing s.bids. Trap-pass rounds —
+    -- where everyone passed in R1 — signal weak overall hands;
+    -- a human bidding HOKM strong in R2 after a trap-pass R1 is
+    -- often overcaution-recovery (they had a marginal hand and
+    -- waited to see if anyone else committed first), not genuine
+    -- combined-team strength. Bot.PickBid R2 reads this to
+    -- discount partner-bid signals in trap-pass rounds.
+    local r1AllPass = true
+    if s.bids then
+        for seat = 1, 4 do
+            local b = s.bids[seat]
+            if b ~= nil and b ~= K.BID_PASS then
+                r1AllPass = false
+                break
+            end
+        end
+    end
+    if B.Bot then
+        B.Bot.r1WasAllPass = r1AllPass
+    end
+
     s.bidRound = 2
     s.bids = {}
     s.phase = K.PHASE_DEAL2BID
