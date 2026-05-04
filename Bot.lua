@@ -975,14 +975,23 @@ local function pickLead(legal, contract, seat)
             end
         end
         local sweepPursuit = (myTeamSweepCount == 7)
-        -- First try a boss-lead in a safe suit.
+        -- First try a boss-lead in a safe suit. v0.5.2 BUG fix:
+        -- previously `isSafe = (Sun OR trump)` excluded non-trump
+        -- bosses in Hokm — making the boss-scan dead code in the
+        -- dominant case. A non-trump boss IS safe in Hokm when
+        -- opponents have no trump left to ruff with — verifiable
+        -- via S.HighestUnplayedRank(contract.trump) == nil.
         if S.HighestUnplayedRank then
+            local trumpExhausted = (contract.type == K.BID_HOKM
+                                    and contract.trump
+                                    and S.HighestUnplayedRank(contract.trump) == nil)
             for _, c in ipairs(legal) do
                 local r = C.Rank(c)
                 local su = C.Suit(c)
                 local isBoss = S.HighestUnplayedRank(su) == r
                 local isSafe = (contract.type ~= K.BID_HOKM)
                                 or C.IsTrump(c, contract)
+                                or trumpExhausted
                 if isBoss and isSafe then return c end
             end
         end
@@ -1632,8 +1641,13 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- if filtering would leave us with no legal cards (only K and Q
     -- of trump are legal), fall through to lowestByRank — legality
     -- always wins.
+    -- v0.5.2 WARNING fix: pass `hand` not `legal` to detect Belote
+    -- across the FULL hand, not just the currently-legal subset. K
+    -- and Q of trump may not be in `legal` when must-follow forces
+    -- non-trump play, but they're still in our hand. Filter still
+    -- applies to `legal` below — legality preserved.
     local completed = #(S.s.tricks or {})
-    if completed < 4 and holdsBeloteThusFar(legal, contract) then
+    if completed < 4 and holdsBeloteThusFar(hand, contract) then
         local trump = contract.trump
         local withoutBelote = {}
         for _, c in ipairs(legal) do
@@ -1826,6 +1840,14 @@ function Bot.PickDouble(seat)
             th = th + 8
         end
     end
+
+    -- v0.5.2 WARNING fix: cap the threshold floor like PickFour does.
+    -- Combined drops from scoreUrgency("defend") + matchPointUrgency
+    -- can push th down by 15+; with C-3b adding up to +31 to strength
+    -- (3 voids × 5 + 3 Aces × 8) and BEL_JITTER ±10, weak-trump hands
+    -- could fire false-Bels. Floor at BOT_BEL_TH - 16 to match
+    -- PickFour's defensive cap.
+    if th < K.BOT_BEL_TH - 16 then th = K.BOT_BEL_TH - 16 end
 
     local jth = jitter(th, BEL_JITTER)
     if strength < jth then return false, false end

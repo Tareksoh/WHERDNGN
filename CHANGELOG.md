@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.5.2 — ultra-test follow-up: 2 BUGs + 3 WARNINGs fixed
+
+A 12-agent ultra-verification swarm read the v0.5.0+v0.5.1 patches
+end-to-end against the live tree and surfaced two actual bugs and
+three latent footguns. All five are now fixed and the regression
+suite (177 tests) plus 100-round baseline tournament still pass.
+
+The headline empirical result: with the test-harness fix in this
+release (BotMaster.lua now loaded by all four offline harnesses),
+Master vs M3lm finally diverges in the standalone tournament —
+all_master natural is winner=A (8.8/8.1, sw=0.06) while all_m3lm
+natural is winner=B (6.6/10.3, sw=0.07). mixed_basic_master forced
+flipped to winner=B (Master), confirming the v0.5_FINAL_REPORT
+prediction held end-to-end.
+
+### Fixed (BUGs from ultra test)
+
+- **BUG #1: C-2 SWA C_Timer nil-guard misplacement (Net.lua).**
+  When `C_Timer` is unavailable (test harness, pre-init edge cases),
+  the previous `S.s.swaRequest` was set + broadcast was issued, but
+  the auto-approve timer was silently skipped — leaving a dangling
+  permission flow that never resolved. Now: timer arming check
+  happens BEFORE the swaRequest assignment; if `C_Timer` is nil we
+  degrade to the instant-claim path so the round never stalls.
+
+- **BUG #2: C-4 isSafe excluded non-trump bosses in Hokm
+  (Bot.lua pickLead trick-8).** The original isSafe expression
+  `(contract.type ~= K.BID_HOKM) or C.IsTrump(c, contract)`
+  excluded every non-trump boss card in Hokm — rendering the
+  trick-8 boss-scan dead in the dominant case (Hokm contracts).
+  Now: when `S.HighestUnplayedRank(contract.trump) == nil`,
+  trump is exhausted and non-trump bosses ARE safe to lead;
+  added `trumpExhausted` check to isSafe.
+
+### Fixed (WARNINGs from ultra test)
+
+- **WARNING #1: PickDouble had no threshold floor (Bot.lua).**
+  Combined drops from `scoreUrgency("defend")` + `matchPointUrgency`
+  could push the threshold down by 15+; combined with C-3b adding
+  up to +31 to strength (3 voids × 5 + 3 Aces × 8) and BEL_JITTER
+  ±10, weak-trump hands could fire false-Bels. Floored at
+  `K.BOT_BEL_TH - 16` to match PickFour's defensive cap.
+
+- **WARNING #2: H-4 Belote preservation passed `legal` not `hand`
+  (Bot.lua pickFollow).** When must-follow forced non-trump play,
+  `legal` would not contain K or Q of trump even when both were
+  still in hand — `holdsBeloteThusFar(legal, ...)` returned false
+  and the preservation logic was bypassed. Now passes `hand`; the
+  filter still applies to `legal` below so legality is preserved.
+
+- **WARNING #3: Net.lua double-delegation to BotMaster.PickPlay.**
+  Since v0.5.0's C-1 fix made Bot.PickPlay delegate internally,
+  the explicit `if B.BotMaster ... B.BotMaster.PickPlay(seat)`
+  block in MaybeRunBot was redundant — and would cause double
+  ISMCTS computation if BotMaster bailed and Bot.PickPlay
+  re-delegated. Single canonical call: `B.Bot.PickPlay(seat)`.
+
+### Fixed (test harness)
+
+- **Test harness load order: BotMaster.lua now loaded by all four
+  offline harnesses** (`test_baseline_metrics.lua`,
+  `test_multiseed_metrics.lua`, `test_v0.5_traced_game.lua`,
+  `test_bel_decision_quality.lua`). Without this, Bot.PickPlay's
+  C-1 delegation fell through (B.BotMaster was nil) and Master
+  silently degraded to M3lm in offline tournaments — masking the
+  empirical proof that the C-1 fix was actually wired. With the
+  load added, all_master and all_m3lm now produce divergent
+  outputs in the standalone baseline (the result predicted in
+  the v0.5_FINAL_REPORT but not previously reproducible offline).
+
+### Notes
+
+- No data shape changes; v0.5.1 saved games load as v0.5.2 unchanged.
+- All Lua files pass syntax check; 177/177 regression tests pass.
+- Baseline tournament metrics: see updated
+  `.swarm_findings/bot_baseline_metrics.json`.
+
 ## v0.5.1 — Sprints B-H: complete bot improvement campaign
 
 Continues the v0.5.0 work by landing the remaining 8 staged patches

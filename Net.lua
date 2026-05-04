@@ -3542,8 +3542,14 @@ function N.MaybeRunBot()
                         -- Instant claim
                         broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, enc))
                         N.HostResolveSWA(seat, hand)
-                    else
-                        -- Permission flow: arm 5-sec auto-approve.
+                    elseif C_Timer and C_Timer.After then
+                        -- v0.5.2 BUG fix: arm the timer BEFORE setting
+                        -- swaRequest + broadcasting. If C_Timer is nil
+                        -- (test harness or pre-init), instant-claim
+                        -- fallback prevents a stalled round (swaRequest
+                        -- left dangling, never resolved). The timer
+                        -- arm itself can't fail — guard the whole
+                        -- permission-flow block on its availability.
                         S.s.swaRequest = {
                             caller    = seat,
                             handCount = handCount,
@@ -3562,17 +3568,20 @@ function N.MaybeRunBot()
                                 N._OnSWAResp("__host__", s2, true, seat)
                             end
                         end
-                        if C_Timer and C_Timer.After then
-                            C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
-                                if not S.s.isHost then return end
-                                if S.s.paused then return end
-                                local req = S.s.swaRequest
-                                if not req or req.caller ~= seat then return end
-                                if S.s.phase ~= K.PHASE_PLAY then return end
-                                S.s.swaRequest = nil
-                                N.HostResolveSWA(seat, hand)
-                            end)
-                        end
+                        C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
+                            if not S.s.isHost then return end
+                            if S.s.paused then return end
+                            local req = S.s.swaRequest
+                            if not req or req.caller ~= seat then return end
+                            if S.s.phase ~= K.PHASE_PLAY then return end
+                            S.s.swaRequest = nil
+                            N.HostResolveSWA(seat, hand)
+                        end)
+                    else
+                        -- C_Timer unavailable: degrade to instant claim
+                        -- rather than stall the round.
+                        broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, enc))
+                        N.HostResolveSWA(seat, hand)
                     end
                     return
                 end
@@ -3585,14 +3594,13 @@ function N.MaybeRunBot()
                     S.s.meldsDeclared[seat] = true
                 end
                 -- Saudi Master tier picks via determinization sampling
-                -- and falls through to Bot.PickPlay if it bails (e.g.,
-                -- single legal play). Lower tiers go straight to PickPlay.
-                local card = nil
-                if B.BotMaster and B.BotMaster.PickPlay
-                   and B.Bot.IsSaudiMaster and B.Bot.IsSaudiMaster() then
-                    card = B.BotMaster.PickPlay(seat)
-                end
-                if not card then card = B.Bot.PickPlay(seat) end
+                -- v0.5.2: Bot.PickPlay now delegates to BotMaster.PickPlay
+                -- internally (C-1 fix in v0.5.0), so the previous explicit
+                -- call here was redundant — and worse, would cause double
+                -- ISMCTS computation if BotMaster.PickPlay returned nil
+                -- and Bot.PickPlay then re-delegated. Single call is now
+                -- canonical; tier dispatch happens in Bot.PickPlay.
+                local card = B.Bot.PickPlay(seat)
                 if not card then return end
                 -- Advanced bot: if we're leading and the chosen lead card
                 -- IS the AKA (highest unplayed) of a non-trump suit, fire

@@ -7,3 +7,9 @@ node_modules/
 package.json
 package-lock.json
 cards/__pycache__/
+
+
+# Swarm tool state
+.claude-flow/
+.swarm/
+
