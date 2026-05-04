@@ -316,6 +316,44 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
         end
     end
 
+    -- v0.7.2 Section 11 rule 1 (Common, video 05): Sun + opp follows
+    -- lead suit with K or higher AND loses → infer they have no
+    -- card LOWER than what they played in that suit. Per the Saudi
+    -- Tasgheer (play-smallest) convention, smaller cards would have
+    -- been played first; reaching K or T means everything below it
+    -- (Q/J/9/8/7) is structurally absent. Set void as a pragmatic
+    -- approximation — the seat may still hold a single T (only rank
+    -- larger than K in plain) but for sampler / opponentsVoidInAll
+    -- purposes the void flag is the right signal.
+    --
+    -- A is excluded because A can't lose in Sun (highest plain rank).
+    -- Q is excluded because the rule's confidence drops at Q; the
+    -- speaker's explicit ~95%/90% bracket only covers K and Q-ish.
+    -- Wiring K and T captures the strong end of the rule.
+    -- Sources: decision-trees.md Section 11 rule 1 (Common, video 05).
+    do
+        local s_contract = S.s and S.s.contract
+        local s_trick    = S.s and S.s.trick
+        if not wasIllegal and leadSuit and cardSuit == leadSuit
+           and s_contract and s_contract.type == K.BID_SUN
+           and s_trick and s_trick.plays then
+            local theirRank = C.Rank(card)
+            if theirRank == "K" or theirRank == "T" then
+                local theirTR = C.TrickRank(card, s_contract)
+                local lost = false
+                for _, p in ipairs(s_trick.plays) do
+                    if p.seat ~= seat
+                       and C.TrickRank(p.card, s_contract) > theirTR then
+                        lost = true; break
+                    end
+                end
+                if lost then
+                    mem.void[leadSuit] = true
+                end
+            end
+        end
+    end
+
     -- M3lm: accumulate per-seat play-style stats across the full game.
     -- Cheap counters; we only USE them in M3lm-gated branches.
     if not Bot._partnerStyle then Bot._partnerStyle = emptyStyle() end
@@ -2286,6 +2324,39 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
         end
 
+        -- v0.7.2 Section 4 rule 1B (Definite, video 09 "biggest
+        -- mistake"): Sun + partner-winning + we must follow + we
+        -- can't beat their lead AND smother above didn't fire (no
+        -- A/T/K/Q/J of led suit to donate). Default lowestByRank
+        -- would return absolute lowest — but per video #09 that's
+        -- the single biggest mistake in Baloot: it signals "I'm
+        -- out of this suit, partner can't lead it back to me",
+        -- denying the re-entry. Play SECOND-LOWEST instead — keeps
+        -- partner's option to lead this suit back to us, knowing
+        -- we may have a higher card to take.
+        --
+        -- Only fires for Sun contracts (Hokm partner-winning has
+        -- different conventions). Only fires when there's an
+        -- in-suit follow with ≥2 cards (otherwise lowestByRank's
+        -- single-card return is forced anyway).
+        -- Sources: decision-trees.md Section 4 rule 1B (Definite, 09).
+        if contract.type == K.BID_SUN and trick.leadSuit then
+            local follow = {}
+            for _, c in ipairs(legal) do
+                if C.Suit(c) == trick.leadSuit then
+                    follow[#follow + 1] = c
+                end
+            end
+            if #follow >= 2 then
+                local sorted = {}
+                for _, c in ipairs(follow) do sorted[#sorted + 1] = c end
+                table.sort(sorted, function(a, b)
+                    return C.TrickRank(a, contract) < C.TrickRank(b, contract)
+                end)
+                return sorted[2]   -- second-lowest = re-entry signal
+            end
+        end
+
         -- Otherwise don't waste a high card.
         return lowestByRank(legal, contract)
     end
@@ -2438,27 +2509,24 @@ local function pickFollow(legal, hand, trick, contract, seat)
             return lowestByRank(withoutBelote, contract)
         end
     end
-    -- v0.5.11 Section 4 rule 1 (Definite, videos 05+09): Sun
-    -- losing-side off-suit follow → dump HIGHEST. Saudi
-    -- inverse-laddering signals partner "we're done in this suit".
-    -- Without this, the bot dumps absolute lowest in-suit when
-    -- forced to follow a suit it can't win — what the source
-    -- video calls "the biggest mistake in Baloot" (per glossary.md
-    -- Tahreeb section, video #09 source). Hokm trump-follow stays
-    -- LOWEST per Section 4 rule 2 (separate convention). Hokm
-    -- non-trump losing-side stays LOWEST until doc clarifies.
-    -- Sources: decision-trees.md Section 4 rule 1 (Definite, 05+09).
-    if contract.type == K.BID_SUN and trick.leadSuit then
-        local follow = {}
-        for _, c in ipairs(legal) do
-            if C.Suit(c) == trick.leadSuit then
-                follow[#follow + 1] = c
-            end
-        end
-        if #follow > 0 then
-            return highestByRank(follow, contract)
-        end
-    end
+    -- v0.7.2 Section 4 rule 1A (Common, video 05): REVERTED v0.5.11
+    -- over-correction. Originally v0.5.11 added "Sun losing-side
+    -- off-suit follow → dump HIGHEST" citing both videos #05 and #09.
+    -- Re-read of video #05 transcript shows the convention is
+    -- Tasgheer / play-SMALLEST under a winning higher card — opp's
+    -- K-play implies no Q/J/9/8/7 below it, mirrored: we play our
+    -- smallest non-saving card. Video #09's "biggest mistake" rule
+    -- is a DIFFERENT scenario (partner-led re-entry preservation),
+    -- handled separately at the partnerWinning fall-through above.
+    --
+    -- Reaching this code path means: not partnerWinning (handled
+    -- above) AND we can't beat (winners-branch failed). All legal
+    -- in-suit cards are dump-pile (no winning save candidates).
+    -- The fall-through to lowestByRank(legal) at the function's
+    -- bottom (after the v0.5.14 Tanfeer sender) already implements
+    -- this correctly — no Sun-specific branch needed here. Left as
+    -- a documentation marker.
+    -- Sources: decision-trees.md Section 4 rule 1A (Common, video 05).
 
     -- v0.5.14 Section 9 N-1 sender (Tanfeer / تنفير).
     -- When opp is winning AND we're VOID in led (so we're discarding

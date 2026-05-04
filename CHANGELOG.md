@@ -1,5 +1,76 @@
 # Changelog
 
+## v0.7.2 — Section 4 rule 1 split + Section 11 rule 1 wire (video #05/#09 re-read)
+
+User-reported re-read of source video #05 transcript revealed that
+v0.5.11 conflated two distinct scenarios into a single "Sun losing-
+side dump HIGHEST" rule. The fix went from one wrong extreme to
+another. v0.7.2 splits Section 4 rule 1 into two scenarios per the
+correct readings, AND wires Section 11 rule 1 (deferred since v0.5.22
+when the WHY column was suspect).
+
+### The video re-read
+
+**Video #05 transcript** (Saudi Arabic, paraphrased):
+> "If this opponent played the K, it's possible he has only the T.
+> He played the K [which is] smaller than the T. But could he have
+> the Q or J? No, impossible — if he had them he would have played
+> them instead of the K, because they are smaller than the K."
+
+The convention is **Tasgheer** (play-smallest), not "dump-highest".
+The speaker's reasoning: opp plays K because K is the smallest of
+their non-saving cards. Q/J/9/8/7 (smaller than K in plain rank
+A>T>K>Q>J>9>8>7) would have been played FIRST per the convention.
+
+**Video #09** ("biggest mistake in Baloot") is a DIFFERENT scenario:
+partner-led Tahreeb-receiver context where playing absolute lowest
+signals "I'm out of this suit", denying partner the re-entry.
+
+### Changed (Bot.lua)
+
+- **Section 4 rule 1A** (Common, video 05). REVERTED v0.5.11
+  "highestByRank" branch in `pickFollow` opp-winning fall-through.
+  The fall-through to `lowestByRank(legal)` at the function bottom
+  already implements the corrected Tasgheer convention. The v0.5.11
+  branch is now a documentation-only marker explaining the revert.
+
+- **Section 4 rule 1B** (Definite, video 09). New branch in
+  `pickFollow` partner-winning fall-through (after smother fails).
+  When Sun + partner-winning + must-follow + can't-beat AND no
+  point card to donate via Takbeer: returns **second-lowest** of
+  the in-suit follow set, NOT absolute lowest. Preserves partner's
+  ability to lead the suit back to us as a re-entry. Fires only
+  for Sun (Hokm partner-winning has different conventions) and
+  only when ≥2 in-suit cards are available.
+
+- **Section 11 rule 1** (Common, video 05). Wire in
+  `Bot.OnPlayObserved`: when Sun + opp follows lead suit with K or
+  T AND that play loses (some other card in the trick outranks it),
+  set `mem.void[leadSuit] = true`. Per Tasgheer convention, smaller
+  cards (Q/J/9/8/7) would have been played first; reaching K or T
+  means everything below is structurally absent. Pragmatic
+  approximation — seat may still hold a single T after K-play, but
+  the void flag is the right signal for sampler / opp-void lookups.
+
+### Changed (docs/strategy/decision-trees.md)
+
+- Section 4 rule 1 split into 1A (Sun+opp-winning → SMALLEST) and
+  1B (Sun+partner-winning → SECOND-LOWEST).
+- Section 11 rule 1 WHY column rewritten — was "Saudi losing-side
+  dump-highest convention" (wrong); now "Saudi Tasgheer / play-
+  smallest convention" with transcript citation.
+- Contradictions log: the Sun off-suit losing-side dump entry
+  reframed as RESOLVED v0.7.2 with rationale.
+
+### Tests
+
+- 292/292 regression tests pass (was 291; +1 new E.6).
+- **E.1 updated**: pre-v0.7.2 expected `KH` (v0.5.11 highest); now
+  expects `8H` (v0.7.2 lowest, Tasgheer rule 1A).
+- **E.6 new**: pin for rule 1B partner-winning + can't-beat →
+  second-lowest. Constructed to skip the smother gate (#pointCards=1
+  H card, completed=0, not lastSeat) so the rule 1B branch fires.
+
 ## v0.7.1 — B-97 opp-meld suit avoidance (audit sweep)
 
 Single-fix release. Loops back to `bot_picker_gaps.md` / wave8 B-97

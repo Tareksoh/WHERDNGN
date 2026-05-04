@@ -724,18 +724,26 @@ assertTrue(m3lmSum >= basicSum * margin,
 -- =====================================================================
 section("E. v0.5.11 fix coverage")
 
--- E.1: Section 4 rule 1 (Definite, videos 05+09).
--- Sun, opp winning a non-trump suit, we must follow with cards that
--- can't beat the winner. Per Saudi inverse-laddering convention,
--- dump the HIGHEST in-suit card (signal partner we're done in this
--- suit). Pre-v0.5.11 returned LOWEST — what video #09 calls "the
--- biggest mistake in Baloot".
+-- E.1: Section 4 rule 1A (Common, video 05). REVISED v0.7.2.
+-- Sun + OPP winning + we must follow with cards that can't beat.
+-- Saudi Tasgheer / play-smallest convention: dump the SMALLEST
+-- in-suit card. Per video #05 transcript: opp's K-play implies no
+-- Q/J/9/8/7 below it (those would have been played first because
+-- they're smaller than K in plain rank). Mirror: we play smallest
+-- non-saving card.
+--
+-- v0.5.11 introduced "dump HIGHEST" citing both videos #05 and #09,
+-- but cross-checking the transcripts shows v0.5.11 conflated two
+-- distinct scenarios. v0.7.2 split them: this E.1 is the OPP-winning
+-- case (rule 1A → SMALLEST). E.6 covers the PARTNER-winning case
+-- (rule 1B → SECOND-LOWEST per video #09 "biggest mistake").
 do
     freshState()
     S.s.isHost = true
     S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
-    -- Trick: seat 1 led AH (winning, can't be beat). Seat 2 to follow.
-    -- Seat 2 hand has KH+JH+8H — three H cards, none can beat AH.
+    -- Trick: seat 1 (OPP of seat 2) led AH (winning, can't be beat).
+    -- Seat 2 to follow with hand containing KH+JH+8H — three H cards,
+    -- none can beat AH. partnerWinning=false (seat 1 is opp).
     S.s.hostHands = {
         [1] = { "AH", "TH", "QH", "AS", "KS", "QS", "JS", "TS" },
         [2] = { "KH", "JH", "8H", "8C", "7C", "8D", "7D", "9D" },
@@ -744,12 +752,11 @@ do
     }
     S.s.trick = { leadSuit = "H", plays = { { seat = 1, card = "AH" } } }
     S.s.tricks = {}
-    -- Seat 2's must-follow: legal = {KH, JH, 8H}. Can't beat AH.
-    -- New v0.5.11 branch: Sun + leadSuit set → highestByRank in-suit → KH.
-    -- Pre-v0.5.11: lowestByRank → 8H.
+    -- Seat 2's must-follow legal = {KH, JH, 8H}. Can't beat AH.
+    -- v0.7.2 rule 1A: opp-winning + can't-beat → lowestByRank → 8H.
     local card = Bot.PickPlay(2)
-    assertEq(card, "KH",
-             "v0.5.11 E.1: Sun losing-side off-suit dumps HIGHEST in-suit (KH)")
+    assertEq(card, "8H",
+             "v0.7.2 E.1: Sun + opp winning + can't beat → SMALLEST in-suit (8H, Tasgheer)")
 end
 
 -- E.2: Section 4 rule 7 Takbeer (Definite, videos 21+22+23).
@@ -907,6 +914,54 @@ do
     -- assertion that confirms the call completes without error.
     assertTrue(hokmYes == true or hokmYes == false,
                "v0.5.11 E.5b: PickDouble in Hokm not blocked by Sun-100 gate")
+end
+
+-- E.6: Section 4 rule 1B (Definite, video 09 "biggest mistake").
+-- Sun + PARTNER winning the trick + we must follow + we can't beat
+-- partner's lead AND smother (Takbeer) doesn't fire (no A/T/K/Q/J of
+-- led suit to donate). Per video #09: don't play absolute lowest —
+-- play second-lowest to preserve partner's option to lead this suit
+-- back to us as a re-entry. Absolute lowest signals "I'm out of this
+-- suit" and is the "biggest mistake in Baloot".
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 4 }
+    -- Trick: seat 4 (PARTNER of seat 2) led AH. Seat 2 must follow.
+    -- Seat 2's H cards: {KH, JH, 8H} — no A/T/K/Q/J that beats AH;
+    -- has K/J/8 but K and J both lose to A. Smother gate requires
+    -- ≥2 point cards (KH+JH qualifies — wait, K is rank 4 so it IS
+    -- a point card per the v0.5.18 expansion which now includes
+    -- A/T/K/Q/J). Need to construct a hand where smother SKIPS so
+    -- the rule 1B fall-through fires.
+    --
+    -- Smother gate (Bot.lua ~line 2185): #pointCards >= 2 OR
+    -- completed >= 3 OR lastSeat. We're pos 2 (not lastSeat),
+    -- completed = 0 (no prior tricks). To skip smother, we need
+    -- only ONE point card in suit. Construct: seat 2's H cards =
+    -- {KH, 9H, 8H}. K is the only point card (J,Q,T,A excluded by
+    -- design here). #pointCards = 1, completed = 0, not lastSeat
+    -- → smother gate fails → fall-through to rule 1B → second-lowest.
+    --
+    -- Sorted ascending by trick rank: 8H (rank 2) < 9H (rank 3) <
+    -- KH (rank 6). Second-lowest = 9H.
+    S.s.hostHands = {
+        [1] = { "AS", "TS", "KS", "QS", "JS", "AC", "TC", "KC" },
+        [2] = { "KH", "9H", "8H", "8C", "7C", "8D", "7D", "9D" },
+        [3] = { "TH", "QH", "JH", "QC", "JC", "AD", "KD", "QD" },
+        [4] = { "AH", "9C", "JD", "TD", "9S", "8S", "7S", "7H" },
+    }
+    S.s.trick = { leadSuit = "H", plays = { { seat = 4, card = "AH" } } }
+    S.s.tricks = {}
+    -- partnerWinning = (seat 4 winning) and seat 4 = R.Partner(2)?
+    -- Partners: 1↔3, 2↔4. R.Partner(2) = 4. Yes, partnerWinning.
+    -- Smother: pointCards in H = {KH}. #pointCards=1, completed=0,
+    -- not lastSeat → gate fails. Tahreeb-sender requires voidInLed
+    -- (we're NOT void since we have H). Falls to rule 1B branch.
+    -- Result: second-lowest of {KH, 9H, 8H} = 9H.
+    local card = Bot.PickPlay(2)
+    assertEq(card, "9H",
+             "v0.7.2 E.6: Sun + partner winning + can't beat → SECOND-LOWEST (9H, video #09 'biggest mistake' fix)")
 end
 
 -- =====================================================================
