@@ -1537,6 +1537,36 @@ local function pickLead(legal, contract, seat)
             end
         end
     end
+
+    -- v0.7.1 B-97: opp-meld suit avoidance. When an opponent has
+    -- declared a sequence meld (seq3/seq4/seq5) in suit X, that suit
+    -- is THEIR run — leading X gives them tempo to cash their
+    -- declared cards. AVOID leading X when an alternative exists.
+    -- M3lm-gated since it relies on accumulated meld observations.
+    -- Only fires for non-bidder defender leads (we're picking lead
+    -- here = we won the prior trick = we're temporarily controlling
+    -- the table; meld-suit avoidance is most useful in that context).
+    -- Sources: bot_picker_gaps.md / wave8 B-97.
+    if Bot.IsM3lm() and not isBidderTeam and S.s.meldsByTeam then
+        local oppTeam = (R.TeamOf(seat) == "A") and "B" or "A"
+        for _, m in ipairs(S.s.meldsByTeam[oppTeam] or {}) do
+            -- Only sequence melds (seq3/seq4/seq5); carrés are
+            -- 4-of-a-rank across suits and don't imply a suit-lead.
+            if m.kind and m.kind:sub(1, 3) == "seq" and m.suit
+               and m.suit ~= (contract.trump or "") then
+                -- Only avoid if there's a non-meld-suit alternative;
+                -- if all our non-trump cards are in the meld suit,
+                -- we'd no-op the avoid anyway via the longest-suit
+                -- fallback. The avoid is layered on top of any
+                -- existing fzlokyAvoidSuit; if both apply (Fzloky
+                -- and meld-suit collide), Fzloky wins (existing).
+                if not fzlokyAvoidSuit then
+                    fzlokyAvoidSuit = m.suit
+                end
+                break  -- only need one avoid hint
+            end
+        end
+    end
     if fzlokyPrefSuit then
         -- Lead our LOWEST card in the preferred suit (partner has
         -- the high cards there; we lead low for them to win).

@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.7.1 — B-97 opp-meld suit avoidance (audit sweep)
+
+Single-fix release. Loops back to `bot_picker_gaps.md` / wave8 B-97
+for one previously unprocessed item.
+
+### Changed (Bot.lua)
+
+- **B-97 opp-meld suit avoidance** (audit). Pre-v0.7.1, `pickLead`
+  never read `S.s.meldsByTeam` — opponents could declare a sequence
+  meld in suit X (their established run) and the bot would still
+  lead X freely, giving them tempo to cash the declared cards.
+  Added an M3lm-gated reader in the defender-branch fzlokyAvoid
+  block that flags any opponent-team sequence meld's suit as an
+  avoid hint. Layered on top of existing Fzloky avoid (Fzloky wins
+  if both apply). Skips trump suit (irrelevant to non-trump lead
+  selection) and skips carrés (across-suit 4-of-a-rank don't imply
+  a suit-lead intent).
+  Sources: bot_picker_gaps.md / wave8 B-97.
+
+### Tests
+
+- 291/291 regression tests pass.
+- B-97 fix is on the M3lm+ defender-lead path and only triggers when
+  an opp seq meld is already in `S.s.meldsByTeam` — narrow scenario,
+  no dedicated fixture (covered by the property-test sweep in
+  test_state_bot.lua section B that runs random states across many
+  seeds and would catch any illegal-card regression).
+
 ## v0.7.0 — Sun-overcall window: Phase 3 (UI) — feature complete
 
 End-to-end Sun-overcall window. The bidder of any non-forced Hokm
