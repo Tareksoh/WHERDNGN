@@ -820,9 +820,23 @@ function N._OnDouble(sender, seat, openField)
     -- has the same gate; this is the wire-side enforcement so even
     -- a bypass-attempt or stale-state client gets stopped.
     -- Sources: decision-trees.md Section 2 (Definite, video 11).
+    --
+    -- v0.5.11 Race-A fix: a v0.5.8 client (no LocalDouble gate) calls
+    -- S.ApplyDouble locally THEN sends the wire (Net.lua LocalDouble
+    -- order). If the host rejects silently, the client's local state
+    -- has doubled=true while host stays at doubled=nil — round-stuck
+    -- desync until next deal. Recovery: when host rejects, broadcast
+    -- MSG_SKIP_DBL + finish the deal at the un-doubled state. The
+    -- offending client sees MSG_SKIP_DBL and HostFinishDeal's MSG_ROUND,
+    -- snapping it back into lockstep. Same pattern as the AFK timeout
+    -- recovery at _HostBelTimeout (Net.lua line ~3020).
     if R and R.CanBel
        and not R.CanBel(R.TeamOf(seat), S.s.contract, S.s.cumulative) then
-        log("Warn", "rejected illegal Bel from seat %d (Sun ≥100 gate)", seat)
+        log("Warn", "rejected illegal Bel from seat %d (Sun >=100 gate)", seat)
+        if S.s.isHost then
+            broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+            N.HostFinishDeal()
+        end
         return
     end
     -- Open/Closed flag (v0.2.0+ wire). Pre-v0.2.0 senders won't include

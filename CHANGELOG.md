@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.5.11 — 35-agent swarm audit follow-up: 4 fixes
+
+A 35-agent (2-wave) swarm review of v0.5.8/9/10 surfaced 4 actionable
+issues. All fixed. Wave-3 verification confirmed convergence.
+
+### Fixed
+
+- **Race A wire desync (Net.lua _OnDouble).** When v0.5.9 host receives
+  a Bel from a v0.5.8 client (which has no LocalDouble Bel-100 gate),
+  the host previously rejected silently. The v0.5.8 client had already
+  applied `doubled=true` locally before sending the wire — round-stuck
+  desync until the next deal. Now: on rejection, host broadcasts
+  `MSG_SKIP_DBL` + calls `HostFinishDeal()`, snapping the client back
+  into lockstep. Reuses the existing AFK-timeout recovery pattern.
+  Severity: WARNING (rare in production — only mixed v0.5.8/v0.5.9
+  sessions, both same-day-tagged, CurseForge auto-update window).
+  Sources: Wave-1/Wave-2 audit Race-A finding.
+
+- **Section 4 rule 1: Sun losing-side off-suit dump HIGHEST
+  (Bot.lua pickFollow).** Previously the bot dumped the LOWEST in-suit
+  card when forced to follow a suit it can't win — what video #9 calls
+  "the biggest mistake in Baloot." Now: in Sun + must-follow + can't
+  beat current winner, return `highestByRank` of the in-suit cards.
+  Saudi inverse-laddering convention signals partner that we're done
+  with this suit. Hokm trump-follow keeps LOWEST (Section 4 rule 2,
+  separate convention). Hokm non-trump losing-side keeps LOWEST until
+  doc clarifies.
+  Sources: decision-trees.md Section 4 rule 1 (Definite, videos 05+09).
+
+- **Section 4 rule 7 Takbeer fix (Bot.lua pickFollow smother branch).**
+  When partner is certain-winning a non-trump-led trick, the Saudi
+  Takbeer rule says donate the HIGHEST card (التكبير, "magnification").
+  The smother branch was sorting ascending and returning [1] = LOWEST
+  of {A, T} held in led suit — the literal opposite. Single-char flip
+  (`<` → `>`). Maximizes trick-point capture (~1 raw point per
+  occurrence: A=11 vs T=10).
+  Sources: decision-trees.md Section 4 rule 7 (Definite, videos
+  21+22+23).
+
+- **T-4 over-fire gate (Bot.lua pickFollow Tahreeb sender).** v0.5.10's
+  T-4 dump-larger-first rule fired on ANY 2-card non-trump non-led
+  suit, including K+J / A+x doubletons — shedding the valuable card
+  for a Tahreeb signal worth ~1 trick of coordination. Saudi rule's
+  premise is a "2-card unwanted suit" (low cards). Now: T-4 only fires
+  when the doubleton's higher rank is at most Q. K/T/A doubletons fall
+  through to `lowestByRank`, preserving the high card.
+  Sources: Wave-2 audit T-4 over-fire finding.
+
+### Tests
+
+- 196/196 regression tests pass.
+
+### Notes
+
+- No data shape changes; v0.5.10 saved games load as v0.5.11 unchanged.
+- The Wave-2 audit also identified several deferred items NOT fixed in
+  this release:
+  * **UI Bel button doesn't consult R.CanBel** — UI shows the button
+    in PHASE_DOUBLE without checking; clicking it triggers the
+    LocalDouble silent gate. Cosmetic UX bug; low player-impact.
+  * **S-3 +12 bonus undercalibrated** — 3-Ace hands without AKQ triple
+    sit at sun=41 vs thSun=44-56, can't fire R1. Doc says "Definite
+    almost always Sun." Could short-circuit `if aceCount >= 3 and
+    sunMinShape then return BID_SUN` (parallel to S-4 Carré).
+  * **Pigeonhole pin extension to H-1** — Definite Section 11 rule.
+    BotMaster sampler hard-pins J/9 of trump to bidder; should also
+    hard-pin remaining N trumps when N opponents are known void.
+  * **Magic numbers ripe for K.* promotion** — B-5 +5, A-6 85, S-3 +12,
+    S-8 +5, R.CanBel 100. Pure refactor.
+  * **Decision-trees.md / glossary.md line numbers stale** — all
+    picker references drifted +165 to +461 lines after v0.5.8/9/10
+    insertions. Comment-only update.
+  * **`tahreebAvoidSuit` dead variable** — set by receiver classifier
+    but never consumed by the picker.
+
 ## v0.5.10 — decision-trees.md Section 8: Tahreeb (تهريب) MVP
 
 The most heavily-sourced section of decision-trees.md (5 of 10 source

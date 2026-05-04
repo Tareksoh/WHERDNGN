@@ -1885,8 +1885,15 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
             local completed = #(S.s.tricks or {})
             if #highInSuit >= 2 or completed >= 3 or lastSeat then
+                -- v0.5.11 Section 4 rule 7 Takbeer fix (Definite, videos
+                -- 21+22+23): when partner is certain-winning, donate the
+                -- HIGHEST card (Takbeer / التكبير), not the lowest. Was
+                -- ascending sort + [1] = LOWEST — the literal opposite of
+                -- the Saudi rule. Single-char flip: < → >. Maximizes
+                -- trick-point capture when partner takes the trick (A=11
+                -- vs T=10 raw differential per occurrence).
                 table.sort(highInSuit, function(a, b)
-                    return C.TrickRank(a, contract) < C.TrickRank(b, contract)
+                    return C.TrickRank(a, contract) > C.TrickRank(b, contract)
                 end)
                 if highInSuit[1] then return highInSuit[1] end
             end
@@ -1958,6 +1965,17 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- first unconditionally because (a) larger-first = clear
             -- "don't want" signal even if partner sees only one event,
             -- and (b) it never falsely signals "want".
+            --
+            -- v0.5.11 T-4 over-fire gate (Wave-2 audit finding): the
+            -- Saudi rule's premise is "a 2-card suit you don't WANT" —
+            -- low-rank doubletons (J+9, 8+7, Q+J style). Without a rank
+            -- floor, T-4 was firing on K+J / A+x doubletons too,
+            -- shedding valuable cards in service of a Tahreeb signal
+            -- that's only worth ~1 trick of partner-coord. Cap the
+            -- larger card at Q — if the doubleton's higher card is K,
+            -- T, or A, fall through to lowestByRank (preserves the
+            -- valuable card; partner still gets a discard signal,
+            -- just not the over-eager Tahreeb encoding).
             for _, su in ipairs({ "S", "H", "D", "C" }) do
                 local cards = bySuit[su]
                 if #cards == 2 then
@@ -1967,7 +1985,12 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     if C.TrickRank(lo, contract) > C.TrickRank(hi, contract) then
                         lo, hi = hi, lo
                     end
-                    return hi
+                    local hiRank = C.Rank(hi)
+                    if hiRank ~= "K" and hiRank ~= "T" and hiRank ~= "A" then
+                        return hi
+                    end
+                    -- High-value doubleton: skip Tahreeb encoding,
+                    -- preserve the card. Continue searching other suits.
                 end
             end
         end
@@ -2122,6 +2145,27 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
         if #withoutBelote > 0 then
             return lowestByRank(withoutBelote, contract)
+        end
+    end
+    -- v0.5.11 Section 4 rule 1 (Definite, videos 05+09): Sun
+    -- losing-side off-suit follow → dump HIGHEST. Saudi
+    -- inverse-laddering signals partner "we're done in this suit".
+    -- Without this, the bot dumps absolute lowest in-suit when
+    -- forced to follow a suit it can't win — what the source
+    -- video calls "the biggest mistake in Baloot" (per glossary.md
+    -- Tahreeb section, video #09 source). Hokm trump-follow stays
+    -- LOWEST per Section 4 rule 2 (separate convention). Hokm
+    -- non-trump losing-side stays LOWEST until doc clarifies.
+    -- Sources: decision-trees.md Section 4 rule 1 (Definite, 05+09).
+    if contract.type == K.BID_SUN and trick.leadSuit then
+        local follow = {}
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == trick.leadSuit then
+                follow[#follow + 1] = c
+            end
+        end
+        if #follow > 0 then
+            return highestByRank(follow, contract)
         end
     end
     return lowestByRank(legal, contract)
