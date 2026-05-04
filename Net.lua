@@ -296,8 +296,28 @@ end
 
 -- Resync senders. Request is a broadcast (we don't know the host's
 -- name until they reply); response is a private whisper.
+-- v0.9.1 L5 fix (audit AUDIT_REPORT_v0.7.1.md): track whether we've
+-- explicitly requested a resync. Pre-v0.9.1, a peer who overheard
+-- the gameID could fabricate a MSG_RESYNC_RES and inject score-
+-- state into our session (no hand exposure, but cumulative + bid +
+-- contract leak). Now: only accept MSG_RESYNC_RES within a 30-second
+-- window after we sent MSG_RESYNC_REQ. The flag clears on first
+-- valid response OR on timeout.
+local expectingResyncRes = false
+local resyncResExpiryTimer = nil
+
 function N.SendResyncReq(gameID)
     broadcast(("%s;%s"):format(K.MSG_RESYNC_REQ, gameID or ""))
+    expectingResyncRes = true
+    if resyncResExpiryTimer and resyncResExpiryTimer.Cancel then
+        resyncResExpiryTimer:Cancel()
+    end
+    if C_Timer and C_Timer.NewTimer then
+        resyncResExpiryTimer = C_Timer.NewTimer(30, function()
+            expectingResyncRes = false
+            resyncResExpiryTimer = nil
+        end)
+    end
 end
 
 -- Pack a compact snapshot of the host's gameplay state and whisper it
@@ -3134,6 +3154,12 @@ function N._OnResyncRes(sender, gameID, payload)
     -- (10th-audit fix) and demote the real host into a soft-locked
     -- non-host state.
     if S.s.isHost then return end
+    -- v0.9.1 L5 fix: only accept resync snapshots within a 30-second
+    -- window after we explicitly sent MSG_RESYNC_REQ. Pre-v0.9.1, any
+    -- peer who knew the gameID (even from passive observation) could
+    -- inject score-state. Now: the request flag must be set; one
+    -- valid response consumes the flag.
+    if not expectingResyncRes then return end
     -- Reject snapshots that don't match the gameID we asked about. A
     -- stale response from a slow host (or a snapshot for a different
     -- game we happened to overhear) shouldn't clobber state if we've
@@ -3141,6 +3167,13 @@ function N._OnResyncRes(sender, gameID, payload)
     if WHEREDNGNDB and WHEREDNGNDB.lastGameID
        and WHEREDNGNDB.lastGameID ~= gameID then
         return
+    end
+    -- Consume the flag so a second/third stale response doesn't
+    -- re-clobber. The expiry timer is still armed; cancel it cleanly.
+    expectingResyncRes = false
+    if resyncResExpiryTimer and resyncResExpiryTimer.Cancel then
+        resyncResExpiryTimer:Cancel()
+        resyncResExpiryTimer = nil
     end
     -- We don't yet know who the host is on a fresh /reload, so we
     -- trust that the sender claims to be host — but only if the

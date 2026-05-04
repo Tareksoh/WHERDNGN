@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.9.1 — Audit-sweep loop iteration: L5 + A-2 + AKA precondition (f)
+
+Three audit items closed in one loop pass.
+
+### Fixed (LOW)
+
+- **L5 _OnResyncRes accepts unsolicited snapshots**. Pre-v0.9.1 a
+  peer who passively overheard the gameID could fabricate a
+  MSG_RESYNC_RES and inject score-state (no hand exposure, but
+  cumulative + bid + contract + seat names leaked). Now: we track
+  `expectingResyncRes` and only accept a response within a 30-second
+  window after we explicitly sent MSG_RESYNC_REQ. The flag clears
+  on first valid response or timeout.
+
+### Added (missing feature #3 — A-2 Ashkal bid-up rank gate)
+
+- **`Bot.PickBid` Ashkal anti-trigger A-2** (Common, video 31).
+  Per the doc's allow-list ("bid-up small/mid: 7, 8, 9, J, Q,
+  singleton-T"), the K is NOT permitted. Pre-v0.9.1 the predicate
+  only blocked A (A-3) and T-with-A-cover (A-4); K could fire
+  Ashkal in the 65-84 sun-strength range. Now: explicit `bidCardRank
+  == "K"` block.
+
+### Added (missing feature #4 — AKA precondition (f))
+
+- **`Bot.PickAKA` precondition (f) — partner-trump-void**
+  (decision-trees.md Section 6, row "AKA-call decision preconditions"
+  subitem f). The whole point of AKA is to ask partner to defer
+  the ruff. If partner is observed void in trump
+  (`Bot._memory[partner].void[trump] == true`), they can't ruff
+  anyway — the signal carries zero coordination value and leaks
+  info to opponents (the banner is broadcast). Now suppressed.
+
+### Tests
+
+- 330/330 regression tests pass (no new fixtures this iteration; the
+  three changes are observation-driven and graceful in absence of
+  triggering conditions).
+
+### Audit response cumulative
+
+| Severity | Closed (v0.8.6 + v0.9.0 + v0.9.1) |
+|---|---|
+| HIGH    | 4/4 |
+| MEDIUM  | 5/5 |
+| LOW     | **4/6** (L1, L4, L5, L6) |
+| Doc drift | 3/5 |
+| Missing | **6/11** (G-4, touching-honors, Tahreeb-want, Bargiya-2flavor, A-2, AKA-f) |
+
 ## v0.9.0 — Audit MEDIUM/LOW fixes + 4 missing-feature wires + doc drift refresh
 
 Continuation of the 73-agent v0.7.2 audit response. v0.8.6 closed

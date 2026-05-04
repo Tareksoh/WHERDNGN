@@ -1211,6 +1211,17 @@ function Bot.PickBid(seat)
             -- Sources: decision-trees.md A-3 (Definite, video 31).
             if bidCardRank == "A" then ok = false end
 
+            -- v0.9.1 patch A-2 (audit AUDIT_REPORT_v0.7.1.md missing
+            -- item #3 / decision-trees.md A-2). Ashkal allow-list per
+            -- video #31: bid-up card must be small/mid (7, 8, 9, J,
+            -- Q, or singleton-T). K is NOT on the allow list — blocks
+            -- Ashkal at this rank. Pre-v0.9.1 the predicate only
+            -- explicitly blocked A and T-with-A-cover; K could fire
+            -- Ashkal when sun was in the 65-84 range, contradicting
+            -- the doc's allow-list semantics.
+            -- Sources: decision-trees.md A-2 (Common, video 31).
+            if ok and bidCardRank == "K" then ok = false end
+
             -- v0.5.8 patch A-4 (decision-trees.md): bid-up is T AND
             -- we hold A of the same suit → don't Ashkal. The A+T
             -- mardoofa pair is preserved by the Hokm contract; an
@@ -3001,6 +3012,21 @@ function Bot.PickAKA(seat, leadCard)
     -- AKA is most useful in the mid/late hand once voids are showing.
     local trickNum = #(S.s.tricks or {}) + 1
     if trickNum <= 1 then return nil end
+    -- v0.9.1 AKA precondition (f) (audit AUDIT_REPORT_v0.7.1.md
+    -- missing item #5, decision-trees.md Section 6 row "preconditions"
+    -- subitem (f)): NOT (partner certainly void in trump). The whole
+    -- point of AKA is to ask partner to defer the ruff (let our boss
+    -- take the trick). If partner is OBSERVED void in trump, they
+    -- can't ruff anyway — the signal carries zero coordination value
+    -- and just leaks info to opponents who can read the banner.
+    -- Suppress.
+    do
+        local partner = R.Partner(seat)
+        local pmem = Bot._memory and Bot._memory[partner]
+        if pmem and pmem.void and pmem.void[trump] then
+            return nil
+        end
+    end
     -- Mark sent and return.
     if mem and mem.akaSent then mem.akaSent[su] = true end
     return su
