@@ -1896,11 +1896,41 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- by returning a low non-trump discard if any non-trump is legal.
     -- Falls through to normal logic when no non-trump exists (legality
     -- preserved) or when AKA isn't applicable.
+    --
+    -- v0.5.16 S6-6 extension (Definite, video 18): IMPLICIT AKA. When
+    -- partner leads a bare Ace of a non-trump suit AND no explicit
+    -- MSG_AKA was broadcast (S.s.akaCalled is nil), the receiver
+    -- still applies AKA-receiver semantics. Saudi convention: leading
+    -- bare A in non-trump = implicit AKA call. The Ace is the highest
+    -- unplayed rank in its suit at trick 1 (no prior plays in that
+    -- suit), so partner is trivially "winning" the trick. Detection:
+    -- partner's most-recent play in this trick is rank=A, suit !=
+    -- trump, partner is currently winning, AKA wasn't explicitly
+    -- broadcast. Same suppress-ruff outcome as explicit AKA.
+    local explicitAKA = S.s.akaCalled
+                        and S.s.akaCalled.seat == R.Partner(seat)
+                        and S.s.akaCalled.suit == trick.leadSuit
+    local implicitAKA = false
+    -- v0.5.16 S6-6: implicit AKA fires when partner LED the bare Ace
+    -- (not when partner FOLLOWED with an Ace). Per the doc, "leading
+    -- bare A in non-trump = implicit AKA". A trick's lead is the
+    -- FIRST play (trick.plays[1]). Partner-followed-Ace is just a
+    -- normal must-follow play, not an AKA signal.
+    if not explicitAKA and contract.type == K.BID_HOKM
+       and contract.trump and trick.leadSuit
+       and trick.leadSuit ~= contract.trump
+       and partnerWinning
+       and trick.plays and trick.plays[1] then
+        local lead = trick.plays[1]
+        if lead.seat == R.Partner(seat)
+           and C.Rank(lead.card) == "A"
+           and C.Suit(lead.card) == trick.leadSuit then
+            implicitAKA = true
+        end
+    end
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM and contract.trump
-       and trick.leadSuit and S.s.akaCalled
-       and S.s.akaCalled.seat == R.Partner(seat)
-       and S.s.akaCalled.suit == trick.leadSuit
-       and partnerWinning then
+       and trick.leadSuit and partnerWinning
+       and (explicitAKA or implicitAKA) then
         local discards = {}
         for _, c in ipairs(legal) do
             if not C.IsTrump(c, contract) then
@@ -2321,6 +2351,13 @@ function Bot.PickAKA(seat, leadCard)
     local su = C.Suit(leadCard)
     -- AKA is non-trump only.
     if su == trump then return nil end
+    -- v0.5.16 S6-10(c) (Definite, video 18): AKA-sender-side
+    -- precondition (c) — `card.rank != "A"`. Leading a bare Ace of a
+    -- non-trump suit is the IMPLICIT AKA case (S6-6); explicitly
+    -- announcing AKA on an Ace is redundant. Receivers detect
+    -- bare-Ace lead via the H-5 implicit-AKA branch (extended this
+    -- release) — no MSG_AKA needed.
+    if r == "A" then return nil end
     -- The lead card must be the highest UNPLAYED rank of its suit.
     -- Otherwise the signal is false (we don't actually hold the boss).
     if S.HighestUnplayedRank(su) ~= r then return nil end

@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.16 — decision-trees.md Section 6: AKA signaling refinements
+
+Translates two AKA-related rules from Section 6:
+
+- **S6-6 Implicit AKA on bare-Ace lead** (Definite, video 18). The
+  H-5 receiver in `pickFollow` now fires on partner's bare-Ace lead
+  in a non-trump suit, even when no explicit `MSG_AKA` was
+  broadcast. Per Saudi convention, leading bare A non-trump IS the
+  implicit AKA call. Receiver suppresses the forced trump-ruff and
+  plays a low non-trump instead. Detection: partner LED (first play
+  of trick) a card with rank=A in a non-trump suit.
+
+- **S6-10(c) AKA-sender skip on Ace** (Definite, video 18). Bot
+  no longer broadcasts `MSG_AKA` when leading an Ace — that's the
+  implicit-AKA case (S6-6) and the explicit announcement is
+  redundant. Applied as a new gate in `Bot.PickAKA` after the
+  existing `su == trump` and bot-partner gates.
+
+### Notes
+
+- 222/222 regression tests pass. The Section E v0.5.11 fix tests
+  briefly broke during implementation when the implicit-AKA branch
+  fired too broadly (matched partner's followed-Ace, not just led-
+  Ace). Fixed by narrowing detection to `trick.plays[1]` (the
+  trick's lead play). Test pin re-confirms expected behavior.
+- The remaining S6 rules (S6-1/2/3/4 touching-honors, S6-7
+  pos-4 ruff release heuristic, S6-10 (f)/(g) sender preconditions)
+  are deferred — touching-honors needs new ledger keys + sampler
+  integration; the others require richer state tracking.
+
 ## v0.5.15 — easy-wins batch (UI gate + Ashkal test fixture + doc refresh)
 
 Audit follow-up batch from the v0.5.13/v0.5.14 deferred lists. Pure
