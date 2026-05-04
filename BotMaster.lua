@@ -96,15 +96,34 @@ end
 --                          all 3 side Aces away from defenders)
 local function getPartnerCards(contract)
     local desire = {}
-    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
+    if not contract then return desire end
+    -- Hokm-bidder partner: trump-count bias + outside-Ace clustering.
+    if contract.type == K.BID_HOKM and contract.trump then
+        local t = contract.trump
+        desire[t] = true
+        for _, s in ipairs(K.SUITS) do
+            if s ~= t then
+                desire["A"..s] = 5
+            end
+        end
         return desire
     end
-    local t = contract.trump
-    desire[t] = true
-    for _, s in ipairs(K.SUITS) do
-        if s ~= t then
-            desire["A"..s] = 5
+    -- v0.6.1 Section 11 rule 4 (Common, video 05): Sun-bidder partner
+    -- → assume concentrated highs. Saudi convention: a Sun-bidder team
+    -- only commits when both partners can carry trick-pulling weight,
+    -- so the partner typically holds A's and K's across multiple suits
+    -- (the "one long suit" inference is harder to localize without
+    -- knowing WHICH suit; we encode the highs-concentration here and
+    -- let length emerge from the random fill). Weight 8 on Aces is
+    -- distinctly above the suit-fallback 20-weight floor so the
+    -- sampler reliably places them in the partner's hand. K weight 4
+    -- mirrors the partial-clustering tier.
+    if contract.type == K.BID_SUN then
+        for _, s in ipairs(K.SUITS) do
+            desire["A"..s] = 8
+            desire["K"..s] = 4
         end
+        return desire
     end
     return desire
 end
@@ -375,6 +394,27 @@ local function sampleConsistentDeal(seat, unseen)
                 local pickProb = 0.7
                 if style and style.aceLate and style.aceLate >= 2 then
                     pickProb = 0.5  -- A-hoarder: less reliable strong-bias
+                end
+                -- v0.6.1 B-56: leadCount-based suit bias. A seat with
+                -- repeated lead-suit X (across the GAME, not the round —
+                -- _partnerStyle is per-game) has historically been dealt
+                -- long in X. Bias the sampler to put more X-suit cards
+                -- in their hand: set desire[suit] = 1 to enable the
+                -- suit-fallback path (weight 20 per card). Threshold of
+                -- >=3 leads avoids noise (a single lead is round-luck;
+                -- 3+ is a hand-shape pattern). Skip if Kawesh-cleared
+                -- the desire map already, OR if the suit-flag is already
+                -- set by another mechanism (Fzloky signal-suit). The
+                -- additive bias only fires for OPPONENT seats — we don't
+                -- need to second-guess teammate hand shape (we already
+                -- have stronger signals via firstDiscard / Tahreeb).
+                if style and style.leadCount and sIsOpponent
+                   and not (mem and mem.likelyKawesh) then
+                    for suit, count in pairs(style.leadCount) do
+                        if count >= 3 and not desire[suit] then
+                            desire[suit] = 1
+                        end
+                    end
                 end
 
                 local remainingInPool = {}

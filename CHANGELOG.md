@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.6.1 — BotMaster sampler biases: leadCount + Sun-bidder partner
+
+Two clean wires that were dead infrastructure or partial.
+
+### Changed (BotMaster.lua sampler)
+
+- **B-56 leadCount-based suit bias** (audit Tier 4 / v0.5_FINAL_REPORT
+  Priority 2). `leadCount[suit]` was previously written by
+  `Bot.OnPlayObserved` (Bot.lua:368-369) but read by zero pickers —
+  pure dead infrastructure. Now read in `sampleConsistentDeal` for
+  OPPONENT seats: when an opp seat has led a given suit ≥3 times
+  across the game (per-game style ledger, not per-round), bias the
+  sampler to put more cards of that suit in their hand. Encoded as
+  `desire[suit] = 1` (triggers the existing 20-weight suit-fallback
+  path). Skipped for Kawesh-cleared opponents and for teammates
+  (we already have stronger Fzloky / Tahreeb signals on partner).
+
+- **Section 11 rule 4 — Sun-bidder partner concentration** (Common,
+  video 02 — deferred from v0.5.22). `getPartnerCards` previously
+  returned `{}` for Sun contracts, leaving the bidder's partner
+  with no sampler bias at all. Saudi convention: a Sun-bidder
+  team only commits when both partners can carry trick-pulling
+  weight, so the partner typically holds A's and K's across
+  multiple suits. Encoded as per-card desire weights:
+  `desire["A"..s] = 8` (matches defender bias), `desire["K"..s] = 4`
+  (partial clustering tier).
+
+### Audit-confirmed already wired (no code change)
+
+- **B-67 aceLate counter** — wired into `sampleConsistentDeal`'s
+  `pickProb` adjustment (BotMaster.lua:376-378). Confirmed live.
+
+- **B-83 gahwaFailed counter** — wired into `Bot.PickFour` (Bot.lua:
+  ~2755). Confirmed live.
+
+- **B-47/B-50 oppGahwas/oppFours** — wired into `matchPointUrgency`
+  (Bot.lua:802-827). Confirmed live.
+
+- **M-3 rollout void tracking** — moot. `heuristicPick` doesn't read
+  `Bot._memory.void`; legality is enforced via the simulated hand
+  state which IS updated as cards play out. The "stale void" concern
+  doesn't apply with the current rollout architecture.
+
+### Deferred
+
+- **Section 11 rule 1 (Sun K-or-higher dump-high inference)**: the
+  decision-tree rule documents a "no lower rank" inference but the
+  rationale ("Saudi losing-side dump-highest convention") suggests
+  the OPPOSITE — dump-highest is consistent with holding lower
+  cards underneath. Defer until source video #05 can be re-verified.
+
+- **Section 11 rule 2 (Hokm trump-high-dump)**: needs new
+  `trumpHighDump` counter infrastructure. Defer.
+
+- **Section 11 rule 5 (Tahreeb-low-from-partner)**: needs
+  `tahreebSuspect[suit]` ledger key. Defer.
+
+### Tests
+
+- 226/226 regression tests pass.
+- Headless tournament (M3lm vs Master) still tier-ordered correctly:
+  Basic 97.9, M3lm 99.5, Master 99.5 over 30 rounds.
+- The sampler biases don't affect picker legality (only sampled
+  hand distributions); property-test legality coverage continues
+  to sweep across many seeds.
+
 ## v0.6.0 — Section 1 deferred bidding rules + audit H-3/H-7 fixes (closes v0.5.x audit cycle)
 
 Three audit-pending items landed in one batch. Major version bump
