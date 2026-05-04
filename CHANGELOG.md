@@ -1,8 +1,11 @@
 # Changelog
 
-## v0.5.23 — Section 1 deferred bidding rules + audit H-3/H-7 fixes
+## v0.6.0 — Section 1 deferred bidding rules + audit H-3/H-7 fixes (closes v0.5.x audit cycle)
 
-Three audit-pending items landed in one batch.
+Three audit-pending items landed in one batch. Major version bump
+signals end of the v0.5.x decision-trees translation cycle —
+Sections 1-11 of `docs/strategy/decision-trees.md` are now either
+implemented or explicitly deferred with rationale.
 
 ### Changed (Bot.lua)
 
@@ -17,7 +20,7 @@ Three audit-pending items landed in one batch.
   ≥100 (Sun-Bel-gate context)" (Common, video 25).
 
 - **H-3 singleton-low rank guard** (audit MASTER_REPORT). The
-  pre-v0.5.23 singleton-lead branch in `pickLead` priority 2
+  pre-v0.6.0 singleton-lead branch in `pickLead` priority 2
   picked the lowest singleton unconditionally — including a
   singleton Ace/T/K/Q in Hokm where the opponent void in that
   suit can over-ruff and capture the honor for nothing. The

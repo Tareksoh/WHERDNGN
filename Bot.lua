@@ -836,7 +836,7 @@ local function matchPointUrgency(myTeam)
     return mod
 end
 
--- v0.5.23 H-7 fix: cap COMBINED urgency at ±15. The per-call cap on
+-- v0.6.0 H-7 fix: cap COMBINED urgency at ±15. The per-call cap on
 -- matchPointUrgency (±10) plus scoreUrgency's max of +12 still allowed
 -- combined urgency to reach +22, dropping BOT_BEL_TH from 70 to 48
 -- in worst case — bot Bels garbage hands when desperate. Per the
@@ -954,7 +954,7 @@ function Bot.PickBid(seat)
     -- Sources: decision-trees.md B-6 (Definite, video 26).
     local belote = beloteSuit(hand)
 
-    -- v0.5.23 H-7: capped at ±15 to prevent garbage Bels under desperation.
+    -- v0.6.0 H-7: capped at ±15 to prevent garbage Bels under desperation.
     local urgency = combinedUrgency(R.TeamOf(seat))
     -- Round-2 threshold ought to be ≥ round-1: in R2 the bidder picks
     -- the suit, so fewer hands are forced to commit. Advanced layer
@@ -985,7 +985,7 @@ function Bot.PickBid(seat)
     local thHokmR2 = jitter(r2Base    - urgency, BID_JITTER)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
 
-    -- v0.5.23 B-7: Bel-fear bias for Sun bidding (Common, video 25).
+    -- v0.6.0 B-7: Bel-fear bias for Sun bidding (Common, video 25).
     -- When OUR team's cumulative is at >= K.SUN_BEL_CUMULATIVE_GATE
     -- (=100), the OTHER team can still Bel us in Sun (per the E-1
     -- Saudi rule: only the team <100 may Bel; opp at <100 still
@@ -1811,7 +1811,7 @@ local function pickLead(legal, contract, seat)
 
     -- 2: singleton low? Pick the lowest singleton if we have any.
     --
-    -- v0.5.23 H-3 fix: rank-guard the singleton-lead branch. The
+    -- v0.6.0 H-3 fix: rank-guard the singleton-lead branch. The
     -- audit's concern: leading a singleton Ace/T/K/Q in Hokm wastes
     -- the honor — opponents void in that suit can over-ruff (no
     -- protection from our hand). The "ruffing entry" rationale
@@ -2640,7 +2640,7 @@ function Bot.PickDouble(seat)
                        + partnerEscalatedBonus(seat, contract)
     -- v0.5 H-8: defender Bel uses context="defend" so the near-clinch
     -- branch flips to aggressive (+5) instead of conservative (-8).
-    -- v0.5.23 H-7: capped at ±15 (combined urgency).
+    -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_BEL_TH - combinedUrgency(R.TeamOf(seat), "defend")
 
     -- Audit Tier 4 (B-61): defensive-Sun detection. If the Sun bidder
@@ -2718,7 +2718,7 @@ function Bot.PickTriple(seat)
     local contract = S.s.contract
     if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
-    -- v0.5.23 H-7: capped at ±15 (combined urgency).
+    -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_TRIPLE_TH - combinedUrgency(R.TeamOf(seat))
     -- Audit Tier 2: M3lm-gated style read. A defender that has Beled
     -- ≥2 times this game is a habitual Beler — their current Bel is
@@ -2750,7 +2750,7 @@ function Bot.PickFour(seat)
     if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     -- v0.5 H-8: defender Four uses context="defend" — same logic as Bel.
-    -- v0.5.23 H-7: capped at ±15 (combined urgency).
+    -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_FOUR_TH - combinedUrgency(R.TeamOf(seat), "defend")
     -- 50-agent audit fix (B-83 wiring): the gahwaFailed counter on
     -- the bidder's _partnerStyle was incremented by Bot.OnRoundEnd
@@ -2799,7 +2799,7 @@ function Bot.PickGahwa(seat)
     local contract = S.s.contract
     if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
-    -- v0.5.23 H-7: capped at ±15 (combined urgency).
+    -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_GAHWA_TH - combinedUrgency(R.TeamOf(seat))
     local yes = strength >= jitter(th, BEL_JITTER)
     return yes, false
