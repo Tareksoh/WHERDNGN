@@ -1,5 +1,117 @@
 # Changelog
 
+## v0.5.8 — Bot.PickBid: translate decision-trees.md Section 1 (bidding)
+
+Translates Section 1 of `docs/strategy/decision-trees.md` (~25 rules
+sourced from Saudi tournament videos) into `Bot.PickBid` picker code.
+Each named patch (B-1 through B-6, S-1 through S-8, A-3 through A-6)
+maps to a specific WHEN/RULE/MAPS-TO row in the decision tree.
+
+A 3-agent post-commit audit surfaced one BUG (B-1 missing the
+"≥1 side Ace" requirement from the source rule) and one stylistic
+NOTE (leading-underscore locals). Both fixed before tagging.
+
+### Bidding fixes
+
+- **B-1, B-2, B-4: Hokm minimum-shape gate.** Bot now refuses to bid
+  Hokm unless either (a) count ≥ 4 with J of trump (B-2 self-
+  sufficient) OR (b) count == 3 with J of trump AND ≥ 1 side Ace
+  (B-1 minimum, "الحكم المغطى"). The absolute floor (B-4) is "no J
+  OR count ≤ 2 → never bid Hokm". The audit-fix step added the
+  side-Ace requirement to the count==3 case — without it, a
+  J+x+x trump hand with zero side aces could bid (no side trick
+  power, structurally weak). Suits like 9+A+T+K (no J) likewise
+  never bid. New helper `hokmMinShape(hand, suit)` enforces the
+  rule; applied in round 1 (Hokm-on-flipped) and round 2 (best-suit
+  search). Sources: decision-trees.md B-1, B-2, B-4 (all Definite, video 26).
+
+- **B-5: 16-vs-26 Hokm-over-Sun bias.** Round 2 now requires Sun to
+  beat the best Hokm score by ≥ 5 strength points before overcalling
+  Hokm. Failed Hokm = 16 raw, failed Sun = 26 raw — the asymmetry
+  bounds the failure cost. Borderline tied calls stay with Hokm.
+  Sources: decision-trees.md B-5 (Definite, videos 25 + 26).
+
+- **B-6: Belote (سراء ملكي) bidding bonus.** When the hand holds K+Q
+  of any suit, that suit gets a +20 bonus in PickBid's Hokm-strength
+  calculation (multiplier-immune Belote bonus). New helper
+  `beloteSuit(hand)`. Sun bidding is unaffected (Belote is Hokm-only).
+  Sources: decision-trees.md B-6 (Definite, video 26).
+
+### Sun fixes
+
+- **S-1, S-5, S-6: Sun minimum-shape gate.** Bot now refuses to bid
+  Sun without either A+T mardoofa (إكة مردوفة) OR 2+ Aces. A bare
+  1-Ace hand without T-cover gets torn through; Saudi rule says do
+  not bid Sun. New helper `sunMinShape(hand)`.
+  Sources: decision-trees.md S-1, S-5 (Definite/Common, video 25).
+
+- **S-3: 3+ Aces strong-Sun bonus.** +12 to Sun strength when the
+  hand holds 3 or more Aces. The 26-vs-16 risk premium is paid by
+  sustained trick power across 3+ suits.
+  Sources: decision-trees.md S-3 (Definite, video 25).
+
+- **S-4: Carré of Aces (الأربع مئة) mandatory Sun.** When the hand
+  holds all 4 Aces, returns `K.BID_SUN` as the earliest possible
+  exit — beats every other path. Carré of Aces = 200 raw × 2 = 400
+  effective ("Four Hundred").
+  Sources: decision-trees.md S-4 (Definite, videos 25, 32, 38).
+
+- **S-8: Sun-Mughataa A+T mardoofa bonus.** +5 per A+T mardoofa pair
+  (capped at 2 pairs) on top of the normal Sun strength. "Covered
+  Sun" emphasizes safety distinct from raw Ace count.
+  Sources: decision-trees.md S-8 (Common, video 25).
+
+### Ashkal fixes
+
+- **Order restructure:** Ashkal-eligibility check now runs BEFORE
+  the direct-Sun branch. Previously direct-Sun (sun ≥ thSun = 50)
+  short-circuited Ashkal (sun ≥ thAshkal = 65), making the Ashkal
+  block effectively dead code. The decision tree expects eligible
+  seats to PREFER Ashkal in the 65-84 strength band; the restructure
+  enables that preference. Non-eligible seats fall through to direct
+  Sun unchanged.
+
+- **A-3: bid-up = A → don't Ashkal.** Anti-trigger; losing A into
+  no-trump with no T-cover is a textbook bad Ashkal.
+  Sources: decision-trees.md A-3 (Definite, video 31).
+
+- **A-4: bid-up = T + we hold A same suit → don't Ashkal.** Hokm
+  preserves the A+T mardoofa; Ashkal converts to Sun and breaks it.
+  Sources: decision-trees.md A-4 (Common, video 31).
+
+- **A-5: 3+ Aces → don't Ashkal.** With that much firepower, claim
+  the contract directly via Sun; we don't need partner's project.
+  Sources: decision-trees.md A-5 (Common, video 31).
+
+- **A-6: sun ≥ 85 → don't Ashkal (the 65/85 pivot).** 65-84 strength
+  range = Ashkal range; 85+ = direct-Sun range. Falls through to the
+  direct-Sun branch below.
+  Sources: decision-trees.md A-6 (Common, video 31).
+
+### Test status
+
+- 180/180 regression tests pass (existing PickBid sanity tests:
+  strong J+9+A+T+K hand still bids Hokm; weak 7/8-only hand still
+  passes — both unaffected because the new gates don't reject those).
+- 100-round symmetric baseline tournament unchanged: the harness
+  uses `pickContract` (deterministic strongest-hand picker), not
+  `Bot.PickBid`, so PickBid changes are not exercised offline.
+- Asymmetric harness similarly uses fixed bidder + trump.
+- Behavioral validation will land via player feedback; the WoW
+  bidding loop is the real test surface for these changes.
+
+### Notes
+
+- No data shape changes; v0.5.7 saved games load as v0.5.8 unchanged.
+- Deferred to a future patch (Section 1 rules NOT yet wired):
+  * B-3 (5+ trump Kaboot pursuit flag — needs `S.s.pursuitFlagBidder`
+    + pickLead read-side wire; structural)
+  * B-7 (cumulative ≥ 100 Bel-fear bias on Sun bidding)
+  * G-2 (round-1 conservative bias — already partially encoded via
+    r1Base > r2Base; further tightening unclear without data)
+  * G-4 (don't bid against partner's contract — Takweesh
+    bid-override anti-trigger)
+
 ## v0.5.7 — v0.5.6 audit follow-up: revert Ashkal misfix + correct CHANGELOG narrative
 
 A 3-agent audit on v0.5.6 surfaced two issues that had to be

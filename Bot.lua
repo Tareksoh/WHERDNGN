@@ -475,6 +475,110 @@ local function sideSuitAceBonus(hand, trumpSuit)
     return math.min(n, 3) * 8
 end
 
+-- v0.5.8 patch B-1/B-4 (decision-trees.md Section 1, Hokm bidding):
+-- the Saudi minimum-Hokm shape is "الحكم المغطى" — J of trump + ≥1
+-- cover trump (مردوفة, so count >= 2) + ≥1 side Ace (B-1).
+-- The B-2 escape clause: 4+ trumps including J is enough on its own,
+-- side-Ace not required (trump-heavy hand is self-sufficient). The
+-- absolute floor (B-4) is "no J OR count <= 2 → never bid Hokm".
+-- Audit fix (post-v0.5.8 commit, before tag): the original gate
+-- enforced only J + count >= 3 and missed the side-Ace requirement
+-- of B-1 — a J + 2 trumps + 0 side-Ace hand passed the gate even
+-- though it has no side trick power. Now correctly implements:
+--   (count >= 4 AND hasJ)  ← B-2 self-sufficient
+--   OR
+--   (count == 3 AND hasJ AND hasSideAce)  ← B-1 minimum
+-- Returns true if the minimum shape is met.
+--
+-- Sources: decision-trees.md Section 1 rules B-1, B-2, B-4 (all
+-- Definite, video 26).
+local function hokmMinShape(hand, suit)
+    if not suit then return false end
+    local hasJ, count = false, 0
+    local hasSideAce = false
+    for _, c in ipairs(hand) do
+        local r, su = C.Rank(c), C.Suit(c)
+        if su == suit then
+            count = count + 1
+            if r == "J" then hasJ = true end
+        elseif r == "A" then
+            hasSideAce = true
+        end
+    end
+    if not hasJ then return false end          -- B-4 absolute floor
+    if count >= 4 then return true end         -- B-2 self-sufficient
+    if count == 3 and hasSideAce then return true end  -- B-1 minimum
+    return false
+end
+
+-- v0.5.8 patch S-1/S-5 (decision-trees.md Section 1, Sun bidding):
+-- the Saudi minimum-Sun shape is either A+T mardoofa (إكة مردوفة) OR
+-- 2+ Aces. A bare 1-Ace hand without T-cover is the canonical "do
+-- NOT bid Sun" anti-trigger — the lone Ace gets torn through.
+-- Returns true if the minimum shape is met.
+--
+-- Sources: decision-trees.md Section 1 rules S-1, S-5 (Definite/Common,
+-- video 25).
+local function sunMinShape(hand)
+    local aceCount = 0
+    local hasA = { S = false, H = false, D = false, C = false }
+    local hasT = { S = false, H = false, D = false, C = false }
+    for _, c in ipairs(hand) do
+        local r, su = C.Rank(c), C.Suit(c)
+        if r == "A" then hasA[su] = true; aceCount = aceCount + 1
+        elseif r == "T" then hasT[su] = true end
+    end
+    if aceCount >= 2 then return true end
+    if aceCount == 1 then
+        for _, su in ipairs({ "S", "H", "D", "C" }) do
+            if hasA[su] and hasT[su] then return true end  -- mardoofa
+        end
+    end
+    return false
+end
+
+-- v0.5.8 patch B-6 (decision-trees.md Section 1, Hokm bidding):
+-- detect Belote pair (K+Q of same suit, "سراء ملكي"). The +20 Belote
+-- bonus is multiplier-immune so locking it in by bidding the suit
+-- as trump is a Saudi MUST. Returns the suit (string) holding K+Q
+-- if any, else nil.
+--
+-- Sources: decision-trees.md Section 1 rule B-6 (Definite, video 26).
+local function beloteSuit(hand)
+    local hasK = { S = false, H = false, D = false, C = false }
+    local hasQ = { S = false, H = false, D = false, C = false }
+    for _, c in ipairs(hand) do
+        local r, su = C.Rank(c), C.Suit(c)
+        if r == "K" then hasK[su] = true
+        elseif r == "Q" then hasQ[su] = true end
+    end
+    for _, su in ipairs({ "S", "H", "D", "C" }) do
+        if hasK[su] and hasQ[su] then return su end
+    end
+    return nil
+end
+
+-- v0.5.8 patches S-3/S-4/S-8 helper: count Aces and detect mardoofa
+-- (A+T pair in same suit). Returns aceCount, mardoofaCount.
+--
+-- Sources: decision-trees.md Section 1 rules S-3 (3+ Aces strong),
+-- S-4 (Carré of Aces mandatory Sun), S-8 (Sun-Mughataa).
+local function aceCountAndMardoofa(hand)
+    local aceCount = 0
+    local hasA = { S = false, H = false, D = false, C = false }
+    local hasT = { S = false, H = false, D = false, C = false }
+    for _, c in ipairs(hand) do
+        local r, su = C.Rank(c), C.Suit(c)
+        if r == "A" then hasA[su] = true; aceCount = aceCount + 1
+        elseif r == "T" then hasT[su] = true end
+    end
+    local mardoofaCount = 0
+    for _, su in ipairs({ "S", "H", "D", "C" }) do
+        if hasA[su] and hasT[su] then mardoofaCount = mardoofaCount + 1 end
+    end
+    return aceCount, mardoofaCount
+end
+
 -- Score for a Sun bid: high cards across all suits, length is irrelevant.
 --
 -- Advanced layer: penalize lopsided distributions. A Sun hand with a
@@ -727,6 +831,16 @@ function Bot.PickBid(seat)
     if not hand then return K.BID_PASS end
     local round = S.s.bidRound
     local bidCardSuit = S.s.bidCard and C.Suit(S.s.bidCard) or nil
+    local bidCardRank = S.s.bidCard and C.Rank(S.s.bidCard) or nil
+
+    -- v0.5.8 patch S-4 (decision-trees.md Section 1, Sun bidding):
+    -- Carré of Aces (الأربع مئة, "Four Hundred") = 200 raw × 2 (Sun
+    -- multiplier) = 400 effective. Saudi rule: ALWAYS Sun, regardless
+    -- of any other consideration. Earliest possible return — beat
+    -- every other bid path.
+    -- Sources: decision-trees.md S-4 (Definite, videos 25, 32, 38).
+    local aceCount, mardoofaCount = aceCountAndMardoofa(hand)
+    if aceCount >= 4 then return K.BID_SUN end
 
     -- Inspect prior bids to know what's still available to us.
     local anyHokm, anySun = false, false
@@ -736,7 +850,25 @@ function Bot.PickBid(seat)
         elseif b and b:sub(1, 4) == K.BID_HOKM then anyHokm = true end
     end
 
+    -- v0.5.8 patches S-3, S-8 (decision-trees.md Section 1, Sun bidding):
+    -- bonus to sunStrength for 3+ Aces (S-3) and per-mardoofa pair (S-8).
+    -- S-3: +12 nudge to clear thSun without being over-determinative.
+    -- S-8: each A+T mardoofa pair is "Sun-Mughataa" (covered Sun) —
+    -- distinctly safer than 2 separate Aces. +5 per pair, capped at 2
+    -- pairs to avoid double-rewarding when 3+ Aces already nudged via S-3.
+    -- Sources: decision-trees.md S-3 (Definite, video 25), S-8 (Common, video 25).
     local sun = sunStrength(hand)
+    if aceCount >= 3 then sun = sun + 12 end
+    sun = sun + math.min(mardoofaCount, 2) * 5
+
+    -- v0.5.8 patch B-6 (decision-trees.md Section 1, Hokm bidding):
+    -- detect Belote (سراء ملكي = K+Q of trump). The +20 Belote bonus
+    -- is multiplier-immune so locking it in by bidding the suit as
+    -- trump is a Saudi MUST. Computed once, applied in both round 1
+    -- (Hokm-on-flipped) and round 2 (best-suit search).
+    -- Sources: decision-trees.md B-6 (Definite, video 26).
+    local belote = beloteSuit(hand)
+
     local urgency = (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
     -- Round-2 threshold ought to be ≥ round-1: in R2 the bidder picks
     -- the suit, so fewer hands are forced to commit. Advanced layer
@@ -768,12 +900,15 @@ function Bot.PickBid(seat)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
 
     if round == 1 then
-        -- Sun overcalls Hokm. Note: a LATER direct Sun does NOT
-        -- overcall an earlier direct Sun — host's HostAdvanceBidding
-        -- locks on the first direct Sun. Bot bids Sun whenever its
-        -- threshold passes; if another seat already won the Sun chair
-        -- earlier, the host silently treats this as a no-op.
-        if sun >= thSun then return K.BID_SUN end
+        -- v0.5.8 ORDER FIX: Ashkal-eligibility check moved BEFORE direct Sun.
+        -- Previously the direct-Sun branch fired at sun >= thSun (50) and
+        -- short-circuited the Ashkal block (which needed sun >= thAshkal=65)
+        -- — Ashkal was effectively dead code unless urgency stacks made
+        -- thSun > thAshkal (rare extreme). The decision-tree expects an
+        -- eligible Ashkal seat in the 65-84 strength band to PREFER Ashkal
+        -- over direct Sun (the 65-84 vs 85+ pivot, A-6). Restructuring
+        -- here makes the patch set A-3/A-4/A-5/A-6 actually have effect.
+        -- Sources: decision-trees.md A-2 through A-6 (videos 27, 31).
 
         -- Ashkal: if our PARTNER bid Hokm earlier in this round and
         -- we hold a Sun-strong hand, call Ashkal so partner is forced
@@ -797,12 +932,48 @@ function Bot.PickBid(seat)
         if bidPos >= 3
            and partnerBid and partnerBid:sub(1, #K.BID_HOKM) == K.BID_HOKM
            and not anySun then
-            -- Advanced: only Ashkal if WE'RE weak in the flipped suit
-            -- (so partner's J of that suit is doing the work, not ours).
-            -- If we hold the J of the flipped suit, partner's bid is
-            -- bluff/marginal and Ashkal is risky — skip.
             local ok = true
-            if Bot.IsAdvanced() and bidCardSuit then
+
+            -- v0.5.8 patch A-3 (decision-trees.md): bid-up card is A
+            -- → don't Ashkal. Losing the A into a no-trump contract
+            -- with no T-cover is a textbook bad Ashkal — the Ace gets
+            -- torn through immediately by opponents.
+            -- Sources: decision-trees.md A-3 (Definite, video 31).
+            if bidCardRank == "A" then ok = false end
+
+            -- v0.5.8 patch A-4 (decision-trees.md): bid-up is T AND
+            -- we hold A of the same suit → don't Ashkal. The A+T
+            -- mardoofa pair is preserved by the Hokm contract; an
+            -- Ashkal converts to Sun and breaks the cover.
+            -- Sources: decision-trees.md A-4 (Common, video 31).
+            if ok and bidCardRank == "T" and bidCardSuit then
+                for _, c in ipairs(hand) do
+                    if C.Rank(c) == "A" and C.Suit(c) == bidCardSuit then
+                        ok = false; break
+                    end
+                end
+            end
+
+            -- v0.5.8 patch A-5 (decision-trees.md): 3+ Aces in hand
+            -- → bid direct Sun, not Ashkal. With that much firepower
+            -- we don't need partner's project — claim the contract
+            -- ourselves so partner-supply isn't a precondition.
+            -- Sources: decision-trees.md A-5 (Common, video 31).
+            if ok and aceCount >= 3 then ok = false end
+
+            -- v0.5.8 patch A-6 (decision-trees.md): the 65/85 pivot.
+            -- 65-84 strength = Ashkal range (need partner's project);
+            -- 85+ strength = direct Sun range (claim it ourselves).
+            -- The fall-through here lets sun >= 85 hands proceed to
+            -- the direct-Sun branch below.
+            -- Sources: decision-trees.md A-6 (Common, video 31).
+            if ok and sun >= 85 then ok = false end
+
+            -- Existing Advanced check: only Ashkal if WE'RE weak in
+            -- the flipped suit (so partner's J of that suit is doing
+            -- the work, not ours). If we hold the J of the flipped
+            -- suit, partner's bid is bluff/marginal and Ashkal is risky.
+            if ok and Bot.IsAdvanced() and bidCardSuit then
                 local sStr, sCnt = suitStrengthAsTrump(hand, bidCardSuit)
                 local hasJflip = false
                 for _, c in ipairs(hand) do
@@ -818,12 +989,33 @@ function Bot.PickBid(seat)
             end
         end
 
+        -- v0.5.8 patch S-1 (decision-trees.md): direct Sun requires
+        -- minimum shape — A+T mardoofa OR 2+ Aces. A bare 1-Ace hand
+        -- without T-cover gets torn through; do not bid Sun on it.
+        -- Sources: decision-trees.md S-1 (Definite, video 25), S-5
+        -- (Common, video 25), S-6 (Common, video 25).
+        --
+        -- Sun overcalls Hokm. Note: a LATER direct Sun does NOT
+        -- overcall an earlier direct Sun — host's HostAdvanceBidding
+        -- locks on the first direct Sun. Bot bids Sun whenever its
+        -- threshold passes; if another seat already won the Sun chair
+        -- earlier, the host silently treats this as a no-op.
+        if sunMinShape(hand) and sun >= thSun then return K.BID_SUN end
+
         -- Hokm-on-flipped only available if no prior Hokm/Sun.
+        -- v0.5.8 patches B-1, B-4, B-6: gate on hokmMinShape (J of
+        -- trump + count >= 3) — Saudi 3-card minimum, "no J = pass".
+        -- Belote (K+Q of trump same suit) adds a +20 multiplier-immune
+        -- bonus when the bid-up suit IS the Belote suit.
+        -- Sources: decision-trees.md B-1 (Definite, 26), B-4 (Definite, 26), B-6 (Definite, 26).
         if not anyHokm and not anySun and bidCardSuit then
-            local strength = suitStrengthAsTrump(hand, bidCardSuit)
-            strength = strength + sideSuitAceBonus(hand, bidCardSuit)
-            if strength >= thHokmR1 then
-                return K.BID_HOKM .. ":" .. bidCardSuit
+            if hokmMinShape(hand, bidCardSuit) then
+                local strength = suitStrengthAsTrump(hand, bidCardSuit)
+                strength = strength + sideSuitAceBonus(hand, bidCardSuit)
+                if belote == bidCardSuit then strength = strength + 20 end
+                if strength >= thHokmR1 then
+                    return K.BID_HOKM .. ":" .. bidCardSuit
+                end
             end
         end
         return K.BID_PASS
@@ -831,16 +1023,38 @@ function Bot.PickBid(seat)
 
     -- Round 2: pass / Hokm-non-flipped / Sun. Both rounds now wait
     -- for all 4 bids and Sun overcalls Hokm in either round.
+    --
+    -- v0.5.8 patches B-1/B-4/B-6: only consider suits where the
+    -- minimum-Hokm shape is met (J + count >= 3). Suits with no J,
+    -- or fewer than 3 trumps, are skipped — Saudi rule, not heuristic.
+    -- Belote suit (K+Q same suit) gets the +20 multiplier-immune bonus.
+    -- Sources: decision-trees.md B-1, B-4 (Definite, video 26), B-6 (Definite, video 26).
     local bestSuit, bestScore = nil, 0
     for _, suit in ipairs(K.SUITS) do
-        if suit ~= bidCardSuit then
+        if suit ~= bidCardSuit and hokmMinShape(hand, suit) then
             local s = suitStrengthAsTrump(hand, suit)
             s = s + sideSuitAceBonus(hand, suit)
+            if belote == suit then s = s + 20 end
             if s > bestScore then bestSuit, bestScore = suit, s end
         end
     end
-    if sun >= thSun and sun > bestScore then
-        return K.BID_SUN
+    -- v0.5.8 patch B-5: 16-vs-26 failed-bid asymmetry. When BOTH Hokm
+    -- and Sun are viable, prefer Hokm UNLESS Sun beats it by ≥ 5
+    -- strength points. Failed Hokm = 16 raw, failed Sun = 26 raw —
+    -- so the conservative default is Hokm. Sun must clearly justify
+    -- the +10 raw downside swing.
+    -- Sources: decision-trees.md B-5 (Definite, videos 25 + 26).
+    -- Patch S-1 also gates Sun on minimum shape (mardoofa or 2+ Aces).
+    if sunMinShape(hand) and sun >= thSun then
+        local hokmViable = (bestSuit and bestScore >= thHokmR2)
+        if not hokmViable then
+            return K.BID_SUN
+        end
+        if sun >= bestScore + 5 then
+            return K.BID_SUN
+        end
+        -- Otherwise: both viable, Sun's margin too thin → stay Hokm
+        -- (falls through to Hokm return below).
     end
     if bestSuit and bestScore >= thHokmR2 then
         return K.BID_HOKM .. ":" .. bestSuit
