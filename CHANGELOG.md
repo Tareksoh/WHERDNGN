@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.5.18 — decision-trees.md Section 4: Takbeer point-card extension
+
+Translates the remaining Definite-confidence rule from Section 4
+(Takbeer/Tasgheer) — extending v0.5.11's smother fix from "donate
+highest of {A, T}" to "donate highest of all point cards"
+(A, T, K, Q, J).
+
+### Changed
+
+- **Section 4 rule 7 extension** (Definite, videos 21, 22, 23):
+  the smother branch in `pickFollow` (partner-winning + non-trump-
+  led + feedSafe gate) now considers ALL point cards in the led
+  suit, not just A and T. Saudi Takbeer convention donates the
+  HIGHEST point card to partner's certain-winning trick. K (4
+  raw), Q (3 raw), and J (2 raw) are also "ابناء" (point-card
+  sons) — donating them when no A or T is in led suit still adds
+  team-pile value vs the previous fall-through to lowestByRank.
+
+  The existing v0.5.11 descending-sort + `[1]` correctly returns
+  the highest after expansion; the gate (`#pointCards >= 2 OR
+  completed >= 3 OR lastSeat`) is preserved unchanged. So a hand
+  with AH+TH still picks AH (same behavior as v0.5.17). A hand
+  with KH+8H now picks KH on `lastSeat=true` instead of falling
+  to lowestByRank (8H). +4 raw donated per occurrence.
+
+### Confirmed (no code change)
+
+- **Section 4 rule 13** (K-tripled / مثلوث الشايب trickle, Common,
+  video 17): "Sun, hold K + 2 lower in led suit, opp leads → play
+  SMALLEST first across tricks 1–2". This is ALREADY correctly
+  handled by the existing pickFollow fall-through:
+  - When opp's A/J/Q is unplayed, K is NOT highest unplayed →
+    `winners` branch doesn't fire on K → falls to `lowestByRank`
+    of legal (= smallest X card). ✓ Matches the rule.
+  - When opp's higher cards are gone, K IS highest unplayed →
+    `winners` branch returns K (or another winner). The K-tripled
+    rule's "save K for trick 3" intent is achieved naturally
+    because K wouldn't be the boss in tricks 1-2 if A is still
+    out. No new code needed.
+
+### Deferred
+
+- **Rules 4–6 (deceptive overplay)** — Sometimes-confidence,
+  single-source. Sacrifice top to bait re-lead. Requires complex
+  scenario detection (partner played mid-trump, opp played low,
+  we hold J+9, etc.). Defer to a focused release with the
+  `pickFollow.deceptiveOverplay` branch + Saudi Master-tier
+  variant.
+
+- **Rules 10–12 (Hokm consecutive top trumps)** — Definite, video
+  22, but the scenarios are subtle (Takbeer-mandatory vs INVERT
+  vs over-cut-with-smaller depend on rank-adjacency analysis of
+  trump cards). Defer to a focused release.
+
+### Tests
+
+- 226/226 regression tests pass. Section E.2 (Takbeer A over T)
+  still pins AH (highest of point cards). The expansion to K/Q/J
+  doesn't change A/T-present scenarios; it adds new scenarios
+  where K alone is the highest available point card.
+
 ## v0.5.17 — SWA tightening + display fix + R.IsValidSWA pre-existing bug
 
 User-reported SWA issues. Three distinct fixes:

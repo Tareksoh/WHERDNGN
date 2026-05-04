@@ -1961,26 +1961,34 @@ local function pickFollow(legal, hand, trick, contract, seat)
         )
         if feedSafe then
             local lead = trick.leadSuit
-            local highInSuit = {}  -- list of A/T legal cards in lead suit
+            -- v0.5.18 Section 4 rule 7 extension (Definite, videos 21+22+23):
+            -- Takbeer / التكبير = donate HIGHEST point card to partner's
+            -- certain-winning trick. Pre-v0.5.18 only A and T were
+            -- candidates ("highInSuit"); the Saudi convention also
+            -- includes K (4 raw), Q (3 raw), and J (2 raw) — all the
+            -- "ابناء" (point-card sons). Higher = more donated; the
+            -- existing v0.5.11 descending-sort + [1] correctly returns
+            -- the highest. Expanding the candidate set ensures we
+            -- donate K when no A or T is in led suit, etc.
+            -- Sources: decision-trees.md Section 4 rule 7 (Definite,
+            -- videos 21, 22, 23).
+            local pointCards = {}
             for _, c in ipairs(legal) do
                 local r = C.Rank(c)
-                if C.Suit(c) == lead and (r == "A" or r == "T") then
-                    highInSuit[#highInSuit + 1] = c
+                if C.Suit(c) == lead and (r == "A" or r == "T"
+                                          or r == "K" or r == "Q" or r == "J") then
+                    pointCards[#pointCards + 1] = c
                 end
             end
             local completed = #(S.s.tricks or {})
-            if #highInSuit >= 2 or completed >= 3 or lastSeat then
-                -- v0.5.11 Section 4 rule 7 Takbeer fix (Definite, videos
-                -- 21+22+23): when partner is certain-winning, donate the
-                -- HIGHEST card (Takbeer / التكبير), not the lowest. Was
-                -- ascending sort + [1] = LOWEST — the literal opposite of
-                -- the Saudi rule. Single-char flip: < → >. Maximizes
-                -- trick-point capture when partner takes the trick (A=11
-                -- vs T=10 raw differential per occurrence).
-                table.sort(highInSuit, function(a, b)
+            -- Gate: ≥2 point cards spare, OR late round, OR pos 4.
+            -- v0.5.18 keeps the same gate logic but applies to the
+            -- expanded candidate set.
+            if #pointCards >= 2 or completed >= 3 or lastSeat then
+                table.sort(pointCards, function(a, b)
                     return C.TrickRank(a, contract) > C.TrickRank(b, contract)
                 end)
-                if highInSuit[1] then return highInSuit[1] end
+                if pointCards[1] then return pointCards[1] end
             end
         end
 
