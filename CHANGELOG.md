@@ -1,5 +1,73 @@
 # Changelog
 
+## v0.5.5 — playtest-fixture audit: harness state-leakage bug found
+
+A targeted playtest-fixture audit (asked: "is Master good enough?")
+built a new `test_asymmetric_metrics.lua` harness that biases the
+deal so the bidder gets a realistic strong-Hokm trump cluster
+(J+9, J+9+A, or J+9+A+T of trump). Running it surfaced a
+LONG-STANDING bug in BOTH the asymmetric and the existing
+baseline harnesses that silently masked all Bel/Triple/Four/Gahwa
+measurements as 0% across every v0.5.x release.
+
+**No production code changed in this release.** Live bot behaviour
+is unaffected — the bug was purely in the offline tournament
+harnesses. v0.5.0–v0.5.4 telemetry must be re-read with the
+"escalation rates were unobservable" caveat.
+
+### Fixed (test harness)
+
+- **State-leakage bug in `resolveEscalation` (test_baseline_metrics.lua,
+  test_asymmetric_metrics.lua).** `Bot.PickDouble`, `PickTriple`,
+  `PickFour`, and `PickGahwa` all read `S.s.contract` and
+  `S.s.hostHands` directly. The harness called `resolveEscalation`
+  BEFORE `playOneRound` (which is what calls `freshState` + sets
+  the live state). So every escalation pick ran against either nil
+  state (round 1) or the PREVIOUS round's contract+hands (rounds 2+).
+  Result: defender PickDouble computed strength against the wrong
+  hand and threshold against the wrong contract, so it almost never
+  fired. Fix: call `freshState` and seed `S.s.contract` /
+  `S.s.hostHands` / `S.s.cumulative` BEFORE `resolveEscalation`.
+  `playOneRound` then re-runs `freshState` (idempotent) before play.
+
+### Added
+
+- **`tests/test_asymmetric_metrics.lua` + `tests/run_asymmetric.py`** —
+  100-round tournaments at three bias levels (moderate / strong /
+  elite) covering the full 6 tier configs × 2 modes matrix. Output
+  written to `.swarm_findings/bot_asymmetric_metrics.json`.
+
+- **`tests/probe_defender_strength.lua`** — diagnostic probe that
+  computes the defender-strength distribution across 1000 hands per
+  bias level and cross-validates by directly calling Bot.PickDouble.
+  Confirms the formula matches: 16% defender-clear-rate at TH=60
+  vs 16% per-defender Bel-fire rate from the live picker.
+
+### Findings (post-fix tournament data)
+
+Symmetric baseline (`bot_baseline_metrics.json`, 100-round tournaments):
+- all_basic natural: Bel 67% (6/9 rounds played)
+- all_advanced natural: Bel 13%
+- all_m3lm natural: Bel 14%
+- all_master natural: Bel 15%
+- mixed_*_master natural: Bel 13–15%
+- Triple still 0% across all natural-mode configs — bidder rarely
+  has the strength to push back
+
+Asymmetric (`bot_asymmetric_metrics.json`):
+- moderate bias: Bel 0–36%, sweep 6–7% (similar to symmetric)
+- strong bias: Bel 6–12%, first Triple observed (8% in basic)
+- elite bias: Bel 0–8%, sweep climbs to 12–21% (bidder strong → sweeps)
+- Master vs Basic in mixed configs: Master wins consistently across
+  all bias levels (AvgB > AvgA in mixed_basic_master_natural at all
+  three bias levels)
+
+### Notes
+
+- 177/177 regression tests still pass; pure test-infra change.
+- Future calibration sprints can now use reliable Bel/Triple/Four/
+  Gahwa rate measurements as a feedback signal.
+
 ## v0.5.4 — SWA banner shows the actual cards (player feedback)
 
 Previously the SWA banner showed only "N cards remaining" + timer.
