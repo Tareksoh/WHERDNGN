@@ -1,5 +1,83 @@
 # Changelog
 
+## v0.5.23 — Section 1 deferred bidding rules + audit H-3/H-7 fixes
+
+Three audit-pending items landed in one batch.
+
+### Changed (Bot.lua)
+
+- **B-7 Bel-fear bias for Sun bidding** (Common, video 25). When
+  OUR team's cumulative is at >= K.SUN_BEL_CUMULATIVE_GATE (=100),
+  the OTHER team can still Bel us in Sun (per the v0.5.9 E-1 rule:
+  only the team <100 may Bel; opp at <100 still qualifies). A
+  failed Bel'd Sun = ×2 multiplier on handTotal=130 raw = 26 game
+  points lost — major setback. Bias `thSun` UP by +8 to deter
+  Sun bids when we're at risk. Roughly one strength-tier penalty.
+  Sources: decision-trees.md S-7 / Section 1 row "Cumulative score
+  ≥100 (Sun-Bel-gate context)" (Common, video 25).
+
+- **H-3 singleton-low rank guard** (audit MASTER_REPORT). The
+  pre-v0.5.23 singleton-lead branch in `pickLead` priority 2
+  picked the lowest singleton unconditionally — including a
+  singleton Ace/T/K/Q in Hokm where the opponent void in that
+  suit can over-ruff and capture the honor for nothing. The
+  "ruffing entry" rationale (lead low, dump it, partner can lead
+  the suit back later for us to ruff) only applies to genuinely
+  low cards. Filter Hokm-contract singletons to face-rank 7/8/9;
+  if all our singletons are honors, fall through to the
+  longest-suit-low lead instead of dumping a winner. Sun keeps
+  current behavior (A/T are sure stoppers in Sun).
+  Sources: MASTER_REPORT H-3 / wave3 A-47.
+
+- **H-7 combined-urgency cap** (audit MASTER_REPORT). Previously
+  callers computed `urgency = scoreUrgency(team) + matchPointUrgency(team)`
+  with each component capped independently (±10 on
+  matchPointUrgency, +12 max on scoreUrgency). Combined could
+  reach +22, dropping BOT_BEL_TH from 70 to 48 in worst case —
+  bot Bels garbage hands when desperate. Per the audit comment
+  intent ("combined cap ±15"), introduced `combinedUrgency(team,
+  context)` helper that clamps the SUM. All five threshold
+  computations (Bel/Triple/Four/Gahwa + R2 Hokm) now route
+  through the helper. Sources: MASTER_REPORT H-7 / wave2 A-56.
+
+### Confirmed already wired (no code change in this release)
+
+- **G-2 round-1 conservative bias** (Common, video 25): R1 Hokm
+  threshold (`TH_HOKM_R1_BASE` ~=42) is already higher than R2
+  (`TH_HOKM_R2_BASE` ~=36). The v0.5.13 calibration locked in the
+  Saudi bidding-decision-tree's "round 1 stricter" intent. No new
+  code needed.
+
+- **B-3 5+ trump Kaboot pursuit** (Common, video 04): partially
+  handled by v0.5.19's trick-3 sweep-pursuit extension. The
+  trump-heavy hand path triggers sweep-pursuit early (trick 3+),
+  giving 5+ trumps free play to chase Kaboot when bidder team
+  hasn't lost a trick yet.
+
+### Deferred
+
+- **G-4 Takweesh bid-override anti-trigger** (Common, video 13):
+  blocks bidding when we just Takweeshed (Qaid). Conflicts with
+  the user's earlier Sun-overcall expectation (the Sun-overcall
+  scenario explicitly allows mid-bidding overcall). Defer until
+  the multi-day Hokm-overcall-window UX lands.
+
+- **H-9 BOT_GAHWA_TH=135 calibration**: audit recommends lowering
+  to 125 since 135 is mathematically near-unreachable. Defer —
+  Gahwa is a match-win commit; conservative bias preferred until
+  empirical Gahwa-success rate is measured.
+
+### Tests
+
+- 226/226 regression tests pass.
+- Headless tournament averages: Basic 97.9, M3lm 99.5, Master 99.5
+  over 30 rounds (tier ordering preserved post-edit).
+- The B-7 / H-3 / H-7 changes don't have dedicated test fixtures
+  (hand-shape gating is hard to pin without elaborate setups);
+  property-test legality coverage in test_state_bot.lua section
+  B sweeps the picker output across many random hands and would
+  catch any illegal-card regression.
+
 ## v0.5.22 — decision-trees.md Section 11 rule 3: pigeonhole pin extension
 
 Translates the Definite-confidence Section 11 rule (sampler hand-
