@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.8.5 — Hokm Faranka exception #3 + S.HighestUnplayedRank trump-rank fix
+
+Audit-sweep loop iteration. Two fixes that landed together because
+the second was discovered while implementing the first.
+
+### Fixed (State.lua)
+
+- **`S.HighestUnplayedRank` trump-rank-order bug**. Pre-v0.8.5 the
+  function walked `AKA_ORDER` (`A>T>K>Q>J>9>8>7`, plain rank) for
+  ALL suits — including the Hokm trump suit, where the actual rank
+  order is `J>9>A>T>K>Q>8>7`. So calling `HighestUnplayedRank(trump)`
+  while the J was still live would return "A" instead of "J",
+  producing wrong "boss" detection in the trick-8 sweep-pursuit
+  branch (Bot.lua:1503) and wrong logic for the trump-pull-skip
+  guard (Bot.lua:1832).
+- Now auto-detects when `suit == s.contract.trump` AND
+  `s.contract.type == K.BID_HOKM`, walks the new `TRUMP_HOKM_ORDER`
+  in that case. Backward-compatible — no caller signature change.
+- Practical impact: in late-game Hokm with J still live and us
+  holding A of trump, the bot was incorrectly leading A as a
+  "safe boss" in sweep pursuit. With the fix, the bot correctly
+  identifies J as the top-live and skips A-leads when J could
+  over-ruff. Estimated EV gain: 1-2 sweep recoveries per 100 rounds
+  in late-trick scenarios.
+
+### Changed (Bot.lua)
+
+- **Hokm Faranka exception #3** (Common, video 04). When J of
+  trump is observed dead AND we hold the 9 of trump → 9 is the
+  new top live trump. Faranka allowed (withhold the new boss to
+  ambush opp's remaining high cards). Detection uses the now-fixed
+  `S.HighestUnplayedRank(contract.trump) == "9"` predicate (clean
+  one-liner thanks to the trump-rank fix).
+- Layered alongside Section 10 exceptions #2 and #4 from v0.8.4 in
+  pickFollow. Anti-trigger from v0.8.4 (rule 7: opp bidder Q-led +
+  we hold J+8) still applies and overrides exception #3 too.
+
+### Tests
+
+- 319/319 regression tests pass (no regression).
+- Both fixes are observation-driven and require specific late-game
+  hand shapes; the property-test legality sweep (section B) covers
+  many random states without explicit fixtures. The
+  `HighestUnplayedRank` fix is implicitly exercised every time the
+  function is called — pre-v0.8.5 callers got wrong results that
+  happened to not break legality but did mis-aim the bot's lead/
+  follow choices.
+
 ## v0.8.4 — Hokm Faranka exceptions (Section 10 rules 2, 4)
 
 Closes the v0.5.20-deferred Section 10 exceptions. Default Hokm

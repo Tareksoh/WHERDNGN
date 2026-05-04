@@ -2504,6 +2504,27 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
         if myTrumpCount == 2 then farankaTriggered = true end
 
+        -- v0.8.5 Exception #3 (Common, video 04): J of trump is dead
+        -- AND we hold the 9 of trump → 9 is the new top live trump
+        -- (Hokm trump rank: J=8 > 9=7 > A=6 > ...). Faranka allowed
+        -- because withholding the new boss to ambush opp's other
+        -- high cards has clear EV.
+        --
+        -- Detection uses S.HighestUnplayedRank(trump) which is
+        -- trump-aware as of v0.8.5 (was buggy plain-rank-order
+        -- pre-v0.8.5). When it returns "9", J has been played AND 9
+        -- is still live — which exactly matches the rule's WHEN.
+        if not farankaTriggered and S.HighestUnplayedRank
+           and S.HighestUnplayedRank(contract.trump) == "9" then
+            local hold9 = false
+            for _, c in ipairs(hand) do
+                if C.Suit(c) == contract.trump and C.Rank(c) == "9" then
+                    hold9 = true; break
+                end
+            end
+            if hold9 then farankaTriggered = true end
+        end
+
         -- Exception #4: we are bidder + both opps void in trump.
         if not farankaTriggered and contract.bidder == seat then
             local oppTrumpExhausted = true

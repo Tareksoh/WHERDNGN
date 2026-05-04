@@ -1257,18 +1257,33 @@ end
 -- adjust their play.
 -- ---------------------------------------------------------------------
 
--- Sun ranking order (highest first). Used to walk down the AKA ladder
--- as cards fall. The trump-only ranking (RANK_TRUMP_HOKM) doesn't
--- apply here — AKA is by definition called on NON-trump suits.
+-- Plain (non-trump) ranking order — highest first. A=11pt, T=10pt, etc.
+-- Used in Sun, and in non-trump suits under Hokm. AKA is by definition
+-- called on NON-trump suits, so this was the original AKA_ORDER name.
 local AKA_ORDER = { "A", "T", "K", "Q", "J", "9", "8", "7" }
+-- v0.8.5 BUG fix: trump-suit ranking order in Hokm (J > 9 > A > T > K
+-- > Q > 8 > 7). Pre-v0.8.5 HighestUnplayedRank used AKA_ORDER for ALL
+-- suits, which incorrectly returned "A" for the trump suit when the
+-- actual top live trump was the J — affecting sweep-pursuit boss
+-- detection (Bot.lua line 1503) and the trick-pull-skip guard (line
+-- 1832). Now HighestUnplayedRank auto-detects whether `suit` is the
+-- contract trump in Hokm and walks the correct order.
+local TRUMP_HOKM_ORDER = { "J", "9", "A", "T", "K", "Q", "8", "7" }
 
 -- Returns the rank string of the highest unplayed card in `suit`,
 -- ignoring any cards already in s.playedCardsThisRound. Returns nil
 -- if every card in the suit has been played (shouldn't happen mid-hand).
+-- Trump-aware: when called on the contract's trump suit in Hokm,
+-- walks TRUMP_HOKM_ORDER. Otherwise walks AKA_ORDER (plain rank).
 function S.HighestUnplayedRank(suit)
     if not suit or suit == "" then return nil end
     s.playedCardsThisRound = s.playedCardsThisRound or {}
-    for _, r in ipairs(AKA_ORDER) do
+    local order = AKA_ORDER
+    if s.contract and s.contract.type == K.BID_HOKM
+       and s.contract.trump == suit then
+        order = TRUMP_HOKM_ORDER
+    end
+    for _, r in ipairs(order) do
         if not s.playedCardsThisRound[r .. suit] then
             return r
         end
