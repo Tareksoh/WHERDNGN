@@ -196,6 +196,17 @@ local function emptyStyle()
             sunFail     = 0,
             aceLate     = 0,
             leadCount   = { S = 0, H = 0, D = 0, C = 0 },
+            -- v0.8.2 Section 11 rule 8: bait-detected ledger. When this
+            -- seat plays J (highest of led suit / trump) AND their
+            -- partner was already winning the pre-J trick state, the
+            -- J was unnecessary — they're "wasting" it as a Saudi
+            -- deceptive-overplay signal ("I'm void below J, re-lead
+            -- this suit"). Per-suit count. Used by pickLead defender
+            -- branch as an avoid-suit hint (don't re-lead the suit
+            -- they baited; they have leverage there).
+            -- Sources: decision-trees.md Section 11 rule 8 (Sometimes,
+            -- video 08); Section 4 rules 4-5 (deceptiveOverplay).
+            baitedSuit  = { S = 0, H = 0, D = 0, C = 0 },
             -- v0.5.10 Section 8 Tahreeb (تهريب) signal log.
             --   tahreebSent[suit] = list of ranks recorded as discards
             --   while this seat's PARTNER was winning the trick. The
@@ -405,6 +416,33 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- by opponents who hoard high cards in X waiting to over-trump.
     if (#trickPlays == 1) and style.leadCount then
         style.leadCount[cardSuit] = (style.leadCount[cardSuit] or 0) + 1
+    end
+
+    -- v0.8.2 Section 11 rule 8: bait-detected ledger. Detect when
+    -- `seat` plays J of led suit (or trump) when their partner was
+    -- already winning the pre-J trick state. The J was unnecessary
+    -- for trick-taking — Saudi convention reads this as deceptive
+    -- overplay ("I'm void below J, re-lead this suit").
+    -- Detection requires:
+    --   • #trickPlays >= 2 (we have prior plays to evaluate)
+    --   • The played card is J
+    --   • Pre-J trick winner == seat's partner
+    -- The increment fires per-suit per-occurrence; pickLead reads
+    -- it as a suit-avoid hint via the Fzloky avoid pipeline.
+    -- Sources: decision-trees.md Section 11 rule 8 (Sometimes, 08);
+    -- Section 4 rules 4-5 (deceptiveOverplay sender, deferred).
+    if not wasIllegal and contract and #trickPlays >= 2
+       and C.Rank(card) == "J" and style.baitedSuit then
+        local prePlays = {}
+        for i = 1, #trickPlays - 1 do prePlays[i] = trickPlays[i] end
+        if #prePlays >= 1 then
+            local prevTrick = { plays = prePlays, leadSuit = leadSuit }
+            local prevWinner = R.CurrentTrickWinner(prevTrick, contract)
+            if prevWinner == R.Partner(seat) then
+                style.baitedSuit[cardSuit] =
+                    (style.baitedSuit[cardSuit] or 0) + 1
+            end
+        end
     end
 
     -- v0.5.10 Section 8 Tahreeb recording. When `seat` plays a non-led
@@ -1640,6 +1678,31 @@ local function pickLead(legal, contract, seat)
                     fzlokyAvoidSuit = m.suit
                 end
                 break  -- only need one avoid hint
+            end
+        end
+    end
+
+    -- v0.8.2 Section 11 rule 8: bait-detected suit avoidance.
+    -- An opp who played J in suit X with their partner already
+    -- winning was performing Saudi deceptive overplay — they're
+    -- baiting us to re-lead X assuming they're void below J. AVOID
+    -- leading X. Layered on top of fzlokyAvoid / meld-suit avoid;
+    -- earlier-set avoid wins (we don't override). M3lm-gated.
+    -- Sources: decision-trees.md Section 11 rule 8 (Sometimes, 08).
+    if Bot.IsM3lm() and Bot._partnerStyle then
+        for s2 = 1, 4 do
+            if R.TeamOf(s2) ~= R.TeamOf(seat) then
+                local m = Bot._partnerStyle[s2]
+                if m and m.baitedSuit then
+                    for suit, count in pairs(m.baitedSuit) do
+                        if count >= 1 and not fzlokyAvoidSuit
+                           and suit ~= (contract.trump or "") then
+                            fzlokyAvoidSuit = suit
+                            break
+                        end
+                    end
+                    if fzlokyAvoidSuit then break end
+                end
             end
         end
     end

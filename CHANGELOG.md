@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.8.2 — Section 11 rule 8 bait-detected ledger
+
+Closes the Section 11 rule 8 deferred item. When an opponent plays J
+of led suit (or trump) while their partner was already winning the
+trick — i.e., the J was unnecessary — the bot now reads it as Saudi
+deceptive overplay ("I'm void below J, re-lead this suit") and
+records the suit as a bait-detected target.
+
+Subsequent `pickLead` defender turns AVOID re-leading that suit,
+denying the opp's bait setup.
+
+### Added (Bot.lua emptyStyle)
+
+- `Bot._partnerStyle[seat].baitedSuit = { S=0, H=0, D=0, C=0 }` —
+  per-suit counter accumulated across the game.
+
+### Added (Bot.lua OnPlayObserved)
+
+- Bait-detection branch: when a non-self seat plays J AND
+  `#trickPlays >= 2` AND the pre-J trick winner equals this seat's
+  partner, increment `baitedSuit[cardSuit]`. M3lm-implicit (the
+  ledger always accumulates; only readers gate on tier).
+
+### Added (Bot.lua pickLead defender branch)
+
+- After the v0.7.1 opp-meld suit-avoidance check: if any opp
+  `baitedSuit[X] >= 1` AND no earlier avoid is set AND X is not
+  trump, set `fzlokyAvoidSuit = X`. Layered avoid logic:
+  Fzloky > meld-suit > bait-suit (first non-nil wins).
+
+### Tests
+
+- 319/319 regression tests pass (no regression).
+- Bait detection is observation-driven; the property-test sweep in
+  test_state_bot.lua section B exercises pickLead against many
+  random states without explicit bait fixtures. The wire is graceful
+  — when no bait is observed, all reads return 0 and behave
+  identically to v0.8.1.
+
 ## v0.8.1 — B-95 opponent score-urgency tracking
 
 Closes the wave8 B-95 gap: bot's own urgency was wired into
