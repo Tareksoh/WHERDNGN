@@ -131,11 +131,24 @@ A+T mardoofa as a strength bonus distinct from raw Ace count.
 Per video #31:
 > "Dealer + يسار الموزع only. RIGHT (يمين) and ACROSS (أمام) cannot."
 
-This translates to bidPositions 3 and 4 in State.lua's bidding
-order — same as the current `S.HostAdvanceBidding` enforcement at
-State.lua:1464-1487. **Verify:** the existing comment says "3rd and
-4th players in turn order"; confirm this maps to dealer + dealer's-
-left in actual seat geometry (not dealer + dealer's-right).
+This maps to **bidPositions 3 + 4** in State.lua's bidding order
+(`{dealer+1, dealer+2, dealer+3, dealer}`). In WHEREDNGN's seat
+geometry, `R.NextSeat(seat) = (seat % 4) + 1` is the seat to your
+RIGHT (per UI.lua:223-225 — `pos == "right"` returns
+`R.NextSeat(me)`). So:
+
+- bidPosition 1 = `dealer+1` = **dealer's RIGHT** (NOT eligible)
+- bidPosition 2 = `dealer+2` = across (NOT eligible)
+- bidPosition 3 = `dealer+3` = **dealer's LEFT** (eligible)
+- bidPosition 4 = `dealer` = dealer himself (eligible)
+
+The current code at State.lua:1468 (`if bidPosition < 3 then ...
+silently drop`) correctly enforces dealer's-LEFT + dealer.
+
+**v0.5.6 audit history:** This was briefly inverted to positions
+1 + 4 in v0.5.6 based on a misreading of Saudi seat geometry, then
+reverted in v0.5.7 after audit confirmed UI.lua's
+NextSeat=right convention.
 
 ### Ashkal trigger conditions
 
@@ -246,28 +259,19 @@ Video #28 surfaced 5 procedural rules. Cross-checked against
 | 5 | "Once passed, cannot Ashkal later" | ✓ Naturally enforced (per-round-one-bid + round 2 bans Ashkal) |
 | BONUS | Bel-100 Sun gate (video #11) | ✓ Net.lua:68-76 (`N._SunBelAllowed`) |
 
-Video #31 surfaced one **likely rule discrepancy** that needs
-verification:
+Video #31's Ashkal seat-restriction (dealer + dealer's LEFT) is
+**already correctly implemented** — verified in audit during v0.5.7.
 
-- Video #31 says Ashkal is eligible only for **dealer + dealer's
-  LEFT (يسار الموزع)** — explicitly forbidding dealer's right
-  (يمين) and across (أمام).
-- Current code at State.lua:1468 enforces `bidPosition >= 3`. In
-  the bidding order `{ dealer+1, dealer+2, dealer+3, dealer }`:
-  - bidPosition 1 = `dealer+1` = **dealer's LEFT** (CCW)
-  - bidPosition 3 = `dealer+3` = **dealer's RIGHT**
-  - bidPosition 4 = `dealer`
-  - So `>= 3` allows **dealer's RIGHT + dealer** (positions 3, 4)
-- Video #31 implies the correct restriction is positions **1 + 4**
-  (dealer's LEFT + dealer), NOT 3 + 4.
-- **Two possibilities:**
-  1. The current code is wrong and should change to `bidPosition == 1
-     OR bidPosition == 4` (or equivalently, by deriving from
-     `S.s.dealer` directly).
-  2. Saudi convention has regional variation; the existing code's
-     citation of "نظام لعبة البلوت الأساسي" reflects a different
-     valid convention.
-- **Recommended action:** confirm with a second Saudi source
-  before changing code. If a fix is warranted, refactor to
-  `R.IsAshkalEligible(seat)` derived from `S.s.dealer` rather than
-  hard-coded bid-position number.
+In WHEREDNGN's seat geometry (per UI.lua:223-225), `R.NextSeat(seat)`
+returns the seat to your RIGHT. So in the bidding order
+`{ dealer+1, dealer+2, dealer+3, dealer }`:
+
+- bidPosition 1 = `dealer+1` = **dealer's RIGHT** (NOT eligible)
+- bidPosition 3 = `dealer+3` = **dealer's LEFT** (eligible)
+- bidPosition 4 = `dealer` (eligible)
+
+State.lua:1468's `bidPosition < 3` correctly allows only positions
+3 + 4 = dealer's LEFT + dealer. **No change needed.**
+
+(v0.5.6 attempted to "fix" this by changing to positions 1+4,
+which inverted the rule. v0.5.7 reverted after audit.)

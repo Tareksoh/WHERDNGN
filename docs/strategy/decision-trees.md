@@ -52,7 +52,7 @@ actual bot logic.** Each rule maps to a specific picker function
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
-| Seat is NOT dealer or dealer's left | **Ashkal forbidden — pass or bid normally** | Saudi rule (rule of game, not heuristic). | State.lua:1464-1487 already enforces; verify dealer's-left interpretation. | Definite | 27, 31 |
+| Seat is NOT dealer or dealer's left | **Ashkal forbidden — pass or bid normally** | Saudi rule (rule of game, not heuristic). | State.lua:1464-1487 enforces via `bidPosition < 3`. NextSeat(s)=right per UI.lua:223 → dealer's-LEFT = bidPosition 3, dealer = bidPosition 4. | Definite | 27, 31 |
 | Eligible seat; hand is Sun-bid-eligible (≥1 Ace, ideally mardoofa); bid-up card is small/mid (7,8,9,J,Q,singleton-T) | **Ashkal — convert partner's contract to Sun** | Bid-up small = your no-trump conversion advantage. | `Bot.PickAshkal` — add bid-up rank check `(not yet wired)`. | Common | 31 |
 | Eligible seat; bid-up card is **A** of a suit | **Do NOT Ashkal** — losing the A into Sun with no protection | Bid-up Ace would be torn through immediately. | `Bot.PickAshkal` anti-trigger `(not yet wired)`. | Definite | 31 |
 | Eligible seat; bid-up is **T with A in your hand same suit** | **Do NOT Ashkal** — mardoofa already exists; preserve via Hokm | Hokm preserves the A+T pair. | `Bot.PickAshkal` anti-trigger `(not yet wired)`. | Common | 31 |

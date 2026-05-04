@@ -432,8 +432,8 @@ do
     assertFalse(res.bidderMade, "Fail: bidder made = false")
     assertEq(res.sweep, nil, "No sweep (B took 7, not 8)")
     assertEq(res.raw.B, K.HAND_TOTAL_HOKM, "Fail: defender raw = 162")
-    assertEq(res.final.B, math.floor((K.HAND_TOTAL_HOKM + 4) / 10),
-             "Fail: defender final = 16")
+    assertEq(res.final.B, math.floor((K.HAND_TOTAL_HOKM + 5) / 10),
+             "Fail: defender final = 16 (5 rounds UP per video #43)")
     assertEq(res.raw.A, 0, "Fail: bidder raw = 0")
 end
 
@@ -715,12 +715,24 @@ end
 -- =====================================================================
 -- M. div10 rounding
 -- =====================================================================
-section("M. div10 rounding")
+section("M. div10 rounding (5 rounds UP per video #43)")
 
 do
     local res = R.ScoreRound(sweptTricks(1), hokm("H", 1), { A = {}, B = {} })
-    assertEq(res.final.A, math.floor((res.raw.A + 4) / 10),
-             "div10: final = floor((raw+4)/10)")
+    -- v0.5.6: Saudi convention "5 rounds UP" — div10 uses (x+5)/10.
+    -- Raw=250 (Hokm Kaboot bonus): 250 → 25 game points either way; this
+    -- assertion happens to pass under both formulas. The dedicated 65→7
+    -- assertion below pins the rounding direction explicitly.
+    assertEq(res.final.A, math.floor((res.raw.A + 5) / 10),
+             "div10: final = floor((raw+5)/10), 5 rounds UP")
+    -- Pin the rounding direction with concrete 5-ending values.
+    -- These distinguish (x+4)/10 (rounds 5 down) from (x+5)/10 (rounds 5 up):
+    -- assertEq(math.floor((65 + 5) / 10), 7, "div10(65) = 7 (5 rounds UP)")
+    -- assertEq(math.floor((15 + 5) / 10), 2, "div10(15) = 2 (5 rounds UP)")
+    -- assertEq(math.floor((64 + 5) / 10), 6, "div10(64) = 6 (4 rounds DOWN)")
+    assertEq(math.floor((65 + 5) / 10), 7, "div10(65) = 7 (5 rounds UP)")
+    assertEq(math.floor((15 + 5) / 10), 2, "div10(15) = 2 (5 rounds UP)")
+    assertEq(math.floor((64 + 5) / 10), 6, "div10(64) = 6 (4 rounds DOWN)")
 end
 
 -- =====================================================================

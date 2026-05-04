@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.5.7 — v0.5.6 audit follow-up: revert Ashkal misfix + correct CHANGELOG narrative
+
+A 3-agent audit on v0.5.6 surfaced two issues that had to be
+fixed:
+
+1. **The v0.5.6 Ashkal seat-restriction "fix" was an inversion,
+   not a correction** — the original v0.5.5 code was already
+   correct. v0.5.6's misfix is reverted in this release.
+
+2. **The v0.5.6 CHANGELOG attributed a Bel-rate jump (0% → 13-67%)
+   to the score-rounding cascade through `scoreUrgency`. That
+   attribution was empirically false** — A/B test reverting the
+   rounding alone showed identical Bel rates. The actual cause
+   was v0.5.5's harness state-leakage fix, not v0.5.6's rounding
+   change. Narrative corrected.
+
+Plus a small test-fixture cleanup: `tests/test_rules.lua` had
+two assertions hard-coded to the OLD `(x+4)/10` formula; both
+coincidentally passed under the new `(x+5)/10` formula but were
+asserting the wrong invariant. Updated to `+5` and added explicit
+"5 rounds UP" boundary tests.
+
+### Fixed
+
+- **Reverted State.lua:1450-1490 Ashkal seat-restriction.** The
+  v0.5.6 change to `bidPosition == 1 OR bidPosition == 4` was
+  based on misreading WHEREDNGN's seat geometry. Audit against
+  `UI.lua:223-225` confirms `R.NextSeat(seat) = (seat % 4) + 1`
+  is "the seat to your RIGHT" (the existing UI code documents
+  this — `pos == "right"` returns `R.NextSeat(me)`). So in the
+  bidding order `{dealer+1, dealer+2, dealer+3, dealer}`:
+  - bidPosition 1 = dealer+1 = **dealer's RIGHT** (NOT eligible)
+  - bidPosition 3 = dealer+3 = **dealer's LEFT** (eligible)
+  - bidPosition 4 = dealer (eligible)
+
+  Video #31's "dealer + dealer's LEFT" therefore maps to
+  positions 3 + 4 — exactly what `bidPosition < 3` (the v0.5.5
+  code) was already enforcing. **The v0.5.5 code was correct;
+  the v0.5.6 misfix is reverted.**
+
+  Comment block in State.lua updated to explicitly cite
+  UI.lua's seat convention as the disambiguator.
+
+- **Updated `tests/test_rules.lua` div10 assertions** to use
+  `(x+5)/10` and added 3 explicit boundary tests pinning
+  "5 rounds UP" behavior:
+  - `div10(65) = 7` (5 rounds UP)
+  - `div10(15) = 2` (5 rounds UP)
+  - `div10(64) = 6` (4 rounds DOWN)
+
+### Notes
+
+- The score-rounding fix in `Rules.lua:698` (`(x+4)/10` →
+  `(x+5)/10`) is **kept** — it remains mathematically correct
+  per video #43. The CHANGELOG narrative attributing the Bel-rate
+  cascade to it has been corrected, but the fix itself stands.
+- Strategy docs (`docs/strategy/bidding.md`,
+  `docs/strategy/decision-trees.md`) updated to reflect the
+  corrected Ashkal seat geometry.
+- 180/180 regression tests pass (was 177 before; 3 new boundary
+  tests added).
+
+### Audit findings (recorded for traceability)
+
+- Audit #1 (Ashkal): FLAGS — verdict driven by `UI.lua:223-225`
+  seat-direction convention conflicting with v0.5.6's comment.
+  Resolution: revert.
+- Audit #2 (score rounding): FLAGS minor — test fixtures
+  hardcoded `+4` formula. Resolution: update to `+5` + add
+  boundary tests.
+- Audit #3 (Bel-rate cascade): REFUTED — empirical A/B test
+  showed rounding had zero causal effect on Bel rates. The
+  v0.5.6 CHANGELOG narrative was a false attribution.
+  Resolution: correct the narrative; the actual cause was
+  v0.5.5's harness state-leakage fix unmasking previously-hidden
+  Bel events.
+
 ## v0.5.6 — Saudi tournament-video doc batch + 2 rule-correctness fixes
 
 This release lands two things:

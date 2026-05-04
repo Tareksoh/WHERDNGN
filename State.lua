@@ -1453,27 +1453,33 @@ function S.HostAdvanceBidding()
                         -- RESTRICTIONS:
                         --   • Only the **dealer + dealer's LEFT**
                         --     (يسار الموزع) may call Ashkal — per
-                        --     video #31 "شرح الاشكل بالتفصيل في البلوت".
-                        --     In the bidding order { dealer+1, dealer+2,
-                        --     dealer+3, dealer }, dealer's LEFT is
-                        --     bidPosition 1 (first to bid, CCW from
-                        --     dealer) and dealer is bidPosition 4.
-                        --     Earlier docs (and earlier code comment)
-                        --     said "3rd and 4th in turn order" —
-                        --     that's RIGHT + dealer, which is wrong
-                        --     per the canonical Saudi convention.
+                        --     video #31 "شرح الاشكل بالتفصيل في البلوت"
+                        --     and "نظام لعبة البلوت الأساسي" rule 3.
+                        --     In WHEREDNGN seat geometry, NextSeat(seat)
+                        --     is the seat to your RIGHT (per
+                        --     UI.lua:223-225). So dealer's LEFT is the
+                        --     seat at `dealer-1` mod 4 = bidPosition 3
+                        --     in the order array. Bidder at order
+                        --     position 4 is the dealer.
+                        --     Result: bidPositions 3 and 4 are eligible.
                         --   • A prior direct Sun blocks Ashkal —
                         --     direct Sun already locked the contract
                         --     type, no point in Ashkal.
                         --   • A later direct Sun can still overcall
                         --     Ashkal (reassigns declarer).
+                        --
+                        -- v0.5.6 incorrectly inverted this to positions
+                        -- 1 + 4 (dealer's-RIGHT + dealer); v0.5.7
+                        -- restores the correct dealer's-LEFT + dealer
+                        -- = positions 3 + 4 mapping after audit
+                        -- against UI.lua's NextSeat=right convention.
                         local bidPosition = 0
                         for i, ord in ipairs(order) do
                             if ord == seat then bidPosition = i; break end
                         end
-                        if bidPosition ~= 1 and bidPosition ~= 4 then
-                            -- Silently drop — only dealer's-left (pos 1)
-                            -- and dealer (pos 4) may call Ashkal.
+                        if bidPosition < 3 then
+                            -- Silently drop — 1st and 2nd bidders
+                            -- can't legally call Ashkal.
                         else
                             local priorSun = false
                             for _, ord in ipairs(order) do
