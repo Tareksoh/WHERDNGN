@@ -1,5 +1,89 @@
 # Changelog
 
+## v0.5.10 — decision-trees.md Section 8: Tahreeb (تهريب) MVP
+
+The most heavily-sourced section of decision-trees.md (5 of 10 source
+videos) — partner-supply discard convention. This release lands the
+sender-side encoding + receiver-side reading scaffolding as MVP. All
+the high-confidence Definite rules from Section 8 are wired; the
+Common-confidence shape-specific receiver rules (T-mardoofa, T-tripled,
+Sun-bidder special cases) are deferred to a follow-up.
+
+### Added
+
+- **`tahreebSent[suit]` per-seat style-ledger key** (Bot.lua, in
+  `emptyStyle`). For each suit, accumulates the rank of every discard
+  the seat made WHILE THEIR PARTNER WAS WINNING the trick. Reset
+  per-round via `Bot.ResetMemory` (other ledger counters are per-game
+  and stay across rounds — this matches their semantics).
+
+- **`tahreebClassify(signals)` helper** (Bot.lua, before pickLead).
+  Classifies a tahreebSent list into `"bargiya"` (Ace at index 1),
+  `"want"` (≥2-event ascending), `"dontwant"` (≥2-event descending),
+  `"hint"` (single non-Ace event), or `nil`. Uses `K.RANK_PLAIN` for
+  ordering since Tahreeb signals are non-trump discards.
+
+- **Tahreeb-signal recording in `Bot.OnPlayObserved`.** When `seat`
+  plays a non-led-suit card AND the trick winner BEFORE this play
+  was `R.Partner(seat)`, append the rank to
+  `Bot._partnerStyle[seat].tahreebSent[discardSuit]`. The "winner
+  before this play" is computed by reconstructing the trick with all
+  plays except the current one and calling `R.CurrentTrickWinner`.
+
+### Wired (Section 8 rules)
+
+**Sender side** (in `pickFollow` partner-winning + void-in-led branch,
+M3lm+ + bot-partner-only):
+
+- **T-1 Bargiya** (Definite, videos 01, 03). Sun, partner winning,
+  hand has A of side suit X with cover (≥2 cards in X) → discard
+  the A as Bargiya ("I have the slam in X, lead it back").
+- **T-4 Dump-ordering** (Definite, video 01). From a 2-card non-led
+  non-trump suit, dump the LARGER first. Larger-first is unambiguous
+  refusal; smaller-first would be a false positive bottom-up signal.
+
+**Receiver side** (in `pickLead`, M3lm+ + bot-partner-only):
+
+- **T-7/T-8 reading** (Definite, videos 09, 10). Read partner's
+  recorded `tahreebSent` per suit; classify; if any suit returns
+  `"bargiya"` (priority 3) or `"want"` (priority 2), prefer
+  leading our LOWEST card in that suit (so partner's tops win). If
+  any suit returns `"dontwant"`, mark it as avoid (informational —
+  not yet consumed by the picker; the existing low-from-longest
+  fallback naturally avoids declared-want suits).
+
+### Tier gating
+
+All Tahreeb logic is M3lm+ and bot-partner-only. Signals to a human
+partner are noise (humans don't follow the convention reliably);
+the existing Fzloky reasoning at the same site applies here.
+
+### Tests
+
+- 196/196 regression tests pass (no new tests in this release —
+  Tahreeb behavior is exercised in production via the M3lm+ tier
+  in real games; the existing harnesses use `pickContract` and
+  fixed-bidder asymmetric deals which don't drive PickFollow's
+  partner-winning discard branch).
+- 100-round baseline tournament metrics identical to v0.5.9 — the
+  Tahreeb branch fires only in M3lm+ Sun discard scenarios, rare
+  enough in random symmetric play that aggregate metrics don't shift.
+
+### Deferred (Section 8 rules NOT in this release)
+
+- **Common-confidence receiver shape rules** (T-mardoofa, T-tripled,
+  T+sun-bidder, T+non-sun-bidder, no-winning-card high-return,
+  partner-resupply release-control). These need richer hand-shape
+  inference + per-suit T-count tracking.
+- **Three-discard variant** (Common, video 10). Strict-ascending
+  3-event sequences. Requires extending the encoding state machine.
+- **Sender's strong-suit avoidance** (Common, video 03). Don't
+  Tahreeb FROM your strong suit. Currently the bot may Bargiya
+  away its own strong-suit Ace if it has cover; the fix needs a
+  "what is our strong suit" classifier.
+- **Cutter-as-Tahreeb-event** (Common, video 03). Treating a ruff
+  as a Tahreeb signal. Adds a state-tracking dimension.
+
 ## v0.5.9 — decision-trees.md Section 2: Sun Bel-100 legality gate
 
 Translates the Definite-confidence rule from Section 2 (Escalation):

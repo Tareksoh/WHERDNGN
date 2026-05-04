@@ -140,6 +140,18 @@ end
 
 function Bot.ResetMemory()
     Bot._memory = emptyMemory()
+    -- v0.5.10 Section 8: clear per-round Tahreeb signals on round-start.
+    -- Bot.ResetMemory is called once per round; the other _partnerStyle
+    -- counters (bels/triples/fours/gahwas/etc.) are intentionally
+    -- per-game and stay across rounds.
+    if Bot._partnerStyle then
+        for s = 1, 4 do
+            local style = Bot._partnerStyle[s]
+            if style and style.tahreebSent then
+                style.tahreebSent = { S = {}, H = {}, D = {}, C = {} }
+            end
+        end
+    end
 end
 
 -- ---------------------------------------------------------------------
@@ -184,6 +196,19 @@ local function emptyStyle()
             sunFail     = 0,
             aceLate     = 0,
             leadCount   = { S = 0, H = 0, D = 0, C = 0 },
+            -- v0.5.10 Section 8 Tahreeb (تهريب) signal log.
+            --   tahreebSent[suit] = list of ranks recorded as discards
+            --   while this seat's PARTNER was winning the trick. The
+            --   sender's intent is encoded by the order of the list:
+            --   ascending = "want this suit", descending = "don't want",
+            --   single Ace at index 1 = Bargiya (برقية, "telegram" —
+            --   strongest "lead this back" signal). Reset per round
+            --   in Bot.OnRoundEnd (per-round, not per-game) so signals
+            --   from a previous round don't leak into receiver
+            --   inference.
+            -- Sources: decision-trees.md Section 8 (Definite, videos
+            -- 01, 02, 03, 09, 10).
+            tahreebSent = { S = {}, H = {}, D = {}, C = {} },
         }
     end
     return m
@@ -342,6 +367,42 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- by opponents who hoard high cards in X waiting to over-trump.
     if (#trickPlays == 1) and style.leadCount then
         style.leadCount[cardSuit] = (style.leadCount[cardSuit] or 0) + 1
+    end
+
+    -- v0.5.10 Section 8 Tahreeb recording. When `seat` plays a non-led
+    -- suit (discard) AND their partner was winning the trick BEFORE
+    -- this play, the discard is a Tahreeb signal directed at the
+    -- partner. Record (suit, rank) in `Bot._partnerStyle[seat].
+    -- tahreebSent[suit]` so the partner-of-`seat` (us, when we read
+    -- partner's signals later) can classify direction:
+    --   • single Ace at index 1 → Bargiya (برقية, "lead this back")
+    --   • ascending sequence (rank order rises) → "want this suit"
+    --   • descending sequence → "do NOT want this suit"
+    -- Two events are needed for high-confidence direction; a single
+    -- discard is a hint (per video #09: "تهريب يحتاج تهريب ثاني عشان
+    -- يأكد"). The picker (pickLead M3lm+) decides what to act on.
+    -- Sources: decision-trees.md Section 8 (Definite, videos 01, 02,
+    -- 03, 09, 10).
+    if not wasIllegal and leadSuit and cardSuit ~= leadSuit
+       and contract and style.tahreebSent then
+        -- Was partner-of-`seat` winning the trick BEFORE this play?
+        -- Construct a "prior plays" trick (everything except the play
+        -- we just observed, which is the most recent entry) and check
+        -- the trick winner.
+        local plays = trickPlays
+        if plays and #plays >= 2 then
+            local prior = {}
+            for i = 1, #plays - 1 do prior[i] = plays[i] end
+            local priorTrick = { plays = prior, leadSuit = leadSuit }
+            local prevWinner = R.CurrentTrickWinner(priorTrick, contract)
+            if prevWinner and R.Partner(seat) == prevWinner then
+                -- Discard while partner is winning = Tahreeb signal.
+                local list = style.tahreebSent[cardSuit]
+                if list then
+                    list[#list + 1] = C.Rank(card)
+                end
+            end
+        end
     end
 
     -- Audit Tier 4 (B-67): late-trick Ace counter. Aces played at
@@ -1164,6 +1225,47 @@ local function wouldWin(card, trick, contract, seat)
     return R.CurrentTrickWinner(sim, contract) == seat
 end
 
+-- v0.5.10 Section 8: classify a partner's recorded Tahreeb signal in
+-- a single suit. `signals` is a list of ranks (e.g. {"7","9"} =
+-- ascending = "want this suit"; {"J","9"} = descending = "do NOT want
+-- this suit"; {"A"} at index 1 = Bargiya).
+--
+-- Returns one of:
+--   "bargiya"  — partner discarded the Ace; lead-this-back signal.
+--   "want"     — ascending sequence of ≥2 events; partner wants this.
+--   "dontwant" — descending sequence of ≥2 events; partner refuses.
+--   "hint"     — exactly 1 event (≠ Ace); ambiguous, wait for second.
+--   nil        — no signal.
+--
+-- Sources: decision-trees.md Section 8 (Definite, videos 01, 09, 10).
+local function tahreebClassify(signals)
+    if not signals or #signals == 0 then return nil end
+    -- Bargiya = the very first observed discard in this suit was the Ace.
+    -- Per video #14 there are two semantic flavors of Bargiya (invite vs
+    -- defensive shed), but for receiver-side action we treat both as
+    -- "lead-this-back" — the worst case is leading partner's strong
+    -- suit, which is still a reasonable play. Defer the
+    -- invite-vs-shed disambiguation to a future patch with better
+    -- hand-shape inference.
+    if signals[1] == "A" then return "bargiya" end
+    if #signals == 1 then return "hint" end
+    -- Compare rank-order indices using K.RANK_PLAIN (the non-trump
+    -- ordering: 7<8<9<J<Q<K<T<A). Tahreeb signals are in non-trump
+    -- discards, so plain ranking applies. A 2+-event sequence that's
+    -- monotonically increasing → "want"; monotonically decreasing →
+    -- "dontwant"; mixed → ambiguous → fall back to "hint".
+    local plain = K.RANK_PLAIN
+    local ascending, descending = true, true
+    for i = 2, #signals do
+        local prev, cur = plain[signals[i - 1]] or 0, plain[signals[i]] or 0
+        if cur <= prev then ascending = false end
+        if cur >= prev then descending = false end
+    end
+    if ascending  then return "want" end
+    if descending then return "dontwant" end
+    return "hint"
+end
+
 local function pickLead(legal, contract, seat)
     local myTeam = R.TeamOf(seat)
     local isBidderTeam = (contract.type == K.BID_HOKM
@@ -1243,6 +1345,60 @@ local function pickLead(legal, contract, seat)
             if su ~= contract.trump and S.HighestUnplayedRank(su) == r then
                 return c
             end
+        end
+    end
+
+    -- v0.5.10 Section 8 Tahreeb receiver. M3lm+ tier reads partner's
+    -- recorded Tahreeb signals (discards while we were winning) and
+    -- biases the lead. Higher confidence than Fzloky's first-discard
+    -- signal — Tahreeb is a deliberate sender-side encoding, not a
+    -- forced shed. Two-event sequence = ~90% confidence; Bargiya
+    -- (Ace-discard) = strongest single-event invite. Only honor
+    -- when partner is a bot (signals from human partners are noise
+    -- per the same Fzloky reasoning below).
+    -- Sources: decision-trees.md Section 8 (Definite, videos 01,
+    -- 02, 09, 10).
+    local tahreebPrefSuit, tahreebAvoidSuit = nil, nil
+    if Bot.IsM3lm() and Bot._partnerStyle then
+        local p = R.Partner(seat)
+        if Bot.IsBotSeat(p) then
+            local pStyle = Bot._partnerStyle[p]
+            local signals = pStyle and pStyle.tahreebSent
+            if signals then
+                -- Score each suit; pick the strongest "want"/"bargiya"
+                -- and the strongest "dontwant" if any.
+                local best, bestScore = nil, 0
+                for _, su in ipairs({ "S", "H", "D", "C" }) do
+                    -- Don't bias toward trump (leading trump has its
+                    -- own dedicated logic below).
+                    if su ~= contract.trump then
+                        local cls = tahreebClassify(signals[su])
+                        local score = (cls == "bargiya" and 3)
+                                   or (cls == "want"    and 2)
+                                   or 0
+                        if score > bestScore then
+                            best, bestScore = su, score
+                        end
+                        if cls == "dontwant" then tahreebAvoidSuit = su end
+                    end
+                end
+                if best then tahreebPrefSuit = best end
+            end
+        end
+    end
+    if tahreebPrefSuit then
+        -- Lead our LOWEST card in the partner-preferred suit. Partner
+        -- has the high cards there (or wants to receive the suit);
+        -- we lead low so partner's tops win the trick.
+        local fromPref = {}
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == tahreebPrefSuit
+               and not C.IsTrump(c, contract) then
+                fromPref[#fromPref + 1] = c
+            end
+        end
+        if #fromPref > 0 then
+            return lowestByRank(fromPref, contract)
         end
     end
 
@@ -1735,6 +1891,87 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 if highInSuit[1] then return highInSuit[1] end
             end
         end
+
+        -- v0.5.10 Section 8 Tahreeb sender. We're discarding (or about
+        -- to) while partner is winning — this discard IS a Tahreeb
+        -- signal whether we mean it to be or not. If we're VOID in
+        -- the led suit (so we have free choice of which suit to
+        -- discard from) AND M3lm+ (the convention is bot-vs-bot
+        -- coordination), encode an intentional signal:
+        --
+        --   T-1 Bargiya (Definite, videos 01,03): if we hold A of a
+        --     side suit X with at least 1 cover (≥2 cards in X), and
+        --     it's Sun, discard the A as Bargiya — "I have the slam
+        --     in X, lead it back".
+        --   T-4 Dump-ordering (Definite, video 01): from a 2-card
+        --     non-led non-trump suit, dump the LARGER first. Larger-
+        --     first reads as unambiguous refusal; smaller-first
+        --     would be a false bottom-up positive signal that
+        --     misleads partner.
+        --
+        -- Both rules only fire when:
+        --   • partner is a bot (signals to humans = noise);
+        --   • we're void in led suit (legal must contain non-led
+        --     cards — we have a free choice of suit);
+        --   • we're not 4th to act on the led suit (the smother
+        --     branch above already handled the high-feed case).
+        --
+        -- When neither rule fires, fall through to lowestByRank.
+        -- Sources: decision-trees.md Section 8 (Definite, videos 01, 03).
+        local voidInLed = trick.leadSuit and (function()
+            for _, c in ipairs(legal) do
+                if C.Suit(c) == trick.leadSuit then return false end
+            end
+            return true
+        end)()
+        if Bot.IsM3lm() and voidInLed
+           and Bot.IsBotSeat(R.Partner(seat)) then
+            -- Group legal cards by suit (excluding trump in Hokm —
+            -- trump discards have their own value as ruff fodder).
+            local bySuit = { S = {}, H = {}, D = {}, C = {} }
+            for _, c in ipairs(legal) do
+                local su = C.Suit(c)
+                if not (contract.type == K.BID_HOKM
+                        and su == contract.trump) then
+                    bySuit[su][#bySuit[su] + 1] = c
+                end
+            end
+
+            -- T-1 Bargiya (Sun only): A-of-side-suit with cover.
+            if contract.type == K.BID_SUN then
+                for _, su in ipairs({ "S", "H", "D", "C" }) do
+                    local cards = bySuit[su]
+                    -- Need ≥2 of the suit (Ace + cover) AND Ace present.
+                    if #cards >= 2 then
+                        for _, c in ipairs(cards) do
+                            if C.Rank(c) == "A" then
+                                return c   -- Bargiya
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- T-4 Dump-ordering: from a 2-card suit, dump LARGER first.
+            -- The encoding only "works" when partner can observe BOTH
+            -- discards in this suit — but we still emit the larger
+            -- first unconditionally because (a) larger-first = clear
+            -- "don't want" signal even if partner sees only one event,
+            -- and (b) it never falsely signals "want".
+            for _, su in ipairs({ "S", "H", "D", "C" }) do
+                local cards = bySuit[su]
+                if #cards == 2 then
+                    -- Find the larger by trick rank (in non-trump,
+                    -- TrickRank uses RANK_PLAIN: 7<8<9<J<Q<K<T<A).
+                    local lo, hi = cards[1], cards[2]
+                    if C.TrickRank(lo, contract) > C.TrickRank(hi, contract) then
+                        lo, hi = hi, lo
+                    end
+                    return hi
+                end
+            end
+        end
+
         -- Otherwise don't waste a high card.
         return lowestByRank(legal, contract)
     end
