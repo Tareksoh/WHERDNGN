@@ -1,5 +1,110 @@
 # Changelog
 
+## v0.5.6 — Saudi tournament-video doc batch + 2 rule-correctness fixes
+
+This release lands two things:
+
+1. A massive **strategy-docs scaffold** in `docs/strategy/`
+   (~24,000 words, 11 files) distilled from 40+ Saudi Baloot
+   tutorial videos processed via yt-dlp auto-captions and
+   whisper-turbo on RTX 5080 GPU.
+2. Two rule-correctness fixes surfaced by the doc audit:
+   one `State.lua` Ashkal seat-restriction fix and one
+   `Rules.lua` score-rounding direction fix.
+
+The bigger Bot.PickBid heuristics-wiring work (translating the
+new `decision-trees.md` Section 1's ~25 bidding rules into
+picker code) is **deliberately deferred** to a follow-up so the
+docs and the picker-code translation can be reviewed
+independently.
+
+### Fixed (rule correctness)
+
+- **Ashkal seat restriction (State.lua:1450-1487).** Per video
+  #31 "شرح الاشكل بالتفصيل في البلوت", only the **dealer + dealer's
+  LEFT** (يسار الموزع) may call Ashkal. The previous code
+  enforced "bidPositions 3 + 4 in turn order" which maps to
+  **dealer's RIGHT + dealer** — wrong direction. The new check
+  is `bidPosition == 1 OR bidPosition == 4` (dealer's-left = pos 1
+  in CCW bidding order, dealer = pos 4). Comment block updated
+  to cite the video and explain the seat geometry.
+
+- **Score rounding direction (Rules.lua:698).** Per video #43
+  "حساب النقاط في البلوت للمبتدئين", Saudi convention is **5 rounds
+  UP** (65 raw → 70, 67 raw → 70, 64 raw → 60). The previous
+  `div10(x) = floor((x + 4) / 10)` rounded 5 DOWN. Corrected to
+  `floor((x + 5) / 10)`. Secondary effect: cumulative scores
+  reach the 100/152 thresholds slightly faster, which cascades
+  through `scoreUrgency` / `matchPointUrgency` and noticeably
+  raises bot-bot Bel rates in baseline tournaments (a positive —
+  v0.5.5's 0% Bel was a known structural gap).
+
+### Added (strategy docs)
+
+- **`docs/strategy/`** (new folder, 11 files):
+  - `README.md` — navigation + decision tree
+  - `glossary.md` — Arabic ↔ code-identifier mapping with Lua
+    line cross-refs; authoritative card-name family-trio (شايب=K,
+    بنت=Q, ولد=J); Tahreeb / Tanfeer / Faranka / Bargiya /
+    Takbeer / Tasgheer / Mardoofa / Mughataa fully defined
+  - `decision-trees.md` — operational WHEN/RULE/MAPS-TO chains
+    across 11 sections; ~140+ rules with confidence ratings
+    (Definite / Common / Sometimes) sourced from videos
+  - `saudi-rules.md` — rule deltas vs French Belote; rule-
+    correctness verifications cross-checked against `Rules.lua`
+    / `Net.lua` (Bel-100 gate, pos-4 ruff-relief, must-overcut-
+    not-partner, Sun ×2 multiplier, Ashkal seat eligibility);
+    Kasho-vs-Qaid distinction; Reverse Al-Kaboot
+  - `bidding.md` — Hokm/Sun/Ashkal hand-strength heuristics
+    (J+مردوفة+إكا minimum Hokm; A+T mardoofa minimum Sun;
+    16-vs-26 failed-bid asymmetry; trump-count tiers; Ashkal
+    65/85 threshold pivot)
+  - `escalation.md` — Bel/Bel-x2/Four/Gahwa chain
+  - `signals.md` — Tahreeb (5 forms, 70/25/5 prior, two-trick
+    confirmation, "biggest mistake in Baloot" rule); Tanfeer as
+    parent class with Tahreeb as intent-bearing subset; Bargiya
+    2-flavor split (come-to-me invite vs defensive shed); AKA
+    touching-honors signaling
+  - `endgame.md` — Faranka (5-factor Sun framework, Hokm 5
+    exceptions); the "smart move" (J/T sacrifice deception);
+    Al-Kaboot trick-3 trigger; SWA strict-deterministic
+  - `opening-leads.md` — strong-card timing; Tahreeb-return
+    decision tree by length
+  - `bot-personalities.md` — tier-fit table for new heuristics
+  - `transcripts.md` — yt-dlp + Whisper workflow doc
+- **`CLAUDE.md`** — repo-level guidance pointing future Claude
+  sessions to `docs/strategy/`; non-obvious Saudi rules
+  highlighted (9 doesn't form Carré, Belote multiplier-immune,
+  Sun ×2, etc.)
+
+### Open questions documented (not fixed)
+
+- Sun Belote (ملكي) — single-source claim of K+Q meld in Sun;
+  currently Hokm-only in code. **Decision: keep Hokm-only.**
+- سيكل (sykl) — possible 9-8-7 sequence meld; unconfirmed.
+- Bel hand-strength thresholds — no video covered specific
+  numerical thresholds for *when* to call Bel; remaining gap.
+- 5 procedural bid-rules from video #28 cross-checked: 4 of 5
+  already implemented in `State.lua` `S.HostAdvanceBidding`,
+  1 (auto-convert-to-Sun on missing trump) is UI-prevented.
+
+### Deferred to follow-up
+
+- **Translate `decision-trees.md` Section 1's bidding rules
+  into `Bot.PickBid` picker code.** The decision-trees.md
+  format gives exact Bot.lua line-N maps; the picker-code
+  translation is the natural next step but kept separate from
+  this commit so docs and code-translation can be reviewed
+  independently.
+
+### Test status
+
+- 177/177 regression tests pass.
+- Baseline tournament: Bel rates jumped from 0% (v0.5.5) to
+  13-67% in natural mode, primarily from the rounding-direction
+  cascade through `scoreUrgency`. Game outcomes still well-
+  distributed; no test regressions.
+
 ## v0.5.5 — playtest-fixture audit: harness state-leakage bug found
 
 A targeted playtest-fixture audit (asked: "is Master good enough?")

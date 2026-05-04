@@ -694,8 +694,11 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         rawB = rawB + K.MELD_BELOTE
     end
 
-    -- Saudi convention: round to nearest 10, "5 rounds down", then /10.
-    local function div10(x) return math.floor((x + 4) / 10) end
+    -- Saudi convention: round to nearest 10, **"5 rounds UP"**,
+    -- then /10. Per video #43 "حساب النقاط في البلوت للمبتدئين":
+    -- 65 raw → 70, 67 raw → 70, 64 raw → 60. Earlier code rounded
+    -- 5 DOWN (`(x + 4) / 10`); the corrected formula is `(x + 5) / 10`.
+    local function div10(x) return math.floor((x + 5) / 10) end
 
     -- Gahwa MATCH-WIN branch (v0.2.0+, per "نظام الدبل في لعبة البلوت"):
     -- a successful Gahwa wins the entire match for the caller's team

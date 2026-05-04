@@ -1451,11 +1451,17 @@ function S.HostAdvanceBidding()
                         -- Ashkal (Saudi): converts the contract to Sun
                         -- with the caller's PARTNER as declarer.
                         -- RESTRICTIONS:
-                        --   • Only the 3rd and 4th players in turn
-                        --     order may call Ashkal (per "نظام لعبة
-                        --     البلوت الأساسي" rule 3 — only seats 3
-                        --     & 4 can Ashkal). 1st and 2nd bidders
-                        --     can't.
+                        --   • Only the **dealer + dealer's LEFT**
+                        --     (يسار الموزع) may call Ashkal — per
+                        --     video #31 "شرح الاشكل بالتفصيل في البلوت".
+                        --     In the bidding order { dealer+1, dealer+2,
+                        --     dealer+3, dealer }, dealer's LEFT is
+                        --     bidPosition 1 (first to bid, CCW from
+                        --     dealer) and dealer is bidPosition 4.
+                        --     Earlier docs (and earlier code comment)
+                        --     said "3rd and 4th in turn order" —
+                        --     that's RIGHT + dealer, which is wrong
+                        --     per the canonical Saudi convention.
                         --   • A prior direct Sun blocks Ashkal —
                         --     direct Sun already locked the contract
                         --     type, no point in Ashkal.
@@ -1465,9 +1471,9 @@ function S.HostAdvanceBidding()
                         for i, ord in ipairs(order) do
                             if ord == seat then bidPosition = i; break end
                         end
-                        if bidPosition < 3 then
-                            -- Silently drop — 1st and 2nd bidders
-                            -- can't legally call Ashkal.
+                        if bidPosition ~= 1 and bidPosition ~= 4 then
+                            -- Silently drop — only dealer's-left (pos 1)
+                            -- and dealer (pos 4) may call Ashkal.
                         else
                             local priorSun = false
                             for _, ord in ipairs(order) do

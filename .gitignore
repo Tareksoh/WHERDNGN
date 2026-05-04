@@ -13,3 +13,6 @@ cards/__pycache__/
 .claude-flow/
 .swarm/
 
+
+# Whisper audio cache (large binaries, regeneratable)
+docs/strategy/_transcripts/whisper_audio/
