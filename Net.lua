@@ -391,6 +391,21 @@ function N.SendResyncRes(target, gameID)
         local eligCsv = table.concat(S.s.preemptEligible, ",")
         whisper(target, ("%s;0;%s"):format(K.MSG_PREEMPT_PASS, eligCsv))
     end
+    -- v0.7 Sun-overcall: replay the open-window state. Without this,
+    -- a rejoiner during the 5s overcall would see PHASE_OVERCALL
+    -- (from the snapshot) but no s.overcall body, so their UI button
+    -- and any local click would no-op silently. Also replay any
+    -- already-recorded decisions so per-seat UI rendering matches.
+    if S.s.phase == K.PHASE_OVERCALL and S.s.overcall then
+        whisper(target, K.MSG_OVERCALL_OPEN)
+        for seat = 1, 4 do
+            local d = S.s.overcall.decisions and S.s.overcall.decisions[seat]
+            if d then
+                whisper(target, ("%s;%d;%s"):format(
+                    K.MSG_OVERCALL_DECISION, seat, d))
+            end
+        end
+    end
     -- Replay closed-trick history (fed via MSG_TRICK so the receiver
     -- runs the same ApplyTrickEnd path; we provide the fully-encoded
     -- plays so they don't depend on MSG_PLAY arrival order).
@@ -492,6 +507,17 @@ function N.HandleMessage(prefix, message, channel, sender)
         -- list on remote clients. Pre-7th senders won't include it;
         -- _OnPreemptPass treats nil as "no CSV provided".
         N._OnPreemptPass(sender, tonumber(fields[2]), fields[3])
+    elseif tag == K.MSG_OVERCALL_OPEN then
+        -- v0.7 Sun-overcall: host opens the 5s window. No payload.
+        N._OnOvercallOpen(sender)
+    elseif tag == K.MSG_OVERCALL_DECISION then
+        -- v0.7 Sun-overcall: a seat decided. Payload: seat;decision.
+        N._OnOvercallDecision(sender, tonumber(fields[2]), fields[3])
+    elseif tag == K.MSG_OVERCALL_RESOLVE then
+        -- v0.7 Sun-overcall: window closed; result follows.
+        -- Payload: taken(0|1);by(seat or 0);type.
+        N._OnOvercallResolve(sender, fields[2], tonumber(fields[3]),
+                             fields[4])
     elseif tag == K.MSG_SKIP_DBL then
         N._OnSkipDouble(sender, tonumber(fields[2]))
     elseif tag == K.MSG_SKIP_TRP then
@@ -999,6 +1025,209 @@ function N._FinalizePreempt()
     N.MaybeRunBot()
 end
 
+-- v0.7 Sun-overcall (post-Hokm 5s upgrade-or-take window).
+-- See Constants.lua K.MSG_OVERCALL_* for wire-format docs and
+-- Rules.lua / State.lua for the underlying state primitives.
+
+function N.SendOvercallOpen()
+    broadcast(K.MSG_OVERCALL_OPEN)
+end
+
+function N.SendOvercallDecision(seat, decision)
+    broadcast(("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION, seat, decision))
+end
+
+function N.SendOvercallResolve(taken, by, otype)
+    broadcast(("%s;%s;%d;%s"):format(
+        K.MSG_OVERCALL_RESOLVE,
+        taken and "1" or "0",
+        by or 0,
+        otype or ""))
+end
+
+function N._OnOvercallOpen(sender)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    if S.s.isHost then return end                  -- defense in depth
+    if not S.s.contract then return end
+    -- Trust the host: open the local overcall window via the state
+    -- primitive. The bidCard / dealer are already in s from the prior
+    -- bid-card and lobby messages.
+    if S.BeginOvercall then
+        S.BeginOvercall(S.s.bidCard, S.s.dealer)
+    end
+    if N.StartLocalWarn then N.StartLocalWarn("overcall") end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
+function N._OnOvercallDecision(sender, seat, decision)
+    if not seat or not decision then return end
+    if S.s.phase ~= K.PHASE_OVERCALL then return end
+    if S.s.isHost then
+        -- Host validates and re-broadcasts. Self-loopback ignored
+        -- because the host writes the decision via N.LocalOvercall
+        -- before broadcasting, and the loopback hits this handler
+        -- with the host's own sender.
+        if fromSelf(sender) then return end
+        if not authorizeSeat(seat, sender) then return end
+        if S.RecordOvercallDecision and S.RecordOvercallDecision(seat, decision) then
+            N.SendOvercallDecision(seat, decision)
+            -- Early-resolve check: if every eligible seat has decided,
+            -- we don't need to wait the full 5s. Eligibility is per
+            -- R.CanOvercall (forced/Sun contracts already returned
+            -- false in _HostBeginOvercallWindow, so all 4 seats are
+            -- eligible — except in the Ace-bid case where the bidder
+            -- is blocked from UPGRADE but can still WAIVE, so even
+            -- there all 4 seats are decision-capable).
+            if N._OvercallAllDecided() then
+                N._HostResolveOvercall()
+            end
+        end
+    else
+        if not fromHost(sender) then return end
+        -- Echo: update local UI state.
+        if S.RecordOvercallDecision then
+            S.RecordOvercallDecision(seat, decision)
+        end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+    end
+end
+
+function N._OnOvercallResolve(sender, takenStr, by, otype)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    if S.s.isHost then return end
+    -- Server-of-truth: the host has already mutated the contract via
+    -- S.FinalizeOvercall (and broadcast a fresh MSG_CONTRACT if taken).
+    -- All we need to do here is clear local overcall state and update UI.
+    if S.FinalizeOvercall then S.FinalizeOvercall() end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
+-- v0.7 Sun-overcall: open the 5s window. Called from _HostStepBid
+-- after MSG_CONTRACT broadcasts but before PHASE_DOUBLE flow.
+-- Returns true if the window opened (caller defers further flow);
+-- false if not eligible (caller continues normally to PHASE_DOUBLE).
+function N._HostBeginOvercallWindow()
+    if not S.s.isHost then return false end
+    if not S.s.contract then return false end
+    if S.s.contract.type ~= K.BID_HOKM then return false end
+    if S.s.contract.forced then return false end
+    -- Honour a per-install opt-out so non-Saudi-rule installations can
+    -- disable the window via /baloot config. Default: enabled.
+    if WHEREDNGNDB ~= nil and WHEREDNGNDB.allowSunOvercall == false then
+        return false
+    end
+    if not S.BeginOvercall then return false end
+    if not S.BeginOvercall(S.s.bidCard, S.s.dealer) then return false end
+    N.SendOvercallOpen()
+    -- Bots act immediately (their Bot.PickOvercall is deterministic
+    -- given hand + thresholds; no need to wait 5s for them). Humans
+    -- get the full 5s.
+    for seat = 1, 4 do
+        if S.IsSeatBot and S.IsSeatBot(seat)
+           and B.Bot and B.Bot.PickOvercall then
+            local d = B.Bot.PickOvercall(seat)
+            if d and S.RecordOvercallDecision
+               and S.RecordOvercallDecision(seat, d) then
+                N.SendOvercallDecision(seat, d)
+            end
+        end
+    end
+    -- Did all 4 already decide? (All-bots table.)
+    if N._OvercallAllDecided() then
+        N._HostResolveOvercall()
+        return true
+    end
+    -- Otherwise schedule the 5s timeout.
+    C_Timer.After(K.OVERCALL_TIMEOUT_SEC, function()
+        if not S.s.isHost then return end
+        if S.s.phase ~= K.PHASE_OVERCALL then return end
+        N._HostResolveOvercall()
+    end)
+    return true
+end
+
+-- Returns true iff every seat has recorded a decision OR is structurally
+-- ineligible (e.g., bidder under Ace-special would normally be blocked
+-- from UPGRADE — but they can still WAIVE, so they ARE eligible to
+-- decide; this is a future hook if we ever introduce a fully-blocked
+-- seat).
+function N._OvercallAllDecided()
+    if not S.s.overcall or not S.s.overcall.decisions then return false end
+    for seat = 1, 4 do
+        if not S.s.overcall.decisions[seat] then return false end
+    end
+    return true
+end
+
+function N._HostResolveOvercall()
+    if not S.s.isHost then return end
+    if not S.s.overcall then return end
+    if not S.FinalizeOvercall then return end
+    -- Snapshot the contract values BEFORE FinalizeOvercall so we can
+    -- detect whether the contract changed (and broadcast a new
+    -- MSG_CONTRACT if so).
+    local prevType   = S.s.contract.type
+    local prevTrump  = S.s.contract.trump
+    local prevBidder = S.s.contract.bidder
+    local result = S.FinalizeOvercall()
+    if not result then return end
+    N.SendOvercallResolve(result.taken, result.by, result.type)
+    if result.taken then
+        -- Contract was mutated. Re-broadcast so all clients see the new
+        -- bidder/type/trump combination canonically (overcall RESOLVE
+        -- is the human-readable announcement; CONTRACT is the
+        -- authoritative state.)
+        N.SendContract(S.s.contract.bidder, S.s.contract.type,
+                       S.s.contract.trump or "")
+    end
+    -- Continue post-bid flow (mirrors the post-MSG_CONTRACT logic in
+    -- _HostStepBid). If the contract is now Sun, re-check Sun-Bel-skip.
+    if S.s.contract.type == K.BID_SUN
+       and N._SunBelAllowed and not N._SunBelAllowed(S.s.contract.bidder) then
+        S.s.belPending = nil
+        N.HostFinishDeal()
+        return
+    end
+    N.MaybeRunBot()
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
+-- Local action (player clicks Take/Upgrade/Waive on their UI).
+function N.LocalOvercall(decision)
+    if not S.s.overcall then return false end
+    if not S.s.localSeat then return false end
+    if S.s.phase ~= K.PHASE_OVERCALL then return false end
+    if not R.CanOvercall(S.s.localSeat, S.s.contract,
+                         S.s.overcall.bidCard) then
+        return false
+    end
+    if decision ~= "UPGRADE" and decision ~= "TAKE" and decision ~= "WAIVE" then
+        return false
+    end
+    -- Bidder + Ace-bid forces UPGRADE → WAIVE silently (R.CanOvercall
+    -- returns false for that combo, so we already returned above).
+    if S.s.localSeat == S.s.contract.bidder and decision == "TAKE" then
+        return false                                 -- bidder can't TAKE own bid
+    end
+    if S.s.localSeat ~= S.s.contract.bidder and decision == "UPGRADE" then
+        return false                                 -- non-bidder can't UPGRADE
+    end
+    -- Send to host. On host, dispatch directly; on remote, broadcast
+    -- the MSG_OVERCALL_DECISION and let _OnOvercallDecision route it.
+    if S.s.isHost then
+        if S.RecordOvercallDecision(S.s.localSeat, decision) then
+            N.SendOvercallDecision(S.s.localSeat, decision)
+            if N._OvercallAllDecided() then N._HostResolveOvercall() end
+        end
+    else
+        broadcast(("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION,
+                                       S.s.localSeat, decision))
+    end
+    return true
+end
+
 function N._OnSkipDouble(sender, seat)
     if fromSelf(sender) then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
@@ -1264,6 +1493,16 @@ function N._HostStepBid()
         end
         S.ApplyContract(payload.bidder, payload.type, payload.trump)
         N.SendContract(payload.bidder, payload.type, payload.trump or "")
+        -- v0.7 Sun-overcall: post-Hokm 5-second window where the
+        -- bidder may upgrade Hokm→Sun (non-Ace bid card only) and
+        -- non-bidder seats may take the contract as their Sun.
+        -- Returns true if a window opened (deferring the rest of the
+        -- post-bid flow until N._HostResolveOvercall fires); false if
+        -- the contract isn't Hokm or is forced/Takweesh, in which case
+        -- we continue straight to PHASE_DOUBLE below.
+        if N._HostBeginOvercallWindow and N._HostBeginOvercallWindow() then
+            return
+        end
         -- Saudi Sun rule: contract Sun can be Beled only after one
         -- team's cumulative game score has exceeded 100 (i.e. ≥101).
         -- If Sun and neither team is past 100, skip the DOUBLE phase
@@ -2938,6 +3177,16 @@ function N.StartLocalWarn(kind)
                 if eseat == S.s.localSeat then mine = true; break end
             end
         end
+    elseif kind == "overcall" then
+        -- v0.7 Sun-overcall: any seat that R.CanOvercall says can act
+        -- (i.e., all 4 seats unless forced/Sun contract; bidder is
+        -- only blocked from UPGRADE — they can still WAIVE; the warn
+        -- fires for the local seat regardless of choice).
+        if S.s.localSeat and S.s.contract and S.s.overcall
+           and R.CanOvercall(S.s.localSeat, S.s.contract,
+                              S.s.overcall.bidCard) then
+            mine = true
+        end
     end
     if not mine then return end
 
@@ -3137,6 +3386,16 @@ function N.MaybeRunBot()
     -- old turn-first dispatch would erroneously schedule a bid timer
     -- for that seat and miss the bel-decision branch entirely. The
     -- contract phases (DOUBLE/REDOUBLE) take precedence.
+
+    -- v0.7 Sun-overcall: decisions for bot seats are recorded
+    -- synchronously by N._HostBeginOvercallWindow at window-open time,
+    -- so we don't need (or want) MaybeRunBot to do any further work
+    -- during PHASE_OVERCALL. The 5s timeout (or all-decided early
+    -- close) calls N._HostResolveOvercall, which then re-invokes
+    -- N.MaybeRunBot once the contract is finalized and we transition
+    -- to PHASE_DOUBLE. Returning here prevents the stale-turn fallback
+    -- branch below from spuriously firing during the window.
+    if S.s.phase == K.PHASE_OVERCALL then return end
 
     -- Bel decision: defender at NextSeat(bidder)
     if S.s.phase == K.PHASE_DOUBLE and S.s.contract then

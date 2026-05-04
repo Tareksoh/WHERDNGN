@@ -213,6 +213,21 @@ K.MSG_PREEMPT      = "@"  -- "Triple-on-Ace" pre-emption (الثالث): an
                           -- declarer. Settles the bid by reassigning
                           -- declarer to the pre-empter.
 K.MSG_PREEMPT_PASS = "%"  -- waive the pre-emption right. Payload: seat.
+K.MSG_OVERCALL_OPEN     = ">"  -- v0.7 host opens a 5s post-Hokm Sun-overcall
+                              -- window. No payload — clients already have
+                              -- the contract / bidder / bidCard / dealer
+                              -- in S.s.* from earlier MSG_CONTRACT etc.
+K.MSG_OVERCALL_DECISION = "<"  -- a seat has decided in the overcall window.
+                              -- Payload: seat;decision (decision is
+                              -- "UPGRADE", "TAKE", or "WAIVE"). Host
+                              -- validates; broadcasts the same payload
+                              -- to all clients for UI parity.
+K.MSG_OVERCALL_RESOLVE  = "?"  -- host announces the overcall window
+                              -- closed and what happened. Payload:
+                              -- taken(0|1);by(seat or 0);type
+                              -- ("UPGRADE"|"TAKE"|""). When taken=1, a
+                              -- subsequent MSG_CONTRACT carries the
+                              -- rewritten Sun contract.
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:

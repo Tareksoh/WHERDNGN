@@ -1,5 +1,73 @@
 # Changelog
 
+## v0.7.0-pre2 — Sun-overcall window: Phase 2 (network protocol)
+
+Wires the Phase 1 state machine onto the addon-message bus so the
+overcall window opens in actual networked play. UI is still Phase 3.
+
+### Added (Constants.lua)
+
+- `K.MSG_OVERCALL_OPEN` (`>`) — host announces the 5s window opens.
+  No payload.
+- `K.MSG_OVERCALL_DECISION` (`<`) — a seat decided. Payload:
+  `seat;decision` where decision ∈ {UPGRADE, TAKE, WAIVE}.
+- `K.MSG_OVERCALL_RESOLVE` (`?`) — host announces window closed +
+  result. Payload: `taken(0|1);by(seat or 0);type`.
+
+### Added (Net.lua)
+
+- `N.SendOvercallOpen / SendOvercallDecision / SendOvercallResolve`
+  broadcast wrappers.
+- `N._OnOvercallOpen / _OnOvercallDecision / _OnOvercallResolve`
+  receivers + dispatch entries in `N.HandleMessage`.
+- `N._HostBeginOvercallWindow` — opens the window via
+  `S.BeginOvercall`, broadcasts MSG_OVERCALL_OPEN, records all
+  bot-seat decisions synchronously (via `Bot.PickOvercall`), schedules
+  the 5s timer OR early-resolves if all seats already decided.
+- `N._HostResolveOvercall` — calls `S.FinalizeOvercall`, broadcasts
+  MSG_OVERCALL_RESOLVE, broadcasts a fresh MSG_CONTRACT if the
+  contract was rewritten, then continues the existing post-bid flow
+  (Sun-Bel-skip check + `MaybeRunBot` for PHASE_DOUBLE).
+- `N.LocalOvercall(decision)` — local-action helper for the player's
+  UI button click. Validates decision vs `R.CanOvercall` + bidder/
+  non-bidder semantics; sends the wire message.
+- Hook in `N._HostStepBid` (between `S.ApplyContract` and the existing
+  Sun-Bel-skip/MaybeRunBot path) — calls
+  `_HostBeginOvercallWindow`. If it returns true, defers the rest of
+  the post-bid flow until `_HostResolveOvercall` fires; otherwise
+  proceeds normally.
+- `N.MaybeRunBot` early-returns on PHASE_OVERCALL — bot decisions
+  are already recorded synchronously by the host orchestrator and
+  the 5s timer drives the resolve.
+- `N.StartLocalWarn` accepts `"overcall"` kind (no-op pre-warn since
+  5s < 10s warn threshold; included for symmetry with the existing
+  escalation kinds).
+- Resync replay: `N.SendResyncRes` whispers `MSG_OVERCALL_OPEN` plus
+  any already-recorded `MSG_OVERCALL_DECISION` frames when a rejoiner
+  arrives during PHASE_OVERCALL. Without this, late-joiners would see
+  PHASE_OVERCALL in the snapshot but no `s.overcall` body, so their
+  UI button + clicks would silently no-op.
+
+### Behavior changes
+
+- Per-install opt-out: `WHEREDNGNDB.allowSunOvercall = false` disables
+  the window entirely (default: enabled). Useful for non-Saudi-rule
+  installations.
+
+### Phase 2 explicitly NOT included
+
+- **No UI yet.** Clicking the local-action button requires Phase 3
+  (UI 5s popup mirroring SWA's pattern).
+- **Headless wire test absent.** WHEREDNGN's Net.lua doesn't have a
+  headless test harness (everything's mocked at S/Bot layer). Phase 2
+  changes are validated by Phase 1's 65 headless tests + manual
+  network testing in-game.
+
+### Tests
+
+- 291/291 regression tests pass — Phase 2 is a wire-protocol layer
+  on top of Phase 1's already-tested state primitives.
+
 ## v0.7.0-pre1 — Sun-overcall window: Phase 1 (state machine + bot AI)
 
 User-requested feature: post-Hokm-bid 5-second window where the bidder
