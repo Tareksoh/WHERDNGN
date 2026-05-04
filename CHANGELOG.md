@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.5.20 — decision-trees.md Section 10: Hokm Faranka audit (no code change)
+
+Section 10's 9 rules establish the Saudi convention: **Hokm Faranka
+default = NO**, with 5 narrow Common-confidence exceptions and 2
+Definite anti-rules.
+
+The current bot code never voluntarily ducks (winners-branch returns
+cheapest-winner; falls through to lowestByRank when no winners) —
+so the Hokm-default is automatically satisfied. The Definite anti-
+rules (6, 7, 9) are likewise implicitly correct via winners-branch
+behavior. The 5 Common-confidence exceptions allow Faranka in
+narrow scenarios — those are deferred.
+
+### Audit findings — all Hokm Faranka rules
+
+| Rule | Confidence | Status | Why |
+|---|---|---|---|
+| 1 (default = NO Faranka) | Definite | **ALIGNED** | Bot never ducks. winners-branch picks cheapest winner; lowestByRank fallback in losing-side. No Faranka path exists in code. |
+| 2 (exception: Al-Kaboot pursuit) | Common | DEFERRED | Would allow Faranka when on sweep-track. Variance acceptable per video #04 ("losing ANY trick already kills Kaboot"). Defer until sweep-track Faranka becomes a measurable need. |
+| 3 (exception: only 2 trumps held) | Common | DEFERRED | Trump-poor hand, low-cost incremental Faranka. Edge case. |
+| 4 (exception: J-of-trump dead, your 9 is new top) | Common | DEFERRED | Requires played-card scan + dynamic top-trump shift detection. |
+| 5 (exception: bidder + opp trump exhausted) | Common | DEFERRED | Risk-free Faranka condition. Requires void-tracking on opp seats. |
+| 6 (exception: partner has shown extra trump) | Sometimes | DEFERRED | Single-source. Style-ledger reading (partner trump-cut-cleanly inference). |
+| 7 (anti-Faranka: opp bidder led trump-Q + we hold J+8) | Definite | **ALIGNED** | Bot plays J normally (winners-branch fires). Faranka isn't tempted because the bot doesn't have a Faranka heuristic to override. |
+| 8 (anti-Faranka: pos-4 trump-9-only + opp Faranka'd) | Common | **ALIGNED** | Bot plays 9 to win (winners-branch fires). |
+| 9 (meta: trump still live → assume worst case, cover) | Definite | **ALIGNED** | Bot's risk-averse default (no voluntary ducking) implements this meta-principle. |
+
+### Net effect: no code change
+
+Hokm Faranka is a refinement OPPORTUNITY (the 5 Common-confidence
+exceptions could lift bot strength in specific scenarios), but the
+DEFAULT behavior is already correct per Saudi convention. Implementing
+the exceptions adds risk-of-misfire (Faranka ducked at the wrong
+moment costs the trick) for marginal gain. Defer to a focused release
+once empirical measurements show what subset of these matters.
+
+### Tests
+
+- 226/226 regression tests pass (no behavior change in this release).
+
 ## v0.5.19 — decision-trees.md Section 7: trick-3 Kaboot pursuit + endgame audit
 
 Translates Section 7 endgame/SWA rules. Most are already wired
