@@ -2092,7 +2092,12 @@ function N.LocalSWA()
     if not S.s.localSeat or not S.s.contract then return end
     if WHEREDNGNDB and WHEREDNGNDB.allowSWA == false then return end
     -- Saudi rule (per video tutorial): calls with 4+ cards remaining
-    -- require opponent permission. Calls with ≤3 cards are instant.
+    -- require opponent permission. Calls with ≤3 cards used to be
+    -- instant; v0.5.17 routes ALL calls through the 5-second
+    -- permission display so the caller's cards are visible to all
+    -- players in every scenario (per user requirement). Opponents
+    -- can still Takweesh during the window if they spot an illegal
+    -- play; bots auto-accept.
     -- Toggle the permission requirement via WHEREDNGNDB.swaRequiresPermission.
     local handCount = #(S.s.hand or {})
     local needPerm = (WHEREDNGNDB == nil)
@@ -2107,7 +2112,10 @@ function N.LocalSWA()
     if S.s.swaRequest and S.s.swaRequest.caller == S.s.localSeat then
         return
     end
-    if needPerm and handCount >= 4 then
+    -- v0.5.17: route ≤3-card claims through the permission window
+    -- too, so the SWA banner displays the caller's cards. Was:
+    -- `if needPerm and handCount >= 4`. Now: `if needPerm` (any count).
+    if needPerm then
         -- Permission flow: broadcast a request, wait for opponents.
         local enc = C.EncodeHand(S.s.hand or {})
         S.s.swaRequest = {
@@ -3569,20 +3577,20 @@ function N.MaybeRunBot()
                     local hand = (S.s.hostHands and S.s.hostHands[seat]) or {}
                     local enc = C.EncodeHand(hand)
                     local handCount = #hand
-                    local needPerm = (WHEREDNGNDB == nil)
-                                  or (WHEREDNGNDB.swaRequiresPermission ~= false)
-                    if handCount <= 3 or not needPerm then
-                        -- Instant claim
-                        broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, enc))
-                        N.HostResolveSWA(seat, hand)
-                    elseif C_Timer and C_Timer.After then
-                        -- v0.5.2 BUG fix: arm the timer BEFORE setting
-                        -- swaRequest + broadcasting. If C_Timer is nil
-                        -- (test harness or pre-init), instant-claim
-                        -- fallback prevents a stalled round (swaRequest
-                        -- left dangling, never resolved). The timer
-                        -- arm itself can't fail — guard the whole
-                        -- permission-flow block on its availability.
+                    -- v0.5.17 SWA card-display fix: previously the
+                    -- ≤3-card "instant claim" branch resolved the SWA
+                    -- without setting `swaRequest` — so the UI banner
+                    -- (which only renders when swaRequest is non-nil)
+                    -- never displayed the caller's cards. Per the
+                    -- user's "in every scenario" requirement, ALL
+                    -- SWA flows now go through the 5-second display
+                    -- window. The opponent-team bot auto-accept still
+                    -- fires for ≤3-card claims (no real permission
+                    -- needed since opps can't Takweesh — there's no
+                    -- defensive position with so few cards), but the
+                    -- timer ensures the banner+cards are visible
+                    -- before HostResolveSWA closes the round.
+                    if C_Timer and C_Timer.After then
                         S.s.swaRequest = {
                             caller    = seat,
                             handCount = handCount,
@@ -3612,7 +3620,7 @@ function N.MaybeRunBot()
                         end)
                     else
                         -- C_Timer unavailable: degrade to instant claim
-                        -- rather than stall the round.
+                        -- rather than stall the round (test harness path).
                         broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, enc))
                         N.HostResolveSWA(seat, hand)
                     end

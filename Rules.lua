@@ -371,7 +371,17 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
 
     -- Done: caller emptied their hand BETWEEN tricks (i.e. trick just
     -- closed in their favour and no cards remain). Claim succeeded.
-    if (#(hands[callerSeat] or {})) == 0 then
+    --
+    -- v0.5.17 BUG fix: gate this on `#plays == 0` (between tricks).
+    -- Pre-fix, this fired whenever caller's hand was empty regardless
+    -- of trick state — which incorrectly returned `true` mid-trick
+    -- when the caller plays their LAST card as the 1st/2nd/3rd play
+    -- of the trick. Subsequent opponent ruffs (or partner over-takes)
+    -- were never seen by the validator. The V14 audit fix earlier
+    -- only addressed the 4th-play case (added `#plays == 4` branch
+    -- ABOVE this); the 1st/2nd/3rd-play case was still broken.
+    -- Discovered via Section O test failures O.2 + O.3.
+    if #plays == 0 and (#(hands[callerSeat] or {})) == 0 then
         return true
     end
 
@@ -424,26 +434,36 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
         }
     end
 
-    local cooperative = (R.TeamOf(nextSeat) == R.TeamOf(callerSeat))
-    if cooperative then
-        -- Caller's team: claim is valid if SOME play leads to a win.
-        for _, card in ipairs(legal) do
-            local nh, ns = applyMove(card)
-            if R.IsValidSWA(callerSeat, nh, contract, ns) then
-                return true
-            end
+    -- v0.5.17: Saudi-strict-strict SWA. The caller's claim must hold
+    -- REGARDLESS of which legal card any other seat (partner OR
+    -- opponent) plays. No "back-and-forth" cooperation with partner
+    -- — partner is treated adversarially in the recursion. Combined
+    -- with the per-trick `winner == callerSeat` check at line 366,
+    -- this enforces: the caller alone wins every remaining trick
+    -- under ANY legal play sequence. Partner may not over-take with
+    -- a higher card; if partner CAN over-take in any legal play,
+    -- the SWA fails.
+    --
+    -- Was (pre-v0.5.17): cooperative branch accepted "SOME partner
+    -- play leads to a win" — partner could optimally duck low to
+    -- preserve caller's eventual win. Per the user's reported
+    -- expectation ("no back-and-forth with teammate"), that's too
+    -- permissive. This release tightens to "EVERY partner play
+    -- leads to a win", which is symmetric with the opponent branch.
+    --
+    -- Trade-off: SWA becomes harder to validly claim. Some hands
+    -- that previously passed (caller-relies-on-partner-ducking) now
+    -- fail. Saudi-strict convention says caller must be self-
+    -- sufficient. Sources: docs/strategy/decision-trees.md Section 7
+    -- rule "SWA = deterministic-or-bust" (Definite, video 35) +
+    -- direct user intent on the v0.5.16 → v0.5.17 transition.
+    for _, card in ipairs(legal) do
+        local nh, ns = applyMove(card)
+        if not R.IsValidSWA(callerSeat, nh, contract, ns) then
+            return false
         end
-        return false
-    else
-        -- Opponent: claim is valid only if EVERY play leads to a win.
-        for _, card in ipairs(legal) do
-            local nh, ns = applyMove(card)
-            if not R.IsValidSWA(callerSeat, nh, contract, ns) then
-                return false
-            end
-        end
-        return true
     end
+    return true
 end
 
 function R.SumMeldValue(list)

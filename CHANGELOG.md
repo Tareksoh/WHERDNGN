@@ -1,5 +1,95 @@
 # Changelog
 
+## v0.5.17 — SWA tightening + display fix + R.IsValidSWA pre-existing bug
+
+User-reported SWA issues. Three distinct fixes:
+
+### 1. SWA strict-caller (R.IsValidSWA cooperative branch tightened)
+
+The pre-v0.5.17 cooperative branch accepted "if SOME partner play
+leads to caller winning" — partner could optimally duck under the
+caller's lead to preserve the SWA. User report: "SWA should only
+work if the player will actually win every hand not back and forth
+with their teammate."
+
+Tightened to "EVERY partner play must lead to caller winning" —
+partner is treated adversarially in the recursion. Combined with
+the per-trick `winner == callerSeat` check, this enforces:
+**caller alone wins every remaining trick under ANY legal play
+sequence**. Partner may not over-take with a higher card; if
+partner CAN over-take in any legal play, the SWA is invalid.
+
+Trade-off: SWA becomes harder to validly claim. Some hands that
+previously passed (caller-relies-on-partner-ducking) now fail.
+Saudi-strict convention says caller must be self-sufficient —
+this matches the stricter interpretation.
+
+### 2. R.IsValidSWA pre-existing bug fix
+
+Discovered while writing Section O regression tests. The "caller
+emptied hand → success" early-return at Rules.lua line ~374 fired
+WHENEVER `caller.hand` was empty, including mid-trick — after
+caller played their last card as the 1st/2nd/3rd play. Subsequent
+opponent ruffs (or partner over-takes) were never seen by the
+validator. False-positive SWA in any 1-card lead scenario where
+the opponent could ruff.
+
+The V14 audit fix earlier only addressed the 4th-play case (added
+`#plays == 4` branch above the early-return). The 1st/2nd/3rd-play
+case was still broken. Now: gate the early-return on `#plays == 0`
+(between tricks) so mid-trick states correctly continue the
+recursion.
+
+### 3. SWA card display in every scenario
+
+User-reported: "SWA does not show — i need to see the actual cards
+in every scenario when it is called for 5 seconds."
+
+The pre-v0.5.17 ≤3-card "instant claim" branch resolved the SWA
+without setting `swaRequest` — so the UI banner (which only renders
+when `swaRequest` is non-nil) never displayed the caller's cards
+in that scenario. Per user requirement, ALL SWA flows now go
+through the 5-second permission display window:
+
+- **Bot-initiated SWA** (`Net.MaybeRunBot` SWA branch): removed the
+  `handCount <= 3` shortcut. Now sets `swaRequest` + broadcasts
+  `MSG_SWA_REQ` + arms the 5s timer for every claim.
+- **Human-initiated SWA** (`Net.LocalSWA`): removed the
+  `handCount >= 4` gate. Same 5s window for all claims.
+
+The opponent-team bot auto-accept still fires for ≤3-card claims
+(no real defensive position with so few cards), and Takweesh is
+still possible during the window — but the cards are visible.
+
+### Added (Section O tests)
+
+- **O.1** 1-card SWA, caller's AS unbeatable, valid (positive).
+- **O.2** 1-card SWA, opp can ruff caller's AS, invalid (catches
+  the pre-existing bug — fails on pre-v0.5.17 code).
+- **O.3** 1-card SWA, partner's only-play over-takes caller's lead,
+  invalid (catches the same bug).
+- **O.4** 2-card SWA, partner has TWO clubs (one would over-take,
+  one would duck), invalid under strict-caller (catches the
+  cooperative=EVERY tightening).
+
+### Tests
+
+- 226/226 regression tests pass (was 222 + 4 new Section O).
+
+### Notes
+
+- Saved games unchanged; v0.5.16 saves load as v0.5.17.
+- The Hokm-vs-Sun overcall-window UX request from the second user
+  message ("any player bid Hokm in 1st/2nd round → 5-second Sun-
+  overcall window with WLA waive button, Ace-special-case excludes
+  bidder") is OUT OF SCOPE for this release. The current bidding
+  flow DOES allow Sun-overcall (verified end-to-end via
+  HostAdvanceBidding trace) — but as sequential turn-based bidding,
+  not as a discrete simultaneous-overcall window. Implementing the
+  proposed UX requires a new `PHASE_HOKM_OVERCALL_WINDOW`, new wire
+  messages, UI integration, and race-condition handling — a
+  multi-day implementation. Will be a separate focused release.
+
 ## v0.5.16 — decision-trees.md Section 6: AKA signaling refinements
 
 Translates two AKA-related rules from Section 6:

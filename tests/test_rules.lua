@@ -777,6 +777,93 @@ do
 end
 
 -- =====================================================================
+-- O. v0.5.17 SWA strict-caller (R.IsValidSWA tightened cooperative branch)
+--
+-- Pre-v0.5.17 the cooperative branch accepted "if SOME partner play
+-- leads to caller winning" — partner could optimally duck under
+-- caller's lead. v0.5.17 tightens to "EVERY partner play must lead
+-- to caller winning" — paranoid against partner over-taking even
+-- if partner would conventionally cooperate. Per user requirement
+-- that SWA work only when caller wins regardless of teammate's
+-- choices.
+-- =====================================================================
+section("O. SWA strict-caller (R.IsValidSWA)")
+
+do
+    local hokm_C = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    local hokm_H = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+
+    -- Easy positive: caller alone holds every winner. 1-card SWA.
+    -- Caller leads AS (only spade in play among remaining cards).
+    -- Trump=H, no one can ruff (no H in hands).
+    local hands = {
+        [1] = { "AS" },
+        [2] = { "9D" },
+        [3] = { "8D" },
+        [4] = { "7D" },
+    }
+    local trick = { plays = {}, leader = 1 }
+    assertTrue(R.IsValidSWA(1, hands, hokm_H, trick),
+               "v0.5.17 O.1: 1-card SWA — caller's AS unbeatable, valid")
+
+    -- Easy negative: caller's lead is over-takable by opponent's trump.
+    hands = {
+        [1] = { "AS" },
+        [2] = { "7H" },  -- opp has trump
+        [3] = { "8D" },
+        [4] = { "7D" },
+    }
+    assertFalse(R.IsValidSWA(1, hands, hokm_H, trick),
+                "v0.5.17 O.2: 1-card SWA — opp can ruff, invalid")
+
+    -- Strict-caller boundary: partner has 1 legal play that would
+    -- OVER-TAKE caller's lead. Pre-v0.5.17 cooperative branch would
+    -- have rejected this anyway (partner's only play wins the trick),
+    -- but v0.5.17 keeps the same rejection.
+    -- Trump=C. Caller leads AC. Partner has JC (only club). JC > AC
+    -- in trump rank (J=8 > A=6 in K.RANK_TRUMP_HOKM).
+    hands = {
+        [1] = { "AC" },
+        [3] = { "JC" },
+        [2] = { "9D" },
+        [4] = { "7D" },
+    }
+    assertFalse(R.IsValidSWA(1, hands, hokm_C, trick),
+                "v0.5.17 O.3: partner's only-play over-takes → invalid")
+
+    -- The critical strict-caller test: partner has TWO clubs, one
+    -- of which would over-take caller. Pre-v0.5.17 (cooperative=SOME)
+    -- would accept (partner can pick the duck). Post-v0.5.17
+    -- (cooperative=EVERY) rejects (partner could pick over-take).
+    -- Trump=H (so clubs use plain rank: A=8 highest). Caller leads
+    -- AC. Partner has TC + 9C (T=7, 9=3 in plain). Both lower than A.
+    -- Trick winner = AC (caller). NO over-take possible for partner.
+    -- This SHOULD pass under both old and new code.
+    --
+    -- For the strict-caller test we need partner to have a HIGH
+    -- card that could win. In NON-trump, A is highest — partner
+    -- can't have anything higher than caller's A.
+    -- So we use trump where rank order differs:
+    -- Trump=clubs. Rank: J=8 > 9=7 > A=6 > T=5 > K=4 > Q=3 > 8=2 > 7=1.
+    -- Caller leads KC (rank 4). Partner has JC + 7C.
+    --   JC=8 over-takes (path: partner wins, SWA invalid).
+    --   7C=1 ducks (path: caller's KC wins).
+    -- Old code: partner picks 7C, caller wins → SWA valid.
+    -- New code: partner could pick JC, caller loses → SWA invalid.
+    hands = {
+        [1] = { "KC", "AS" },
+        [3] = { "JC", "7C" },
+        [2] = { "9D", "8D" },
+        [4] = { "7D", "8H" },  -- 8H is a trump? wait trump=C
+    }
+    -- Actually trump=C, so 8H is not trump. OK.
+    -- Wait let me recheck: hokm_C.trump = "C". So C is trump.
+    -- 8H is NOT trump.
+    assertFalse(R.IsValidSWA(1, hands, hokm_C, trick),
+                "v0.5.17 O.4: partner-could-overtake caller's KC → strict-invalid")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
