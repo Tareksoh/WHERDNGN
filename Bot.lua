@@ -1617,6 +1617,41 @@ local function pickLead(legal, contract, seat)
                 end
             end
         end
+
+        -- v0.6.1+ B-57/B-71: bidder-branch styleTrumpTempo read. When
+        -- a DEFENDER on the opposing team has shown conservative trump
+        -- tempo across prior rounds (styleTrumpTempo == -1: they hold
+        -- high trump for over-ruff capture, NOT for early-tempo pull),
+        -- straight trump-pull on this round is dangerous — they're
+        -- waiting to over-ruff our pulled trump card. Saudi pro
+        -- counter: cash side-suit Aces FIRST (defenders must follow if
+        -- they have the suit, can't over-ruff a non-trump lead),
+        -- forcing them to spend low cards in side suits. Then pull
+        -- trump on a later trick when their non-trump holdings are
+        -- depleted. M3lm-gated (style ledger requires accumulated
+        -- prior-round signal), Hokm-only, Advanced trump-counting
+        -- already established above.
+        --
+        -- Sources: bot_picker_gaps.md "styleTrumpTempo of opposing
+        -- defender team" gap, MASTER_REPORT.md B-57/B-71.
+        if Bot.IsM3lm() and contract.type == K.BID_HOKM
+           and contract.trump and contract.bidder then
+            local conservativeOpp = false
+            for s2 = 1, 4 do
+                if R.TeamOf(s2) ~= bidderTeam
+                   and styleTrumpTempo(s2) == -1 then
+                    conservativeOpp = true
+                    break
+                end
+            end
+            if conservativeOpp then
+                for _, c in ipairs(legal) do
+                    if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
+                        return c
+                    end
+                end
+            end
+        end
         -- Audit Tier 4 (B-98): J+9 trump-lock detection. Once BOTH
         -- the Jack and 9 of trump have been observed played (or are
         -- in our own hand still), opponent trump strength is nearly

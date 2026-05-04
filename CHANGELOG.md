@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.6.1 — BotMaster sampler biases: leadCount + Sun-bidder partner
+## v0.6.1 — BotMaster sampler biases + bidder-branch styleTrumpTempo wire
 
-Two clean wires that were dead infrastructure or partial.
+Three clean wires that were dead infrastructure or partial.
 
 ### Changed (BotMaster.lua sampler)
 
@@ -26,6 +26,21 @@ Two clean wires that were dead infrastructure or partial.
   multiple suits. Encoded as per-card desire weights:
   `desire["A"..s] = 8` (matches defender bias), `desire["K"..s] = 4`
   (partial clustering tier).
+
+### Changed (Bot.lua)
+
+- **B-57/B-71 styleTrumpTempo bidder-branch wire** (audit
+  bot_picker_gaps.md). Pre-v0.6.1 the bidder branch of `pickLead`
+  never read `styleTrumpTempo` — only the defender branch did.
+  Gap: a defender showing CONSERVATIVE trump tempo (saving high
+  trump for over-ruff capture rather than tempo pull) is signaling
+  intent to over-ruff the bidder's pulled trump. Saudi pro counter:
+  cash side-suit Aces FIRST (defenders must follow if they have
+  the suit; can't over-ruff a non-trump lead), forcing them to
+  spend low cards in side suits before pulling trump.
+  Inserted between the trump-poor side-Ace branch and the B-98
+  J+9 trump-lock branch in pickLead bidder mode. M3lm-gated
+  (style ledger requires accumulated prior-round signal), Hokm-only.
 
 ### Audit-confirmed already wired (no code change)
 
