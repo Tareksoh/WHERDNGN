@@ -29,6 +29,9 @@ local function help()
     print("  /baloot felt <name>  - switch felt theme (run /baloot themes for the list)")
     print("  /baloot themes       - list available card styles + felt themes")
     print("  /baloot status       - print current phase + seats")
+    print("  /baloot history [N]  - dump last N round-result rows (default 20)")
+    print("  /baloot history clear - wipe round-result history")
+    print("  /baloot history off / on - toggle telemetry capture (default on)")
 end
 
 local function dispatch(msg)
@@ -204,6 +207,54 @@ local function dispatch(msg)
         if logArg == "clear" then L.Clear(); say("log cleared"); return end
         local n = tonumber(logArg) or 50
         L.Dump(n)
+        return
+    end
+
+    -- v0.8.3 telemetry export: /baloot history [N]
+    -- /baloot history clear  → wipe
+    -- /baloot history on/off → toggle capture
+    -- /baloot history [N]    → dump last N rows (default 20)
+    local histArg = msg:match("^history%s*(.*)$")
+    if histArg then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        if histArg == "clear" then
+            WHEREDNGNDB.history = {}
+            say("round-result history cleared")
+            return
+        elseif histArg == "off" then
+            WHEREDNGNDB.historyEnabled = false
+            say("history capture OFF (existing rows preserved)")
+            return
+        elseif histArg == "on" then
+            WHEREDNGNDB.historyEnabled = true
+            say("history capture ON")
+            return
+        end
+        local h = WHEREDNGNDB.history or {}
+        local n = tonumber(histArg) or 20
+        local total = #h
+        if total == 0 then
+            say("no round results recorded yet (toggle with /baloot history on)")
+            return
+        end
+        local startIdx = math.max(1, total - n + 1)
+        say(("history: %d row%s total, showing last %d:"):format(
+            total, total == 1 and "" or "s", math.min(n, total)))
+        for i = startIdx, total do
+            local r = h[i]
+            print(("  r%-3d  %-4s  trump=%-1s bidder=%d  Δ=%+d/%+d  cum=%d/%d  bel=%d trp=%d for=%d gah=%d  swp=%s  made=%d  br%d  bidc=%s"):format(
+                r.roundNumber or 0, r.type or "?",
+                r.trump or "-", r.bidder or 0,
+                r.addA or 0, r.addB or 0,
+                r.totA or 0, r.totB or 0,
+                r.doubled or 0, r.tripled or 0, r.foured or 0, r.gahwa or 0,
+                (r.sweep ~= "" and r.sweep) or "-",
+                r.bidderMade or -1,
+                r.bidRound or 0,
+                r.bidCard or "-"))
+        end
+        say(("see SavedVariables/WHEREDNGN.lua for the full table " ..
+             "(WHEREDNGNDB.history)"))
         return
     end
 

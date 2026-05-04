@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.8.3 — Live-game telemetry export
+
+Foundation for empirical calibration work. Captures one row per round
+into `WHEREDNGNDB.history` (SavedVariables, persists across sessions),
+exposed via `/baloot history` slash commands.
+
+### Added (State.lua)
+
+- `S.ApplyRoundEnd` writes a row to `WHEREDNGNDB.history` per round.
+  Capped at 200 rows; oldest rows drop when full. Captures:
+  `roundNumber`, `ts` (GetTime), `type` (HOKM/SUN), `trump`,
+  `bidder`, `doubled`/`tripled`/`foured`/`gahwa` flags, `forced`
+  (Takweesh-recovery), `bidRound` (1/2), `bidCard`, `addA`/`addB`,
+  `totA`/`totB`, `sweep`, `bidderMade`, `target`, `localSeat`.
+
+### Added (Slash.lua)
+
+- `/baloot history [N]` — print last N row summaries to chat
+  (default 20). One line per round with contract shape + score
+  delta + multiplier flags.
+- `/baloot history clear` — wipe the history table.
+- `/baloot history on` / `/baloot history off` — toggle capture
+  (default ON).
+
+### Behavior changes
+
+- None on a clean install. `WHEREDNGNDB.historyEnabled` defaults to
+  `nil` which is treated as ON (`~= false`). Existing players see
+  the table grow silently; can disable with `/baloot history off`
+  if SavedVariables size is a concern.
+- Each client logs independently — every player has their own
+  per-round perspective. Useful for individual analysis.
+
+### Rationale
+
+v0.5_FINAL_REPORT Priority 1 flagged "Bel calibration from real game
+data" as the unblocking work for several deferred calibration items
+(R1 threshold, BOT_GAHWA_TH, BOT_OVERCALL thresholds, Bel-strength
+formula). This is zero-risk infrastructure — no behavior change —
+that makes that calibration possible. Run a few sessions, dump the
+table, fit thresholds against observed outcomes.
+
+### Tests
+
+- 319/319 regression tests pass (no regression).
+- Telemetry write is gated on `WHEREDNGNDB` being a table; in the
+  test harness `WHEREDNGNDB` is a stub table so writes happen but
+  don't affect test assertions.
+
 ## v0.8.2 — Section 11 rule 8 bait-detected ledger
 
 Closes the Section 11 rule 8 deferred item. When an opponent plays J

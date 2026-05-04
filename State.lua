@@ -1402,6 +1402,51 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     if B.Bot and B.Bot.OnRoundEnd and s.contract then
         B.Bot.OnRoundEnd(s.contract, bidderMade)
     end
+
+    -- v0.8.3 Telemetry export: append per-round outcome to the
+    -- persistent history table for offline analysis. Cap at 200
+    -- rows to keep SavedVariables size bounded — drops oldest when
+    -- full. Disabled by setting WHEREDNGNDB.historyEnabled = false.
+    -- Default: enabled.
+    --
+    -- One row per round per client. Captures contract shape, score
+    -- before/after, multiplier flags, sweep, bidderMade, bid round,
+    -- and timestamp. Used by `/baloot dump-history` and external
+    -- calibration scripts.
+    -- Sources: v0.5_FINAL_REPORT Priority 1 — Bel calibration from
+    -- real game data; menu item #4 in design discussion.
+    if WHEREDNGNDB and WHEREDNGNDB.historyEnabled ~= false and s.contract then
+        WHEREDNGNDB.history = WHEREDNGNDB.history or {}
+        local h = WHEREDNGNDB.history
+        local row = {
+            roundNumber  = s.roundNumber or 0,
+            ts           = (GetTime and GetTime()) or 0,
+            type         = s.contract.type,
+            trump        = s.contract.trump,
+            bidder       = s.contract.bidder,
+            doubled      = s.contract.doubled and 1 or 0,
+            tripled      = s.contract.tripled and 1 or 0,
+            foured       = s.contract.foured  and 1 or 0,
+            gahwa        = s.contract.gahwa   and 1 or 0,
+            forced       = s.contract.forced  and 1 or 0,
+            bidRound     = s.bidRound or 0,
+            bidCard      = s.bidCard or "",
+            addA         = addA or 0,
+            addB         = addB or 0,
+            totA         = totA or 0,
+            totB         = totB or 0,
+            sweep        = sweep or "",
+            bidderMade   = (bidderMade == true) and 1
+                           or (bidderMade == false) and 0 or -1,
+            target       = s.target or 152,
+            localSeat    = s.localSeat or 0,
+        }
+        h[#h + 1] = row
+        -- Cap at 200 rows; drop oldest.
+        while #h > 200 do
+            table.remove(h, 1)
+        end
+    end
 end
 
 -- Stash the full round-result object on the host so the round-end
