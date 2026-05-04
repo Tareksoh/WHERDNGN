@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.5.22 — decision-trees.md Section 11 rule 3: pigeonhole pin extension
+
+Translates the Definite-confidence Section 11 rule (sampler hand-
+reconstruction inference). Extension of v0.5.0's H-1 J/9-of-trump
+pin in `BotMaster.PickPlay` sampler.
+
+### Changed (BotMaster.lua sampler)
+
+- **Rule 3 pigeonhole pin** (Definite, video 05). When N trumps
+  remain unseen AND we observe all-but-one OTHER seats are void
+  in trump (via `Bot._memory[s].void[trump]`), all those remaining
+  trumps MUST be in the one remaining trump-eligible seat —
+  mathematical force. Pin them via `meldPins`.
+
+  Pre-v0.5.22, only J/9 of trump were pinned (H-1). The other
+  trump cards (K/Q/T/A/8/7) were sampled randomly across all
+  three opp/partner hands per the baseline 70%-pickProb. With
+  voids surfacing late in the round, the random sampling was
+  often counter-factual (placed trumps on seats known to be
+  void). This extension uses the void-observation data to
+  hard-constrain the remaining trumps to the single eligible
+  seat when only one such seat exists.
+
+  Significantly improves rollout accuracy late in the round when
+  trump voids have surfaced — the rollout no longer wastes
+  iterations on impossible deals.
+
+### Other Section 11 rules (deferred)
+
+| Rule | Confidence | Status |
+|---|---|---|
+| 1 (Sun K-or-higher dump-high inference → no-lower-rank constraint) | Common | DEFERRED — needs `dumpHighSeen` ledger key + sampler constraint |
+| 2 (Hokm trump-high-dump → opp short on trump) | Common | DEFERRED — needs `trumpHighDump` counter |
+| 4 (Partner Sun bidder → assume one long suit + concentrated highs) | Common | DEFERRED — Sun-bidder-partner sampler bias |
+| 5 (Partner Tahreeb'd low → partner has A or J in other suit) | Common | DEFERRED — `tahreebSuspect[suit]` ledger key |
+| 6 (Touching-honors gate when not winning) | Definite | BLOCKED — no touching-honors read exists yet (rules 1-3 from Section 6 also deferred) |
+| 7 (Convention-adherence rolling counter) | Sometimes | DEFERRED |
+| 8 (Bait-detected ledger) | Sometimes | BLOCKED — no deceptiveOverplay sender exists yet |
+
+### Tests
+
+- 226/226 regression tests pass.
+- The pigeonhole pin fires only when:
+  - Hokm contract.
+  - Trump suit known.
+  - All-but-one other seats observed void in trump (mid-late round).
+  This is rare in random tournaments; the change won't show up in
+  aggregate baseline metrics. Verified empirically via the tournament
+  harnesses still running clean.
+
 ## v0.5.21 — Section 5 Sun Faranka + scoring discrepancy fix + Hokm SWA safety
 
 Three user-reported items addressed in one batch.

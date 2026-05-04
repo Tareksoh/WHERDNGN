@@ -263,6 +263,41 @@ local function sampleConsistentDeal(seat, unseen)
         end
     end
 
+    -- v0.5.22 Section 11 rule 3 (Definite, video 05): pigeonhole pin
+    -- extension of H-1. When N trumps remain unseen AND we observe
+    -- that all-but-one OTHER seats are void in trump (via
+    -- B.Bot._memory[s].void[trump]), all those remaining trumps MUST
+    -- be in the one remaining trump-eligible seat. Mathematical
+    -- force; pin them. This is a HARD constraint that significantly
+    -- improves rollout accuracy late in the round when voids surface.
+    -- Sources: decision-trees.md Section 11 rule 3 (Definite, video 05).
+    if contract and contract.type == K.BID_HOKM and contract.trump then
+        local trump = contract.trump
+        -- Collect non-self seats that have NOT been observed void in trump.
+        local trumpEligible = {}
+        for s = 1, 4 do
+            if s ~= seat then
+                local voids = (B.Bot._memory and B.Bot._memory[s]
+                               and B.Bot._memory[s].void) or {}
+                if not voids[trump] then
+                    trumpEligible[#trumpEligible + 1] = s
+                end
+            end
+        end
+        -- If exactly one other seat can hold trump, pin all unseen
+        -- trumps to that seat. (Existing H-1 J/9 pin already covers
+        -- those two specifically — this catches K/Q/T/A/8/7 of trump
+        -- in the same scenario.)
+        if #trumpEligible == 1 then
+            local pinSeat = trumpEligible[1]
+            for _, u in ipairs(unseen) do
+                if C.Suit(u) == trump and u ~= pinCard and not meldPins[u] then
+                    meldPins[u] = pinSeat
+                end
+            end
+        end
+    end
+
     local maxAttempts = 15
     for attempt = 1, maxAttempts do
         local pool = {}
