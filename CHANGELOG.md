@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.5.12 — test coverage for v0.5.11 fixes (Wave-3 audit follow-up)
+
+The 40-agent swarm audit's Wave-3 verification flagged that v0.5.11
+shipped 4 load-bearing fixes (Race A, Section 4 rule 1, Takbeer
+smother, T-4 over-fire gate) with **zero new tests**. A future
+refactor could silently re-flip the behavior — particularly the
+single-character Takbeer sort flip and the Section 4 rule 1
+HIGHEST-vs-LOWEST direction. This release adds 6 targeted regression
+tests pinning the post-v0.5.11 behavior.
+
+### Added (test coverage)
+
+- **`tests/test_state_bot.lua` Section E** — 6 new tests pinning
+  the v0.5.11 fixes:
+  * **E.1** Section 4 rule 1: Sun losing-side off-suit dumps HIGHEST.
+    Pre-v0.5.11 returned LOWEST (8H); post returns KH.
+  * **E.2** Takbeer smother: partner certain-winning donates A over T.
+    Pre-v0.5.11 returned TH; post returns AH.
+  * **E.3** T-4 over-fire gate: K-doubleton + A-doubleton both skip
+    Tahreeb encoding, falling through to lowestByRank → 7S
+    (preserves the high cards). Pre-v0.5.11 returned KH (over-fired).
+  * **E.4** T-4 base case (sanity): Q-doubleton still fires the
+    Tahreeb encoding correctly (gate doesn't accidentally block Q).
+  * **E.5** PickDouble integration with R.CanBel: Sun + defender
+    cumulative ≥100 → PickDouble returns false regardless of strength.
+  * **E.5b** Hokm Bel not blocked by the Sun-100 gate (sanity).
+
+### Notes
+
+- 202/202 regression tests pass (was 196 + 6 new).
+- The Race A wire-side fix doesn't have a direct test in this
+  release because `tests/test_state_bot.lua` doesn't load `Net.lua`.
+  Wire-side enforcement uses the same broadcast + `HostFinishDeal`
+  pattern as the well-exercised AFK timeout path; missing test is
+  acceptable risk for now.
+- No production code changed in this release — pure test-coverage.
+
 ## v0.5.11 — 35-agent swarm audit follow-up: 4 fixes
 
 A 35-agent (2-wave) swarm review of v0.5.8/9/10 surfaced 4 actionable

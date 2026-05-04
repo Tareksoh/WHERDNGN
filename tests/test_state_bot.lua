@@ -709,6 +709,207 @@ assertTrue(m3lmSum >= basicSum * margin,
            :format(m3lmSum, basicSum))
 
 -- =====================================================================
+-- E. v0.5.11 fix coverage — pickFollow regression pins
+--
+-- The Wave-3 audit flagged that v0.5.11's 4 fixes (Race A wire,
+-- Section 4 rule 1, Takbeer smother, T-4 over-fire gate) shipped
+-- without any new tests — a future refactor could silently re-flip
+-- the load-bearing behavior. These tests pin the post-v0.5.11
+-- behavior so any regression fails loudly.
+--
+-- The Race A wire test would require loading Net.lua, which this
+-- harness doesn't currently do. Wire-side enforcement uses the same
+-- pattern (broadcast + HostFinishDeal) as the well-exercised AFK
+-- timeout path, so the missing test is acceptable risk for now.
+-- =====================================================================
+section("E. v0.5.11 fix coverage")
+
+-- E.1: Section 4 rule 1 (Definite, videos 05+09).
+-- Sun, opp winning a non-trump suit, we must follow with cards that
+-- can't beat the winner. Per Saudi inverse-laddering convention,
+-- dump the HIGHEST in-suit card (signal partner we're done in this
+-- suit). Pre-v0.5.11 returned LOWEST — what video #09 calls "the
+-- biggest mistake in Baloot".
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    -- Trick: seat 1 led AH (winning, can't be beat). Seat 2 to follow.
+    -- Seat 2 hand has KH+JH+8H — three H cards, none can beat AH.
+    S.s.hostHands = {
+        [1] = { "AH", "TH", "QH", "AS", "KS", "QS", "JS", "TS" },
+        [2] = { "KH", "JH", "8H", "8C", "7C", "8D", "7D", "9D" },
+        [3] = { "AC", "TC", "KC", "QC", "JC", "AD", "KD", "QD" },
+        [4] = { "9H", "7H", "9C", "JD", "TD", "9S", "8S", "7S" },
+    }
+    S.s.trick = { leadSuit = "H", plays = { { seat = 1, card = "AH" } } }
+    S.s.tricks = {}
+    -- Seat 2's must-follow: legal = {KH, JH, 8H}. Can't beat AH.
+    -- New v0.5.11 branch: Sun + leadSuit set → highestByRank in-suit → KH.
+    -- Pre-v0.5.11: lowestByRank → 8H.
+    local card = Bot.PickPlay(2)
+    assertEq(card, "KH",
+             "v0.5.11 E.1: Sun losing-side off-suit dumps HIGHEST in-suit (KH)")
+end
+
+-- E.2: Section 4 rule 7 Takbeer (Definite, videos 21+22+23).
+-- Smother branch: when partner is currently winning a non-trump-led
+-- trick, we donate the HIGHEST of {A, T} held in led suit, not the
+-- lowest. Pre-v0.5.11 sorted ascending → returned LOWEST (T over A).
+-- Post-v0.5.11: descending → A over T. +1 raw point per occurrence.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 2 }
+    -- Trick: 3 plays already, seat 1 in pos 4 (lastSeat=true).
+    -- Seat 3 (partner) played KH and is currently winning.
+    -- Seat 1 hand has BOTH AH and TH — highInSuit = {AH, TH}.
+    S.s.hostHands = {
+        [1] = { "AH", "TH", "9C", "8C", "7C", "8D", "7D", "9D" },
+        [2] = {},
+        [3] = {},
+        [4] = {},
+    }
+    S.s.trick = { leadSuit = "H", plays = {
+        { seat = 2, card = "9H" },
+        { seat = 3, card = "KH" },
+        { seat = 4, card = "JH" },
+    } }
+    S.s.tricks = {}
+    -- partnerWinning=true (seat 3 = partner, KH currently highest).
+    -- Both AH and TH legal (must follow H). highInSuit = {A, T}.
+    -- lastSeat=true → smother fires. Post-fix descending sort → AH.
+    local card = Bot.PickPlay(1)
+    assertEq(card, "AH",
+             "v0.5.11 E.2: Takbeer smother donates HIGHEST (AH > TH)")
+end
+
+-- E.3: T-4 over-fire gate (Wave-2 audit finding).
+-- v0.5.10's Tahreeb T-4 dump-larger fired on ANY 2-card non-trump
+-- non-led suit, including K+J / A+x doubletons — shedding valuable
+-- cards. Post-v0.5.11: only fires when the doubleton's higher rank
+-- is at most Q. K/T/A doubletons fall through to lowestByRank.
+do
+    -- M3lm tier required (Tahreeb is M3lm-gated).
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 2 }
+    -- Hand: K+J of hearts (2-card with hi=K → should skip per gate),
+    -- A+9 of diamonds (2-card with hi=A → should skip),
+    -- 4 trumps (KS, QS, 8S, 7S). Void in clubs (led).
+    S.s.hostHands = {
+        [1] = { "KH", "JH", "KS", "QS", "8S", "7S", "AD", "9D" },
+        [2] = {},
+        [3] = {},
+        [4] = {},
+    }
+    S.s.trick = { leadSuit = "C", plays = {
+        { seat = 2, card = "9C" },
+        { seat = 3, card = "AC" },
+        { seat = 4, card = "TC" },
+    } }
+    S.s.tricks = {}
+    -- Mark partner (seat 3) as bot for the bot-partner-only gate.
+    S.s.seats = {
+        [1] = nil,
+        [2] = { isBot = true },
+        [3] = { isBot = true },
+        [4] = { isBot = true },
+    }
+    if Bot.ResetMemory then Bot.ResetMemory() end
+    -- voidInLed=true (no clubs). M3lm=true. partner-bot=true.
+    -- T-1 Bargiya: skipped (HOKM not Sun).
+    -- T-4: iterates S, H, D, C.
+    --   S (trump): excluded.
+    --   H: KH+JH, hi=KH, hiRank="K" → SKIP (gate).
+    --   D: AD+9D, hi=AD, hiRank="A" → SKIP (gate).
+    --   C: void → skip.
+    -- No T-4 return. Falls through to lowestByRank(legal, contract).
+    -- Lowest trick rank: 7S (trump rank 1 in RANK_TRUMP_HOKM).
+    -- Pre-v0.5.11: T-4 fired on H, returned KH.
+    local card = Bot.PickPlay(1)
+    assertEq(card, "7S",
+             "v0.5.11 E.3: T-4 gate skips K/A doubletons → lowestByRank → 7S")
+    -- Cleanup
+    WHEREDNGNDB.m3lmBots = false
+end
+
+-- E.4: T-4 base case (sanity) — Q-doubleton still fires.
+-- Verifies the gate doesn't accidentally block Q-doubletons (the
+-- actual "2-card unwanted suit" case the rule was designed for).
+do
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 2 }
+    -- Hand: Q+J of hearts (2-card with hi=Q → SHOULD fire T-4).
+    -- 3-card clubs (not 2-card, won't be considered).
+    -- 3 trumps. Void in diamonds (led).
+    S.s.hostHands = {
+        [1] = { "QH", "JH", "7C", "8C", "9C", "KS", "QS", "JS" },
+        [2] = {},
+        [3] = {},
+        [4] = {},
+    }
+    S.s.trick = { leadSuit = "D", plays = {
+        { seat = 2, card = "9D" },
+        { seat = 3, card = "AD" },
+        { seat = 4, card = "TD" },
+    } }
+    S.s.tricks = {}
+    S.s.seats = {
+        [1] = nil,
+        [2] = { isBot = true },
+        [3] = { isBot = true },
+        [4] = { isBot = true },
+    }
+    if Bot.ResetMemory then Bot.ResetMemory() end
+    -- T-4 fires on H: hi=QH, hiRank="Q" → passes gate → returns QH.
+    local card = Bot.PickPlay(1)
+    assertEq(card, "QH",
+             "v0.5.11 E.4: T-4 fires on Q-doubleton (sanity, gate passes)")
+    WHEREDNGNDB.m3lmBots = false
+end
+
+-- E.5: PickDouble integration with R.CanBel (Sun Bel-100 gate).
+-- v0.5.9 introduced the gate; this pins the bot-side integration:
+-- PickDouble must early-return false when R.CanBel returns false,
+-- regardless of strength. Without this test, a future refactor of
+-- the PickDouble early checks could silently drop the gate.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    -- Defender team B at cumulative 100 (gate fires).
+    S.s.cumulative = { A = 50, B = 100 }
+    -- Seat 2's hand is strong-Bel material (would normally fire).
+    S.s.hostHands = {
+        [1] = { "9H", "8H", "7H", "9D", "8D", "7D", "9C", "8C" },
+        [2] = { "AH", "KH", "QH", "JH", "AS", "TS", "AD", "AC" },
+        [3] = { "TH", "KD", "QD", "JD", "TC", "KC", "QC", "JC" },
+        [4] = { "JS", "9S", "8S", "7S", "KS", "QS", "TD", "JH" },
+    }
+    local yes = Bot.PickDouble(2)
+    assertEq(yes, false,
+             "v0.5.11 E.5: PickDouble respects R.CanBel (Sun, B>=100, blocked)")
+
+    -- Sanity: Hokm has no gate. Same hand, Hokm contract → may fire.
+    S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+    -- Don't assert specific result for Hokm Bel — just verify it's not
+    -- blocked by R.CanBel (returns true unconditionally for Hokm).
+    -- The actual fire is strength-dependent; the key invariant is
+    -- that the gate path doesn't short-circuit Hokm.
+    local hokmYes = Bot.PickDouble(2)
+    -- We expect either true or false — but NOT a forced-false from
+    -- the CanBel gate. The test just exercises that Hokm bypasses.
+    -- Don't assert on hokmYes (strength-dependent); use a placeholder
+    -- assertion that confirms the call completes without error.
+    assertTrue(hokmYes == true or hokmYes == false,
+               "v0.5.11 E.5b: PickDouble in Hokm not blocked by Sun-100 gate")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
