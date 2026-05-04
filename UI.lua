@@ -1315,6 +1315,55 @@ local function buildTable()
     akaBanner.text:SetTextColor(0.40, 1.00, 0.55)
     tablePanel.akaBanner = akaBanner
 
+    -- v0.7 Sun-overcall countdown banner. Visible during the 5-sec
+    -- post-Hokm overcall window. Self-ticks at ~3 Hz to keep the
+    -- countdown digit honest without depending on full U.Refresh.
+    -- Hidden whenever S.s.phase ~= PHASE_OVERCALL.
+    local overcallBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
+    overcallBanner:SetSize(280, 38)
+    overcallBanner:SetPoint("TOP", centerPad, "TOP", 0, -8)
+    setBackdrop(overcallBanner, true,
+        { 0.06, 0.10, 0.14, 0.94 }, { 0.40, 0.78, 1.00, 1 }, 8, "solid")
+    overcallBanner:SetFrameLevel(centerPad:GetFrameLevel() + 50)
+    overcallBanner:Hide()
+    overcallBanner.title = makeText(overcallBanner, 12, "CENTER")
+    overcallBanner.title:SetPoint("TOP", 0, -3)
+    overcallBanner.title:SetTextColor(0.55, 0.85, 1.00)
+    overcallBanner.body = makeText(overcallBanner, 11, "CENTER")
+    overcallBanner.body:SetPoint("TOP", overcallBanner.title, "BOTTOM", 0, -2)
+    overcallBanner.body:SetTextColor(0.95, 0.95, 0.95)
+    overcallBanner._tickAccum = 0
+    overcallBanner._lastRemain = nil
+    overcallBanner:SetScript("OnUpdate", function(self, elapsed)
+        self._tickAccum = (self._tickAccum or 0) + (elapsed or 0)
+        if self._tickAccum < 0.33 then return end
+        self._tickAccum = 0
+        if S.s.phase ~= K.PHASE_OVERCALL or not S.s.overcall then
+            self:Hide(); self._lastRemain = nil; return
+        end
+        local windowSec = K.OVERCALL_TIMEOUT_SEC or 5
+        local now = (GetTime and GetTime()) or 0
+        local startedAt = S.s.overcall.startedAt or now
+        local remain = math.max(0, math.ceil(windowSec - (now - startedAt)))
+        self.title:SetText("Sun-overcall window")
+        -- Count decisions for the body line.
+        local decided, total = 0, 4
+        if S.s.overcall.decisions then
+            for s2 = 1, 4 do
+                if S.s.overcall.decisions[s2] then decided = decided + 1 end
+            end
+        end
+        self.body:SetText(("%ds left  ·  %d/%d decided"):format(
+            remain, decided, total))
+        if remain ~= self._lastRemain then
+            self._lastRemain = remain
+            -- Trigger a U.Refresh so action buttons re-render with
+            -- the updated remain count in their labels.
+            if U.Refresh then U.Refresh() end
+        end
+    end)
+    tablePanel.overcallBanner = overcallBanner
+
     -- SWA pending preview banner. Visible during the 5-sec
     -- auto-approve window after a permission-required SWA call:
     -- shows the caller's name + remaining-card count + countdown,
@@ -1765,6 +1814,62 @@ local function renderActions()
                 "|cffff0000Confirm Gahwa? (match-win or match-loss)|r",
                 function() net().LocalGahwa() end)
             addAction("Skip", function() net().LocalSkipDouble() end)
+        end
+    elseif S.s.phase == K.PHASE_OVERCALL then
+        -- v0.7 Sun-overcall window: 5s post-Hokm chance for the bidder
+        -- to upgrade Hokm→Sun (non-Ace bid card only) or for any
+        -- non-bidder seat to take the contract as their own Sun.
+        --
+        -- After our local seat has decided, the buttons disappear
+        -- (lock-out per Q3=A in the design discussion). If the contract
+        -- makes us ineligible (R.CanOvercall returns false — only
+        -- happens for forced/Sun contracts which shouldn't have opened
+        -- the window in the first place), no buttons.
+        local oc = S.s.overcall
+        if oc and S.s.localSeat and S.s.contract then
+            local alreadyDecided = oc.decisions
+                                   and oc.decisions[S.s.localSeat]
+            local canAct = R and R.CanOvercall and S.s.localSeat ~= nil
+                           and R.CanOvercall(S.s.localSeat, S.s.contract,
+                                              oc.bidCard)
+            -- Compute remaining seconds for the button-label hint.
+            local windowSec = K.OVERCALL_TIMEOUT_SEC or 5
+            local now = (GetTime and GetTime()) or 0
+            local elapsed = (oc.startedAt and now)
+                            and (now - oc.startedAt) or 0
+            local remain = math.max(0, math.ceil(windowSec - elapsed))
+            local rTag = (" (%ds)"):format(remain)
+            if not alreadyDecided then
+                local isBidder = (S.s.localSeat == S.s.contract.bidder)
+                if isBidder then
+                    -- Bidder: UPGRADE + WAIVE. UPGRADE is filtered out
+                    -- by R.CanOvercall when the bid card is an Ace,
+                    -- in which case only the WAIVE button shows. The
+                    -- net effect: bidder with Ace bid only sees WAIVE.
+                    if canAct then
+                        addAction("|cff66ff88Upgrade to Sun|r" .. rTag,
+                            function() net().LocalOvercall("UPGRADE") end)
+                    end
+                    addAction("|cff999999WLA (waive)|r" .. rTag,
+                        function() net().LocalOvercall("WAIVE") end)
+                else
+                    -- Non-bidder: TAKE as Sun + WAIVE.
+                    if canAct then
+                        addAction("|cff66ddffTake as Sun|r" .. rTag,
+                            function() net().LocalOvercall("TAKE") end)
+                    end
+                    addAction("|cff999999WLA (waive)|r" .. rTag,
+                        function() net().LocalOvercall("WAIVE") end)
+                end
+            else
+                -- Decided already — show what we picked, no clickable.
+                local label = ({
+                    UPGRADE = "|cff66ff88Upgraded to Sun|r — waiting for others",
+                    TAKE    = "|cff66ddffTook as Sun|r — waiting for others",
+                    WAIVE   = "|cff999999Waived (WLA)|r — waiting for others",
+                })[alreadyDecided] or "Decided"
+                addAction(label .. rTag, function() end)
+            end
         end
     elseif S.s.phase == K.PHASE_PREEMPT then
         -- Triple-on-Ace pre-emption (الثالث): earlier seats may claim
@@ -3004,6 +3109,19 @@ end
 -- player sees the actual cards being claimed (Saudi convention =
 -- show your hand on SWA). Especially needed for bot-initiated SWA
 -- where the player previously approved/auto-approved blind.
+local function renderOvercallBanner()
+    local b = tablePanel and tablePanel.overcallBanner
+    if not b then return end
+    if S.s.phase ~= K.PHASE_OVERCALL or not S.s.overcall then
+        b:Hide(); b._lastRemain = nil; return
+    end
+    -- Body text and remain are kept fresh by the OnUpdate self-tick
+    -- on the banner itself (3 Hz). The render-path show is only
+    -- responsible for making the frame visible when phase enters
+    -- PHASE_OVERCALL; the OnUpdate loop hides it on phase exit.
+    b:Show()
+end
+
 local function renderSWABanner()
     local b = tablePanel and tablePanel.swaBanner
     if not b then return end
@@ -3185,6 +3303,7 @@ function U.Refresh()
         renderBanner()
         renderAKABanner()
         renderSWABanner()
+        renderOvercallBanner()
         renderPeekButton()
         renderPauseControls()
     end

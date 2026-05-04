@@ -1145,6 +1145,11 @@ function N._HostBeginOvercallWindow()
         if S.s.phase ~= K.PHASE_OVERCALL then return end
         N._HostResolveOvercall()
     end)
+    -- Host UI: kick the local refresh since the receiver _OnOvercallOpen
+    -- skips host-loopback. Without this the host doesn't render the
+    -- countdown banner / their own overcall buttons.
+    if N.StartLocalWarn then N.StartLocalWarn("overcall") end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
     return true
 end
 

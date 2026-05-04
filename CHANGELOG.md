@@ -1,5 +1,83 @@
 # Changelog
 
+## v0.7.0 — Sun-overcall window: Phase 3 (UI) — feature complete
+
+End-to-end Sun-overcall window. The bidder of any non-forced Hokm
+contract gets a 5-second window to upgrade to Sun (unless the R1
+bid card was an Ace, in which case only WAIVE is available); other
+seats get to TAKE the contract as their Sun. First bidder UPGRADE
+wins; otherwise earliest TAKE in bid order; otherwise Hokm stands.
+
+### Added (UI.lua)
+
+- **Sun-overcall countdown banner** mirroring SWA's pattern. Shows
+  "Xs left · N/4 decided" and self-ticks at ~3 Hz. Auto-hides on
+  phase exit. Anchored to `centerPad` top, tinted blue (vs SWA
+  gold) for at-a-glance phase distinction.
+- **PHASE_OVERCALL action buttons** in the standard action panel:
+  - Bidder + non-Ace bid → "Upgrade to Sun (Ns)" + "WLA (waive) (Ns)"
+  - Bidder + Ace bid → "WLA (waive) (Ns)" only (UPGRADE filtered)
+  - Non-bidder → "Take as Sun (Ns)" + "WLA (waive) (Ns)"
+  - After local seat decides → status indicator instead of buttons
+    ("Upgraded to Sun — waiting for others", etc.)
+- Host explicitly calls `B.UI.Refresh()` from
+  `N._HostBeginOvercallWindow` since the loopback receiver returns
+  early on `S.s.isHost` — without this the host wouldn't see their
+  own overcall buttons / banner.
+
+### End-to-end behaviour
+
+| Scenario | Outcome |
+|---|---|
+| All-bot table, no bot bids strong enough Sun | 5s elapses, all WAIVE, contract stays Hokm (existing flow) |
+| All-bot table, one bot has Sun-strong hand | Synchronous resolve at window-open: contract flips to Sun |
+| Mixed table, human bidder Sun-strong | Human clicks Upgrade, contract flips, 5s short-circuits if all decide |
+| Mixed table, human non-bidder takes | Human clicks Take, contract flips, becomes new bidder |
+| R1 bid card was Ace, bidder strong | Bidder sees WLA only — anti-trap rule. Other seats can still TAKE. |
+| Forced/Takweesh contract | Window does NOT open (existing post-bid flow proceeds as v0.6) |
+| Sun bid | Window does NOT open (overcall is Hokm-only) |
+| Late join during window | Resync replay sends MSG_OVERCALL_OPEN + recorded decisions |
+
+### Tests
+
+- 291/291 regression tests pass.
+- Phase 3 UI is not covered by headless tests (no UI test harness in
+  the repo). State machine + bot AI are exhaustively tested in Phase 1
+  (sections P + H, 65 assertions). Network protocol relies on
+  manual in-game verification — the SWA banner pattern this mirrors
+  is a known-good blueprint.
+
+### Configuration
+
+- `WHEREDNGNDB.allowSunOvercall` (Boolean, default true): set false
+  to disable the entire feature for non-Saudi-rule installations.
+
+### Known limitations / deferred polish
+
+- 5s window is short. If you find players consistently miss the
+  decision, we can raise `K.OVERCALL_TIMEOUT_SEC` (or make it
+  contextual: longer when a human is eligible, shorter when only
+  bots remain undecided).
+- Bot strength thresholds (`K.BOT_OVERCALL_SELF_TH = 75`,
+  `K.BOT_OVERCALL_TAKE_TH = 80`) are first-pass calibrations.
+  Tune empirically once you've played some games.
+- `Bot.PickOvercall` is M3lm+ only (lower tiers always WAIVE) per
+  D3 in the design spec. If you want Advanced bots to also act on
+  overcalls, drop the `Bot.IsM3lm()` gate.
+
+### Side notes (logged for future work)
+
+- **R1 bid rate measurement** (1000 deals): R1 bid 36.7%, R2 bid
+  69.7% of those that reached R2, overall 80.8% of deals get a bid;
+  19.2% all-pass redeals. Lowering `TH_HOKM_R1_BASE` from 42 to 38
+  would shift more boundary hands into bidding without violating
+  the B-1 minimum-shape gate. **Deferred** — calibration tweak,
+  not a bug.
+- **Ashkal never fires in pure-bot bidding** despite v0.5.8 ORDER
+  FIX — likely because the bid-history snapshot used by the Ashkal
+  predicate is empty when seats are simulated independently.
+  **Deferred** — separate investigation.
+
 ## v0.7.0-pre2 — Sun-overcall window: Phase 2 (network protocol)
 
 Wires the Phase 1 state machine onto the addon-message bus so the
