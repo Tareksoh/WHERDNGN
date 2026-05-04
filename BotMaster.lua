@@ -395,6 +395,19 @@ local function sampleConsistentDeal(seat, unseen)
                 if style and style.aceLate and style.aceLate >= 2 then
                     pickProb = 0.5  -- A-hoarder: less reliable strong-bias
                 end
+                -- v0.8.1 B-95: desperate-bidder pickProb damping. When
+                -- this seat is the contract bidder AND on a team far
+                -- behind us (opponentUrgency >= 6), they may have bid
+                -- a weaker hand than thresholds suggest — Hail-Mary
+                -- bidding pattern. Damp pickProb so the strong-card
+                -- pinning is less aggressive in this seat's hand,
+                -- widening the sampled distribution toward weaker
+                -- holdings. M3lm-gated via OpponentUrgency.
+                -- Sources: bot_picker_gaps.md / wave8 B-95.
+                if s == bidder and B.Bot.OpponentUrgency
+                   and B.Bot.OpponentUrgency(bidder) >= 6 then
+                    pickProb = math.min(pickProb, 0.5)
+                end
                 -- v0.6.1 B-56: leadCount-based suit bias. A seat with
                 -- repeated lead-suit X (across the GAME, not the round —
                 -- _partnerStyle is per-game) has historically been dealt

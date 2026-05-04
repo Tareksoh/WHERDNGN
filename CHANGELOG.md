@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.8.1 — B-95 opponent score-urgency tracking
+
+Closes the wave8 B-95 gap: bot's own urgency was wired into
+`matchPointUrgency` (v0.5.x), but opponent urgency was unmodelled.
+Desperate humans bid weaker hands; the bot now anticipates this
+and counter-Bels accordingly.
+
+### Added (Bot.lua)
+
+- `opponentUrgency(oppSeat)` — local helper, mirror of `scoreUrgency`
+  read from oppSeat's team perspective. Returns +12 (opp on brink),
+  +6 (opp behind 80+), -8 (opp near clinch), 0 (neutral). M3lm-gated.
+- `Bot.OpponentUrgency(oppSeat)` — public wrapper for cross-module
+  use (BotMaster sampler reads this).
+
+### Changed (Bot.lua)
+
+- `Bot.PickDouble` lowers the Bel threshold by 5 when the contract
+  bidder's `opponentUrgency` ≥ 6 (their team behind 80+, or we're
+  near clinch). M3lm-gated. Combined with existing `combinedUrgency`
+  the threshold stays within the `BOT_BEL_TH - 16` floor.
+
+### Changed (BotMaster.lua)
+
+- `sampleConsistentDeal` damps `pickProb` to 0.5 (matching the
+  aceLate degradation tier) when the bidder seat has `OpponentUrgency`
+  ≥ 6. Strong-card pinning becomes less aggressive in the bidder's
+  hand, widening the sampled distribution toward weaker holdings —
+  the Hail-Mary bid pattern.
+
+### Tests
+
+- 319/319 regression tests pass (no regression).
+- The B-95 wire is gated on M3lm + cumulative-score state; unit
+  tests for `Bot.PickPlay` legality (section B) sweep across many
+  random states without explicit B-95 fixtures. The behavior is
+  graceful — when opponentUrgency returns 0 (neutral), all wires
+  no-op identically to pre-v0.8.1.
+
 ## v0.8.0 — Sun-overcall window: cross-trump Hokm take
 
 Extension of v0.7.0. Same 5s window now also lets a non-bidder seat

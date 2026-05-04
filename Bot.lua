@@ -806,6 +806,44 @@ local function scoreUrgency(myTeam, context)
     return 0
 end
 
+-- v0.8.1 B-95: opponent score-urgency reader. Mirrors `scoreUrgency`
+-- but reads from `oppSeat`'s team perspective. Used to model how
+-- desperate the opp is — desperate opponents bid marginally and
+-- commit weak Hokm/Sun contracts more readily, which our defensive
+-- counter-play should anticipate.
+--
+-- Returns:
+--   +12 — opp's team is on the brink (their opp-from-them ≥ target-25,
+--         which is OUR team near-clinch from opp's view) → opp likely
+--         to commit Hail-Mary bids and escalations.
+--    +6 — opp behind 80+ relative to us → opp risk-tolerant bidder.
+--    -8 — opp near clinch themselves (their cumulative ≥ target-25)
+--         → conservative bidder, less likely to overbid.
+--     0 — neutral.
+--
+-- M3lm-gated (style-modeling tier; lower tiers stay simple).
+-- Sources: bot_picker_gaps.md / wave8 B-95 — "human score-position
+-- signaling via bid aggressiveness".
+local function opponentUrgency(oppSeat)
+    if not Bot.IsM3lm() then return 0 end
+    if not S.s.cumulative or not oppSeat then return 0 end
+    local oppTeam = R.TeamOf(oppSeat)
+    if not oppTeam then return 0 end
+    local opp_cum = S.s.cumulative[oppTeam] or 0
+    local our_cum = S.s.cumulative[(oppTeam == "A") and "B" or "A"] or 0
+    local target = (S.s.target or 152)
+    -- Mirror of scoreUrgency from opp's POV:
+    if opp_cum >= target - 25 then return -8 end       -- opp near clinch
+    if our_cum >= target - 25 then return  12 end      -- opp desperate (we near win)
+    if our_cum - opp_cum > 80  then return  6  end     -- opp far behind us
+    return 0
+end
+
+-- Public wrapper for cross-module use (BotMaster sampler reads this).
+function Bot.OpponentUrgency(oppSeat)
+    return opponentUrgency(oppSeat)
+end
+
 -- M3lm-only: smoother match-point urgency. Layers on top of
 -- scoreUrgency with a finer-grained curve based on distance-to-win.
 -- Returns ADDITIONAL modifier to subtract from threshold (so positive
@@ -2775,6 +2813,21 @@ function Bot.PickDouble(seat)
     -- branch flips to aggressive (+5) instead of conservative (-8).
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_BEL_TH - combinedUrgency(R.TeamOf(seat), "defend")
+
+    -- v0.8.1 B-95: opp-bidder desperation. If the bidder is on a team
+    -- that's far behind us (or we're near clinch), their contract is
+    -- more likely a Hail-Mary marginal bid. Lower our Bel threshold
+    -- to defensively counter the likely-failing bid. M3lm-gated since
+    -- it relies on opponentUrgency which itself is M3lm+. Magnitude
+    -- (-5) is conservative — combined with the existing combinedUrgency
+    -- it stays within the BOT_BEL_TH - 16 floor enforced below.
+    -- Sources: bot_picker_gaps.md / wave8 B-95.
+    if contract.bidder and Bot.IsM3lm() then
+        local bidUrg = opponentUrgency(contract.bidder)
+        if bidUrg >= 6 then
+            th = th - 5
+        end
+    end
 
     -- Audit Tier 4 (B-61): defensive-Sun detection. If the Sun bidder
     -- has failed Sun >=2 times this game, they're a known defensive-Sun
