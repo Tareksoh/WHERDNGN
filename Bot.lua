@@ -579,13 +579,25 @@ end
 -- conservative). Near-win = conservative ⇒ negative; near-loss =
 -- desperate ⇒ positive; far-behind = take risks ⇒ positive. The
 -- old returns gave the opposite of the documented intent.
-local function scoreUrgency(myTeam)
+-- v0.5 H-8: context-aware near-win modifier. The "we're nearly won"
+-- branch was uniformly -8 (conservative offensive bid), but in
+-- DEFENSIVE escalations (Bel, Four) Saudi pros do the opposite —
+-- they aggress when one win clinches the match. context="defend"
+-- flips that branch to +5 (more aggressive defensive escalation);
+-- "bid" preserves the original -8 for offensive bid evaluation.
+local function scoreUrgency(myTeam, context)
     if not Bot.IsAdvanced() then return 0 end
     if not S.s.cumulative or not myTeam then return 0 end
     local me  = S.s.cumulative[myTeam] or 0
     local opp = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
     local target = (S.s.target or 152)
-    if me  >= target - 25 then return -8  end   -- conservative when nearly won
+    if me  >= target - 25 then
+        -- Defender Bel/Four near clinch: aggress (+5). Bidder bid: stay
+        -- conservative (-8). Default to "bid" for backward compat with
+        -- callers that haven't been updated.
+        if context == "defend" then return  5 end
+        return -8
+    end
     if opp >= target - 25 then return  12 end   -- desperate when nearly lost
     if opp - me > 80      then return  6  end   -- take risks when far behind
     return 0
@@ -1198,6 +1210,37 @@ local function pickLead(legal, contract, seat)
         return lowestByRank(singletons, contract)
     end
 
+    -- v0.5 H-7: Sun shortest-suit lead. Saudi pro convention is to
+    -- lead from the shortest non-trump suit in Sun (forcing opponents
+    -- to play their boss in that suit early; once spent, our lower
+    -- cards in that suit become winners). Bot previously fell through
+    -- to "low from longest" for both Hokm defenders AND Sun bidders —
+    -- the longest-suit lead is right for Hokm defenders (preserve
+    -- high cards for capture, give partner room) but wrong for Sun
+    -- (Sun has no trump shield; long-suit cards get over-trumped).
+    if contract.type == K.BID_SUN then
+        local count = { S = 0, H = 0, D = 0, C = 0 }
+        for _, c in ipairs(legal) do
+            count[C.Suit(c)] = count[C.Suit(c)] + 1
+        end
+        local shortestSuit, shortestN = nil, 99
+        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+            local n = count[suit] or 0
+            if n > 0 and n < shortestN then shortestSuit, shortestN = suit, n end
+        end
+        if shortestSuit then
+            local fromShortest = {}
+            for _, c in ipairs(legal) do
+                if C.Suit(c) == shortestSuit then
+                    fromShortest[#fromShortest + 1] = c
+                end
+            end
+            if #fromShortest > 0 then
+                return lowestByRank(fromShortest, contract)
+            end
+        end
+    end
+
     -- 3: lead low from longest non-trump suit. If Fzloky has flagged
     -- a partner-avoid suit (their LOW first-discard), exclude that
     -- suit from the longest-pick when an alternative exists.
@@ -1493,6 +1536,22 @@ function Bot.PickAKA(seat, leadCard)
 end
 
 function Bot.PickPlay(seat)
+    -- v0.5 C-1: Saudi Master ISMCTS delegation. Previously Bot.PickPlay
+    -- bypassed BotMaster.PickPlay entirely — only Net.lua's MaybeRunBot
+    -- explicit branch reached the sampler. Direct callers (AFK timeout
+    -- recovery, test harnesses, error paths) all ran heuristics even
+    -- with saudiMasterBots=true. Empirical: M3lm and Saudi Master
+    -- produced byte-identical metrics in 100-round tests. This delegation
+    -- routes every call through ISMCTS when active, gated by Bot._inRollout
+    -- so internal rolloutValue doesn't recursively re-enter ISMCTS.
+    if not Bot._inRollout then
+        local BM = WHEREDNGN and WHEREDNGN.BotMaster
+        if BM and BM.IsActive and BM.IsActive() and BM.PickPlay then
+            local masterCard = BM.PickPlay(seat)
+            if masterCard then return masterCard end
+        end
+    end
+
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local trick = S.s.trick
     local contract = S.s.contract
@@ -1559,7 +1618,9 @@ function Bot.PickDouble(seat)
     -- strength; score urgency adjusts threshold for desperation/safety.
     strength = strength + partnerBidBonus(seat, contract)
                        + partnerEscalatedBonus(seat, contract)
-    local th = K.BOT_BEL_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
+    -- v0.5 H-8: defender Bel uses context="defend" so the near-clinch
+    -- branch flips to aggressive (+5) instead of conservative (-8).
+    local th = K.BOT_BEL_TH - (scoreUrgency(R.TeamOf(seat), "defend") + matchPointUrgency(R.TeamOf(seat)))
 
     -- Audit Tier 4 (B-61): defensive-Sun detection. If the Sun bidder
     -- has failed Sun >=2 times this game, they're a known defensive-Sun
@@ -1658,7 +1719,8 @@ function Bot.PickFour(seat)
     local contract = S.s.contract
     if not hand or not contract then return false, false end
     local strength = escalationStrength(seat, hand, contract)
-    local th = K.BOT_FOUR_TH - (scoreUrgency(R.TeamOf(seat)) + matchPointUrgency(R.TeamOf(seat)))
+    -- v0.5 H-8: defender Four uses context="defend" — same logic as Bel.
+    local th = K.BOT_FOUR_TH - (scoreUrgency(R.TeamOf(seat), "defend") + matchPointUrgency(R.TeamOf(seat)))
     -- 50-agent audit fix (B-83 wiring): the gahwaFailed counter on
     -- the bidder's _partnerStyle was incremented by Bot.OnRoundEnd
     -- but never read by any picker — a dead-counter feature gap. A

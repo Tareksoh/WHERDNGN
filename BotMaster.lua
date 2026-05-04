@@ -54,6 +54,34 @@ local function getStrongCards(contract)
     return strong
 end
 
+-- v0.5 H-2 helper: desire map for defender seats in a Hokm contract.
+-- Defenders cluster non-trump Aces and Kings because the bidder
+-- committed to trump strength — side-suit power cards tend to live
+-- in non-bidder hands. Returns {} for SUN (no trump asymmetry).
+--
+-- Three bias tiers:
+--   desire["A"..s] = 8     non-trump Ace (strong clustering)
+--   desire["K"..s] = 4     non-trump King (secondary bias)
+--   desire[s]      = true  activates `desire[suit] and 20` fallback for
+--                          remaining cards in that suit, biasing 4+
+--                          length onto defenders. Card-level A/K take
+--                          precedence (checked first in pool loop).
+local function getDefenderCards(contract)
+    local desire = {}
+    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
+        return desire
+    end
+    local t = contract.trump
+    for _, s in ipairs(K.SUITS) do
+        if s ~= t then
+            desire["A"..s] = 8
+            desire["K"..s] = 4
+            desire[s]      = true
+        end
+    end
+    return desire
+end
+
 -- Helper: returns true if Saudi-Master tier is active.
 function BM.IsActive()
     return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots == true
@@ -125,6 +153,9 @@ local function sampleConsistentDeal(seat, unseen)
     local contract = S.s.contract
     local bidder = contract and contract.bidder
     local strong = getStrongCards(contract)
+    -- v0.5 H-2: pre-compute defender desire once (shared by both
+    -- defender seats). Defender = on opposing team AND not bidder.
+    local defenderDesire = getDefenderCards(contract)
     local partner = R.Partner(seat)
     local pMem = B.Bot._memory and B.Bot._memory[partner]
     local pSignalSuit = pMem and pMem.firstDiscard and pMem.firstDiscard.suit
@@ -177,6 +208,29 @@ local function sampleConsistentDeal(seat, unseen)
         end
     end
 
+    -- v0.5 H-1 fix: for Hokm contracts, hard-pin the J and 9 of trump to
+    -- the bidder seat. They are structurally bidder-held (the bidder
+    -- bought Hokm precisely because they hold these power cards). The
+    -- baseline 70%-pickProb desire weighting still placed them on
+    -- defenders ~30% of sampled worlds, inverting every rollout's value
+    -- estimate for the bidder team. Three skip conditions all reduce to
+    -- "is the card still in unseen?": already played → buildUnseen
+    -- excludes; already in our hand → buildUnseen excludes; already
+    -- covered by pinCard (the bid card IS the J or 9) → guarded below.
+    if contract and contract.type == K.BID_HOKM and contract.trump and bidder then
+        local trump = contract.trump
+        for _, powerCard in ipairs({ "J" .. trump, "9" .. trump }) do
+            if powerCard ~= pinCard and not meldPins[powerCard] then
+                for _, u in ipairs(unseen) do
+                    if u == powerCard then
+                        meldPins[powerCard] = bidder
+                        break
+                    end
+                end
+            end
+        end
+    end
+
     local maxAttempts = 15
     for attempt = 1, maxAttempts do
         local pool = {}
@@ -210,7 +264,18 @@ local function sampleConsistentDeal(seat, unseen)
 
                 -- Phase 1: Biased pick from pool.
                 -- Bidder gets strong cards; partner gets signaled suit.
-                local desire = (s == bidder) and strong or {}
+                -- v0.5 H-2: defender seats now share defenderDesire
+                -- (non-trump A/K clustering). Role determined by
+                -- absolute team comparison so both defender seats get
+                -- the same bias regardless of which seat is the
+                -- sampler's caller.
+                local isDefender = bidder ~= nil
+                                   and R.TeamOf(s) ~= R.TeamOf(bidder)
+                                   and s ~= bidder
+                local desire
+                if     s == bidder  then desire = strong
+                elseif isDefender   then desire = defenderDesire
+                else                     desire = {} end
                 if s == partner and pSignalSuit then desire[pSignalSuit] = 1 end
 
                 -- Audit Tier 4 (B-99): if this seat is `likelyKawesh`
@@ -555,8 +620,17 @@ end
 function BM.PickPlay(seat)
     if not BM.IsActive() then return nil end
     if not S.s.contract then return nil end
+    -- v0.5 C-1 recursion guard: Bot.PickPlay now delegates to us when
+    -- Saudi Master is active. heuristicPick is currently a local
+    -- closure and doesn't call Bot.PickPlay, but we set the flag
+    -- defensively so any future refactor that routes rollout play
+    -- selection through Bot.PickPlay won't recursively re-enter ISMCTS.
+    -- Save/restore (not just clear) in case nested host calls ever happen.
+    local prevRollout = B.Bot._inRollout
+    B.Bot._inRollout = true
+    local function _restore(v) B.Bot._inRollout = prevRollout; return v end
     local hand = S.s.hostHands and S.s.hostHands[seat]
-    if not hand or #hand == 0 then return nil end
+    if not hand or #hand == 0 then return _restore(nil) end
     -- Build legal-plays list.
     local trick = S.s.trick or { leadSuit = nil, plays = {} }
     local legal = {}
@@ -564,18 +638,28 @@ function BM.PickPlay(seat)
         local ok = R.IsLegalPlay(c, hand, trick, S.s.contract, seat)
         if ok then legal[#legal + 1] = c end
     end
-    if #legal == 0 then return nil end
-    if #legal == 1 then return legal[1] end
+    if #legal == 0 then return _restore(nil) end
+    if #legal == 1 then return _restore(legal[1]) end
 
     local unseen = buildUnseen(seat)
     local scores = {}
     for _, c in ipairs(legal) do scores[c] = 0 end
 
-    -- Dynamic world count: scale up for end-game accuracy.
+    -- Dynamic world count: scale UP for early tricks (maximum uncertainty),
+    -- scale DOWN as the round progresses toward a near-deterministic state.
+    --
+    -- Rationale: at trick 0-2 up to 8 cards are unknown across opponent
+    -- hands; the state space is vast and more samples are needed to converge
+    -- on a reliable card choice.  By trick 6+ only 2-4 total cards remain
+    -- unseen; a single determinization nearly captures the true state, so
+    -- BASE_NUM_WORLDS (30) is more than sufficient.  The previous code was
+    -- inverted: it burned 100 worlds when the game was nearly decided and
+    -- used only 30 when uncertainty was highest.
     local numTricks = #(S.s.tricks or {})
-    local numWorlds = BASE_NUM_WORLDS
-    if numTricks >= 6 then numWorlds = 100
-    elseif numTricks >= 4 then numWorlds = 60 end
+    local numWorlds
+    if numTricks <= 2 then numWorlds = 100
+    elseif numTricks <= 5 then numWorlds = 60
+    else numWorlds = BASE_NUM_WORLDS end
 
     for w = 1, numWorlds do
         local world = sampleConsistentDeal(seat, unseen)
@@ -591,5 +675,5 @@ function BM.PickPlay(seat)
     for _, c in ipairs(legal) do
         if scores[c] > bestScore then best, bestScore = c, scores[c] end
     end
-    return best
+    return _restore(best)
 end

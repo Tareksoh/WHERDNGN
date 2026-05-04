@@ -260,7 +260,10 @@ K.SWA_TIMEOUT_SEC     = 5
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
 -- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).
-K.BOT_BEL_TH          = 70    -- defenders bel with own strength >= TH
+K.BOT_BEL_TH          = 60    -- defenders bel with own strength >= TH
+                              -- (was 70; v0.5 C-3 calibration: TH=70 produced
+                              --  50% false-Bel coin-flip + 247/268 winnable
+                              --  Bels missed per 1000 hands; TH=60 best F1)
 K.BOT_TRIPLE_TH       = 90    -- bidder triples (×3) — needs strong hand
 K.BOT_FOUR_TH         = 110   -- defenders four (×4) — very strong hand
 K.BOT_GAHWA_TH        = 135   -- bidder gahwa (match-win) — terminal, near-certain

@@ -1,5 +1,118 @@
 # Changelog
 
+## v0.5.0 — Sprint A: Saudi Master tier unlocked + bot quality improvements
+
+The 20-agent ruflo-swarm "Bot Improvement" research campaign (the
+larger 300-agent budget converged early) found 5 critical structural
+defects + 9 high-priority gaps in bot behavior. This release lands
+Sprint A — the highest-impact subset — verified via empirical 100-round
+A/B tournaments that show measurable Master-tier wins for the first
+time. Master vs Basic mixed tournaments flipped winner: Master team
+gp/round +33%; sweep rate +86% in M3lm-vs-Master.
+
+Full research report at `.swarm_findings/bot_improvement_v0.5_REPORT.md`.
+Pre-Sprint-A baseline at `.swarm_findings/bot_baseline_metrics.json`;
+post-Sprint-A at `bot_baseline_metrics_sprint_A.json`. Staged patches
+for the remaining findings at `.swarm_findings/bot_proposed_patches/`.
+
+### Fixed (Critical structural defects)
+
+- **C-1: Saudi Master ISMCTS was dead code (CRITICAL).**
+  `Bot.PickPlay` never delegated to `BotMaster.PickPlay`. Only
+  Net.lua's MaybeRunBot reached the sampler — direct callers (AFK
+  recovery, error fallback, test harnesses) all ran heuristics
+  even with `saudiMasterBots=true`. Empirical proof: M3lm and
+  Saudi Master produced byte-identical metrics across all 6
+  tournament configs in 100-round runs. v0.5 wires the
+  delegation at the top of `Bot.PickPlay`, gated by a new
+  `Bot._inRollout` flag set by `BotMaster.PickPlay` to prevent
+  ISMCTS from recursively re-entering itself.
+
+- **C-5: numWorlds direction was BACKWARDS (HIGH).** v0.4.7 audit
+  incorrectly marked H-2 as resolved; the production code still
+  used 30 worlds at trick 1 (max uncertainty) and 100 at trick 8
+  (least uncertainty). Inverted to 100/60/30 by trick number —
+  early-trick decisions, where the state space is largest, now
+  get the most sampling budget. ~50% reduction in early-trick
+  rollout sampling noise.
+
+- **C-3a: Bel threshold lowered 70 → 60 (HIGH).** Empirical
+  bel-decision-quality test (`bel_decision_quality.json`) showed
+  TH=70 fired Bel only 4.2% of the time in 1000 hands and was
+  wrong 50% of those firings (literal coin-flip precision). At
+  TH=60 the F1 score doubles (0.137 → 0.286). Calibration only —
+  the underlying strength formula still has structural issues,
+  documented in C-3b for a future sprint.
+
+### Added (Sampler improvements)
+
+- **H-1: Hard-pin J/9 of trump to bidder (HIGH).** Previously the
+  desire-weight mechanism (J=50, 9=40) still placed them on
+  defenders ~30% of sampled worlds — every such world was
+  structurally inverted (defender holding the trump Jack), and
+  every rollout pessimistic for the bidder team. Now hard-pinned
+  via the same `meldPins` mechanism used for the bid card and
+  declared melds.
+
+- **H-2: Defender side-suit Ace clustering (HIGH).** Previously
+  defender seats got `desire = {}` — side-suit Aces distributed
+  uniformly. Real defenders cluster non-trump Aces (since the
+  bidder claimed trump). Added `getDefenderCards`: each non-trump
+  Ace gets weight 8, King 4, plus a long-suit incentive. Ships
+  for both opposing seats; bidder's partner stays on `{}` (H-3
+  staged for future).
+
+### Fixed (Strategy heuristics)
+
+- **H-7: Sun opening lead from shortest non-trump suit (MEDIUM).**
+  Saudi pro convention is to lead from shortest suit in Sun
+  (forcing opponents to play their boss early). Bot previously
+  fell through to the same "low from longest" used by Hokm
+  defenders — the longest-suit lead is right for Hokm but wrong
+  for Sun (no trump shield; long-suit cards get over-trumped).
+  Sun now leads shortest, with boss/Fzloky/singleton priorities
+  preserved.
+
+- **H-8: Context-aware near-win urgency (MEDIUM).**
+  `scoreUrgency` returned -8 uniformly when our team was near-clinch,
+  raising thresholds for ALL escalations. Saudi pros do the
+  opposite for DEFENSIVE escalation (Bel, Four) — they aggress
+  when one win clinches the match. Added `context` param: `"bid"`
+  preserves the conservative -8 (offensive); `"defend"` flips to
+  +5 (aggressive). PickDouble and PickFour now pass `"defend"`;
+  PickBid/PickTriple/PickGahwa/PickPreempt stay `"bid"`.
+
+### Empirical impact (100-round A/B tournament)
+
+Pre-Sprint-A → Post-Sprint-A:
+
+| Config | Metric | Before | After | Delta |
+|---|---|---|---|---|
+| `mixed_basic_master` natural | Master AvgB | 8.8 | **11.7** | **+33%** |
+| `mixed_basic_master` forced | Tournament winner | A (Basic) | **B (Master)** | flipped |
+| `mixed_m3lm_master` natural | Sweep rate | 0.07 | **0.13** | +86% |
+| `all_master` natural | AvgB | 10.3 | 8.5 | -1.8 (more competitive) |
+
+Master vs Basic empirically advantageous for the first time.
+
+### Staged for future sprints (design specs in `.swarm_findings/bot_proposed_patches/`)
+
+- **C-2: Bot-initiated SWA** (`Bot.PickSWA`)
+- **C-3b: Defender-aware strength formula** (proper Bel calibration)
+- **C-4: Last-trick +10 / Al-Kaboot pursuit** (LAST_TRICK_BONUS targeting)
+- **H-3: Sampler partner trump-count bias**
+- **H-4: Belote K+Q preservation**
+- **H-5: AKA receiver convention**
+- **H-6: A-of-trump preservation for late tricks**
+- **H-9: Wire dead `_partnerStyle` counters** (leadCount, triples, aceLate)
+
+### Verification
+
+- 9/9 Lua files syntax-validated
+- 177/177 tests pass
+- A/B baseline JSON evidence committed
+- Worktree experiment in `WHEREDNGN-sprintA` branch (kept for reference)
+
 ## v0.4.11 — Spectator mode + WoW deck
 
 ### Added
