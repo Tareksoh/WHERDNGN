@@ -269,3 +269,22 @@ K.BOT_FOUR_TH         = 110   -- defenders four (×4) — very strong hand
 K.BOT_GAHWA_TH        = 135   -- bidder gahwa (match-win) — terminal, near-certain
 K.BOT_ASHKAL_TH       = 65    -- partner-of-Hokm-bidder calls Ashkal with Sun-strong hand
 K.BOT_PREEMPT_TH      = 75    -- earlier seat pre-empts a Sun-on-Ace bid
+
+-- v0.5.13 PickBid magic-number promotion: pulled out of Bot.lua
+-- inline literals so they're tunable from one place. Each maps to
+-- a named patch in decision-trees.md Section 1.
+K.BOT_SUN_3ACE_BONUS                = 15  -- S-3 (was inline +12; bumped per Wave-2
+                                          --  audit calibration — 3-Ace hands without
+                                          --  AKQ triple now reliably clear thSun)
+K.BOT_SUN_MARDOOFA_BONUS            = 5   -- S-8 per A+T mardoofa pair
+K.BOT_SUN_MARDOOFA_PAIR_CAP         = 2   -- S-8 pair count cap (2 pairs = +10 max)
+K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN  = 5   -- B-5 (round 2 Sun must beat best Hokm by ≥ this)
+K.BOT_ASHKAL_DIRECT_SUN_PIVOT       = 85  -- A-6 (sun >= this → skip Ashkal, prefer direct Sun)
+K.BOT_PICKBID_BELOTE_BONUS          = K.MELD_BELOTE  -- B-6 (mirrors meld scoring;
+                                                    --  +20 raw multiplier-immune)
+
+-- v0.5.13: Sun Bel-100 cumulative gate constant (E-1 / R.CanBel).
+-- Pulled from inline `mine < 100` literal in Rules.lua so it's
+-- tunable per ruleset variant. Saudi Bel-legality threshold —
+-- only the Sun-defender team currently at <100 may Bel.
+K.SUN_BEL_CUMULATIVE_GATE = 100

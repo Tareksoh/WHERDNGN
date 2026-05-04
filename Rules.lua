@@ -471,9 +471,10 @@ function R.CanBel(team, contract, cumulative)
     if contract.type ~= K.BID_SUN then
         return true                         -- Hokm: always allowed
     end
-    -- Sun: team at >= 100 is forbidden from Bel.
+    -- Sun: team at >= K.SUN_BEL_CUMULATIVE_GATE is forbidden from Bel.
+    -- v0.5.13: 100 promoted to K.* constant for ruleset-variant tunability.
     local mine = (cumulative and cumulative[team]) or 0
-    return mine < 100
+    return mine < K.SUN_BEL_CUMULATIVE_GATE
 end
 
 -- Round scoring -------------------------------------------------------

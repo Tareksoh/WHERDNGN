@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.5.13 — S-3 calibration + magic-number K.* promotion
+
+Two related items from the v0.5.11 deferred list:
+
+1. **S-3 (3-Ace Sun bonus) calibration:** the v0.5.8 implementation
+   used `+12` to nudge 3-Ace hands toward Sun. Wave-2 audit found
+   that 3-Ace hands without an AKQ stopper triple landed at sun ≈ 41
+   vs thSun = 44–56, which couldn't fire R1 reliably. The
+   decision-trees.md Section 1 row ranks S-3 as Definite ("almost
+   always Sun"), so the formula should clear the median threshold
+   reliably. Bumped from 12 → 15: the floor moves from 41 to 44,
+   crossing thSun in ~70% of jitter outcomes (vs ~30% under +12).
+
+2. **Magic-number K.* promotion:** v0.5.x added several inline
+   tunable literals to `Bot.PickBid` and `Rules.R.CanBel`. Pulled
+   them into named `K.*` constants in Constants.lua so future
+   tuning lives in one place and comments can't drift from values.
+
+### Added (Constants.lua)
+
+- **`K.BOT_SUN_3ACE_BONUS = 15`** (S-3, was inline +12; bumped per
+  Wave-2 calibration)
+- **`K.BOT_SUN_MARDOOFA_BONUS = 5`** (S-8 per A+T mardoofa pair)
+- **`K.BOT_SUN_MARDOOFA_PAIR_CAP = 2`** (S-8 max pairs counted)
+- **`K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN = 5`** (B-5 round-2 margin)
+- **`K.BOT_ASHKAL_DIRECT_SUN_PIVOT = 85`** (A-6 65/85 pivot)
+- **`K.BOT_PICKBID_BELOTE_BONUS = K.MELD_BELOTE`** (B-6; aliased to
+  the meld constant so the bid bonus tracks the actual scoring
+  bonus if either is ever retuned)
+- **`K.SUN_BEL_CUMULATIVE_GATE = 100`** (E-1 / R.CanBel; Saudi
+  Bel-legality threshold for Sun)
+
+### Changed (Bot.lua)
+
+- S-3 bonus now reads `K.BOT_SUN_3ACE_BONUS` (=15, bumped from 12).
+- S-8 mardoofa bonus and pair cap now read K.* constants.
+- B-5 Sun-over-Hokm margin reads `K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN`.
+- A-6 Ashkal pivot reads `K.BOT_ASHKAL_DIRECT_SUN_PIVOT`.
+- B-6 Belote bonus reads `K.BOT_PICKBID_BELOTE_BONUS`.
+
+### Changed (Rules.lua)
+
+- `R.CanBel` reads `K.SUN_BEL_CUMULATIVE_GATE` instead of inline `100`.
+
+### Tests
+
+- 202/202 regression tests pass (no behavior change for
+  same-strength inputs; the S-3 +3 nudge shifts which 3-Ace hands
+  trigger the Sun-bid threshold but is empirically validated by
+  the asymmetric harness still running clean).
+
+### Notes
+
+- No new tests in this release. The 6 new K.* constants are
+  static values; the S-3 calibration change is verified
+  by the asymmetric harness's clean run + the
+  pre-existing PickBid sanity tests still passing.
+- Saved games unchanged; v0.5.12 saves load as v0.5.13 unchanged.
+
 ## v0.5.12 — test coverage for v0.5.11 fixes (Wave-3 audit follow-up)
 
 The 40-agent swarm audit's Wave-3 verification flagged that v0.5.11

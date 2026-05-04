@@ -913,14 +913,24 @@ function Bot.PickBid(seat)
 
     -- v0.5.8 patches S-3, S-8 (decision-trees.md Section 1, Sun bidding):
     -- bonus to sunStrength for 3+ Aces (S-3) and per-mardoofa pair (S-8).
-    -- S-3: +12 nudge to clear thSun without being over-determinative.
+    -- S-3: nudge to clear thSun without being over-determinative.
     -- S-8: each A+T mardoofa pair is "Sun-Mughataa" (covered Sun) —
-    -- distinctly safer than 2 separate Aces. +5 per pair, capped at 2
-    -- pairs to avoid double-rewarding when 3+ Aces already nudged via S-3.
-    -- Sources: decision-trees.md S-3 (Definite, video 25), S-8 (Common, video 25).
+    -- distinctly safer than 2 separate Aces. Capped at 2 pairs to
+    -- avoid double-rewarding when 3+ Aces already nudged via S-3.
+    --
+    -- v0.5.13 calibration: bonus values and pair cap promoted to K.*
+    -- constants. The S-3 bonus was bumped from 12 → 15 per the Wave-2
+    -- audit finding that 3-Ace hands without AKQ triple landed at
+    -- sun≈41 vs thSun=44–56 (couldn't fire R1) — doc ranks S-3
+    -- "Definite, almost always Sun" so the formula should clear the
+    -- median threshold reliably. +15 puts the floor at sun≈44, which
+    -- crosses thSun in ~70% of jitter outcomes vs ~30% under +12.
+    -- Sources: decision-trees.md S-3 (Definite, video 25), S-8
+    -- (Common, video 25); Wave-2 audit calibration analysis.
     local sun = sunStrength(hand)
-    if aceCount >= 3 then sun = sun + 12 end
-    sun = sun + math.min(mardoofaCount, 2) * 5
+    if aceCount >= 3 then sun = sun + K.BOT_SUN_3ACE_BONUS end
+    sun = sun + math.min(mardoofaCount, K.BOT_SUN_MARDOOFA_PAIR_CAP)
+              * K.BOT_SUN_MARDOOFA_BONUS
 
     -- v0.5.8 patch B-6 (decision-trees.md Section 1, Hokm bidding):
     -- detect Belote (سراء ملكي = K+Q of trump). The +20 Belote bonus
@@ -1025,10 +1035,13 @@ function Bot.PickBid(seat)
             -- v0.5.8 patch A-6 (decision-trees.md): the 65/85 pivot.
             -- 65-84 strength = Ashkal range (need partner's project);
             -- 85+ strength = direct Sun range (claim it ourselves).
-            -- The fall-through here lets sun >= 85 hands proceed to
-            -- the direct-Sun branch below.
+            -- The fall-through here lets sun >= cutoff hands proceed
+            -- to the direct-Sun branch below.
+            -- v0.5.13: 85 promoted to K.BOT_ASHKAL_DIRECT_SUN_PIVOT.
             -- Sources: decision-trees.md A-6 (Common, video 31).
-            if ok and sun >= 85 then ok = false end
+            if ok and sun >= K.BOT_ASHKAL_DIRECT_SUN_PIVOT then
+                ok = false
+            end
 
             -- Existing Advanced check: only Ashkal if WE'RE weak in
             -- the flipped suit (so partner's J of that suit is doing
@@ -1073,7 +1086,12 @@ function Bot.PickBid(seat)
             if hokmMinShape(hand, bidCardSuit) then
                 local strength = suitStrengthAsTrump(hand, bidCardSuit)
                 strength = strength + sideSuitAceBonus(hand, bidCardSuit)
-                if belote == bidCardSuit then strength = strength + 20 end
+                -- v0.5.13: B-6 +20 promoted to K.BOT_PICKBID_BELOTE_BONUS
+                -- (which mirrors K.MELD_BELOTE so the bid bonus tracks
+                -- the actual scoring bonus if either is ever retuned).
+                if belote == bidCardSuit then
+                    strength = strength + K.BOT_PICKBID_BELOTE_BONUS
+                end
                 if strength >= thHokmR1 then
                     return K.BID_HOKM .. ":" .. bidCardSuit
                 end
@@ -1095,7 +1113,8 @@ function Bot.PickBid(seat)
         if suit ~= bidCardSuit and hokmMinShape(hand, suit) then
             local s = suitStrengthAsTrump(hand, suit)
             s = s + sideSuitAceBonus(hand, suit)
-            if belote == suit then s = s + 20 end
+            -- v0.5.13: +20 → K.BOT_PICKBID_BELOTE_BONUS (mirrors K.MELD_BELOTE).
+            if belote == suit then s = s + K.BOT_PICKBID_BELOTE_BONUS end
             if s > bestScore then bestSuit, bestScore = suit, s end
         end
     end
@@ -1111,7 +1130,8 @@ function Bot.PickBid(seat)
         if not hokmViable then
             return K.BID_SUN
         end
-        if sun >= bestScore + 5 then
+        -- v0.5.13: B-5 +5 margin → K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN.
+        if sun >= bestScore + K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN then
             return K.BID_SUN
         end
         -- Otherwise: both viable, Sun's margin too thin → stay Hokm
