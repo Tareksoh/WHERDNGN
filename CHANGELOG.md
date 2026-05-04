@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.8.4 — Hokm Faranka exceptions (Section 10 rules 2, 4)
+
+Closes the v0.5.20-deferred Section 10 exceptions. Default Hokm
+Faranka stays NO (play winners normally); these two exceptions
+allow withholding the top trump in narrow Common-confidence cases.
+
+### Changed (Bot.lua pickFollow)
+
+- **Section 10 exception #2** (Common, video 04): we hold only 2
+  trumps total → trump posture is already weak; Faranka EV cost
+  is small. Withhold the top, play a non-winner (preferring
+  non-trump non-winners to preserve trump cover).
+- **Section 10 exception #4** (Common, video 04): we are the
+  bidder AND both opponents are observed void in trump → risk-free
+  Faranka (no one can punish the withhold). Same withhold logic.
+
+- **Anti-trigger (rule 7)**: when opp bidder led trump-Q AND we
+  hold both J and 8 of trump → override the Faranka trigger and
+  play J normally. Direct counter per Section 10 rule 7.
+
+- M3lm-gated. Lower tiers stay with default no-Faranka.
+
+### Deferred (Section 10 exceptions still pending)
+
+- **Exception #1** (Al-Kaboot pursuit): sweep-track detection
+  exists in pickLead but cross-wiring with pickFollow adds
+  complexity. Defer.
+- **Exception #3** (J of trump dead, our 9 is now top): needs
+  played-card scan + dynamic top-trump tracking. Doable; deferred
+  for separate batch.
+- **Exception #5** (partner shown extra trump): needs new style
+  ledger counter for partner trump-cut events. Defer.
+
+### Tests
+
+- 319/319 regression tests pass (no regression).
+- Faranka exceptions are M3lm-gated and require specific hand
+  shapes; the property-test legality sweep in section B catches
+  any illegal-card regression. No dedicated fixture in this batch
+  (would require multi-trick state setup); covered indirectly by
+  E.1/E.6 + the legality sweep.
+
 ## v0.8.3 — Live-game telemetry export
 
 Foundation for empirical calibration work. Captures one row per round

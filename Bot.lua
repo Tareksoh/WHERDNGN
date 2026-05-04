@@ -2467,6 +2467,108 @@ local function pickFollow(legal, hand, trick, contract, seat)
     for _, c in ipairs(legal) do
         if wouldWin(c, trick, contract, seat) then winners[#winners + 1] = c end
     end
+
+    -- v0.8.4 Section 10 Hokm Faranka exceptions (Common, video 04).
+    -- Default Hokm behavior is "no Faranka — play winners". The
+    -- following narrow exceptions allow withholding the top trump
+    -- (play a non-winner instead, saving the top for later):
+    --
+    --   Exception #2: we hold ONLY 2 trumps total — trump posture
+    --     is already weak, so the Faranka EV cost is small.
+    --   Exception #4: we are the bidder AND both opponents are
+    --     observed void in trump — risk-free Faranka (no one can
+    --     punish the withhold).
+    --
+    -- Anti-trigger (Section 10 rule 7): opp bidder led trump-Q AND
+    -- we hold both J and 8 of trump → don't Faranka, play J normally.
+    --
+    -- Exceptions #1, #3, #5 are deferred (sweep-track detection
+    -- exists in pickLead but cross-wiring here adds complexity;
+    -- played-card scan for J-dead detection is doable but separate
+    -- from this batch; partner-extra-trump style ledger needs a
+    -- new counter — all flagged in CHANGELOG).
+    --
+    -- M3lm-gated since the exceptions are tournament-strategy
+    -- nuances; lower tiers stay with the default no-Faranka.
+    -- Sources: decision-trees.md Section 10 (Common, video 04).
+    if Bot.IsM3lm() and contract.type == K.BID_HOKM and contract.trump
+       and trick.leadSuit and #winners > 0 then
+        local farankaTriggered = false
+
+        -- Count our trumps for Exception #2.
+        local myTrumpCount = 0
+        for _, c in ipairs(hand) do
+            if C.IsTrump(c, contract) then
+                myTrumpCount = myTrumpCount + 1
+            end
+        end
+        if myTrumpCount == 2 then farankaTriggered = true end
+
+        -- Exception #4: we are bidder + both opps void in trump.
+        if not farankaTriggered and contract.bidder == seat then
+            local oppTrumpExhausted = true
+            for s2 = 1, 4 do
+                if R.TeamOf(s2) ~= R.TeamOf(seat) then
+                    local m = Bot._memory and Bot._memory[s2]
+                    if not (m and m.void and m.void[contract.trump]) then
+                        oppTrumpExhausted = false
+                        break
+                    end
+                end
+            end
+            if oppTrumpExhausted then farankaTriggered = true end
+        end
+
+        -- Anti-trigger (rule 7): opp bidder led trump-Q + we hold J+8.
+        if farankaTriggered and trick.leadSuit == contract.trump
+           and trick.plays and trick.plays[1] then
+            local lead = trick.plays[1]
+            if lead.seat == contract.bidder
+               and R.TeamOf(lead.seat) ~= R.TeamOf(seat)
+               and C.Rank(lead.card) == "Q" then
+                local hasJ, has8 = false, false
+                for _, c in ipairs(hand) do
+                    if C.IsTrump(c, contract) then
+                        local r = C.Rank(c)
+                        if r == "J" then hasJ = true
+                        elseif r == "8" then has8 = true end
+                    end
+                end
+                if hasJ and has8 then
+                    farankaTriggered = false
+                end
+            end
+        end
+
+        if farankaTriggered then
+            -- Find a non-winner to play. Prefer non-trump non-winner
+            -- (preserve trump cover); fall through to lowest non-winner
+            -- of any suit.
+            local nonWinners = {}
+            for _, c in ipairs(legal) do
+                local isWin = false
+                for _, w in ipairs(winners) do
+                    if w == c then isWin = true; break end
+                end
+                if not isWin then
+                    nonWinners[#nonWinners + 1] = c
+                end
+            end
+            if #nonWinners > 0 then
+                -- Prefer non-trump non-winner to keep trump in reserve.
+                local nonTrumpLosers = {}
+                for _, c in ipairs(nonWinners) do
+                    if not C.IsTrump(c, contract) then
+                        nonTrumpLosers[#nonTrumpLosers + 1] = c
+                    end
+                end
+                local pool = (#nonTrumpLosers > 0) and nonTrumpLosers or nonWinners
+                return lowestByRank(pool, contract)
+            end
+            -- All legal are winners; fall through to natural play.
+        end
+    end
+
     if #winners > 0 then
         -- Position-aware (advanced):
         --   pos 2: "second hand low" — partner hasn't played yet.
