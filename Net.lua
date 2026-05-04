@@ -1208,16 +1208,28 @@ function N.LocalOvercall(decision)
                          S.s.overcall.bidCard) then
         return false
     end
-    if decision ~= "UPGRADE" and decision ~= "TAKE" and decision ~= "WAIVE" then
-        return false
-    end
+    -- Validate decision string (mirrors S.RecordOvercallDecision).
+    local validDec = decision == "UPGRADE"
+                     or decision == "TAKE"
+                     or decision == "WAIVE"
+                     or (decision and decision:sub(1, 10) == "TAKE_HOKM_"
+                         and #decision == 11
+                         and ({S=true,H=true,D=true,C=true})[decision:sub(11, 11)])
+    if not validDec then return false end
     -- Bidder + Ace-bid forces UPGRADE → WAIVE silently (R.CanOvercall
     -- returns false for that combo, so we already returned above).
-    if S.s.localSeat == S.s.contract.bidder and decision == "TAKE" then
+    if S.s.localSeat == S.s.contract.bidder
+       and (decision == "TAKE" or (decision and decision:sub(1, 10) == "TAKE_HOKM_")) then
         return false                                 -- bidder can't TAKE own bid
     end
     if S.s.localSeat ~= S.s.contract.bidder and decision == "UPGRADE" then
         return false                                 -- non-bidder can't UPGRADE
+    end
+    -- v0.8 cross-trump-Hokm: reject TAKE_HOKM with same suit as
+    -- bidder's current trump (no point in same Hokm).
+    if decision and decision:sub(1, 10) == "TAKE_HOKM_"
+       and decision:sub(11, 11) == (S.s.contract.trump or "") then
+        return false
     end
     -- Send to host. On host, dispatch directly; on remote, broadcast
     -- the MSG_OVERCALL_DECISION and let _OnOvercallDecision route it.

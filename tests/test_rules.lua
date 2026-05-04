@@ -969,6 +969,56 @@ do
     assertEq(R.ResolveOvercall(nil, hokm, "9C", 4).taken, false, "P.20: nil decisions → not-taken")
     assertEq(R.ResolveOvercall({}, nil, "9C", 4).taken,   false, "P.21: nil contract → not-taken")
     assertEq(R.ResolveOvercall({}, hokm, "9C", nil).taken, false, "P.22: nil dealer → not-taken")
+
+    -- v0.8 Hokm cross-trump take: TAKE_HOKM_<suit>.
+    -- Single non-bidder TAKE_HOKM with valid different suit.
+    res = R.ResolveOvercall(
+        { [3] = "TAKE_HOKM_S" },
+        hokm, "9C", 4)  -- contract trump = C; bidder=1; dealer=4
+    assertEq(res.taken, true,                "P.23: TAKE_HOKM_S non-bidder → taken")
+    assertEq(res.by,    3,                   "P.23: by=3")
+    assertEq(res.type,  "TAKE_HOKM",         "P.23: type=TAKE_HOKM")
+    assertEq(res.trump, "S",                 "P.23: trump=S")
+
+    -- TAKE_HOKM_<contract.trump> (same as current trump) → rejected → WAIVE.
+    res = R.ResolveOvercall(
+        { [3] = "TAKE_HOKM_C" },  -- same as bidder's trump C
+        hokm, "9C", 4)
+    assertEq(res.taken, false,               "P.24: TAKE_HOKM same-as-current-trump rejected")
+
+    -- TAKE_HOKM with malformed suit → rejected silently.
+    res = R.ResolveOvercall(
+        { [3] = "TAKE_HOKM_X" },
+        hokm, "9C", 4)
+    assertEq(res.taken, false,               "P.25: TAKE_HOKM_<invalid-suit> rejected")
+
+    -- Bidder UPGRADE wins over non-bidder TAKE_HOKM.
+    res = R.ResolveOvercall(
+        { [1] = "UPGRADE", [3] = "TAKE_HOKM_S" },
+        hokm, "9C", 4)
+    assertEq(res.type, "UPGRADE",            "P.26: bidder UPGRADE wins over TAKE_HOKM")
+
+    -- Bid-order priority: TAKE and TAKE_HOKM share priority order.
+    -- dealer=4, order = 1,2,3,4. Seat 1 is bidder. Earliest non-bidder = 2.
+    res = R.ResolveOvercall(
+        { [2] = "TAKE_HOKM_H", [3] = "TAKE" },
+        hokm, "9C", 4)
+    assertEq(res.by,   2,                    "P.27: TAKE_HOKM at seat 2 wins over TAKE at seat 3 (bid-order priority)")
+    assertEq(res.type, "TAKE_HOKM",          "P.27: type=TAKE_HOKM")
+    assertEq(res.trump, "H",                 "P.27: trump=H")
+
+    -- Reverse priority: TAKE earlier than TAKE_HOKM in bid order.
+    res = R.ResolveOvercall(
+        { [2] = "TAKE", [3] = "TAKE_HOKM_H" },
+        hokm, "9C", 4)
+    assertEq(res.by,   2,                    "P.28: TAKE at seat 2 wins (earlier in bid order)")
+    assertEq(res.type, "TAKE",               "P.28: type=TAKE (Sun)")
+
+    -- Forced contract → no overcall.
+    res = R.ResolveOvercall(
+        { [2] = "TAKE_HOKM_S" },
+        takweesh, "9C", 4)
+    assertEq(res.taken, false,               "P.29: TAKE_HOKM blocked on forced contract")
 end
 
 -- =====================================================================

@@ -334,3 +334,10 @@ K.SUN_BEL_CUMULATIVE_GATE = 100
 -- effective points if you fail.
 K.BOT_OVERCALL_SELF_TH = 75   -- bidder upgrade Hokm→Sun threshold
 K.BOT_OVERCALL_TAKE_TH = 80   -- non-bidder take-as-Sun threshold
+-- v0.8 Hokm cross-trump take threshold. A non-bidder seat may also
+-- take the contract as their OWN Hokm (different trump suit) within
+-- the same 5s window. The threshold is per-suit suitStrengthAsTrump
+-- against the bidder's current trump (which the taker rejects). Keep
+-- close to OVERCALL_TAKE_TH so cross-trump-Hokm takes are roughly as
+-- demanding as a Sun take.
+K.BOT_OVERCALL_TAKE_HOKM_TH = 80

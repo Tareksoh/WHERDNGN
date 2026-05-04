@@ -1,5 +1,74 @@
 # Changelog
 
+## v0.8.0 — Sun-overcall window: cross-trump Hokm take
+
+Extension of v0.7.0. Same 5s window now also lets a non-bidder seat
+**TAKE the contract as their OWN Hokm** (different trump suit), in
+addition to the existing TAKE-as-Sun option. Symmetric with how
+v0.7.0 enabled bidder UPGRADE → Sun and non-bidder TAKE → Sun.
+
+Bidder UPGRADE remains Sun-only (a bidder switching to a different
+Hokm suit makes no strategic sense — they already chose their best
+trump).
+
+### Added (Constants.lua)
+
+- `K.BOT_OVERCALL_TAKE_HOKM_TH = 80` — bot threshold for cross-trump
+  Hokm take.
+
+### Changed (Rules.lua)
+
+- `R.ResolveOvercall` now accepts decisions of the form
+  `TAKE_HOKM_<S|H|D|C>`. Validates suit (must be one of S/H/D/C and
+  must NOT match bidder's current trump). On match, returns
+  `{ taken = true, by = N, type = "TAKE_HOKM", trump = "<suit>" }`.
+- TAKE and TAKE_HOKM_<suit> share the same priority (bid order from
+  dealer's right). Bidder UPGRADE still wins over both.
+
+### Changed (State.lua)
+
+- `S.RecordOvercallDecision` accepts `TAKE_HOKM_<S|H|D|C>` decisions.
+  Validates the 11-character format and suit set; rejects malformed
+  inputs (`TAKE_HOKM_X`, `TAKE_HOKM_`, `TAKE_HOKM`).
+- `S.FinalizeOvercall` handles the `TAKE_HOKM` result type: contract
+  type stays Hokm, bidder is rewritten to taker, trump is rewritten
+  to result.trump, defender pair re-derived.
+
+### Changed (Bot.lua)
+
+- `Bot.PickOvercall` extended to evaluate Hokm-take alternatives.
+  For each non-current-trump suit, computes `suitStrengthAsTrump`,
+  applies the B-1 Saudi minimum-Hokm gate (J + count >= 3), and
+  returns the strongest contract type that clears its threshold.
+  When TAKE-as-Sun and TAKE_HOKM-as-Hokm both clear, the higher raw
+  strength score wins.
+
+### Changed (Net.lua)
+
+- `N.LocalOvercall` validates `TAKE_HOKM_<suit>` decisions, rejects
+  same-as-current-trump suits, and routes via the existing
+  `MSG_OVERCALL_DECISION` wire (no protocol change — decision string
+  is just longer).
+
+### Changed (UI.lua)
+
+- Non-bidder PHASE_OVERCALL action panel shows two TAKE options:
+  "Take as Sun" + "Take as Hokm <suit>" (auto-picks best non-current-
+  trump suit from local hand using inline suitStrength heuristic).
+  WLA still available. Decided-state label handles all decision
+  types including TAKE_HOKM_<suit>.
+
+### Tests
+
+- 319/319 regression tests pass (was 292; +7 new in section P,
+  +20 new in section H).
+- New P.23-P.29: TAKE_HOKM resolution, same-suit rejection,
+  malformed-suit rejection, bidder UPGRADE still wins, bid-order
+  priority across mixed TAKE/TAKE_HOKM, forced-contract gating.
+- New H.15-H.17: Bot.PickOvercall TAKE_HOKM choice, contract
+  rewrite via S.FinalizeOvercall, lock-out, malformed decision
+  rejection.
+
 ## v0.7.2 — Section 4 rule 1 split + Section 11 rule 1 wire (video #05/#09 re-read)
 
 User-reported re-read of source video #05 transcript revealed that

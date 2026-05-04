@@ -1853,21 +1853,80 @@ local function renderActions()
                     addAction("|cff999999WLA (waive)|r" .. rTag,
                         function() net().LocalOvercall("WAIVE") end)
                 else
-                    -- Non-bidder: TAKE as Sun + WAIVE.
+                    -- Non-bidder: TAKE as Sun + TAKE as Hokm + WAIVE.
+                    -- v0.8 cross-trump-Hokm: same window, same priority,
+                    -- but the taker chooses their own trump suit (any
+                    -- suit other than bidder's current trump). UI shows
+                    -- a single "Take as Hokm (auto-pick suit)" button
+                    -- that picks the strongest non-current-trump from
+                    -- the local hand at click-time. This avoids 4 trump
+                    -- buttons cluttering the panel; the auto-pick uses
+                    -- the same suitStrengthAsTrump heuristic the bot
+                    -- uses, so the choice is consistent.
                     if canAct then
                         addAction("|cff66ddffTake as Sun|r" .. rTag,
                             function() net().LocalOvercall("TAKE") end)
+                        -- Auto-pick best Hokm trump from local hand.
+                        local function bestHokmTake()
+                            local hand = (S.s.hostHands and S.s.hostHands[S.s.localSeat])
+                                         or S.s.hand or {}
+                            local curTrump = (S.s.contract and S.s.contract.trump) or ""
+                            local bestSuit, bestStr = nil, -1
+                            for _, suit in ipairs({ "S", "H", "D", "C" }) do
+                                if suit ~= curTrump then
+                                    -- Inline suitStrengthAsTrump-lite:
+                                    -- count + score per rank.
+                                    local count, score, hasJ = 0, 0, false
+                                    for _, c in ipairs(hand) do
+                                        if C.Suit(c) == suit then
+                                            count = count + 1
+                                            local r = C.Rank(c)
+                                            if r == "J" then score = score + 20; hasJ = true
+                                            elseif r == "9" then score = score + 14
+                                            elseif r == "A" then score = score + 11
+                                            elseif r == "T" then score = score + 10
+                                            elseif r == "K" then score = score + 4
+                                            elseif r == "Q" then score = score + 3
+                                            else score = score + 2 end
+                                        end
+                                    end
+                                    if hasJ and count >= 3 and score > bestStr then
+                                        bestSuit, bestStr = suit, score
+                                    end
+                                end
+                            end
+                            return bestSuit
+                        end
+                        local takeHokmSuit = bestHokmTake()
+                        if takeHokmSuit then
+                            addAction(
+                                ("|cffffaa55Take as Hokm %s|r"):format(
+                                    K.SUIT_GLYPH and K.SUIT_GLYPH[takeHokmSuit] or takeHokmSuit
+                                ) .. rTag,
+                                function()
+                                    net().LocalOvercall("TAKE_HOKM_" .. takeHokmSuit)
+                                end)
+                        end
                     end
                     addAction("|cff999999WLA (waive)|r" .. rTag,
                         function() net().LocalOvercall("WAIVE") end)
                 end
             else
                 -- Decided already — show what we picked, no clickable.
-                local label = ({
-                    UPGRADE = "|cff66ff88Upgraded to Sun|r — waiting for others",
-                    TAKE    = "|cff66ddffTook as Sun|r — waiting for others",
-                    WAIVE   = "|cff999999Waived (WLA)|r — waiting for others",
-                })[alreadyDecided] or "Decided"
+                local label
+                if alreadyDecided == "UPGRADE" then
+                    label = "|cff66ff88Upgraded to Sun|r — waiting for others"
+                elseif alreadyDecided == "TAKE" then
+                    label = "|cff66ddffTook as Sun|r — waiting for others"
+                elseif alreadyDecided == "WAIVE" then
+                    label = "|cff999999Waived (WLA)|r — waiting for others"
+                elseif alreadyDecided and alreadyDecided:sub(1, 10) == "TAKE_HOKM_" then
+                    local suit = alreadyDecided:sub(11, 11)
+                    local glyph = K.SUIT_GLYPH and K.SUIT_GLYPH[suit] or suit
+                    label = ("|cffffaa55Took as Hokm %s|r — waiting for others"):format(glyph)
+                else
+                    label = "Decided"
+                end
                 addAction(label .. rTag, function() end)
             end
         end

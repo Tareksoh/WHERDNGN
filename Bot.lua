@@ -3009,21 +3009,52 @@ function Bot.PickOvercall(seat)
     local bidCard  = S.s.overcall.bidCard
     if not R.CanOvercall(seat, contract, bidCard) then return "WAIVE" end
 
-    local strength = sunStrength(hand)
+    local sunStr = sunStrength(hand)
     if seat == contract.bidder then
         -- UPGRADE option (non-Ace-bid only — CanOvercall already
         -- filters Ace case). Threshold is BOT_OVERCALL_SELF_TH.
-        if strength >= K.BOT_OVERCALL_SELF_TH then
+        if sunStr >= K.BOT_OVERCALL_SELF_TH then
             return "UPGRADE"
         end
         return "WAIVE"
     end
-    -- Non-bidder TAKE option. Stricter threshold per the
-    -- BOT_OVERCALL_TAKE_TH > BOT_OVERCALL_SELF_TH ordering.
-    if strength >= K.BOT_OVERCALL_TAKE_TH then
-        return "TAKE"
+
+    -- Non-bidder: choose between TAKE (as Sun) and TAKE_HOKM_<suit>
+    -- (v0.8 cross-trump Hokm take). Evaluate each candidate; pick
+    -- the strongest contract type that clears its threshold.
+    --
+    -- Sun takes use sunStrength against BOT_OVERCALL_TAKE_TH.
+    -- Hokm-take suits (excluding bidder's current trump) use
+    -- suitStrengthAsTrump against BOT_OVERCALL_TAKE_HOKM_TH.
+    -- We compare RAW strength scores across types — sunStr and
+    -- trump-strength share the same "strength score" scale via the
+    -- existing escalation formulas, so highest wins.
+    local bestType, bestScore = "WAIVE", -1
+    if sunStr >= K.BOT_OVERCALL_TAKE_TH and sunStr > bestScore then
+        bestType, bestScore = "TAKE", sunStr
     end
-    return "WAIVE"
+    for _, suit in ipairs({ "S", "H", "D", "C" }) do
+        if suit ~= contract.trump then
+            local trumpStr, trumpCnt = suitStrengthAsTrump(hand, suit)
+            -- Saudi minimum-Hokm shape gate (mirror of B-1 from
+            -- pickBid): require J of trump + count >= 3 to even
+            -- consider taking this as Hokm. Without this gate the
+            -- threshold can be cleared by side-suit-Ace stacking on
+            -- a hand with no actual trump support.
+            local hasJ = false
+            for _, c in ipairs(hand) do
+                if C.Suit(c) == suit and C.Rank(c) == "J" then
+                    hasJ = true; break
+                end
+            end
+            if hasJ and trumpCnt >= 3
+               and trumpStr >= K.BOT_OVERCALL_TAKE_HOKM_TH
+               and trumpStr > bestScore then
+                bestType, bestScore = "TAKE_HOKM_" .. suit, trumpStr
+            end
+        end
+    end
+    return bestType
 end
 
 function Bot.PickKawesh(seat)
