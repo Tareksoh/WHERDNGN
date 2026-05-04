@@ -1322,8 +1322,17 @@ local function buildTable()
     -- press the always-visible TAKWEESH button (illegal-play counter)
     -- or just let the timer auto-approve. Anchored below the AKA
     -- slot so both can coexist.
+    --
+    -- v0.5.4 player-feedback fix: previously the banner showed only
+    -- the count ("N cards remaining"), so the player had to approve
+    -- (or auto-approve) without seeing WHICH cards the caller was
+    -- claiming. Especially opaque for bot-initiated SWA. Now: a
+    -- card-face row is rendered inside the banner, decoded from
+    -- req.encodedHand. Saudi convention is "show your hand on SWA"
+    -- so opponents can verify the claim before accepting/Takweeshing.
+    local SWA_CARD_W, SWA_CARD_H, SWA_CARD_GAP = 36, 52, 4
     local swaBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
-    swaBanner:SetSize(280, 38)
+    swaBanner:SetSize(280, 100)  -- v0.5.4: was 38; +62 for card row
     swaBanner:SetPoint("TOP", centerPad, "TOP", 0, -32)
     setBackdrop(swaBanner, true,
         { 0.10, 0.07, 0.04, 0.94 }, { 1.0, 0.85, 0.30, 1 }, 8, "solid")
@@ -1333,19 +1342,64 @@ local function buildTable()
     swaBanner.title:SetPoint("TOP", 0, -3)
     swaBanner.title:SetTextColor(1.00, 0.85, 0.30)
     swaBanner.body = makeText(swaBanner, 11, "CENTER")
-    swaBanner.body:SetPoint("BOTTOM", 0, 4)
+    swaBanner.body:SetPoint("TOP", swaBanner.title, "BOTTOM", 0, -2)
     swaBanner.body:SetTextColor(0.95, 0.95, 0.85)
+
+    -- Card-face row (max 4 cards — SWA fires at <=4 remaining). Slots
+    -- are pre-built once and shown/hidden + repositioned per refresh.
+    swaBanner.cardSlots = {}
+    for i = 1, 4 do
+        local slot = makeCardFace(swaBanner, SWA_CARD_W, SWA_CARD_H)
+        -- makeCardFace returns frame parented to swaBanner already;
+        -- bump its frame-level above the banner's backdrop so the
+        -- card art renders on top of the brown gradient.
+        slot.frame:SetFrameLevel(swaBanner:GetFrameLevel() + 1)
+        slot.frame:Hide()
+        swaBanner.cardSlots[i] = slot
+    end
+
+    -- Re-anchor the visible slots, centered horizontally, anchored to
+    -- the banner's bottom edge. Hides slots beyond `n`.
+    swaBanner.layoutCards = function(self, n)
+        n = math.max(0, math.min(n or 0, 4))
+        local total = (n > 0)
+            and (n * SWA_CARD_W + (n - 1) * SWA_CARD_GAP) or 0
+        local startX = -(total / 2) + (SWA_CARD_W / 2)
+        for i, slot in ipairs(self.cardSlots) do
+            if i <= n then
+                slot.frame:ClearAllPoints()
+                slot.frame:SetPoint("BOTTOM", self, "BOTTOM",
+                    startX + (i - 1) * (SWA_CARD_W + SWA_CARD_GAP), 6)
+                slot.frame:Show()
+            else
+                slot.frame:Hide()
+            end
+        end
+    end
+
+    -- Decode req.encodedHand and populate the slots. Used by both
+    -- self-tick OnUpdate and renderSWABanner (Refresh path).
+    swaBanner.populateCards = function(self, encodedHand)
+        local cards = (encodedHand and C.DecodeHand)
+            and C.DecodeHand(encodedHand) or {}
+        self:layoutCards(#cards)
+        for i, slot in ipairs(self.cardSlots) do
+            setCardSlot(slot, cards[i])
+        end
+    end
+
     -- Self-ticking countdown: while shown, OnUpdate refreshes ~3x/sec
     -- so the "auto-approve in N s" digit decrements smoothly without
     -- needing the rest of U.Refresh to fire.
     swaBanner._tickAccum = 0
+    swaBanner._lastEnc   = nil
     swaBanner:SetScript("OnUpdate", function(self, elapsed)
         self._tickAccum = (self._tickAccum or 0) + (elapsed or 0)
         if self._tickAccum < 0.33 then return end
         self._tickAccum = 0
         local req = S.s.swaRequest
         if not req or not req.caller or S.s.phase ~= K.PHASE_PLAY then
-            self:Hide(); return
+            self:Hide(); self._lastEnc = nil; return
         end
         local windowSec = req.windowSec or K.SWA_TIMEOUT_SEC or 5
         local now = (GetTime and GetTime()) or 0
@@ -1360,6 +1414,12 @@ local function buildTable()
             self.body:SetText(("%s · auto-approve in %ds"):format(cardLine, remain))
         else
             self.body:SetText(("%s · %ds — Takweesh to counter"):format(cardLine, remain))
+        end
+        -- Repopulate cards only when the encoded hand changes (every
+        -- request is a fresh encoded payload; no need to redecode 3x/s).
+        if self._lastEnc ~= req.encodedHand then
+            self._lastEnc = req.encodedHand
+            self:populateCards(req.encodedHand)
         end
     end)
     tablePanel.swaBanner = swaBanner
@@ -2922,12 +2982,22 @@ end
 -- timer auto-approve, press the always-visible TAKWEESH button to
 -- counter, or use the Accept/Deny manual override. Hidden once the
 -- request resolves (timer fires, takweesh fires, or accept/deny).
+--
+-- v0.5.4: also populates the card-face row inside the banner so the
+-- player sees the actual cards being claimed (Saudi convention =
+-- show your hand on SWA). Especially needed for bot-initiated SWA
+-- where the player previously approved/auto-approved blind.
 local function renderSWABanner()
     local b = tablePanel and tablePanel.swaBanner
     if not b then return end
     local req = S.s.swaRequest
     if not req or not req.caller or S.s.phase ~= K.PHASE_PLAY then
-        b:Hide(); return
+        b:Hide()
+        if b.cardSlots then
+            for _, slot in ipairs(b.cardSlots) do slot.frame:Hide() end
+        end
+        b._lastEnc = nil
+        return
     end
     local info = S.s.seats and S.s.seats[req.caller]
     local nm = (info and info.name) and shortName(info.name) or ("seat " .. req.caller)
@@ -2948,6 +3018,13 @@ local function renderSWABanner()
     else
         b.title:SetText(("|cffff5544SWA from %s|r"):format(nm))
         b.body:SetText(("%s · %ds — Takweesh to counter"):format(cardLine, remain))
+    end
+    -- v0.5.4: populate card-face row from the encoded hand. Only
+    -- redecode when the encoded payload changes (the OnUpdate self-
+    -- tick uses the same _lastEnc guard).
+    if b.populateCards and b._lastEnc ~= req.encodedHand then
+        b._lastEnc = req.encodedHand
+        b:populateCards(req.encodedHand)
     end
     b:Show()
 end

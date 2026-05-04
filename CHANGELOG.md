@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.4 — SWA banner shows the actual cards (player feedback)
+
+Previously the SWA banner showed only "N cards remaining" + timer.
+Player approved (or auto-approved) without seeing WHICH cards the
+caller was claiming — especially opaque for bot-initiated SWA where
+the player has no other visibility into the bot's hand.
+
+### Changed
+
+- **SWA banner now renders the caller's full hand inline (UI.lua).**
+  The banner height grew from 38 to 100 px to accommodate a card-
+  face row beneath the title/body. Up to 4 card slots (SWA fires at
+  ≤4 remaining), centered horizontally, anchored to the banner's
+  bottom edge. The cards are decoded from `swaRequest.encodedHand`
+  which has been on the wire since v0.4.6 — only the visualization
+  was missing. Saudi convention is "show your hand on SWA"; opponents
+  can now actually inspect the claim before the auto-approve timer
+  expires.
+
+- **No data shape changes** — pure UI fix. v0.5.3 saved games and
+  active SWA requests display correctly without any state migration.
+
+### Notes
+
+- Both render paths updated: the banner's self-tick OnUpdate (3 Hz
+  for the timer countdown) and the `renderSWABanner` Refresh path.
+  Both share `_lastEnc` to avoid redecoding the hand 3× per second.
+- 177/177 regression tests pass; UI.lua syntax-checks clean via
+  Lua loadfile.
+
 ## v0.5.3 — second ultra-test follow-up: 3 BUGs fixed
 
 A 6-agent verification swarm against shipped v0.5.2 surfaced three
