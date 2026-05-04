@@ -870,6 +870,46 @@ local function highestByRank(cards, contract)
     return best
 end
 
+-- v0.5.1 C-4 helper: pick the highest-FACE-VALUE card from a list,
+-- tie-broken by trick rank. Used for last-trick targeting where the
+-- LAST_TRICK_BONUS (+10) plus the card's face value matters more
+-- than its trick-rank (winning the last trick with a Ten = 10 face
+-- + 10 bonus = 20 effective vs winning with a 7 = 0+10 = 10).
+local function highestByFaceValue(cards, contract)
+    local best, bestPts, bestRank = cards[1], -1, -1
+    for _, c in ipairs(cards) do
+        local pts = C.PointValue(c, contract) or 0
+        if pts > bestPts then
+            best, bestPts, bestRank = c, pts, C.TrickRank(c, contract)
+        elseif pts == bestPts then
+            local r = C.TrickRank(c, contract)
+            if r > bestRank then best, bestRank = c, r end
+        end
+    end
+    return best
+end
+
+-- v0.5.1 H-4 helper: do we currently hold BOTH K and Q of trump
+-- (the Belote pair)? Belote scores +20 raw post-multiplier when
+-- both cards are played from the same hand within a single round —
+-- so we want to preserve them through the early discards.
+-- Hokm-only; Sun has no trump so Belote doesn't apply.
+local function holdsBeloteThusFar(hand, contract)
+    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
+        return false
+    end
+    local trump = contract.trump
+    local hasK, hasQ = false, false
+    for _, c in ipairs(hand) do
+        if C.Suit(c) == trump then
+            local r = C.Rank(c)
+            if     r == "K" then hasK = true
+            elseif r == "Q" then hasQ = true end
+        end
+    end
+    return hasK and hasQ
+end
+
 local function highestNonTrump(cards, contract)
     local best, bestR = nil, -1
     for _, c in ipairs(cards) do
@@ -915,6 +955,45 @@ local function pickLead(legal, contract, seat)
     local isBidderTeam = (contract.type == K.BID_HOKM
                           and myTeam == R.TeamOf(contract.bidder))
     local isBidder = (seat == contract.bidder)
+
+    -- v0.5.1 C-4: last-trick targeting at lead. On trick 8 there's no
+    -- future trick to set up — lead our HIGHEST face-value winner if
+    -- we hold a guaranteed boss (HighestUnplayedRank check) in any
+    -- safe suit, OR fall through to highest-face-value otherwise.
+    -- Sweep pursuit: if my team has won 7/7 tricks so far, also push
+    -- aggressively (already-leading suggests we're going for AL_KABOOT).
+    local trickNum = #(S.s.tricks or {}) + 1
+    if trickNum == 8 then
+        -- Sweep pursuit: our team won every prior trick → maximise
+        -- our chance of winning this final trick by leading our
+        -- highest-rank card (boss most likely; even if not, brute-force
+        -- it).
+        local myTeamSweepCount = 0
+        for _, t in ipairs(S.s.tricks or {}) do
+            if R.TeamOf(t.winner) == myTeam then
+                myTeamSweepCount = myTeamSweepCount + 1
+            end
+        end
+        local sweepPursuit = (myTeamSweepCount == 7)
+        -- First try a boss-lead in a safe suit.
+        if S.HighestUnplayedRank then
+            for _, c in ipairs(legal) do
+                local r = C.Rank(c)
+                local su = C.Suit(c)
+                local isBoss = S.HighestUnplayedRank(su) == r
+                local isSafe = (contract.type ~= K.BID_HOKM)
+                                or C.IsTrump(c, contract)
+                if isBoss and isSafe then return c end
+            end
+        end
+        -- Else: just lead our highest-rank or highest-face-value
+        -- (sweep pursuit ranks tie-break to highest-rank for max
+        -- over-trump resistance).
+        if sweepPursuit then
+            return highestByRank(legal, contract)
+        end
+        return highestByFaceValue(legal, contract)
+    end
 
     -- Advanced (Tier 3 #11): if we hold a card that's currently the
     -- HIGHEST UNPLAYED in its non-trump suit, leading that card is
@@ -1078,7 +1157,37 @@ local function pickLead(legal, contract, seat)
                 end
             end
         end
-        local t = highestTrump(legal, contract)
+        -- v0.5.1 H-6: preserve A-of-trump for late tricks. Saudi pros
+        -- spend J/9 of trump on trump-pull and reserve A-of-trump for
+        -- the LAST few tricks where its 11 face value + LAST_TRICK_BONUS
+        -- becomes 21 effective points. Without this guard, after J+9
+        -- are out, the bot's `highestTrump` returns A-of-trump and
+        -- spends it on routine pull. Filter out A-of-trump from the
+        -- candidate set when (a) we're in early tricks (#tricks < 5)
+        -- AND (b) we have non-Ace trump available. Falls through to
+        -- raw highestTrump if A is our only trump or trick 5+.
+        local trumpCandidates = {}
+        local hasNonAceTrump = false
+        for _, c in ipairs(legal) do
+            if C.IsTrump(c, contract) and C.Rank(c) ~= "A" then
+                hasNonAceTrump = true
+                break
+            end
+        end
+        local earlyTricks = (#(S.s.tricks or {}) < 5)
+        for _, c in ipairs(legal) do
+            if C.IsTrump(c, contract) then
+                if not (earlyTricks and C.Rank(c) == "A" and hasNonAceTrump) then
+                    trumpCandidates[#trumpCandidates + 1] = c
+                end
+            end
+        end
+        local t
+        if #trumpCandidates > 0 then
+            t = highestByRank(trumpCandidates, contract)
+        else
+            t = highestTrump(legal, contract)
+        end
         if t then return t end
     end
 
@@ -1332,6 +1441,30 @@ local function pickFollow(legal, hand, trick, contract, seat)
     local pos = #trick.plays + 1
     local lastSeat = (pos == 4)
 
+    -- v0.5.1 H-5: AKA receiver convention. When our partner just
+    -- announced AKA (إكَهْ) on the led suit AND is currently winning the
+    -- trick, they're saying "I hold the boss of this suit, partner —
+    -- don't over-trump it." Without this gate the bot's forced-trump
+    -- logic in Hokm would still ruff partner's lead. Suppress the ruff
+    -- by returning a low non-trump discard if any non-trump is legal.
+    -- Falls through to normal logic when no non-trump exists (legality
+    -- preserved) or when AKA isn't applicable.
+    if Bot.IsAdvanced() and contract.type == K.BID_HOKM and contract.trump
+       and trick.leadSuit and S.s.akaCalled
+       and S.s.akaCalled.seat == R.Partner(seat)
+       and S.s.akaCalled.suit == trick.leadSuit
+       and partnerWinning then
+        local discards = {}
+        for _, c in ipairs(legal) do
+            if not C.IsTrump(c, contract) then
+                discards[#discards + 1] = c
+            end
+        end
+        if #discards > 0 then
+            return lowestByRank(discards, contract)
+        end
+    end
+
     if partnerWinning then
         -- Smother: dumping our Ace/10 of lead suit onto partner's
         -- trick-pile feeds points to our team. Gate:
@@ -1463,6 +1596,15 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 return highestByRank(winners, contract)
             end
         end
+        -- v0.5.1 C-4: last-trick targeting. On trick 8 the cheapest
+        -- winner is wrong — there's no future trick to save the
+        -- higher card for, and LAST_TRICK_BONUS (+10) plus face-value
+        -- captures more total points. Default / pos 4 / no advanced
+        -- behavior elsewhere remains "cheapest winner".
+        local trickNum = #(S.s.tricks or {}) + 1
+        if trickNum == 8 then
+            return highestByFaceValue(winners, contract)
+        end
         -- Default / pos 4 / no advanced: cheapest winner.
         return lowestByRank(winners, contract)
     end
@@ -1481,6 +1623,27 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
         if #discardable > 0 then
             return lowestByRank(discardable, contract)
+        end
+    end
+    -- v0.5.1 H-4: Belote (K+Q of trump) preservation. If we still hold
+    -- BOTH K and Q of trump and we're in early tricks (#tricks < 4),
+    -- avoid discarding either — they pair for +20 raw post-multiplier
+    -- when played from the same hand. Filter the discard candidates;
+    -- if filtering would leave us with no legal cards (only K and Q
+    -- of trump are legal), fall through to lowestByRank — legality
+    -- always wins.
+    local completed = #(S.s.tricks or {})
+    if completed < 4 and holdsBeloteThusFar(legal, contract) then
+        local trump = contract.trump
+        local withoutBelote = {}
+        for _, c in ipairs(legal) do
+            local r = C.Rank(c)
+            if not (C.Suit(c) == trump and (r == "K" or r == "Q")) then
+                withoutBelote[#withoutBelote + 1] = c
+            end
+        end
+        if #withoutBelote > 0 then
+            return lowestByRank(withoutBelote, contract)
         end
     end
     return lowestByRank(legal, contract)
@@ -1610,6 +1773,32 @@ function Bot.PickDouble(seat)
         -- already uses.
         local trumpStr = suitStrengthAsTrump(hand, contract.trump)
         strength = strength + trumpStr
+
+        -- v0.5.1 C-3b: defender-aware strength additions. The 200-agent
+        -- audit identified missed Bels when defender had ruff potential
+        -- (void suits) or multiple side-suit Aces. Empirical: at TH=60
+        -- the Bel formula precision was still 45% — these additions
+        -- improve discriminator power.
+        --   • Void in non-trump suit: +5 (ruff capacity each round)
+        --   • Each side-suit Ace beyond the first: +8 (sustained
+        --     trick-winning power outside the trump axis)
+        local voidCount, sideAces = 0, 0
+        local suitCount = { S = 0, H = 0, D = 0, C = 0 }
+        for _, c in ipairs(hand) do
+            suitCount[C.Suit(c)] = suitCount[C.Suit(c)] + 1
+            if C.Rank(c) == "A" and C.Suit(c) ~= contract.trump then
+                sideAces = sideAces + 1
+            end
+        end
+        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+            if suit ~= contract.trump and suitCount[suit] == 0 then
+                voidCount = voidCount + 1
+            end
+        end
+        strength = strength + voidCount * 5
+        if sideAces >= 2 then
+            strength = strength + (sideAces - 1) * 8
+        end
     end
     if contract.type == K.BID_SUN then
         strength = strength + 10   -- bias: Sun is harder for the bidder
@@ -1737,6 +1926,14 @@ function Bot.PickFour(seat)
         elseif fails >= 1 then
             th = th - 5
         end
+        -- v0.5.1 H-9: wire `triples` counter (was dead). Habitual
+        -- Triple-bidder = aggressive caller; defenders should be
+        -- slightly more willing to Four against them. Cap combined
+        -- threshold drop with the gahwaFailed branch above so we
+        -- don't collapse the threshold below 50% of base.
+        local triples = m and (m.triples or 0) or 0
+        if triples >= 2 then th = th - 5 end
+        if th < K.BOT_FOUR_TH - 16 then th = K.BOT_FOUR_TH - 16 end
     end
     return escalateDecision(strength, th)
 end
@@ -1865,4 +2062,44 @@ function Bot.PickTakweesh(seat)
 
     if math.random() < rate then return found end
     return nil
+end
+
+-- v0.5.1 C-2: Bot.PickSWA — bot SWA initiation. Returns true when the
+-- bot holds an unbeatable position; the caller (Net.lua MaybeRunBot)
+-- then dispatches the SWA via the existing host SWA flow. Saudi
+-- convention: SWA is the ≤4-card "I claim the rest" call. Validity is
+-- delegated to R.IsValidSWA which runs the recursive minimax against
+-- the host's authoritative hand state.
+--
+-- Gates:
+--   • Bot.IsAdvanced() — Basic bots never call SWA
+--   • Phase == PLAY
+--   • S.s.hostHands[seat] exists and has ≤4 cards
+--   • R.IsValidSWA returns true on the reconstructed trick state
+function Bot.PickSWA(seat)
+    if not Bot.IsAdvanced() then return false end
+    if S.s.phase ~= K.PHASE_PLAY then return false end
+    if not S.s.contract then return false end
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    if not hand or #hand == 0 or #hand > 4 then return false end
+
+    -- Reconstruct trick state for the validator.
+    local trickPlays = (S.s.trick and S.s.trick.plays) or {}
+    local trickLead = S.s.trick and S.s.trick.leadSuit
+    local trickLeader
+    if #trickPlays > 0 then
+        trickLeader = trickPlays[1].seat
+    else
+        trickLeader = S.s.turn or seat
+    end
+    local trickState = {
+        leadSuit = trickLead, leader = trickLeader, plays = trickPlays,
+    }
+    -- Build all four hands for the validator.
+    local hands = {}
+    for s2 = 1, 4 do
+        hands[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
+    end
+    -- Delegate to R.IsValidSWA — single source of truth for SWA legality.
+    return R.IsValidSWA(seat, hands, S.s.contract, trickState) == true
 end

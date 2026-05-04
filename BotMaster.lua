@@ -82,6 +82,33 @@ local function getDefenderCards(contract)
     return desire
 end
 
+-- v0.5.1 H-3 helper: desire map for the BIDDER'S PARTNER seat in a
+-- Hokm contract. Bidder's partner usually holds 2-3 trump cards
+-- (the rest of the team's allotment after the bidder claimed J/9/A
+-- via the bid). Without this bias, the sampler under-trumped the
+-- partner ~50% of worlds and over-trumped defenders, distorting
+-- cooperative trump-clearing rollouts. Returns {} for SUN.
+--
+--   desire[trump] = true   long-suit incentive: any remaining trump
+--                          card weight 20 via the existing fallback
+--   desire["A"..s] = 5     light non-trump-Ace bias (lighter than
+--                          defender's 8 to avoid double-clustering
+--                          all 3 side Aces away from defenders)
+local function getPartnerCards(contract)
+    local desire = {}
+    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
+        return desire
+    end
+    local t = contract.trump
+    desire[t] = true
+    for _, s in ipairs(K.SUITS) do
+        if s ~= t then
+            desire["A"..s] = 5
+        end
+    end
+    return desire
+end
+
 -- Helper: returns true if Saudi-Master tier is active.
 function BM.IsActive()
     return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots == true
@@ -156,6 +183,11 @@ local function sampleConsistentDeal(seat, unseen)
     -- v0.5 H-2: pre-compute defender desire once (shared by both
     -- defender seats). Defender = on opposing team AND not bidder.
     local defenderDesire = getDefenderCards(contract)
+    -- v0.5.1 H-3: partner desire (trump-count bias). Distinct from
+    -- the calling sampler's `partner` (R.Partner(seat)) — we want
+    -- the BIDDER's partner regardless of who's calling.
+    local partnerDesire = getPartnerCards(contract)
+    local bidderPartner = bidder and R.Partner(bidder) or nil
     local partner = R.Partner(seat)
     local pMem = B.Bot._memory and B.Bot._memory[partner]
     local pSignalSuit = pMem and pMem.firstDiscard and pMem.firstDiscard.suit
@@ -272,10 +304,13 @@ local function sampleConsistentDeal(seat, unseen)
                 local isDefender = bidder ~= nil
                                    and R.TeamOf(s) ~= R.TeamOf(bidder)
                                    and s ~= bidder
+                -- v0.5.1 H-3: bidder's partner gets trump-count bias.
+                local isBidderPartner = bidderPartner ~= nil and s == bidderPartner
                 local desire
-                if     s == bidder  then desire = strong
-                elseif isDefender   then desire = defenderDesire
-                else                     desire = {} end
+                if     s == bidder        then desire = strong
+                elseif isDefender         then desire = defenderDesire
+                elseif isBidderPartner    then desire = partnerDesire
+                else                           desire = {} end
                 if s == partner and pSignalSuit then desire[pSignalSuit] = 1 end
 
                 -- Audit Tier 4 (B-99): if this seat is `likelyKawesh`

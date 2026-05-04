@@ -1,5 +1,101 @@
 # Changelog
 
+## v0.5.1 — Sprints B-H: complete bot improvement campaign
+
+Continues the v0.5.0 work by landing the remaining 8 staged patches
+from the bot improvement research campaign. v0.5.0 unlocked the
+Saudi Master tier; v0.5.1 lands the strategy and coordination
+heuristics that distinguish a competent player from a Saudi pro.
+
+Empirical 100-round A/B tournament (`bot_baseline_metrics_sprint_BCDH.json`):
+- All-Master (natural) flipped from B-wins back to balanced
+  (8.8/8.1) — Master-vs-Master games are now near-symmetric
+- Master ISMCTS rollouts have higher quality through
+  partner-trump bias (H-3) and defender-Ace clustering (H-2 in v0.5.0)
+
+### Added (Critical missing features)
+
+- **C-2: Bot-initiated SWA (`Bot.PickSWA`).** Bots now claim the rest
+  of the round when holding an unbeatable hand (≤4 cards, R.IsValidSWA
+  passes). Net.lua MaybeRunBot dispatches SWA via the existing
+  permission flow (5-sec auto-approve from v0.4.6) for ≥4 cards or
+  instant-claim for ≤3. Saudi convention preserved. Silent gameplay
+  improvement: bots no longer leak winnable trick-points to opponents
+  by playing out unbeatable hands trick-by-trick.
+
+- **C-4: Last-trick +10 targeting + AL-KABOOT pursuit.** Trick 8
+  was previously played identical to trick 1 — `lowestByRank(winners)`
+  in pos-4 wasted the highest face-value card on a cheap winner,
+  forfeiting the LAST_TRICK_BONUS. Now `pickFollow` pos-4 on trick 8
+  uses `highestByFaceValue`, and `pickLead` on trick 8 prefers boss
+  cards in safe suits (or highest-rank if our team has won 7/7
+  → AL-KABOOT pursuit mode).
+
+- **C-3b: Defender-aware strength formula additions.** PickDouble's
+  Bel-decision strength now adds void-suit count × 5 (each void =
+  ruff potential) and side-suit Aces beyond the first × 8 (sustained
+  trick-winning power). Combined with v0.5.0's TH=60 calibration,
+  Bels now fire on the right defender hands.
+
+### Added (High-priority strategy heuristics)
+
+- **H-3: Sampler partner trump-count bias (`getPartnerCards`).** The
+  bidder's partner now gets a trump-suit weighting (`desire[trump] = true`
+  → weight 20 via the suit-fallback) plus a light non-trump-Ace bias
+  (5 per Ace). Without this, the sampler under-trumped the partner
+  in ~50% of worlds, distorting cooperative trump-clearing rollouts.
+
+- **H-4: Belote (K+Q of trump) preservation.** `pickFollow` discard
+  fallback now skips K and Q of trump in tricks 1-3 if BOTH are still
+  in hand. Saudi rule: Belote +20 raw post-multiplier scores when
+  both K and Q are played from the same hand. Bot was routinely
+  shedding K via `lowestByRank` (rank 4, low-end). Belote bonus now
+  preserved.
+
+- **H-5: AKA receiver convention.** When partner announces AKA on
+  the led suit and is currently winning the trick, the bot
+  suppresses the forced trump-ruff and plays a low non-trump
+  discard instead. The half-coordination from v0.4.5 (sender-only)
+  is now complete.
+
+- **H-6: A-of-trump preservation for late tricks.** In bidder
+  pickLead trump-pull, the A of trump is now excluded from the
+  highestTrump candidate set when (a) `#tricks < 5` AND (b) we have
+  non-Ace trump available. Saudi pros spend J/9 on pull and reserve
+  A for late tricks where its 11 face value + LAST_TRICK_BONUS = 21
+  effective points.
+
+- **H-8 (already in v0.5.0): scoreUrgency context-aware** — confirmed
+  active in v0.5.1.
+
+### Activated (Style ledger wiring)
+
+- **H-9 (partial): `triples` counter wired into PickFour.** Previously
+  written by OnEscalation but read by zero pickers. Now defenders
+  facing a habitual-Triple bidder (`triples >= 2`) drop their Four
+  threshold by 5 (capped at -16 combined with `gahwaFailed`).
+  `aceLate` and `leadCount` remain dead — wiring them is staged for
+  a future cleanup sprint.
+
+### Empirical impact
+
+Pre-v0.5 → v0.5.1 cumulative (100-round tournaments):
+
+| Metric | Before | After (v0.5.0) | After (v0.5.1) |
+|---|---|---|---|
+| `all_master` natural AvgB | 10.3 | 8.5 | **8.1** (more competitive) |
+| `mixed_basic_master` natural Master gp/round | 8.8 | **11.7** | 11.5 |
+| `mixed_basic_master` forced winner | A | **B** | B (Master) |
+| `mixed_m3lm_master` sweep rate | 0.07 | 0.13 | **0.13** |
+
+### Verification
+
+- 9/9 Lua files syntax-validated
+- 177/177 tests pass
+- 3 baseline JSONs preserved as evidence
+  (`bot_baseline_metrics.json`, `_sprint_A.json`, `_sprint_BCDH.json`)
+- v0.5.1 worktree retained for reference
+
 ## v0.5.0 — Sprint A: Saudi Master tier unlocked + bot quality improvements
 
 The 20-agent ruflo-swarm "Bot Improvement" research campaign (the

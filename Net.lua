@@ -3525,6 +3525,57 @@ function N.MaybeRunBot()
                     N.HostResolveTakweesh(seat)
                     return
                 end
+                -- v0.5.1 C-2: bot-initiated SWA. If the bot holds an
+                -- unbeatable position (R.IsValidSWA returns true on
+                -- the recursive minimax), claim the rest. Saudi rule:
+                -- ≤3 cards = instant claim; 4+ = permission flow with
+                -- the existing 5-sec auto-approve timer (v0.4.6). This
+                -- branch fires before PickMelds + PickPlay so the bot
+                -- short-circuits the trick when it can win them all.
+                if B.Bot.PickSWA and B.Bot.PickSWA(seat) then
+                    local hand = (S.s.hostHands and S.s.hostHands[seat]) or {}
+                    local enc = C.EncodeHand(hand)
+                    local handCount = #hand
+                    local needPerm = (WHEREDNGNDB == nil)
+                                  or (WHEREDNGNDB.swaRequiresPermission ~= false)
+                    if handCount <= 3 or not needPerm then
+                        -- Instant claim
+                        broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, enc))
+                        N.HostResolveSWA(seat, hand)
+                    else
+                        -- Permission flow: arm 5-sec auto-approve.
+                        S.s.swaRequest = {
+                            caller    = seat,
+                            handCount = handCount,
+                            responses = {},
+                            encodedHand = enc,
+                            ts        = (GetTime and GetTime()) or 0,
+                            windowSec = K.SWA_TIMEOUT_SEC or 5,
+                        }
+                        broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, enc))
+                        -- Auto-accept all opponent bots (mirrors
+                        -- _OnSWAReq's existing convention).
+                        local callerTeam = R.TeamOf(seat)
+                        for s2 = 1, 4 do
+                            local info = S.s.seats[s2]
+                            if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
+                                N._OnSWAResp("__host__", s2, true, seat)
+                            end
+                        end
+                        if C_Timer and C_Timer.After then
+                            C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
+                                if not S.s.isHost then return end
+                                if S.s.paused then return end
+                                local req = S.s.swaRequest
+                                if not req or req.caller ~= seat then return end
+                                if S.s.phase ~= K.PHASE_PLAY then return end
+                                S.s.swaRequest = nil
+                                N.HostResolveSWA(seat, hand)
+                            end)
+                        end
+                    end
+                    return
+                end
                 if not S.s.meldsDeclared[seat] then
                     local melds = B.Bot.PickMelds(seat)
                     for _, m in ipairs(melds) do
