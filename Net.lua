@@ -1886,8 +1886,14 @@ function N.HostResolveTakweesh(callerSeat)
     if belote == "A" then rawA = rawA + K.MELD_BELOTE
     elseif belote == "B" then rawB = rawB + K.MELD_BELOTE end
 
-    local addA = math.floor((rawA + 4) / 10)
-    local addB = math.floor((rawB + 4) / 10)
+    -- v0.5.21 scoring-inconsistency fix: align with R.ScoreRound's
+    -- v0.5.6 div10 fix (5 rounds UP per video #43). Pre-v0.5.21
+    -- this Qaid path used the old (x+4)/10 (5 rounds DOWN) while
+    -- R.ScoreRound used (x+5)/10. A Qaid penalty resolution
+    -- rounded scores DIFFERENTLY than a regular round-end. User-
+    -- reported "scoring not matching the docs" symptom.
+    local addA = math.floor((rawA + 5) / 10)
+    local addB = math.floor((rawB + 5) / 10)
     local totA = S.s.cumulative.A + addA
     local totB = S.s.cumulative.B + addB
 
@@ -2588,8 +2594,10 @@ function N.HostResolveSWA(callerSeat, callerHand)
         local rawB = (cardB + mpB) * mult
         if beloteOwner == "A" then rawA = rawA + K.MELD_BELOTE
         elseif beloteOwner == "B" then rawB = rawB + K.MELD_BELOTE end
-        addA = math.floor((rawA + 4) / 10)
-        addB = math.floor((rawB + 4) / 10)
+        -- v0.5.21 scoring-inconsistency fix: same div10 alignment
+        -- as HostResolveTakweesh above (5 rounds UP per video #43).
+        addA = math.floor((rawA + 5) / 10)
+        addB = math.floor((rawB + 5) / 10)
         contractMade = false
     else
         -- VALID SWA → caller's team takes all remaining trick points.

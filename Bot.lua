@@ -1962,6 +1962,61 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
     end
 
+    -- v0.5.21 Section 5 Sun pos-4 Faranka (Definite, video 06).
+    -- Saudi-pro Faranka: Sun + lastSeat + partnerWinning + we hold A
+    -- AND a "cover" (T or K) of led suit + EXACTLY 2 cards of led
+    -- suit (anti-trigger rule 4: ≥3 means 10 drops naturally).
+    -- Duck with the COVER (T or K), let partner take this trick;
+    -- our A captures the next opp-led trick. Bridges 2 tricks per
+    -- single A/cover deployment.
+    --
+    -- Tier-gating: bidder-team only (rule 9 — defenders should win
+    -- the trick to deny opp Kaboot rather than fish for tempo).
+    -- Anti-trigger rule 3 (we hold two highest UNPLAYED) is hard
+    -- to detect cheaply; the suitCount==2 + has-A + has-T-or-K
+    -- gate is a reasonable proxy for the canonical "A+T mardoofa"
+    -- Faranka shape (which IS the typical case where the rule
+    -- fires per video #06).
+    --
+    -- This branch fires BEFORE smother (Section 4 rule 7 Takbeer)
+    -- because Faranka and Takbeer conflict — both fire on
+    -- partner-winning + we-hold-A scenarios. Per video #06,
+    -- Faranka is the correct Sun pos-4 play; Takbeer is the
+    -- general partner-winning donate-highest behavior. When BOTH
+    -- conditions match (Sun + lastSeat + bidder-team + A+cover +
+    -- 2-card suit), Faranka takes precedence.
+    -- Sources: decision-trees.md Section 5 (Definite, video 06).
+    if contract.type == K.BID_SUN and lastSeat and partnerWinning
+       and trick.leadSuit
+       and R.TeamOf(seat) == R.TeamOf(contract.bidder) then
+        local lead = trick.leadSuit
+        local hasA = false
+        local cover = nil
+        local coverRank = -1
+        local suitCount = 0
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == lead then
+                suitCount = suitCount + 1
+                local r = C.Rank(c)
+                if r == "A" then hasA = true
+                elseif r == "T" or r == "K" then
+                    local cr = C.TrickRank(c, contract)
+                    if cr > coverRank then
+                        cover = c
+                        coverRank = cr
+                    end
+                end
+            end
+        end
+        -- Faranka fires when:
+        --   • We have A + a cover (T or K) of led suit.
+        --   • Exactly 2 cards in led suit (rule 4 anti-trigger).
+        --   • Bidder-team only (rule 9 anti-trigger).
+        if hasA and cover and suitCount == 2 then
+            return cover
+        end
+    end
+
     if partnerWinning then
         -- Smother: dumping our Ace/10 of lead suit onto partner's
         -- trick-pile feeds points to our team. Gate:
@@ -2832,6 +2887,52 @@ function Bot.PickSWA(seat)
     for s2 = 1, 4 do
         hands[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
     end
+
     -- Delegate to R.IsValidSWA — single source of truth for SWA legality.
-    return R.IsValidSWA(seat, hands, S.s.contract, trickState) == true
+    if not R.IsValidSWA(seat, hands, S.s.contract, trickState) then
+        return false
+    end
+
+    -- v0.5.21 user-reported safety net: in Hokm, additionally require
+    -- that caller holds the HIGHEST unplayed trump OR no opponent has
+    -- any trump remaining. R.IsValidSWA is strict-caller-correct
+    -- (post-v0.5.17), but the user reports observing SWA-while-opp-
+    -- has-trump scenarios that "feel wrong" — possibly false-positives
+    -- from edge cases in the recursive validator, possibly UI-banner
+    -- misinterpretation. This belt-and-suspenders gate makes the
+    -- bot strictly conservative in Hokm: SWA only fires when the
+    -- top-trump position is unambiguous.
+    -- Sources: user-direct on v0.5.20 → v0.5.21 transition.
+    if S.s.contract.type == K.BID_HOKM and S.s.contract.trump then
+        local trump = S.s.contract.trump
+        -- Find caller's highest trump (if any).
+        local callerTopRank = -1
+        for _, c in ipairs(hand) do
+            if C.Suit(c) == trump then
+                local r = C.TrickRank(c, S.s.contract)
+                if r > callerTopRank then callerTopRank = r end
+            end
+        end
+        -- Find opponents' highest trump (if any).
+        local oppTopRank = -1
+        for s2 = 1, 4 do
+            if R.TeamOf(s2) ~= R.TeamOf(seat) then
+                for _, c in ipairs(hands[s2]) do
+                    if C.Suit(c) == trump then
+                        local r = C.TrickRank(c, S.s.contract)
+                        if r > oppTopRank then oppTopRank = r end
+                    end
+                end
+            end
+        end
+        -- Reject if any opp trump is higher than caller's top trump.
+        -- (oppTopRank == -1 means no opp trump → safe.
+        --  callerTopRank == -1 + oppTopRank > -1 means opp has trump and
+        --  we don't → reject. Caller would lose any trick to opp's ruff.)
+        if oppTopRank > callerTopRank then
+            return false
+        end
+    end
+
+    return true
 end

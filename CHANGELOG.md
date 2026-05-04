@@ -1,5 +1,81 @@
 # Changelog
 
+## v0.5.21 — Section 5 Sun Faranka + scoring discrepancy fix + Hokm SWA safety
+
+Three user-reported items addressed in one batch.
+
+### Section 5 — Sun pos-4 Faranka (Definite, video 06)
+
+The canonical Saudi Faranka: Sun + lastSeat + partnerWinning + we
+hold A AND a "cover" (T or K) of led suit + EXACTLY 2 cards of
+led suit → DUCK with the cover, let partner take this trick, our
+A captures the next opp-led trick. Bridges 2 tricks per single
+A/cover deployment.
+
+This branch fires BEFORE the v0.5.18 Takbeer-extension smother
+because Faranka and Takbeer conflict (both fire on partner-
+winning + we-hold-A). Per video #06, Faranka is the correct
+Sun pos-4 play; Takbeer is the general partner-winning donate-
+highest behavior. When BOTH match, Faranka wins.
+
+Tier-gating: bidder-team only (rule 9 anti-trigger — defenders
+should win the trick to deny opp Kaboot rather than fish for
+tempo). Anti-trigger rule 4 (≥3 cards of suit, 10 drops naturally)
+is enforced via `suitCount == 2` gate.
+
+Anti-trigger rules 3, 5, 6, 8 are SOMETIMES-confidence or require
+state we don't track cheaply (e.g., A is known to be at LHO).
+Deferred.
+
+### Scoring discrepancy fix (user-reported "scoring not matching docs")
+
+Two paths in Net.lua used the OLD `(x + 4) / 10` rounding (5
+rounds DOWN), inconsistent with R.ScoreRound's v0.5.6 fix to
+`(x + 5) / 10` (5 rounds UP per video #43):
+
+- **`Net.HostResolveTakweesh`** (Qaid penalty path) at line ~1889.
+- **`Net.HostResolveSWA`** invalid-SWA branch at line ~2591.
+
+Both now use `(x + 5) / 10` consistently with R.ScoreRound. So
+a Qaid penalty resolution and an invalid-SWA penalty resolve
+with the same rounding direction as a normal round-end. User-
+reported symptom: scores after a takweesh/SWA-failure didn't
+match what the docs said for raw values ending in 5 (e.g., 65
+raw should be 7 game points per "5 rounds UP", not 6).
+
+### Hokm SWA safety net (user-reported "bots SWA while opp has Hokm")
+
+User reports observing bots calling SWA in Hokm contracts while
+opponents still hold trump (Hokm) cards. R.IsValidSWA is post-
+v0.5.17 strict-caller-correct (per inline trace verification),
+but the user wants extra conservatism in Hokm.
+
+Added belt-and-suspenders gate to `Bot.PickSWA`: in Hokm, after
+R.IsValidSWA returns true, additionally verify that NO opponent
+holds a trump higher than caller's top trump. Specifically:
+- Compute `callerTopRank` = highest TrickRank of caller's trumps.
+- Compute `oppTopRank` = highest TrickRank of opps' trumps.
+- Reject SWA if `oppTopRank > callerTopRank`.
+
+When caller has 0 trumps and opp has any trump, oppTopRank > -1 =
+callerTopRank → reject. (R.IsValidSWA already correctly rejects
+this case via the must-trump-ruff path; the safety net is
+redundant defense for any edge case.)
+
+Trade-off: bot may miss some genuinely valid Hokm SWAs where
+caller has no trump but the situation is otherwise unbeatable
+(e.g., 4-card endgame where caller holds 4 Aces and opp's only
+trump is 7H but they're forced to follow non-trump leads). Rare;
+conservative bias preferred per user.
+
+### Tests
+
+- 226/226 regression tests pass.
+- The Section 5 Faranka branch and the Hokm SWA safety net are
+  not directly pinned by tests (would require complex hand setup);
+  scoring rounding fix is implicitly covered by the existing
+  Section M div10 tests in test_rules.lua.
+
 ## v0.5.20 — decision-trees.md Section 10: Hokm Faranka audit (no code change)
 
 Section 10's 9 rules establish the Saudi convention: **Hokm Faranka
