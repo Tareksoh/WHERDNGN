@@ -22,7 +22,12 @@ actual bot logic.** Each rule maps to a specific picker function
 
 ---
 
-## Section 1 — Bidding (`Bot.PickBid` Bot.lua:725, `Bot.PickAshkal`)
+## Section 1 — Bidding (`Bot.PickBid` Bot.lua:890, `Bot.PickAshkal`)
+<!-- Line numbers refreshed v0.5.15. Cell-level "MAPS-TO" line refs
+     elsewhere may still be stale (drifted +165 to +461 across
+     v0.5.8 → v0.5.14). See glossary.md for the current snapshot
+     and the grep recipe to re-anchor. -->
+
 
 ### Hokm bidding triggers
 
@@ -70,7 +75,7 @@ actual bot logic.** Each rule maps to a specific picker function
 
 ---
 
-## Section 2 — Escalation (`Bot.PickDouble` 1787, `PickTriple` 1908, `PickFour` 1938, `PickGahwa` 1982)
+## Section 2 — Escalation (`Bot.PickDouble` 2403, `PickTriple` 2534, `PickFour` 2564, `PickGahwa` 2608)
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
@@ -84,7 +89,7 @@ actual bot logic.** Each rule maps to a specific picker function
 
 ---
 
-## Section 3 — Opening leads (`pickLead` Bot.lua:953)
+## Section 3 — Opening leads (`pickLead` Bot.lua:1289)
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
@@ -92,7 +97,7 @@ actual bot logic.** Each rule maps to a specific picker function
 
 ---
 
-## Section 4 — Mid-trick play (`pickFollow` Bot.lua:1457, positions 2-3)
+## Section 4 — Mid-trick play (`pickFollow` Bot.lua:1882, positions 2-3)
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
@@ -123,7 +128,7 @@ actual bot logic.** Each rule maps to a specific picker function
 
 ---
 
-## Section 5 — Pos-4 (last-to-play) plays (`pickFollow` pos-4 branch Bot.lua:1457)
+## Section 5 — Pos-4 (last-to-play) plays (`pickFollow` pos-4 branch Bot.lua:1882)
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
@@ -139,7 +144,7 @@ actual bot logic.** Each rule maps to a specific picker function
 
 ---
 
-## Section 6 — AKA / signaling (`Bot.PickAKA` Bot.lua:1686, AKA-receiver in `pickFollow`)
+## Section 6 — AKA / signaling (`Bot.PickAKA` Bot.lua:2302, AKA-receiver in `pickFollow`)
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
@@ -149,14 +154,14 @@ actual bot logic.** Each rule maps to a specific picker function
 | Partner plays a clear LOW card (e.g. 7 or 8) under your winning lead | Infer: partner is **broke in suit's high cards**. NEVER assume the unseen high is partner's. | Inverse of touching-honors signal. | Sampler suit-X high-card allocation; should NOT pin to partner if partner played low. `(not yet wired)`. | Common | 05 |
 | AKA partner-call window — you hold the highest unplayed card in some non-trump suit | Consider AKA call. Receiver convention applies in `pickFollow` — H-5 (v0.5.1). | Standard Saudi AKA convention. | `Bot.PickAKA` Bot.lua:1686; receiver in `pickFollow` Bot.lua:1457. | Definite | 05 + existing v0.5.1 H-5 |
 | Hokm, you are leading trick-1 with the **bare Ace** of a non-trump suit (no AKA explicitly broadcast) | Receiver applies AKA-receiver convention anyway — **implicit AKA** | Saudi convention: leading bare Ace in non-trump = implicit AKA call. Receiver suppresses ruff. | Extend `pickFollow` H-5 receiver branch to fire on partner's bare-Ace lead AND `S.s.akaCalled == nil`. **Refinement of v0.5.1 H-5.** | Definite | 18 |
-| Hokm, you are pos-4 (last to play); partner is currently winning the trick; you are void in led suit | **Released from must-ruff** — may discard non-trump instead | Saudi rule: must-trump obligation lifts when partner is the current trick-winner. Saves trump for future tricks. | **Rule-correctness item:** `R.IsLegalPlay` Hokm trump-discipline branch may need a "partner winning trick" exception. Currently enforces must-trump regardless of partner-state. | Common | 42 |
+| Hokm, you are pos-4 (last to play); partner is currently winning the trick; you are void in led suit | **Released from must-ruff** — may discard non-trump instead | Saudi rule: must-trump obligation lifts when partner is the current trick-winner. Saves trump for future tricks. | **ALREADY WIRED:** `R.IsLegalPlay` Rules.lua:118-121 (trump-led branch) and Rules.lua:147-149 (off-lead-trump branch) both have the partner-winning exception. The actionable gap is a `pickFollow` heuristic that *prefers* a non-trump discard when released — currently the bot defaults to lowestByRank which may pick a trump anyway. | Common | 42 |
 | Hokm, partner verbally announced AKA on highest unplayed of led suit | **Released from must-ruff** — already wired (v0.5.1 H-5) | Same as above; AKA is the explicit form. | `pickFollow` H-5 (v0.5.1). | Definite | 42 + existing |
 | **AKA must be VERBAL** — silent high-card play does NOT confer AKA-receiver relief | If you play the highest unplayed without announcing, partner is NOT obligated to defer | Saudi convention is verbal-announcement-required. | `Bot.PickAKA` Bot.lua:1686 already gates on explicit broadcast (`S.s.akaCalled` state). No change needed. | Definite | 42 |
 | AKA-call decision (sender side) preconditions | All of: (a) contract == Hokm; (b) card.suit != trump; (c) card.rank != "A"; (d) you hold the HIGHEST UNPLAYED of that suit; (e) you're leading + trick has 0 plays so far; (f) NOT (partner certainly void in trump); (g) round_stage allows (early-stage with low scoreUrgency, OR top-of-suit confidence is certain). | Tightens existing AKA-call gate. | `Bot.PickAKA` Bot.lua:1686 — augment with predicates (f) and (g). | Definite | 18 |
 
 ---
 
-## Section 7 — Endgame / SWA / Al-Kaboot (`Bot.PickSWA` Bot.lua:2120, `pickLead` trick-8 branch Bot.lua:953)
+## Section 7 — Endgame / SWA / Al-Kaboot (`Bot.PickSWA` Bot.lua:2746, `pickLead` trick-8 branch Bot.lua:1289)
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|

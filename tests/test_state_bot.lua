@@ -1077,6 +1077,110 @@ do
 end
 
 -- =====================================================================
+-- G. Ashkal eligibility — bid-position-based seat restriction
+--
+-- Audit-recommended pin (v0.5.6/v0.5.7 saga): only the dealer +
+-- dealer's-LEFT may call Ashkal. v0.5.6 incorrectly inverted this
+-- to dealer + dealer's-RIGHT; v0.5.7 reverted. UI.lua:223-225's
+-- NextSeat=right convention is the disambiguator. In bid order
+-- (dealer-left first, dealer last), eligible seats are positions
+-- 3 (dealer's-left) and 4 (dealer).
+--
+-- This fixture pins the post-v0.5.7 correct behavior: 16 assertions
+-- (4 dealer values × 4 seat values) verifying which seat-by-dealer
+-- combinations may legally call Ashkal.
+-- =====================================================================
+section("G. Ashkal eligibility (audit-recommended fixture)")
+
+-- Reusable helper: simulate a round-1 Ashkal attempt by setting
+-- s.bids and calling HostAdvanceBidding. The Ashkal-call rule
+-- silently drops the call if the seat isn't bidPosition >= 3.
+-- We test this by reading whether the RESULT favors the Ashkal
+-- caller (or their partner, who becomes the Sun-bidder if Ashkal
+-- succeeds).
+local function ashkalEligible(dealer, seat)
+    -- bid order = {(d%4)+1, ((d+1)%4)+1, ((d+2)%4)+1, d}.
+    -- Position of `seat` in that order.
+    local order = {
+        (dealer % 4) + 1, ((dealer + 1) % 4) + 1,
+        ((dealer + 2) % 4) + 1, dealer,
+    }
+    for i, st in ipairs(order) do
+        if st == seat then return i >= 3 end
+    end
+    return false
+end
+
+-- Cross-check: for each (dealer, seat), set up a scenario where:
+--   - dealer-left bidder bids HOKM:H
+--   - then `seat` attempts ASHKAL
+--   - other bidders pass
+-- HostAdvanceBidding result tells us whether Ashkal was honored.
+-- Eligible seats produce contract={SUN, viaAshkal=true}; ineligible
+-- seats produce contract={HOKM, ...} (Ashkal silently dropped).
+for dealer = 1, 4 do
+    local order = {
+        (dealer % 4) + 1, ((dealer + 1) % 4) + 1,
+        ((dealer + 2) % 4) + 1, dealer,
+    }
+    for seat = 1, 4 do
+        local expected = ashkalEligible(dealer, seat)
+        local label = ("dealer=%d seat=%d (bidPos=%d)"):format(
+            dealer, seat,
+            (seat == order[1] and 1) or
+            (seat == order[2] and 2) or
+            (seat == order[3] and 3) or
+            (seat == order[4] and 4) or 0
+        )
+        -- Build a bid sequence: first eligible bidder (order[1]) bids
+        -- HOKM:H, our `seat` bids ASHKAL, others PASS.
+        -- Special case: if seat IS order[1], they can't bid HOKM AND
+        -- ASHKAL — so use a different testing setup.
+        local bids = {}
+        if seat == order[1] then
+            -- seat is the FIRST bidder. They bid Ashkal directly
+            -- (no prior Hokm). Per Saudi rule, bidPos 1 can't
+            -- Ashkal — the Hokm bid is required to be in winner
+            -- before Ashkal evaluates (line 1500: HOKM gates winning).
+            -- So seat 1 alone bidding Ashkal means winning stays nil
+            -- after the Ashkal logic (which checks bidPos >= 3).
+            -- For a clean test, we still expect Ashkal silently drops
+            -- and we should fall to whatever else qualifies. Add
+            -- HOKM:H from seat-2 to make the scenario testable.
+            bids[seat] = K.BID_ASHKAL
+            bids[order[2]] = "HOKM:H"
+            bids[order[3]] = K.BID_PASS
+            bids[order[4]] = K.BID_PASS
+        else
+            -- seat is not first. order[1] bids HOKM:H, seat bids ASHKAL.
+            bids[order[1]] = "HOKM:H"
+            bids[seat] = K.BID_ASHKAL
+            for _, st in ipairs(order) do
+                if not bids[st] then bids[st] = K.BID_PASS end
+            end
+        end
+
+        S.s.isHost = true
+        S.s.contract = nil
+        S.s.dealer = dealer
+        S.s.bidRound = 1
+        S.s.bids = bids
+
+        local action, payload = S.HostAdvanceBidding()
+
+        -- If Ashkal was honored, the contract type becomes Sun (via
+        -- Ashkal: declarer = caller's partner). If not, the Hokm
+        -- from the first bidder wins.
+        local ashkalHonored = (action == "contract"
+                              and payload
+                              and payload.type == K.BID_SUN)
+        assertEq(ashkalHonored, expected,
+                 ("v0.5.15 G: Ashkal eligibility (%s) honored=%s"):format(
+                     label, tostring(expected)))
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

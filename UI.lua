@@ -1701,17 +1701,34 @@ local function renderActions()
             -- Bel (×2). Open/Closed (التربيع) choice: open lets the
             -- bidder counter with Triple; closed stops the chain.
             -- Sun has no Triple rung, so only the Bel button shows.
-            local isSun = S.s.contract and S.s.contract.type == K.BID_SUN
-            if isSun then
-                addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
-                    function() net().LocalDouble(false) end)
+            --
+            -- v0.5.15: gate the Bel buttons on R.CanBel. Saudi rule
+            -- (E-1, v0.5.9): in Sun, only the team at <100 cumulative
+            -- may Bel. Without this UI gate, the local player would
+            -- see clickable Bel buttons that fail silently via
+            -- Net.LocalDouble's R.CanBel guard — confusing UX.
+            -- When the gate forbids, surface a "Bel forbidden" tip
+            -- in place of the actionable buttons.
+            local canBel = (R and R.CanBel) and
+                R.CanBel(R.TeamOf(S.s.localSeat),
+                         S.s.contract, S.s.cumulative)
+            if canBel == false then
+                addAction("|cff999999Bel forbidden (Sun >=100)|r",
+                          function() end)
+                addAction("Skip", function() net().LocalSkipDouble() end)
             else
-                addConfirmAction("Bel & open", "|cffff7755Confirm Bel & open?|r",
-                    function() net().LocalDouble(true) end)
-                addConfirmAction("Bel & closed", "|cffff7755Confirm Bel & close?|r",
-                    function() net().LocalDouble(false) end)
+                local isSun = S.s.contract and S.s.contract.type == K.BID_SUN
+                if isSun then
+                    addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
+                        function() net().LocalDouble(false) end)
+                else
+                    addConfirmAction("Bel & open", "|cffff7755Confirm Bel & open?|r",
+                        function() net().LocalDouble(true) end)
+                    addConfirmAction("Bel & closed", "|cffff7755Confirm Bel & close?|r",
+                        function() net().LocalDouble(false) end)
+                end
+                addAction("Skip", function() net().LocalSkipDouble() end)
             end
-            addAction("Skip", function() net().LocalSkipDouble() end)
         end
     elseif S.s.phase == K.PHASE_TRIPLE then
         -- v0.2.0: Triple is the BIDDER's response to Bel.

@@ -397,8 +397,10 @@ strategy notes that use it.
 ## Re-anchoring line numbers
 
 Bot.lua and friends are under active development. The line numbers
-above are accurate as of v0.5.4 (commit dab7ee1). To re-anchor
-after changes:
+above are accurate as of **v0.5.15** (commit will be tagged on
+ship). They drifted +165 to +461 lines across v0.5.8 → v0.5.14;
+treat them as approximate hints, not exact pointers. **Always
+re-grep before relying on them in a code change.**
 
 ```bash
 # Pickers in Bot.lua:
@@ -413,3 +415,30 @@ grep -n '^function (BM|BotMaster)\.' BotMaster.lua
 
 If you update the line numbers in this file, also update any
 reference in `decision-trees.md` and `CLAUDE.md`.
+
+### Current snapshot (v0.5.15)
+
+For a quick reference without re-grepping (verify with grep before
+acting on these):
+
+| Symbol | Line |
+|---|---|
+| `Bot.PickBid` | 890 |
+| `Bot.PickAKA` | 2302 |
+| `Bot.PickPlay` | 2344 |
+| `Bot.PickMelds` | 2380 |
+| `Bot.PickDouble` | 2403 |
+| `Bot.PickTriple` | 2534 |
+| `Bot.PickFour` | 2564 |
+| `Bot.PickGahwa` | 2608 |
+| `Bot.PickPreempt` | 2630 |
+| `Bot.PickKawesh` | 2681 |
+| `Bot.PickTakweesh` | 2708 |
+| `Bot.PickSWA` | 2746 |
+| `pickLead` | 1289 |
+| `pickFollow` | 1882 |
+| `escalationStrength` | 2510 |
+| `escalateDecision` | 2525 |
+| `scoreUrgency` | 753 |
+| `matchPointUrgency` | 784 |
+| `Bot.OnPlayObserved` | 292 |

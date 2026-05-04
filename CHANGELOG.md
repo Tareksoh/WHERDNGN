@@ -1,5 +1,73 @@
 # Changelog
 
+## v0.5.15 — easy-wins batch (UI gate + Ashkal test fixture + doc refresh)
+
+Audit follow-up batch from the v0.5.13/v0.5.14 deferred lists. Pure
+small-LOC items + audit-recommended test fixture + doc maintenance.
+
+### Sun-overcall investigation (no code change)
+
+Verified end-to-end via inline trace: round 1 Sun-overcalls-Hokm
+works correctly. The earlier user observation likely reflects bot
+threshold tuning (a 2-Ace hand without mardoofa scores too low to
+overcall — correct per Saudi convention since failing Sun is -26
+vs failing Hokm -16). All 4 Saudi rules pass:
+- Round 1 Sun overcalls Hokm ✓
+- Hokm cannot overcall a prior Sun ✓
+- Two Sun bids: first wins ✓
+- Round 2 Sun overcalls Hokm ✓
+
+### Fixed
+
+- **UI Bel button consults R.CanBel** (UI.lua, PHASE_DOUBLE
+  render). Previously the Bel/Bel-open/Bel-closed buttons rendered
+  unconditionally for the eligible defender; clicking them in a
+  forbidden Sun ≥100 scenario was silently dropped by Net.LocalDouble's
+  R.CanBel guard — confusing UX. Now: when R.CanBel returns false,
+  show "Bel forbidden (Sun >=100)" disabled placeholder + Skip.
+
+### Added
+
+- **Section G in tests/test_state_bot.lua** — 16 Ashkal eligibility
+  test cases (4 dealer values × 4 seat values). Pins post-v0.5.7
+  correct behavior: only `bidPos >= 3` (dealer + dealer's-LEFT) may
+  call Ashkal. Audit-recommended fixture from v0.5.6/v0.5.7 saga.
+
+### Changed (docs)
+
+- **glossary.md "Re-anchoring line numbers" section** — refreshed
+  current snapshot table for v0.5.15. Picker line numbers drifted
+  +165 to +461 lines across v0.5.8 → v0.5.14. Snapshot included
+  alongside the existing grep recipe.
+- **decision-trees.md section headers** — Sections 1–7 line-number
+  refs updated to current values. Cell-level "MAPS-TO" line refs
+  inside the tables NOT updated (would be hundreds of edits) —
+  treat them as approximate.
+- **decision-trees.md S6-7 stale claim removed** — the doc claimed
+  `R.IsLegalPlay` "may need a 'partner winning trick' exception."
+  Wave-2 audit confirmed Rules.lua:118–121 + 147–149 already have
+  it. Updated to "ALREADY WIRED" + flagged the actual remaining
+  gap (a pickFollow heuristic to *prefer* non-trump discard when
+  released, separate from the legality fix).
+
+### Deferred to a future release
+
+- **Section 3 rule 1** (`pickLead` strong-card-hold). The user's
+  queue marked it "easy" but the rule requires post-processing the
+  chosen lead card to detect "leading our strong suit early"
+  (T-as-top in non-A suit, partner hasn't captured trick) and
+  rerouting to a different suit. Non-trivial in the existing
+  pickLead structure with multiple lead heuristics (Tahreeb pref,
+  Fzloky pref, Advanced bare-Ace, bidder trump-pull, lead-from-
+  longest). Better as a focused release.
+
+### Tests
+
+- 222/222 regression tests pass (was 206 + 16 new Section G).
+- No production behavior change beyond the UI Bel button gate
+  (which now matches Net.LocalDouble's already-existing wire-side
+  enforcement).
+
 ## v0.5.14 — decision-trees.md Section 9: Tanfeer (تنفير)
 
 Translates Section 9 (Tanfeer / opponent-disrupt convention) — 3
