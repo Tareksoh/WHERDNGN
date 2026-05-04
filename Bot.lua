@@ -2003,6 +2003,16 @@ function Bot.PickDouble(seat)
     local contract = S.s.contract
     if not hand or not contract then return false, false end
 
+    -- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate.
+    -- Saudi rule: in Sun contracts, only the team at <100 cumulative
+    -- score may Bel. Hokm has no such gate. R.CanBel is the
+    -- authoritative predicate (also enforced wire-side in Net.lua,
+    -- so a human player can't bypass via the wire).
+    -- Sources: decision-trees.md Section 2 (Definite, video 11).
+    if R.CanBel and not R.CanBel(R.TeamOf(seat), contract, S.s.cumulative) then
+        return false, false
+    end
+
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
         -- Trump cards are an extra defensive resource. Audit C-4 fix:

@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.5.9 — decision-trees.md Section 2: Sun Bel-100 legality gate
+
+Translates the Definite-confidence rule from Section 2 (Escalation):
+**in Sun contracts, only the team at <100 cumulative score may Bel**
+(الحكم مفتوح في الدبل ≠ الصن; Sun has the gate, Hokm doesn't). This
+is a rule-correctness item, not a heuristic — wired both bot-side
+(`Bot.PickDouble`) and wire-side (`Net._OnDouble` + `Net.LocalDouble`)
+so a stale-state human client cannot bypass it via the wire.
+
+### Added
+
+- **`R.CanBel(team, contract, cumulative)` in Rules.lua.** Authoritative
+  predicate: returns true iff the given team may legally call Bel
+  against `contract`, given the cumulative table. Hokm: always true.
+  Sun: true iff `cumulative[team] < 100`. Three call sites consume the
+  same predicate so behavior cannot drift between bot and human.
+
+- **16 boundary tests** in `tests/test_rules.lua` Section N pin the
+  `< 100` direction strictly (99 ✓, 100 ✗, 101 ✗), per-team
+  independence (A blocked at 100 doesn't affect B), and defensive
+  nil handling.
+
+### Fixed (rule-correctness)
+
+- **E-1 (decision-trees.md Section 2): Sun Bel-100 gate.** Previously
+  bots and humans could call Bel in Sun even when their cumulative
+  was >=100 — a Saudi-rule violation. `Bot.PickDouble` now early-returns
+  false when `R.CanBel` is false; `Net._OnDouble` rejects illegal
+  incoming wire messages with a `Warn` log; `Net.LocalDouble` short-
+  circuits before issuing the wire.
+  Sources: decision-trees.md Section 2 (Definite, video 11);
+  glossary.md "Bel (×2) legality gate".
+
+### Tests
+
+- 196/196 regression tests pass (was 180; +16 R.CanBel boundary tests).
+
+### Notes
+
+- Hokm Bel logic is unchanged — the gate explicitly returns true for
+  Hokm regardless of score.
+- The other Section 2 rules are NOT in this release:
+  * Round-1 Bel restriction (Sometimes confidence — TBD from a
+    follow-up video to confirm exact mechanism)
+  * Trick-3 Al-Kaboot pursuit trigger (Common; structural — needs
+    pursuit-flag state field + pickLead read-side wire)
+  * Sun bidder sweep-abandonment (Sometimes; score-aware sweep logic)
+  * Defender Qaid-bait (Sometimes; doc explicitly says "bot likely
+    should NOT do this without dedicated heuristic")
+
 ## v0.5.8 — Bot.PickBid: translate decision-trees.md Section 1 (bidding)
 
 Translates Section 1 of `docs/strategy/decision-trees.md` (~25 rules

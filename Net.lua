@@ -814,6 +814,17 @@ function N._OnDouble(sender, seat, openField)
     local eligibleSeat = (S.s.contract.bidder % 4) + 1
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
+    -- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate.
+    -- Reject illegal Bel attempts at the wire — a human player whose
+    -- team is at >=100 in a Sun contract cannot Bel. Bot.PickDouble
+    -- has the same gate; this is the wire-side enforcement so even
+    -- a bypass-attempt or stale-state client gets stopped.
+    -- Sources: decision-trees.md Section 2 (Definite, video 11).
+    if R and R.CanBel
+       and not R.CanBel(R.TeamOf(seat), S.s.contract, S.s.cumulative) then
+        log("Warn", "rejected illegal Bel from seat %d (Sun ≥100 gate)", seat)
+        return
+    end
     -- Open/Closed flag (v0.2.0+ wire). Pre-v0.2.0 senders won't include
     -- it; default to OPEN (current behavior).
     local open = (openField == nil) or (openField ~= "0")
@@ -1471,6 +1482,14 @@ function N.LocalDouble(open)
     if S.s.phase ~= K.PHASE_DOUBLE then return end
     local b = S.s.contract.bidder
     if S.s.localSeat ~= (b % 4) + 1 then return end
+    -- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate.
+    -- Local gate (UI surface). The Bel button should already be
+    -- hidden by the UI when CanBel is false, but defend in depth.
+    -- Sources: decision-trees.md Section 2 (Definite, video 11).
+    if R and R.CanBel
+       and not R.CanBel(R.TeamOf(S.s.localSeat), S.s.contract, S.s.cumulative) then
+        return
+    end
     cancelLocalWarn()
     if open == nil then open = true end
     -- In Sun, open/closed is moot — there's no Triple rung. Force

@@ -452,6 +452,30 @@ function R.SumMeldValue(list)
     return s
 end
 
+-- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate
+-- (decision-trees.md Section 2, "Bel is FORBIDDEN" row).
+--
+-- Saudi rule: in a Sun contract, only the team currently at <100
+-- cumulative score may call Bel. Hokm has no such gate (الحكم مفتوح
+-- في الدبل — "Hokm is open in the doubling"). Authoritative
+-- predicate so Bot.PickDouble + Net._OnDouble + Net.LocalDouble all
+-- gate on the same answer.
+--
+-- Returns true iff `team` may legally call Bel against `contract`,
+-- given the current `cumulative` table (`{ A = N, B = N }`).
+--
+-- Sources: decision-trees.md Section 2 (Definite, video 11);
+-- glossary.md "Bel (×2) legality gate".
+function R.CanBel(team, contract, cumulative)
+    if not contract or not team then return false end
+    if contract.type ~= K.BID_SUN then
+        return true                         -- Hokm: always allowed
+    end
+    -- Sun: team at >= 100 is forbidden from Bel.
+    local mine = (cumulative and cumulative[team]) or 0
+    return mine < 100
+end
+
 -- Round scoring -------------------------------------------------------
 
 -- Inputs:

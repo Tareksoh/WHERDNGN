@@ -736,6 +736,47 @@ do
 end
 
 -- =====================================================================
+-- N. Sun Bel-100 legality gate (R.CanBel) — v0.5.9 Section 2 patch E-1
+--
+-- Saudi rule (decision-trees.md Section 2, Definite, video 11):
+-- in Sun, only the team at <100 cumulative score may Bel. Hokm has
+-- no such gate. Boundary tests pin the < 100 direction strictly.
+-- =====================================================================
+section("N. Sun Bel-100 legality gate (R.CanBel)")
+
+do
+    local sun  = { type = K.BID_SUN,  trump = nil, bidder = 1 }
+    local hokm = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+
+    -- Hokm: always allowed regardless of cumulative.
+    assertTrue(R.CanBel("A", hokm, { A = 0,   B = 0   }), "Hokm: 0/0 → A can Bel")
+    assertTrue(R.CanBel("A", hokm, { A = 99,  B = 0   }), "Hokm: 99/0 → A can Bel")
+    assertTrue(R.CanBel("A", hokm, { A = 100, B = 0   }), "Hokm: 100/0 → A can Bel (no Sun gate)")
+    assertTrue(R.CanBel("A", hokm, { A = 200, B = 0   }), "Hokm: 200/0 → A can Bel")
+    assertTrue(R.CanBel("B", hokm, { A = 0,   B = 100 }), "Hokm: B at 100 → B can Bel")
+
+    -- Sun: <100 allowed, >=100 forbidden.
+    assertTrue(R.CanBel("A", sun, { A = 0,   B = 0   }), "Sun: 0/0 → A can Bel")
+    assertTrue(R.CanBel("A", sun, { A = 99,  B = 0   }), "Sun: 99/0 → A can Bel (boundary, < 100)")
+    assertEq(R.CanBel("A", sun, { A = 100, B = 0   }), false,
+             "Sun: 100/0 → A FORBIDDEN (boundary, == 100)")
+    assertEq(R.CanBel("A", sun, { A = 101, B = 0   }), false,
+             "Sun: 101/0 → A FORBIDDEN")
+    -- Per-team independence: A blocked at 100 doesn't affect B.
+    assertTrue(R.CanBel("B", sun, { A = 100, B = 50  }), "Sun: A=100,B=50 → B still can Bel")
+    assertEq(R.CanBel("B", sun, { A = 50,  B = 100 }), false,
+             "Sun: A=50,B=100 → B FORBIDDEN")
+    -- Both blocked.
+    assertEq(R.CanBel("A", sun, { A = 100, B = 100 }), false, "Sun: 100/100 → A blocked")
+    assertEq(R.CanBel("B", sun, { A = 100, B = 100 }), false, "Sun: 100/100 → B blocked")
+
+    -- Defensive nil-handling.
+    assertEq(R.CanBel("A", sun, nil),                    true,  "Sun: nil cumulative → defaults to 0, allowed")
+    assertEq(R.CanBel(nil,  sun, { A = 50, B = 50 }),   false, "nil team → false (defensive)")
+    assertEq(R.CanBel("A", nil, { A = 50, B = 50 }),   false, "nil contract → false (defensive)")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
