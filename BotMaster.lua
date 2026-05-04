@@ -784,7 +784,7 @@ function BM.PickPlay(seat)
     elseif numTricks <= 5 then numWorlds = 60
     else numWorlds = BASE_NUM_WORLDS end
 
-    -- v0.5.3 BUG fix: wrap the rollout loop in pcall so a mid-rollout
+    -- v0.5.3 BUG fix: wrap the rollout in pcall so a mid-rollout
     -- error (sampler nil-deref, malformed card, ScoreRound edge case)
     -- cannot escape with B.Bot._inRollout left = true. Without this,
     -- a single rollout error would silently disable Saudi Master ISMCTS
@@ -792,8 +792,19 @@ function BM.PickPlay(seat)
     -- would skip the BotMaster delegation guard at Bot.lua and fall
     -- through to heuristics. The outer pcall in Net.lua's MaybeRunBot
     -- catches the error but never restores _inRollout, hence this fix.
-    local ok, err = pcall(function()
-        for w = 1, numWorlds do
+    --
+    -- v0.8.6 H4 fix (audit AUDIT_REPORT_v0.7.1.md): pcall granularity
+    -- moved to PER-WORLD. Pre-v0.8.6 the pcall wrapped the entire
+    -- world loop, so ONE bad world (e.g., a sampler edge case in
+    -- world 7 of 100) aborted ALL rollouts and dropped to heuristics
+    -- — discarding the 99 healthy world evaluations. Now each world
+    -- is wrapped independently; a failed world is silently skipped
+    -- and the remaining worlds aggregate normally. With 100 worlds
+    -- typical, losing 1-2 to errors is statistically irrelevant;
+    -- losing all 100 to one bad world was the prior pathology.
+    local rolloutErrors = 0
+    for w = 1, numWorlds do
+        local ok, err = pcall(function()
             local world = sampleConsistentDeal(seat, unseen)
             if world then
                 for _, card in ipairs(legal) do
@@ -801,14 +812,12 @@ function BM.PickPlay(seat)
                                   + rolloutValue(seat, card, world, S.s.contract)
                 end
             end
-        end
-    end)
-    if not ok then
-        -- Rollout failed: clear flag, return nil so Bot.PickPlay
-        -- falls through to heuristics. The error itself is silently
-        -- swallowed (no taint risk in Lua 5.1; geterrorhandler() in
-        -- WoW would surface a Lua error message which we don't want
-        -- here for a recoverable degradation).
+        end)
+        if not ok then rolloutErrors = rolloutErrors + 1 end
+    end
+    -- If literally every world errored (suggests a deterministic bug
+    -- not a sampling edge), fall back to heuristics with restored flag.
+    if rolloutErrors == numWorlds then
         return _restore(nil)
     end
 

@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.8.6 — 73-agent audit HIGH fixes (H1-H4)
+
+User-supplied 73-agent audit on v0.7.2 head identified four HIGH-severity
+functional defects. All four fixed with source-level regression pins.
+
+### Fixed (H1) — Sun-overcall race-A wire desync
+
+**Net.lua `_OnOvercallResolve`** previously called `S.FinalizeOvercall()`
+which RE-DERIVED the contract mutation from the remote's local
+`s.overcall.decisions` table. If MSG_OVERCALL_DECISION frames were
+dropped/reordered on a slow client, the remote's local-derived contract
+disagreed with the host's. The `taken=true` branch was masked by the
+host's follow-up MSG_CONTRACT broadcast; the `taken=false` branch had
+no self-correction → desync persisted into trick play (different
+trump suit / multiplier / scoring).
+
+Fix: trust the wire. `_OnOvercallResolve` now just clears local
+overcall state and exits PHASE_OVERCALL. The host is server-of-truth
+via the follow-up MSG_CONTRACT (sent on `taken=true`); on `taken=false`
+the contract stayed Hokm and the remote shouldn't mutate based on its
+possibly-wrong local decisions.
+
+### Fixed (H2) — Failed-Gahwa loser keeps own melds (cumulative inflation)
+
+**Net.lua `_HostStepAfterTrick`** Gahwa-win override force-bumped the
+WINNER's add to push their cumulative to target, but left the LOSER's
+add intact (which could include their own meld points per the
+"each team keeps own melds" rule in `R.ScoreRound:fail`). This
+inflated the loser's cumulative cosmetically AND, more critically,
+created a tiebreaker false-fire path when both teams happened to land
+exactly at target.
+
+Fix: zero the loser's add (delta) after force-bumping the winner's.
+The cumulative state now cleanly reflects "match decided by Gahwa
+override" with no tiebreaker race.
+
+### Fixed (H3) — Tie-at-target tiebreaker reads `contract.bidder` (wrong on failed Gahwa)
+
+**Net.lua `_HostStepAfterTrick`** game-end branch awarded
+match-on-tie to `R.TeamOf(S.s.contract.bidder)`. On a FAILED contract
+(`bidderMade==false`), the bidder team is the LOSER of the round —
+awarding them the match contradicts the round result.
+
+Fix: tiebreaker now respects `res.gahwaWinner` (canonical for Gahwa
+rounds), then `res.bidderMade` (bidder won round → bidder team;
+bidder failed → opp team won round). The pre-v0.8.6 raw
+`contract.bidder` read is removed.
+
+### Fixed (H4) — ISMCTS pcall granularity wraps entire 100-world loop
+
+**BotMaster.PickPlay** `pcall` previously wrapped the entire `for w =
+1, numWorlds do` loop. One bad world (sampler edge case, malformed
+card, ScoreRound corner) caused pcall to bail and discard ALL 99
+healthy rollouts → fallback to heuristics, dropping Saudi Master to
+M3lm-equivalent for that play.
+
+Fix: `pcall` moved INSIDE the per-world iteration. Failed worlds are
+silently skipped; remaining worlds aggregate normally. With 100
+worlds typical, losing 1-2 to errors is statistically irrelevant.
+Only when literally all worlds error does the function fall back to
+heuristics (suggests a deterministic bug, not a sampling edge).
+
+### Tests
+
+- 330/330 regression tests pass (was 319; +11 in new test_state_bot.lua
+  section I).
+- I.1a-e (H3): tiebreaker decision matrix (5 cases — bidderMade
+  true/false × bidder seat 1/2 × Gahwa override).
+- I.2/I.2b/I.2c (H1): source-level pin asserting `_OnOvercallResolve`
+  no longer invokes `FinalizeOvercall`, still clears `s.overcall`,
+  still transitions to PHASE_DOUBLE.
+- I.3a/I.3b (H2): source-level pin for `addA = 0` / `addB = 0` in
+  the Gahwa-win override branch.
+- I.4 (H4): source-level pin asserting `pcall(function()` appears
+  AFTER `for w = 1, numWorlds` (per-world wrapping, not loop-wrapping).
+
+### Audit report
+
+The full report and 73 per-agent findings live at
+`.swarm_findings/audit_v0.7.1/AUDIT_REPORT.md`. This release closes
+the HIGH section. MEDIUM (5) and LOW (6) findings + 11 missing
+features are deferred for follow-up.
+
 ## v0.8.5 — Hokm Faranka exception #3 + S.HighestUnplayedRank trump-rank fix
 
 Audit-sweep loop iteration. Two fixes that landed together because

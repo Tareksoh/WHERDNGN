@@ -1097,10 +1097,29 @@ function N._OnOvercallResolve(sender, takenStr, by, otype)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
-    -- Server-of-truth: the host has already mutated the contract via
-    -- S.FinalizeOvercall (and broadcast a fresh MSG_CONTRACT if taken).
-    -- All we need to do here is clear local overcall state and update UI.
-    if S.FinalizeOvercall then S.FinalizeOvercall() end
+    -- v0.8.6 H1 fix (audit AUDIT_REPORT_v0.7.1.md): pre-v0.8.6 this
+    -- handler called S.FinalizeOvercall() which RE-DERIVED the contract
+    -- mutation from the remote's LOCAL `s.overcall.decisions` table.
+    -- If MSG_OVERCALL_DECISION frames were dropped or reordered on a
+    -- slow client, the remote's decisions disagreed with the host's
+    -- → different contract type/bidder/trump than the host. The
+    -- `taken=true` branch was masked by the host's follow-up
+    -- MSG_CONTRACT broadcast, but the `taken=false` branch had no
+    -- self-correction → desync persisted into trick play.
+    --
+    -- Now: trust the wire. Just clear local overcall state and exit
+    -- PHASE_OVERCALL. If the contract changed (taken=true), the host's
+    -- follow-up MSG_CONTRACT (sent immediately after MSG_OVERCALL_RESOLVE)
+    -- canonically sets the new contract via _OnContract / S.ApplyContract.
+    -- If not changed (taken=false), the contract stays Hokm and the
+    -- remote shouldn't mutate based on its (possibly wrong) decisions.
+    --
+    -- The wire payload (takenStr/by/otype) is informational — kept in
+    -- the function signature for forward-compat / debug logging — but
+    -- not consulted for state mutation. The host is server-of-truth
+    -- via MSG_CONTRACT.
+    S.s.overcall = nil
+    S.s.phase = K.PHASE_DOUBLE
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
@@ -1590,12 +1609,25 @@ function N._HostStepAfterTrick()
         -- Gahwa match-win override: a successful (or failed) Gahwa
         -- hands the entire match to a single team. Force their
         -- cumulative to the target so the game-end branch fires.
+        --
+        -- v0.8.6 H2 fix (audit AUDIT_REPORT_v0.7.1.md): also zero the
+        -- LOSER's delta. Pre-v0.8.6, the loser's add could include
+        -- their own meld points (per the "each team keeps own melds"
+        -- branch in R.ScoreRound:fail). With Gahwa overriding the
+        -- match outcome, leaving the loser's add non-zero inflated
+        -- their cumulative for cosmetic display AND — more critically
+        -- — could trigger a tiebreaker false-fire when both teams
+        -- happened to land at exactly target. Zeroing the loser's
+        -- delta makes the cumulative state cleanly reflect "match
+        -- decided by Gahwa override" and removes the tiebreaker race.
         if res.gahwaWonGame and res.gahwaWinner then
             local target = S.s.target or 152
             if res.gahwaWinner == "A" then
                 addA = math.max(addA, target - (S.s.cumulative.A or 0))
+                addB = 0  -- v0.8.6 H2: zero loser's delta
             else
                 addB = math.max(addB, target - (S.s.cumulative.B or 0))
+                addA = 0  -- v0.8.6 H2: zero loser's delta
             end
         end
         local totA = S.s.cumulative.A + addA
@@ -1603,13 +1635,29 @@ function N._HostStepAfterTrick()
         S.ApplyRoundEnd(addA, addB, totA, totB, res.sweep, res.bidderMade)
         N.SendRound(addA, addB, totA, totB, res.sweep, res.bidderMade)
         if totA >= S.s.target or totB >= S.s.target then
-            -- Saudi convention: on an exact tie at the target, the
-            -- BIDDING team wins — they took the contract risk and
-            -- got over the line. Default fallback when there's no
-            -- contract (shouldn't happen at game-end) is Team A.
+            -- v0.8.6 H3 fix (audit AUDIT_REPORT_v0.7.1.md): tiebreaker
+            -- on cumulative tie at target previously read raw
+            -- contract.bidder, but on a FAILED contract (bidderMade==
+            -- false) the bidder team is the LOSER of the round. Awarding
+            -- the match to the failing team contradicts the round result.
+            -- Now: respect res.gahwaWinner first (canonical for Gahwa
+            -- rounds), then bidderMade (bidder won round → bidder team;
+            -- bidder failed → opp team won round).
             local winner
-            if totA == totB and S.s.contract and S.s.contract.bidder then
-                winner = R.TeamOf(S.s.contract.bidder)
+            if totA == totB then
+                if res.gahwaWonGame and res.gahwaWinner then
+                    winner = res.gahwaWinner
+                elseif S.s.contract and S.s.contract.bidder then
+                    local bidderTeam = R.TeamOf(S.s.contract.bidder)
+                    if res.bidderMade then
+                        winner = bidderTeam       -- bidder made → they win tie
+                    else
+                        winner = (bidderTeam == "A") and "B" or "A"
+                                                  -- bidder failed → opp won round
+                    end
+                else
+                    winner = "A"                  -- defensive fallback
+                end
             elseif totA > totB then winner = "A"
             elseif totB > totA then winner = "B"
             else                    winner = "A" end

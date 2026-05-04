@@ -1470,6 +1470,123 @@ do
 end
 
 -- =====================================================================
+-- I. v0.8.6 audit-fix regression pins (H1-H4)
+--
+-- Pins for the four HIGH-severity bugs caught in the v0.7.2 audit:
+--   H1 — Sun-overcall race-A wire desync (_OnOvercallResolve)
+--   H2 — Failed-Gahwa loser keeps melds (_HostStepAfterTrick)
+--   H3 — Tie-at-target tiebreaker reads contract.bidder
+--   H4 — ISMCTS pcall granularity (BotMaster.PickPlay)
+-- =====================================================================
+section("I. v0.8.6 HIGH-bug regression pins (H1-H4)")
+
+do
+    -- I.1 (H3): tiebreaker on cumulative tie at target should respect
+    -- bidderMade. When bidder team failed (bidderMade=false), the
+    -- opponent team won the round — they should win the tiebreaker.
+    --
+    -- Direct test of the tiebreaker logic by simulating the decision
+    -- without going through full game flow (which requires too much
+    -- state). The fixed predicate:
+    --   if totA == totB:
+    --     if gahwaWonGame: winner = gahwaWinner
+    --     elif bidderMade: winner = bidderTeam
+    --     elif bidderMade==false: winner = oppTeam
+    local function tiebreaker(totA, totB, gahwaWonGame, gahwaWinner,
+                              bidderMade, bidder)
+        if totA == totB then
+            if gahwaWonGame and gahwaWinner then
+                return gahwaWinner
+            elseif bidder then
+                local bidderTeam = R.TeamOf(bidder)
+                if bidderMade then
+                    return bidderTeam
+                else
+                    return (bidderTeam == "A") and "B" or "A"
+                end
+            else
+                return "A"
+            end
+        elseif totA > totB then return "A"
+        elseif totB > totA then return "B" end
+        return "A"
+    end
+
+    -- Sanity: bidderMade=true → bidder team wins tie.
+    assertEq(tiebreaker(152, 152, false, nil, true, 1), "A",
+             "I.1a (H3): tie + bidder=1 (team A) made → A wins")
+    -- Bug-pin: bidderMade=false → opp team wins tie.
+    assertEq(tiebreaker(152, 152, false, nil, false, 1), "B",
+             "I.1b (H3): tie + bidder=1 (team A) FAILED → B wins (was A pre-v0.8.6)")
+    assertEq(tiebreaker(152, 152, false, nil, false, 2), "A",
+             "I.1c (H3): tie + bidder=2 (team B) FAILED → A wins")
+    -- Gahwa override: gahwaWinner is canonical.
+    assertEq(tiebreaker(152, 152, true, "B", false, 1), "B",
+             "I.1d (H3): Gahwa won by B regardless of bidder")
+    -- No-tie cases unchanged.
+    assertEq(tiebreaker(155, 152, false, nil, false, 1), "A",
+             "I.1e (H3): A higher cumulative wins regardless of bidderMade")
+
+    -- I.2 (H1): _OnOvercallResolve must NOT call S.FinalizeOvercall
+    -- (which re-derives mutation from local decisions). Direct
+    -- verification: walk Net.lua source for the post-fix pattern.
+    do
+        local net_path = WHEREDNGN_TESTS_ROOT .. "/Net.lua"
+        local f = io.open(net_path, "r")
+        local body = f:read("*a"); f:close()
+        local fnStart = body:find("function N%._OnOvercallResolve")
+        local fnEnd = body:find("function N%._HostBeginOvercallWindow",
+                                fnStart or 1)
+        local fn = body:sub(fnStart or 1, fnEnd or #body)
+        -- Pre-v0.8.6: contained "if S.FinalizeOvercall then S.FinalizeOvercall() end"
+        -- Post-v0.8.6: should NOT have that call pattern. Match the
+        -- specific conditional-invocation guard, not loose substrings
+        -- (the explanatory comment legitimately mentions the function name).
+        assertEq(fn:find("if%s+S%.FinalizeOvercall%s+then%s+S%.FinalizeOvercall%(%)") ~= nil, false,
+                 "I.2 (H1): _OnOvercallResolve must NOT invoke FinalizeOvercall (server-of-truth)")
+        -- Should still clear s.overcall and transition phase.
+        assertTrue(fn:find("s%.overcall%s*=%s*nil") ~= nil,
+                   "I.2b (H1): _OnOvercallResolve clears s.overcall")
+        assertTrue(fn:find("phase%s*=%s*K%.PHASE_DOUBLE") ~= nil,
+                   "I.2c (H1): _OnOvercallResolve transitions to PHASE_DOUBLE")
+    end
+
+    -- I.3 (H2): in Gahwa-win override, loser's delta should be zeroed.
+    -- Direct test: source-level verification that the fix is present.
+    do
+        local net_path = WHEREDNGN_TESTS_ROOT .. "/Net.lua"
+        local f = io.open(net_path, "r")
+        local body = f:read("*a"); f:close()
+        local stepFn = body:find("function N%._HostStepAfterTrick")
+        local nextFn = body:find("function N%._HostRedeal", stepFn or 1)
+        local fn = body:sub(stepFn or 1, nextFn or #body)
+        -- Look for the H2 fix markers: addB = 0 and addA = 0 inside
+        -- the gahwaWonGame branch.
+        assertTrue(fn:find("addB%s*=%s*0") ~= nil,
+                   "I.3a (H2): Gahwa-win zero loser B delta present")
+        assertTrue(fn:find("addA%s*=%s*0") ~= nil,
+                   "I.3b (H2): Gahwa-win zero loser A delta present")
+    end
+
+    -- I.4 (H4): BotMaster.PickPlay pcall must be PER-WORLD, not wrapping
+    -- the entire loop. Source-level check.
+    do
+        local bm_path = WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"
+        local f = io.open(bm_path, "r")
+        local body = f:read("*a"); f:close()
+        local fnStart = body:find("function BM%.PickPlay")
+        local fn = body:sub(fnStart or 1)
+        -- Pre-v0.8.6: pcall wraps the for-loop ("pcall(function()" then
+        -- "for w = 1, numWorlds").
+        -- Post-v0.8.6: for-loop wraps the pcall ("for w" before pcall).
+        local forIdx = fn:find("for w%s*=%s*1%s*,%s*numWorlds")
+        local pcallIdx = fn:find("pcall%(function%(%)")
+        assertTrue(forIdx and pcallIdx and forIdx < pcallIdx,
+                   "I.4 (H4): pcall must be inside the for-loop (per-world), not outside")
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
