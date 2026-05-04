@@ -664,13 +664,18 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- same team. After the sweep override above moves belote to the
     -- sweeping team, the holder's 100-meld may no longer be relevant
     -- (sweeper discards loser's melds). Apply cancellation AFTER sweep
-    -- so the +20 follows the sweep winner correctly. Cancel only if
-    -- the team currently holding belote ALSO has a ≥100 meld declared
-    -- by kWho (i.e., the K+Q holder is on the side scoring the belote).
-    if belote and kWho and R.TeamOf(kWho) == belote then
+    -- so the +20 follows the sweep winner correctly.
+    --
+    -- v0.9.0 M5 fix (audit AUDIT_REPORT_v0.7.1.md): cancellation is
+    -- TEAM-level. Pre-v0.9.0 the predicate required `m.declaredBy ==
+    -- kWho` (same player) which silently ignored partner's ≥100 meld
+    -- AND silently failed when declaredBy was nil. Saudi rule "≥100
+    -- subsumes belote" applies to the team's collective scoring side
+    -- — partner's quarte cancels K+Q-holder's belote.
+    if belote and kWho then
         local list = (meldsByTeam and meldsByTeam[belote]) or {}
         for _, m in ipairs(list) do
-            if m.declaredBy == kWho and (m.value or 0) >= 100 then
+            if (m.value or 0) >= 100 then
                 belote = nil
                 break
             end

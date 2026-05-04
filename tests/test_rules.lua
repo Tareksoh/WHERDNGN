@@ -644,18 +644,22 @@ do
     assertEq(res.belote, nil, "Belote cancellation: K+Q holder declared 100-meld")
 end
 
--- Belote NOT cancelled when 100-meld declared by *partner* (not the K+Q holder).
+-- v0.9.0 M5 fix (audit AUDIT_REPORT_v0.7.1.md): Belote cancellation
+-- is now TEAM-level. Pre-v0.9.0 the predicate required the meld's
+-- declaredBy to match the K+Q holder seat — partner's ≥100 meld
+-- silently failed to cancel. The corrected semantic: any team-mate's
+-- ≥100 meld subsumes the belote.
 do
     local winners = {1,1,1,1,1,2,2,2}
     local tricks = tricksWithSeat1Belote(winners)
     local meldsByTeam = {
         A = { { kind = "carre", value = 100, top = "K", len = 4,
-                declaredBy = 3 } },  -- declared by partner, not K+Q holder
+                declaredBy = 3 } },  -- declared by partner (seat 3)
         B = {},
     }
     local res = R.ScoreRound(tricks, hokm("H", 1), meldsByTeam)
-    assertEq(res.belote, "A",
-             "Belote NOT cancelled when meld declared by partner, not the K+Q holder")
+    assertEq(res.belote, nil,
+             "v0.9.0 M5: Belote cancelled when ANY team-mate declares a 100+ meld (was 'A' pre-v0.9.0)")
 end
 
 -- =====================================================================

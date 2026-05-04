@@ -1,5 +1,130 @@
 # Changelog
 
+## v0.9.0 — Audit MEDIUM/LOW fixes + 4 missing-feature wires + doc drift refresh
+
+Continuation of the 73-agent v0.7.2 audit response. v0.8.6 closed
+HIGH (H1-H4); v0.9.0 closes MEDIUM (M1-M5), partial LOW (L1, L4, L6),
+ships 4 of the 11 documented missing features, and refreshes doc-
+drift markers (D3, D4).
+
+### Fixed (MEDIUM)
+
+- **M1 PHASE_OVERCALL pause-blind timer**. The 5s overcall window's
+  `C_Timer.After` fired regardless of pause state — could force-
+  resolve the contract on resume before a human had a chance to
+  click. Now: re-arms a fresh 5s timer on resume (mirrors SWA
+  pattern at Net.lua:2627).
+- **M2 /reload mid-OVERCALL or mid-SWA soft-locks**. PLAYER_LOGIN
+  re-armed only Bel/Triple/Four/Gahwa AFK timers. Host /reload
+  during PHASE_OVERCALL or with an SWA permission request in
+  flight left the window stuck until manual recovery. Now: both
+  windows are re-armed in WHEREDNGN.lua's PLAYER_LOGIN handler
+  (cleanly resetting `startedAt` / `req.ts` so the 5s clock
+  restarts post-reload).
+- **M3 ISMCTS desire-table mutation idempotence**. Pre-v0.9.0,
+  per-seat mutations in `sampleConsistentDeal` (line 368
+  pSignalSuit, line 428 leadCount, etc.) wrote DIRECTLY into the
+  shared `strong` / `defenderDesire` / `partnerDesire` tables —
+  pollution persisted across seats and retry attempts within
+  one PickPlay call. Now: each seat clones desire before mutation
+  (3-line patch).
+- **M4 Bot._partnerStyle persisted across /reload**. Bot's module-
+  level state (`_partnerStyle`, `_memory`, `r1WasAllPass`) lived
+  outside `S.s` and was wiped on every /reload — M3lm / Fzloky /
+  Saudi-Master silently lost all accumulated reads (bels/triples/
+  fours/gahwas counts, void inferences, aceLate, leadCount,
+  baitedSuit, gahwaFailed, sunFail, etc.) mid-game. Now bundled
+  into `WHEREDNGNDB.session.bot`; rehydrated in `S.RestoreSession`.
+- **M5 Belote cancellation team-level**. Cancellation predicate
+  required `m.declaredBy == kWho` (same player) — silently ignored
+  partner's ≥100 meld AND silently failed when declaredBy was nil.
+  Saudi rule "≥100 subsumes belote" applies to the team's collective
+  scoring side. Now any team-mate's ≥100 meld cancels.
+
+### Fixed (LOW)
+
+- **L1 UI banner ticks during pause**. SWA + overcall self-ticking
+  countdown OnUpdate handlers now skip body refresh under
+  `S.s.paused`. Banner stays visible with frozen digit until resume.
+- **L4 Late-AKA retroactive flip**. `N.LocalAKA` now requires
+  `#trick.plays == 0` (we're about to lead) AND turn-aware
+  (`S.s.turn == localSeat AND turnKind == "play"`). Pre-v0.9.0,
+  pressing AKA mid-trick retroactively flipped `s.akaCalled` and
+  suppressed the 4th-seat bot's ruff after the fact —
+  informationally inconsistent.
+- **L6 WHEREDNGNDB.target type-guard gap**. Both read sites in
+  `WHEREDNGN.lua` now `tonumber()`-coerce. Hand-edited string
+  target no longer breaks `cum >= target` arithmetic.
+
+### Added (4 of 11 missing features)
+
+- **G-4 partner-bid suppression** (audit missing #1, video #29).
+  `Bot.PickBid` R2 now suppresses our own Hokm bid when partner
+  has already bid Hokm — Saudi convention says support partner's
+  commitment, don't compete. Sun overcall still allowed (different
+  contract type). Pre-v0.9.0 the bot would emit HOKM:♥ outbid
+  on partner's HOKM:♠; the host dropped it (winning already set),
+  but the wire violation was visible.
+
+- **Touching-honors family — Section 6 rules 1-4** (audit missing
+  #10, video #05, Definite-confidence). When a seat plays T/K/Q
+  in a trick led by their PARTNER's Ace of the same suit (or
+  AKA-led), Saudi convention infers the next-rung-down rank in
+  their hand:
+    plays T  → has K
+    plays K  → has Q
+    plays Q  → has J
+    plays 7/8 → broke in suit's high cards
+  Inference written to `Bot._partnerStyle[seat].topTouchSignal[suit]`.
+  Read by BotMaster sampler: pins the inferred next-down card to
+  the seat (desire weight 60), and clears suit-high desires when
+  the seat showed broke.
+
+- **Tahreeb sender's "want" arm** (audit missing #7, video #10).
+  Pre-v0.9.0 the Tahreeb sender only emitted T-4 ("LARGER first" =
+  don't-want signal); the "want" arm (LOW-then-HIGH ascending
+  sequence) was never emitted, so receiver's "want" classification
+  could only fire by coincidence. Now wired: when we hold A or T
+  of a side suit with ≥3 cards, the FIRST discard event from that
+  suit is the LOWEST non-winner — receiver reads ascending
+  sequence as "want this suit, lead it back".
+
+- **Bargiya 2-flavor split** (audit missing #9, video #14).
+  `tahreebClassify` now distinguishes:
+    `bargiya`       — confirmed invite (signals[1]==A, ≥2 events)
+    `bargiya_hint`  — ambiguous single-Ace event (could be invite
+                       OR defensive shed; lower-confidence)
+  Receiver scoring weights: bargiya=3, want=2, bargiya_hint=1
+  (below "want" so multi-event signals dominate the ambiguous
+  single-Ace case).
+
+### Doc drift (D3, D4)
+
+- Section 9 Tanfeer rules (3 rows) updated from "(not yet wired)"
+  → "wired v0.5.14" with code-anchor hints.
+- Section 11 rule 3 (pigeonhole pin) updated from "(not yet wired)"
+  → "wired v0.5.22".
+- Section 11 rule 4 (Sun-bidder partner concentration) updated
+  from "(not yet wired)" → "wired v0.6.1".
+- Section 11 rule 8 (deceptiveOverplay bait ledger) updated
+  to reflect v0.8.2 wire (was duplicated in the doc; deduped).
+
+### Tests
+
+- 330/330 regression tests pass (was 330; M5 fix corrected one
+  test's expected value from "A" to nil — the original test pinned
+  the buggy single-player-only cancellation behavior).
+
+### Audit response status (cumulative across v0.8.6 + v0.9.0)
+
+| Severity | Total | Closed | Remaining |
+|---|---|---|---|
+| HIGH    |  4 | **4** | 0 |
+| MEDIUM  |  5 | **5** | 0 |
+| LOW     |  6 | **3** (L1, L4, L6) | 3 (L2 cosmetic AFK-pass, L3 stale akaCalled defensive, L5 _OnResyncRes info-leak) |
+| Doc drift | 5 | **3** (D3, D4, partial D2) | 2 (D1 line-anchor pass, D2 R.CanBel unification, D5 Qaid forfeit text) |
+| Missing |  11 | **4** | 7 (B-3, A-2, AKA preconds f+g, Bargiya receiver phase-split, 70/25/5 prior, Six-factor Tanfeer) |
+
 ## v0.8.6 — 73-agent audit HIGH fixes (H1-H4)
 
 User-supplied 73-agent audit on v0.7.2 head identified four HIGH-severity

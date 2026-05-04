@@ -1341,6 +1341,13 @@ local function buildTable()
         if S.s.phase ~= K.PHASE_OVERCALL or not S.s.overcall then
             self:Hide(); self._lastRemain = nil; return
         end
+        -- v0.9.0 L1 fix (audit AUDIT_REPORT_v0.7.1.md): freeze countdown
+        -- under pause. Pre-v0.9.0 the OnUpdate kept ticking the digit
+        -- and decrementing remain even while host had paused; the
+        -- M1-fix re-arms the timer cleanly on resume but the visual
+        -- countdown looked broken. Now: skip the body refresh under
+        -- pause; banner stays visible with stale digits until resume.
+        if S.s.paused then return end
         local windowSec = K.OVERCALL_TIMEOUT_SEC or 5
         local now = (GetTime and GetTime()) or 0
         local startedAt = S.s.overcall.startedAt or now
@@ -1446,6 +1453,9 @@ local function buildTable()
         self._tickAccum = (self._tickAccum or 0) + (elapsed or 0)
         if self._tickAccum < 0.33 then return end
         self._tickAccum = 0
+        -- v0.9.0 L1 fix: freeze SWA banner countdown under pause.
+        -- Same rationale as the overcall banner above.
+        if S.s.paused then return end
         local req = S.s.swaRequest
         if not req or not req.caller or S.s.phase ~= K.PHASE_PLAY then
             self:Hide(); self._lastEnc = nil; return

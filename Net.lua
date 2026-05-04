@@ -1159,11 +1159,30 @@ function N._HostBeginOvercallWindow()
         return true
     end
     -- Otherwise schedule the 5s timeout.
-    C_Timer.After(K.OVERCALL_TIMEOUT_SEC, function()
+    -- v0.9.0 M1 fix (audit AUDIT_REPORT_v0.7.1.md): pause-aware timer.
+    -- If the host pauses mid-window, the original C_Timer.After kept
+    -- counting and force-resolved the contract on resume — possibly
+    -- before a human had a chance to click. Now: on timer fire, if
+    -- paused, re-arm a fresh timer and skip resolve. Mirrors the
+    -- existing SWA timer pattern at Net.lua ~2627.
+    local function overcallTimerFn()
         if not S.s.isHost then return end
         if S.s.phase ~= K.PHASE_OVERCALL then return end
+        if S.s.paused then
+            -- Re-arm a fresh window when the host pauses through a
+            -- timeout fire. The 5s resets — humans get a fresh shot
+            -- after resume rather than auto-WLA on the resume tick.
+            if S.s.overcall then
+                S.s.overcall.startedAt = (GetTime and GetTime()) or 0
+            end
+            if C_Timer and C_Timer.After then
+                C_Timer.After(K.OVERCALL_TIMEOUT_SEC, overcallTimerFn)
+            end
+            return
+        end
         N._HostResolveOvercall()
-    end)
+    end
+    C_Timer.After(K.OVERCALL_TIMEOUT_SEC, overcallTimerFn)
     -- Host UI: kick the local refresh since the receiver _OnOvercallOpen
     -- skips host-loopback. Without this the host doesn't render the
     -- countdown banner / their own overcall buttons.
@@ -2287,6 +2306,20 @@ function N.LocalAKA(suit)
     if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then return end
     if not S.s.localSeat then return end
     if not suit or suit == "" then return end
+    -- v0.9.0 L4 fix (audit AUDIT_REPORT_v0.7.1.md): AKA must be called
+    -- BEFORE leading. Pre-v0.9.0, a human pressing AKA mid-trick
+    -- retroactively flipped s.akaCalled and suppressed the 4th-seat
+    -- bot's ruff after the fact — informationally inconsistent. The
+    -- correct gate: the local seat must be about to LEAD (no plays
+    -- in the current trick yet), AND it must be their turn. The
+    -- v0.5.16 implicit-AKA path is unaffected (it fires from
+    -- pickFollow's pre-play observation, not via this wire).
+    if S.s.trick and S.s.trick.plays and #S.s.trick.plays > 0 then
+        return
+    end
+    if S.s.turn ~= S.s.localSeat or S.s.turnKind ~= "play" then
+        return
+    end
     -- Sanity-check: the caller really does hold the AKA in this suit.
     -- (Anti-misclick + light anti-cheat — UI would have hidden the
     -- button otherwise, but the network handler shouldn't trust UI.)

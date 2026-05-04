@@ -365,6 +365,18 @@ local function sampleConsistentDeal(seat, unseen)
                 elseif isDefender         then desire = defenderDesire
                 elseif isBidderPartner    then desire = partnerDesire
                 else                           desire = {} end
+                -- v0.9.0 M3 fix (audit AUDIT_REPORT_v0.7.1.md): clone
+                -- desire before any per-seat mutation. Pre-v0.9.0, the
+                -- per-seat mutations below (pSignalSuit assignment at
+                -- this site, leadCount/baitedSuit additions further
+                -- down) wrote DIRECTLY into the shared `strong`/
+                -- `defenderDesire`/`partnerDesire` tables, polluting
+                -- them across seats and retry attempts within one
+                -- sampleConsistentDeal call. Now each seat gets a
+                -- fresh copy and mutations are seat-local.
+                local desireOrig = desire
+                desire = {}
+                for k, v in pairs(desireOrig) do desire[k] = v end
                 if s == partner and pSignalSuit then desire[pSignalSuit] = 1 end
 
                 -- Audit Tier 4 (B-99): if this seat is `likelyKawesh`
@@ -426,6 +438,35 @@ local function sampleConsistentDeal(seat, unseen)
                     for suit, count in pairs(style.leadCount) do
                         if count >= 3 and not desire[suit] then
                             desire[suit] = 1
+                        end
+                    end
+                end
+
+                -- v0.9.0 Section 6 rules 1-4: touching-honors-down
+                -- desire bumps. When this seat showed touching-honors
+                -- in suit X (played T → has K, etc.), HARD-PIN the
+                -- inferred next-down card. Definite-confidence per
+                -- video #05. When they showed broke (rule 4), CLEAR
+                -- the suit's desire so the sampler doesn't pin highs
+                -- in that suit to this seat.
+                -- Sources: decision-trees.md Section 6 rules 1-4.
+                if style and style.topTouchSignal then
+                    for suit, entry in pairs(style.topTouchSignal) do
+                        if entry.nextDown then
+                            local card = entry.nextDown .. suit
+                            -- High desire weight to nudge sampler. Not
+                            -- a hard meld-pin (declared melds get those);
+                            -- this is a soft inference. Use a desire
+                            -- weight strictly above the existing strong-
+                            -- card weights so it dominates random fills.
+                            desire[card] = math.max(desire[card] or 0, 60)
+                        end
+                        if entry.broke then
+                            -- Clear high-card desires for this suit;
+                            -- seat is observed broke in highs.
+                            for _, hi in ipairs({ "A", "T", "K", "Q", "J" }) do
+                                desire[hi .. suit] = nil
+                            end
                         end
                     end
                 end

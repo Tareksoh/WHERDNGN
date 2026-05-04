@@ -207,6 +207,16 @@ local function emptyStyle()
             -- Sources: decision-trees.md Section 11 rule 8 (Sometimes,
             -- video 08); Section 4 rules 4-5 (deceptiveOverplay).
             baitedSuit  = { S = 0, H = 0, D = 0, C = 0 },
+            -- v0.9.0 Section 6 rules 1-4 (Definite, video 05):
+            -- touching-honors-down ledger. When this seat plays
+            -- T/K/Q in a trick led by their partner's Ace (or
+            -- AKA-led), Saudi convention says they hold the
+            -- next-rung-DOWN rank. When they play LOW (7/8) instead,
+            -- they're broke in the suit's high cards.
+            -- Per-suit nextDown ∈ {"K","Q","J"} or broke=true.
+            -- Read by BotMaster sampler to bias hand distribution.
+            -- Sources: decision-trees.md Section 6 rules 1-4 (Definite, 05).
+            topTouchSignal = { S = {}, H = {}, D = {}, C = {} },
             -- v0.5.10 Section 8 Tahreeb (تهريب) signal log.
             --   tahreebSent[suit] = list of ranks recorded as discards
             --   while this seat's PARTNER was winning the trick. The
@@ -416,6 +426,49 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- by opponents who hoard high cards in X waiting to over-trump.
     if (#trickPlays == 1) and style.leadCount then
         style.leadCount[cardSuit] = (style.leadCount[cardSuit] or 0) + 1
+    end
+
+    -- v0.9.0 Section 6 rules 1-4 (Definite, video 05): touching-
+    -- honors-down inferences. When `seat` plays in a trick led by
+    -- their PARTNER's Ace of the same suit (or AKA-led), Saudi
+    -- convention reads:
+    --   plays T  → has the K  (rule 1)
+    --   plays K  → has the Q  (rule 2)
+    --   plays Q  → has the J  (rule 3)
+    --   plays 7/8 → broke in the suit's high cards  (rule 4)
+    -- Inference written to seat's topTouchSignal ledger; the
+    -- BotMaster sampler reads it as a hard-pin / negative-bias for
+    -- hand reconstruction.
+    if not wasIllegal and contract and trick and trick.plays
+       and #trick.plays >= 2 and style.topTouchSignal then
+        local lead = trick.plays[1]
+        local theirRank = C.Rank(card)
+        -- Touching-honors context: lead was the Ace of cardSuit AND
+        -- the lead seat is THIS seat's partner. (AKA-led equivalence
+        -- captured via S.s.akaCalled with seat == partner of `seat`,
+        -- suit == cardSuit.)
+        local touchContext = false
+        if lead.seat == R.Partner(seat)
+           and C.Suit(lead.card) == cardSuit
+           and C.Rank(lead.card) == "A" then
+            touchContext = true
+        elseif S.s.akaCalled and S.s.akaCalled.seat == R.Partner(seat)
+               and S.s.akaCalled.suit == cardSuit then
+            touchContext = true
+        end
+        if touchContext then
+            local entry = style.topTouchSignal[cardSuit] or {}
+            if theirRank == "T" then
+                entry.nextDown = "K"            -- rule 1
+            elseif theirRank == "K" then
+                entry.nextDown = "Q"            -- rule 2
+            elseif theirRank == "Q" then
+                entry.nextDown = "J"            -- rule 3
+            elseif theirRank == "7" or theirRank == "8" then
+                entry.broke = true              -- rule 4
+            end
+            style.topTouchSignal[cardSuit] = entry
+        end
     end
 
     -- v0.8.2 Section 11 rule 8: bait-detected ledger. Detect when
@@ -1249,6 +1302,30 @@ function Bot.PickBid(seat)
     -- Round 2: pass / Hokm-non-flipped / Sun. Both rounds now wait
     -- for all 4 bids and Sun overcalls Hokm in either round.
     --
+    -- v0.9.0 G-4 fix (audit AUDIT_REPORT_v0.7.1.md / video #29):
+    -- partner-bid suppression. If partner has already bid Hokm this
+    -- round, the bot must NOT outbid them with our own different-suit
+    -- Hokm — Saudi convention says support partner's commitment, not
+    -- compete with it. Sun overcall is still allowed (higher contract
+    -- type, not partner-bid competition). Otherwise pass.
+    -- Pre-v0.9.0 the bot would happily emit HOKM:<other-suit> outbid
+    -- on partner's HOKM:<their-suit>; the host dropped it (winning
+    -- already set), but the wire violation was visible.
+    do
+        local g4_partner = R.Partner(seat)
+        local g4_partnerBid = S.s.bids and S.s.bids[g4_partner]
+        local g4_partnerBidHokm = g4_partnerBid
+            and g4_partnerBid:sub(1, #K.BID_HOKM) == K.BID_HOKM
+        if g4_partnerBidHokm then
+            -- Partner committed Hokm. Allow Sun overcall (different
+            -- contract type, not a "competing Hokm" violation).
+            if sunMinShape(hand) and sun >= thSun then
+                return K.BID_SUN
+            end
+            return K.BID_PASS
+        end
+    end
+
     -- v0.5.8 patches B-1/B-4/B-6: only consider suits where the
     -- minimum-Hokm shape is met (J + count >= 3). Suits with no J,
     -- or fewer than 3 trumps, are skipped — Saudi rule, not heuristic.
@@ -1406,14 +1483,23 @@ end
 -- Sources: decision-trees.md Section 8 (Definite, videos 01, 09, 10).
 local function tahreebClassify(signals)
     if not signals or #signals == 0 then return nil end
-    -- Bargiya = the very first observed discard in this suit was the Ace.
-    -- Per video #14 there are two semantic flavors of Bargiya (invite vs
-    -- defensive shed), but for receiver-side action we treat both as
-    -- "lead-this-back" — the worst case is leading partner's strong
-    -- suit, which is still a reasonable play. Defer the
-    -- invite-vs-shed disambiguation to a future patch with better
-    -- hand-shape inference.
-    if signals[1] == "A" then return "bargiya" end
+    -- v0.9.0 Bargiya 2-flavor split (audit AUDIT_REPORT_v0.7.1.md
+    -- missing item #9, Sources: video #14):
+    --   • CONFIRMED invite: signals[1]=="A" AND ≥2 events with the
+    --     second being lower-rank than A. Partner explicitly extended
+    --     the discard pattern → strong "lead this back, I have cover".
+    --   • AMBIGUOUS bargiya_hint: signals[1]=="A" AND #signals==1.
+    --     Could be invite (cover-held) OR defensive-shed (singleton A,
+    --     dumping for safety). Without follow-up, lower-confidence —
+    --     callers may treat as "hint" rather than full lead-back.
+    -- Pre-v0.9.0 conflated both as "bargiya", potentially wasting
+    -- leads on defensive-shed cases.
+    if signals[1] == "A" then
+        if #signals >= 2 then
+            return "bargiya"        -- confirmed invite (cover proven)
+        end
+        return "bargiya_hint"       -- ambiguous (possible defensive shed)
+    end
     if #signals == 1 then return "hint" end
     -- Compare rank-order indices using K.RANK_PLAIN (the non-trump
     -- ordering: 7<8<9<J<Q<K<T<A). Tahreeb signals are in non-trump
@@ -1567,8 +1653,15 @@ local function pickLead(legal, contract, seat)
                     -- own dedicated logic below).
                     if su ~= contract.trump then
                         local cls = tahreebClassify(signals[su])
-                        local score = (cls == "bargiya" and 3)
-                                   or (cls == "want"    and 2)
+                        -- v0.9.0 Bargiya 2-flavor weights:
+                        --   bargiya       (confirmed invite): 3
+                        --   want                            : 2
+                        --   bargiya_hint  (ambiguous, single A): 1
+                        --     — lower than "want" so multi-event signals
+                        --     dominate the single-Ace ambiguous case.
+                        local score = (cls == "bargiya"      and 3)
+                                   or (cls == "want"         and 2)
+                                   or (cls == "bargiya_hint" and 1)
                                    or 0
                         if score > bestScore then
                             best, bestScore = su, score
@@ -2384,6 +2477,43 @@ local function pickFollow(legal, hand, trick, contract, seat)
                             if C.Rank(c) == "A" then
                                 return c   -- Bargiya
                             end
+                        end
+                    end
+                end
+            end
+
+            -- v0.9.0 Tahreeb "want" sender arm (Definite, video 10 —
+            -- audit AUDIT_REPORT_v0.7.1.md missing item #7). Pre-v0.9.0
+            -- only T-4 ("LARGER first" = don't-want signal) was wired;
+            -- the "want" arm (LOW-then-HIGH ascending sequence) was
+            -- never emitted, so the receiver's "want" classification
+            -- could only fire by coincidence. Now wired: when we hold
+            -- A or T of a side suit with ≥3 cards (winner + ≥2 covers),
+            -- the FIRST discard event from that suit is the LOWEST
+            -- non-winner — receiver reads it as event#1 of an
+            -- ascending sequence ("want this suit, lead it back").
+            -- Subsequent events naturally produce the "high" half of
+            -- the pattern because the lowest is now gone.
+            -- Fires BEFORE T-4 so want suits win over doubleton dump.
+            for _, su in ipairs({ "S", "H", "D", "C" }) do
+                local cards = bySuit[su]
+                if #cards >= 3 then
+                    local hasWinner = false
+                    for _, c in ipairs(cards) do
+                        if C.Rank(c) == "A" or C.Rank(c) == "T" then
+                            hasWinner = true; break
+                        end
+                    end
+                    if hasWinner then
+                        -- Pick lowest non-winner card from this suit.
+                        local lows = {}
+                        for _, c in ipairs(cards) do
+                            if C.Rank(c) ~= "A" and C.Rank(c) ~= "T" then
+                                lows[#lows + 1] = c
+                            end
+                        end
+                        if #lows > 0 then
+                            return lowestByRank(lows, contract)
                         end
                     end
                 end

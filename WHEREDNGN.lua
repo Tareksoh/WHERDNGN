@@ -74,7 +74,11 @@ end
 
 local function init()
     ensureDB()
-    B.State.s.target = WHEREDNGNDB.target or 152
+    -- v0.9.0 L6 fix (audit AUDIT_REPORT_v0.7.1.md): tonumber-coerce
+    -- WHEREDNGNDB.target so a hand-edited string value doesn't break
+    -- `cum >= target` arithmetic downstream. Default 152 if absent
+    -- or non-numeric.
+    B.State.s.target = tonumber(WHEREDNGNDB.target) or 152
     -- Persisted team labels (host-only setting, applied account-wide).
     if WHEREDNGNDB.teamNames then
         B.State.ApplyTeamNames(WHEREDNGNDB.teamNames.A,
@@ -143,7 +147,11 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
             -- save time, which clobbers any /baloot target change made
             -- between sessions. Re-read from the per-account DB so the
             -- newer setting wins.
-            B.State.s.target = WHEREDNGNDB.target or B.State.s.target or 152
+            -- v0.9.0 L6 fix: tonumber-coerce to defend against
+            -- hand-edited string targets in SavedVariables.
+            B.State.s.target = tonumber(WHEREDNGNDB.target)
+                               or B.State.s.target
+                               or 152
             -- Host needs to resume bot scheduling and re-broadcast the
             -- lobby so reconnected peers see the same seat list.
             if B.State.s.isHost then
@@ -232,6 +240,55 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                     -- local seat being eligible, so calling on every
                     -- client is safe — only eligible local seats arm.
                     B.Net.StartLocalWarn("preempt")
+                elseif s.phase == K.PHASE_OVERCALL then
+                    -- v0.9.0 M2 fix: also re-arm pre-warn for v0.7.0
+                    -- Sun-overcall window. Same self-gating semantics
+                    -- as the others.
+                    B.Net.StartLocalWarn("overcall")
+                end
+            end
+            -- v0.9.0 M2 fix (audit AUDIT_REPORT_v0.7.1.md): host re-arm
+            -- of mid-window timers. Pre-v0.9.0, /reload mid-PHASE_OVERCALL
+            -- or mid-SWA-permission soft-locked the host until manual
+            -- recovery — only Bel/Triple/Four/Gahwa AFK timers were
+            -- re-armed via StartTurnTimer above.
+            if B.State.s.isHost and B.Net then
+                if B.State.s.phase == K.PHASE_OVERCALL
+                   and B.State.s.overcall then
+                    -- Reset window startedAt to now so the countdown
+                    -- restarts cleanly; arm a fresh resolve timer.
+                    B.State.s.overcall.startedAt = (GetTime and GetTime()) or 0
+                    if C_Timer and C_Timer.After then
+                        C_Timer.After(K.OVERCALL_TIMEOUT_SEC, function()
+                            if not B.State.s.isHost then return end
+                            if B.State.s.phase ~= K.PHASE_OVERCALL then return end
+                            if B.State.s.paused then return end
+                            B.Net._HostResolveOvercall()
+                        end)
+                    end
+                end
+                if B.State.s.swaRequest and B.State.s.swaRequest.caller
+                   and B.State.s.phase == K.PHASE_PLAY then
+                    -- Reset SWA request ts and arm a fresh auto-resolve
+                    -- timer. The 5s clock restarts so opponents see a
+                    -- full window post-reload.
+                    local req = B.State.s.swaRequest
+                    req.ts = (GetTime and GetTime()) or req.ts
+                    if C_Timer and C_Timer.After then
+                        C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
+                            if not B.State.s.isHost then return end
+                            if not B.State.s.swaRequest then return end
+                            if B.State.s.swaRequest.caller ~= req.caller then return end
+                            if B.State.s.phase ~= K.PHASE_PLAY then return end
+                            if B.State.s.paused then return end
+                            local hand = (req.encodedHand
+                                          and B.Cards.DecodeHand(req.encodedHand))
+                                         or {}
+                            local caller = req.caller
+                            B.State.s.swaRequest = nil
+                            B.Net.HostResolveSWA(caller, hand)
+                        end)
+                    end
                 end
             end
             if B.UI and B.UI.Refresh then B.UI.Refresh() end

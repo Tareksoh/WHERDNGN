@@ -258,6 +258,23 @@ function S.SaveSession()
     for k, v in pairs(s) do
         if not TRANSIENT_FIELDS[k] then snap[k] = v end
     end
+    -- v0.9.0 M4 fix (audit AUDIT_REPORT_v0.7.1.md): persist Bot's
+    -- module-level partner-style + memory state across /reload.
+    -- Pre-v0.9.0, _partnerStyle / _memory / r1WasAllPass lived in
+    -- Bot.lua module scope and were wiped on every /reload — M3lm /
+    -- Fzloky / Saudi-Master silently lost all accumulated partner
+    -- reads (bels/triples/fours/gahwas counts, void inferences,
+    -- aceLate, leadCount, baitedSuit, gahwaFailed, sunFail, etc.)
+    -- mid-game. Now bundled into the session snapshot.
+    local botModuleState = nil
+    if B.Bot then
+        botModuleState = {
+            partnerStyle = B.Bot._partnerStyle,
+            memory       = B.Bot._memory,
+            r1WasAllPass = B.Bot.r1WasAllPass,
+        }
+    end
+
     -- Tag with the saving character's name. WHEREDNGNDB is per-account,
     -- so on a different character the restore must reject this session
     -- — otherwise we'd resurface character A's hand for character B.
@@ -265,6 +282,7 @@ function S.SaveSession()
         ts    = time(),
         owner = s.localName,
         state = snap,
+        bot   = botModuleState,
     }
 end
 
@@ -323,6 +341,19 @@ function S.RestoreSession()
     if s.trick and s.trick.plays then
         for _, p in ipairs(s.trick.plays) do
             s.playedCardsThisRound[p.card] = true
+        end
+    end
+    -- v0.9.0 M4 fix: rehydrate Bot module-level state. Defensive nil
+    -- guards — older session snapshots won't have a `.bot` field.
+    if sess.bot and B.Bot then
+        if sess.bot.partnerStyle then
+            B.Bot._partnerStyle = sess.bot.partnerStyle
+        end
+        if sess.bot.memory then
+            B.Bot._memory = sess.bot.memory
+        end
+        if sess.bot.r1WasAllPass ~= nil then
+            B.Bot.r1WasAllPass = sess.bot.r1WasAllPass
         end
     end
     return true
