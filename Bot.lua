@@ -1298,8 +1298,28 @@ local function pickLead(legal, contract, seat)
     -- safe suit, OR fall through to highest-face-value otherwise.
     -- Sweep pursuit: if my team has won 7/7 tricks so far, also push
     -- aggressively (already-leading suggests we're going for AL_KABOOT).
+    --
+    -- v0.5.19 Section 7 rules 1+2 (Common, videos 06+07+15): extend
+    -- the sweep-pursuit branch to fire from trick 3 onwards when:
+    --   • Bidder's team has won EVERY prior trick (clean sweep so far).
+    --   • We're the BIDDER team (defenders pursuing sweep is rarer).
+    --   • trickNum is 3-7 (trick 8 already handled by the block below).
+    -- Per video 15: "if no opp cut by trick 2, trump distribution is
+    -- favorable; sweep is genuinely reachable. Earlier trigger lets
+    -- tricks 3-7 be optimized for sweep." K.AL_KABOOT_HOKM=250,
+    -- K.AL_KABOOT_SUN=220 (×2=440). Worth pursuing aggressively.
     local trickNum = #(S.s.tricks or {}) + 1
-    if trickNum == 8 then
+    local sweepPursuitEarly = false
+    if trickNum >= 3 and trickNum <= 7 and isBidderTeam then
+        local mySwept = 0
+        for _, t in ipairs(S.s.tricks or {}) do
+            if R.TeamOf(t.winner) == myTeam then
+                mySwept = mySwept + 1
+            end
+        end
+        sweepPursuitEarly = (mySwept == trickNum - 1)
+    end
+    if trickNum == 8 or sweepPursuitEarly then
         -- Sweep pursuit: our team won every prior trick → maximise
         -- our chance of winning this final trick by leading our
         -- highest-rank card (boss most likely; even if not, brute-force

@@ -1,5 +1,81 @@
 # Changelog
 
+## v0.5.19 — decision-trees.md Section 7: trick-3 Kaboot pursuit + endgame audit
+
+Translates Section 7 endgame/SWA rules. Most are already wired
+post-v0.5.17; this release lands the trick-3 Kaboot-pursuit
+extension and audits the rest.
+
+### Changed
+
+- **Section 7 rules 1+2** (Common, videos 06+07+15): trick-3
+  Kaboot pursuit extension. The pre-v0.5.19 sweep-pursuit branch
+  in `pickLead` only fired at `trickNum == 8`. Per video #15: "if
+  no opp cut by trick 2, trump distribution is favorable; sweep
+  is genuinely reachable. Earlier trigger lets tricks 3-7 be
+  optimized for sweep." Now: when `trickNum >= 3` AND `isBidderTeam`
+  AND mytTeam-has-won-every-prior-trick → enter sweep-pursuit
+  mode (same logic as trick-8 — boss-lead in safe suit, fall
+  through to highest-face-value). K.AL_KABOOT_HOKM=250,
+  K.AL_KABOOT_SUN=220 ×2 = 440. High-value bonus to pursue.
+
+### Confirmed already wired (no code change)
+
+- **Rule 7** (Sun Bargiya — Common, video 01): wired in v0.5.10
+  T-1 Bargiya sender. When partner is winning + we hold A of side
+  suit X with cover → discard A as Bargiya signal.
+
+- **Rule 11** (SWA deterministic-or-bust — Definite, video 35):
+  enforced in v0.5.17 via R.IsValidSWA strict-caller (cooperative
+  branch tightened to "every play must succeed").
+
+- **Rule 12** (Opp denies SWA → Qaid penalty — Common, video 35):
+  already wired via `MSG_SWA_OUT` + `Net.HostResolveSWA` outcome
+  path. The valid-flag in the message carries the result.
+
+### Confirmed implicitly handled (no code change)
+
+- **Rule 5** (Defender prevent Kaboot — Common, video 07): the
+  existing `pickFollow` winners-branch already returns any winner
+  when opp is winning + we have a winner. "First success" =
+  taking any trick = the winners-branch firing at all.
+
+- **Rule 6** (Defender force-fail — Common, video 07): partially
+  implicit via `scoreUrgency` for bidding/escalation. The play-
+  side "capture high-value tricks at cost of low-card discipline"
+  would require switching the winners-branch from cheapest-winner
+  to highest-face-value-winner when defender + bidder-making.
+  Could be a future targeted enhancement; currently the
+  cheapest-winner default still captures trick points (just not
+  maximally).
+
+### Deferred
+
+- **Rule 3** (Sun bidder sweep abandonment — Sometimes, video 15):
+  needs score-tracking. House-rule territory.
+- **Rule 4** (Defender Qaid-bait — Sometimes): doc explicitly
+  says "bot likely should NOT do this without dedicated
+  heuristic". Skip.
+- **Rule 8** (Sun trick-8 Bargiya followup — Sometimes, videos
+  01+08): we'd lead the suit we Bargiya'd in earlier. Requires
+  reading our OWN `tahreebSent` (not partner's) — small
+  extension to the v0.5.10 receiver. Defer.
+- **Rule 9** (Reverse Al-Kaboot scoring — Sometimes, video 16):
+  +88 raw to defender team on full sweep against bidder. Single-
+  source; doc says "confirm before wiring". Defer.
+- **Rule 10** (SWA card-count thresholds 5+ stricter): video #35
+  refines current ≤3-instant / 4+-permission to ≤3 / 4-context-
+  dependent / 5+-mandatory. Current code (post-v0.5.17 — all
+  flows go through 5s window) is functionally correct; the
+  "context-dependent" subtlety is hard to pin behaviorally. Defer.
+
+### Tests
+
+- 226/226 regression tests pass (no new tests for this release;
+  the trick-3 sweep pursuit fires only when bidder-team has won
+  every prior trick — rare in random tournaments, exercised
+  empirically rather than via a pinned test).
+
 ## v0.5.18 — decision-trees.md Section 4: Takbeer point-card extension
 
 Translates the remaining Definite-confidence rule from Section 4
