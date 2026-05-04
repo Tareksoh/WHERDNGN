@@ -881,6 +881,84 @@ function S.ApplyBid(seat, bid)
     end
 end
 
+-- v0.7 Sun-overcall window helpers. The 5-second post-Hokm window
+-- where the bidder may upgrade to Sun (non-Ace bid card only) and
+-- non-bidder seats may take the contract as their Sun.
+--
+-- Phase-1 architecture (this file): pure state-machine primitives.
+-- Network plumbing (Net.lua) and UI (UI.lua) are Phase 2/3 work.
+-- The host-side flow eventually calls:
+--   S.BeginOvercall(...) → S.RecordOvercallDecision(...) per seat →
+--   S.FinalizeOvercall() → existing PHASE_DOUBLE transition.
+--
+-- s.overcall = {
+--   decisions  = {[seat] = "UPGRADE"|"TAKE"|"WAIVE"|nil},
+--   bidCard    = card-string-or-nil (R1 only),
+--   dealerSeat = 1-4,
+--   startedAt  = GetTime() snapshot (for the 5s window timer),
+-- }
+function S.BeginOvercall(bidCard, dealerSeat)
+    if not s.contract or s.contract.type ~= K.BID_HOKM then return false end
+    if s.contract.forced then return false end
+    -- All-WAIVE inputs (decisions={}) at FinalizeOvercall time keep
+    -- the Hokm contract; this initialization is purely "open the window."
+    s.overcall = {
+        decisions  = {},
+        bidCard    = bidCard,
+        dealerSeat = dealerSeat,
+        startedAt  = (GetTime and GetTime()) or 0,
+    }
+    s.phase = K.PHASE_OVERCALL
+    return true
+end
+
+function S.RecordOvercallDecision(seat, decision)
+    if not s.overcall then return false end
+    if not seat or seat < 1 or seat > 4 then return false end
+    if decision ~= "UPGRADE" and decision ~= "TAKE" and decision ~= "WAIVE" then
+        return false
+    end
+    -- Once a seat decides, lock it in (no take-backs per the rule
+    -- "once said WLA, locked out").
+    if s.overcall.decisions[seat] then return false end
+    s.overcall.decisions[seat] = decision
+    return true
+end
+
+-- Resolves the overcall window and returns the result struct from
+-- R.ResolveOvercall. As a side effect, mutates s.contract if a
+-- non-bidder TAKE wins (rewrites bidder + type) or if the bidder
+-- UPGRADE wins (just rewrites type + clears trump).
+-- After resolution, transitions phase to PHASE_DOUBLE so the existing
+-- Bel flow proceeds. The s.overcall table is cleared.
+function S.FinalizeOvercall()
+    if not s.overcall or not s.contract then return nil end
+    local result = R.ResolveOvercall(
+        s.overcall.decisions,
+        s.contract,
+        s.overcall.bidCard,
+        s.overcall.dealerSeat
+    )
+    if result.taken then
+        if result.type == "UPGRADE" then
+            -- Bidder keeps the bidder slot; contract becomes their Sun.
+            s.contract.type  = K.BID_SUN
+            s.contract.trump = nil
+        elseif result.type == "TAKE" then
+            -- Non-bidder takes; they become the new bidder.
+            s.contract.type   = K.BID_SUN
+            s.contract.trump  = nil
+            s.contract.bidder = result.by
+            -- Re-derive defender pair (mirrors S.ApplyContract).
+            local oppA = result.by == 1 or result.by == 3
+            s.belPending = oppA and { 2, 4 } or { 1, 3 }
+        end
+    end
+    s.overcall = nil
+    s.phase = K.PHASE_DOUBLE
+    return result
+end
+
 function S.ApplyContract(bidder, btype, trump)
     -- 6th-audit fix: idempotence guard. If a duplicate MSG_CONTRACT
     -- arrives (e.g., from the host's normal broadcast then again via

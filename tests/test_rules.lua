@@ -864,6 +864,114 @@ do
 end
 
 -- =====================================================================
+-- P. v0.7 Sun-overcall (R.CanOvercall + R.ResolveOvercall)
+--
+-- Post-Hokm-bid 5s window. Bidder may UPGRADE Hokm → own Sun (unless
+-- bid card was Ace, the anti-trap rule). Non-bidder seats may TAKE
+-- the contract as their Sun. Conflict: bidder UPGRADE wins; otherwise
+-- bid-order priority among non-bidder TAKE'rs (starting from dealer's
+-- right).
+-- =====================================================================
+section("P. Sun-overcall (R.CanOvercall + R.ResolveOvercall)")
+
+do
+    local hokm = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    local sun  = { type = K.BID_SUN,  bidder = 1 }
+    local takweesh = { type = K.BID_HOKM, trump = "C", bidder = 1, forced = true }
+
+    -- CanOvercall — bidder UPGRADE eligibility
+    assertTrue(R.CanOvercall(1, hokm, "9C"),
+               "P.1: Hokm + non-Ace bid card → bidder can UPGRADE")
+    assertTrue(R.CanOvercall(1, hokm, nil),
+               "P.2: Hokm + R2 (no bid card) → bidder can UPGRADE")
+    assertEq(R.CanOvercall(1, hokm, "AC"), false,
+             "P.3: Hokm + Ace bid card → bidder BLOCKED from UPGRADE")
+    assertEq(R.CanOvercall(1, hokm, "AS"), false,
+             "P.4: Hokm + Ace bid card (different suit) → bidder BLOCKED")
+
+    -- CanOvercall — non-bidder TAKE eligibility
+    assertTrue(R.CanOvercall(2, hokm, "9C"), "P.5: non-bidder + non-Ace → can TAKE")
+    assertTrue(R.CanOvercall(3, hokm, "AC"), "P.6: non-bidder + Ace → can TAKE (Ace rule is bidder-only)")
+    assertTrue(R.CanOvercall(4, hokm, nil),  "P.7: non-bidder + R2 → can TAKE")
+
+    -- CanOvercall — contract-type / forced gating
+    assertEq(R.CanOvercall(2, sun, nil), false,
+             "P.8: Sun contract → no overcall (overcall is Hokm-only)")
+    assertEq(R.CanOvercall(2, takweesh, "9C"), false,
+             "P.9: forced/Takweesh contract → no overcall (Q4 user spec)")
+    assertEq(R.CanOvercall(1, takweesh, "9C"), false,
+             "P.10: forced contract bidder also blocked")
+
+    -- ResolveOvercall — basic flows
+    -- Bidder UPGRADE wins.
+    local res = R.ResolveOvercall(
+        { [1] = "UPGRADE", [2] = "WAIVE", [3] = "WAIVE", [4] = "WAIVE" },
+        hokm, "9C", 4)  -- dealer=4, so bid order = 1, 2, 3, 4
+    assertEq(res.taken, true,            "P.11: bidder UPGRADE → taken")
+    assertEq(res.by,    1,               "P.11: bidder UPGRADE → by=1")
+    assertEq(res.type,  "UPGRADE",       "P.11: bidder UPGRADE → type=UPGRADE")
+
+    -- All WAIVE → Hokm stands.
+    res = R.ResolveOvercall(
+        { [1] = "WAIVE", [2] = "WAIVE", [3] = "WAIVE", [4] = "WAIVE" },
+        hokm, "9C", 4)
+    assertEq(res.taken, false, "P.12: all WAIVE → not taken")
+
+    -- Empty decisions (all timeout) → Hokm stands.
+    res = R.ResolveOvercall({}, hokm, "9C", 4)
+    assertEq(res.taken, false, "P.13: empty decisions (all timeout) → not taken")
+
+    -- Single non-bidder TAKE.
+    res = R.ResolveOvercall(
+        { [1] = "WAIVE", [2] = "WAIVE", [3] = "TAKE", [4] = "WAIVE" },
+        hokm, "9C", 4)
+    assertEq(res.taken, true,    "P.14: single non-bidder TAKE → taken")
+    assertEq(res.by,    3,       "P.14: TAKE by seat 3")
+    assertEq(res.type,  "TAKE",  "P.14: type=TAKE")
+
+    -- Bidder UPGRADE beats non-bidder TAKE.
+    res = R.ResolveOvercall(
+        { [1] = "UPGRADE", [2] = "TAKE", [3] = "TAKE", [4] = "TAKE" },
+        hokm, "9C", 4)
+    assertEq(res.by,   1,           "P.15: bidder UPGRADE wins over multiple TAKEs")
+    assertEq(res.type, "UPGRADE",   "P.15: type=UPGRADE despite TAKE'rs")
+
+    -- Multiple non-bidder TAKEs → bid-order priority. dealer=4, so
+    -- bid order from dealer's right is: 1 (bidder, skip) → 2 → 3 → 4.
+    -- Earliest non-bidder TAKE in that order = 2.
+    res = R.ResolveOvercall(
+        { [1] = "WAIVE", [2] = "TAKE", [3] = "TAKE", [4] = "TAKE" },
+        hokm, "9C", 4)
+    assertEq(res.by,   2,      "P.16: bid-order priority: dealer=4 → seat 2 wins (first non-bidder)")
+
+    -- Different dealer changes the bid order. dealer=1, bid order = 2,3,4,1.
+    -- Multiple TAKEs from {3,4} → 3 wins (earliest after dealer's right=2 which is bidder=1's partner... wait bidder=1).
+    -- bid order = 2, 3, 4, 1. seat 1 is bidder so skip. First TAKE in {2,3,4} order:
+    res = R.ResolveOvercall(
+        { [3] = "TAKE", [4] = "TAKE" },
+        hokm, "9C", 1)
+    assertEq(res.by, 3, "P.17: dealer=1 bid-order: 2→3→4→1; first TAKE at 3")
+
+    -- Ace-bid blocks bidder UPGRADE even if "UPGRADE" is recorded.
+    res = R.ResolveOvercall(
+        { [1] = "UPGRADE", [2] = "TAKE" },
+        hokm, "AC", 4)
+    assertEq(res.by,   2,       "P.18: Ace bid card → bidder UPGRADE rejected, TAKE wins")
+    assertEq(res.type, "TAKE",  "P.18: TAKE picked since UPGRADE was filtered")
+
+    -- Forced contract → no overcall ever resolves.
+    res = R.ResolveOvercall(
+        { [1] = "UPGRADE", [2] = "TAKE", [3] = "TAKE" },
+        takweesh, "9C", 4)
+    assertEq(res.taken, false, "P.19: forced contract → ResolveOvercall returns not-taken")
+
+    -- Defensive: nil inputs.
+    assertEq(R.ResolveOvercall(nil, hokm, "9C", 4).taken, false, "P.20: nil decisions → not-taken")
+    assertEq(R.ResolveOvercall({}, nil, "9C", 4).taken,   false, "P.21: nil contract → not-taken")
+    assertEq(R.ResolveOvercall({}, hokm, "9C", nil).taken, false, "P.22: nil dealer → not-taken")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

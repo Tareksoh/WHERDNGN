@@ -117,6 +117,10 @@ K.PHASE_LOBBY    = "lobby"       -- host has invited, waiting on players to clai
 K.PHASE_DEAL1    = "deal1"       -- 5 cards out, bid card up, round-1 bidding
 K.PHASE_DEAL2BID = "deal2bid"    -- all passed round 1, round-2 bidding
 K.PHASE_PREEMPT  = "preempt"     -- round-2 Sun on Ace bid card: earlier seats may pre-empt (الثالث)
+K.PHASE_OVERCALL = "overcall"    -- post-Hokm-bid 5s window: bidder may upgrade to Sun
+                                 -- (non-Ace bid card only) AND non-bidder seats may take
+                                 -- the bid as their Sun. Bid-order priority among takers.
+                                 -- See R.CanOvercall / R.ResolveOvercall.
 K.PHASE_DOUBLE   = "double"      -- contract decided, defenders' window for Bel
 K.PHASE_TRIPLE   = "triple"      -- Bel happened, bidder's window for Triple (×3)
 K.PHASE_FOUR     = "four"        -- Triple happened, defenders' window for Four (×4)
@@ -257,6 +261,22 @@ K.CARD_ANIM_SEC       = 0.18  -- duration of the card-land scale+fade animation
 -- counter via Takweesh; explicit Deny still works as a manual cancel.
 K.SWA_TIMEOUT_SEC     = 5
 
+-- v0.7 Sun-overcall window. After any Hokm bid resolves (R1 or R2),
+-- the host opens a 5-second window during which:
+--   • The bidder may UPGRADE their own Hokm to Sun — UNLESS the R1
+--     bid card was an Ace (anti-trap rule: bidder shouldn't be able
+--     to bid weak Hokm-on-Ace then upgrade once the Ace is locked).
+--   • Any non-bidder seat may TAKE the contract as THEIR Sun. The
+--     taker becomes the new bidder; the original Hokm bidder becomes
+--     a defender.
+-- Auto-WAIVE on timeout. Conflict resolution: bidder UPGRADE wins;
+-- otherwise bid-order priority (earliest in turn order from dealer)
+-- among non-bidder TAKE'rs.
+-- Forced/Takweesh-recovery contracts do NOT trigger overcall.
+-- Bot tier gating: only M3lm+ bots act on the overcall (Basic /
+-- Advanced auto-WAIVE — this is a tournament-strategy nuance).
+K.OVERCALL_TIMEOUT_SEC = 5
+
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
 -- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).
@@ -288,3 +308,14 @@ K.BOT_PICKBID_BELOTE_BONUS          = K.MELD_BELOTE  -- B-6 (mirrors meld scorin
 -- tunable per ruleset variant. Saudi Bel-legality threshold —
 -- only the Sun-defender team currently at <100 may Bel.
 K.SUN_BEL_CUMULATIVE_GATE = 100
+
+-- v0.7 Sun-overcall bot strength thresholds. Used by Bot.PickOvercall.
+-- Bidder self-upgrade requires CLEARLY exceeding the regular Sun-bid
+-- threshold (~50 in normal bidding) — they already committed to Hokm,
+-- so the upgrade implies "I underbid; my hand is actually Sun-strong."
+-- Non-bidder TAKE is stricter still (BOT_OVERCALL_TAKE_TH > BOT_OVERCALL_SELF_TH)
+-- because taking another seat's contract is a high-commitment move
+-- that puts you on the hook for a Sun's full handTotal=130 ×2 = 260
+-- effective points if you fail.
+K.BOT_OVERCALL_SELF_TH = 75   -- bidder upgrade Hokm→Sun threshold
+K.BOT_OVERCALL_TAKE_TH = 80   -- non-bidder take-as-Sun threshold

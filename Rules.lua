@@ -497,6 +497,71 @@ function R.CanBel(team, contract, cumulative)
     return mine < K.SUN_BEL_CUMULATIVE_GATE
 end
 
+-- v0.7 Sun-overcall predicate. Returns true iff `seat` is currently
+-- eligible to act in the post-Hokm overcall window. Two action types:
+--   • UPGRADE — only the bidder, only when the contract is Hokm AND
+--     the R1 bid card (if any) was NOT an Ace. R2 contracts have no
+--     bid card and the Ace-special rule does not apply.
+--   • TAKE — any non-bidder seat may take the contract as their Sun.
+-- Forced/Takweesh-recovery contracts (`contract.forced == true`) do
+-- NOT trigger the overcall window; the predicate returns false for
+-- every seat in that case.
+-- Sun contracts also return false (overcall is Hokm→Sun only).
+function R.CanOvercall(seat, contract, bidCard)
+    if not seat or not contract then return false end
+    if contract.type ~= K.BID_HOKM then return false end
+    if contract.forced then return false end
+    if seat == contract.bidder then
+        -- Bidder UPGRADE option. Blocked when bid card was an Ace.
+        if bidCard and C.Rank and C.Rank(bidCard) == "A" then
+            return false
+        end
+        return true
+    end
+    -- Non-bidder TAKE option — always available.
+    return true
+end
+
+-- v0.7 Sun-overcall resolution. Inputs:
+--   decisions  : {[seat] = "UPGRADE" | "TAKE" | "WAIVE" | nil}
+--                nil/missing entries are treated as WAIVE (timeout).
+--   contract   : current contract table (Hokm).
+--   bidCard    : the R1 bid card, or nil for R2.
+--   dealerSeat : the dealer seat (1-4) — used to compute bid order.
+-- Returns one of:
+--   { taken = false }                                        — Hokm stands.
+--   { taken = true, by = N, type = "UPGRADE" }               — bidder upgrade.
+--   { taken = true, by = N, type = "TAKE" }                  — N takes as Sun.
+-- Priority: bidder UPGRADE wins if eligible & decided; otherwise
+-- earliest-in-bid-order TAKE among non-bidder seats wins. Bid order
+-- starts at the seat to dealer's right (Saudi anticlockwise convention)
+-- and proceeds through 4 seats.
+function R.ResolveOvercall(decisions, contract, bidCard, dealerSeat)
+    if not contract or not decisions or not dealerSeat then
+        return { taken = false }
+    end
+    local bidder = contract.bidder
+    -- Bidder UPGRADE has top priority — provided the bidder is allowed
+    -- to upgrade (Ace-special blocks them; CanOvercall encodes this).
+    if bidder and decisions[bidder] == "UPGRADE"
+       and R.CanOvercall(bidder, contract, bidCard) then
+        return { taken = true, by = bidder, type = "UPGRADE" }
+    end
+    -- Non-bidder TAKE in bid order. Saudi turn order: starting from
+    -- dealer's right (R.NextSeat after dealer = the player who acts
+    -- first in normal play). Walk all 4 seats from there; the first
+    -- non-bidder TAKE wins.
+    local s = R.NextSeat(dealerSeat)
+    for _ = 1, 4 do
+        if s ~= bidder and decisions[s] == "TAKE"
+           and R.CanOvercall(s, contract, bidCard) then
+            return { taken = true, by = s, type = "TAKE" }
+        end
+        s = R.NextSeat(s)
+    end
+    return { taken = false }
+end
+
 -- Round scoring -------------------------------------------------------
 
 -- Inputs:

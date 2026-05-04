@@ -1181,6 +1181,188 @@ for dealer = 1, 4 do
 end
 
 -- =====================================================================
+-- H. v0.7 Sun-overcall (S.BeginOvercall / S.RecordOvercallDecision /
+--    S.FinalizeOvercall) + Bot.PickOvercall
+-- =====================================================================
+section("H. v0.7 Sun-overcall state-machine + Bot.PickOvercall")
+
+do
+    -- Reset state for each scenario.
+    local function setup(bidder, trump, forced, bidCard, dealer)
+        S.s.contract = {
+            type    = K.BID_HOKM,
+            trump   = trump or "C",
+            bidder  = bidder or 1,
+            forced  = forced or nil,
+        }
+        S.s.dealer = dealer or 4
+        S.s.overcall = nil
+        S.s.phase = K.PHASE_DOUBLE  -- pre-overcall canonical state
+    end
+
+    -- Scenario 1: bidder UPGRADE
+    setup(1, "C", false, "9C", 4)
+    local ok = S.BeginOvercall("9C", 4)
+    assertEq(ok, true, "H.1: BeginOvercall returns true on Hokm contract")
+    assertEq(S.s.phase, K.PHASE_OVERCALL, "H.1: phase transitioned to PHASE_OVERCALL")
+    S.RecordOvercallDecision(1, "UPGRADE")
+    S.RecordOvercallDecision(2, "WAIVE")
+    S.RecordOvercallDecision(3, "WAIVE")
+    S.RecordOvercallDecision(4, "WAIVE")
+    local res = S.FinalizeOvercall()
+    assertEq(res.taken, true,           "H.1: bidder UPGRADE → taken")
+    assertEq(res.type,  "UPGRADE",      "H.1: result type=UPGRADE")
+    assertEq(S.s.contract.type,   K.BID_SUN, "H.1: contract.type rewritten to Sun")
+    assertEq(S.s.contract.trump,  nil,      "H.1: contract.trump cleared")
+    assertEq(S.s.contract.bidder, 1,        "H.1: bidder unchanged on UPGRADE")
+    assertEq(S.s.phase,           K.PHASE_DOUBLE, "H.1: phase advanced to PHASE_DOUBLE")
+    assertEq(S.s.overcall,        nil,           "H.1: s.overcall cleared")
+
+    -- Scenario 2: non-bidder TAKE (seat 3)
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    S.RecordOvercallDecision(1, "WAIVE")
+    S.RecordOvercallDecision(3, "TAKE")
+    res = S.FinalizeOvercall()
+    assertEq(res.taken, true,            "H.2: non-bidder TAKE → taken")
+    assertEq(res.by,    3,               "H.2: by=3")
+    assertEq(S.s.contract.type,   K.BID_SUN, "H.2: contract.type=Sun")
+    assertEq(S.s.contract.bidder, 3,         "H.2: bidder rewritten to taker (3)")
+    assertEq(S.s.contract.trump,  nil,       "H.2: trump cleared")
+
+    -- Scenario 3: all WAIVE → Hokm stands
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    res = S.FinalizeOvercall()  -- empty decisions = all timeout = WAIVE
+    assertEq(res.taken,         false,       "H.3: empty decisions → not taken")
+    assertEq(S.s.contract.type, K.BID_HOKM, "H.3: contract stays Hokm")
+    assertEq(S.s.contract.trump, "C",        "H.3: trump preserved")
+    assertEq(S.s.phase,         K.PHASE_DOUBLE, "H.3: phase still advances")
+
+    -- Scenario 4: Ace bid card blocks bidder UPGRADE
+    setup(1, "C", false, "AC", 4)
+    S.BeginOvercall("AC", 4)
+    S.RecordOvercallDecision(1, "UPGRADE")  -- attempted but blocked by R.CanOvercall
+    S.RecordOvercallDecision(2, "TAKE")
+    res = S.FinalizeOvercall()
+    assertEq(res.taken, true,    "H.4: Ace-bid-card blocks bidder, TAKE wins")
+    assertEq(res.by,    2,       "H.4: TAKE by=2 (after dealer=4 → bid order 1,2,3,4; 1 skipped as bidder)")
+    assertEq(res.type,  "TAKE",  "H.4: type=TAKE")
+
+    -- Scenario 5: forced/Takweesh contract → BeginOvercall refuses
+    setup(1, "C", true, "9C", 4)
+    ok = S.BeginOvercall("9C", 4)
+    assertEq(ok, false,                  "H.5: forced contract → BeginOvercall refuses")
+    assertEq(S.s.phase, K.PHASE_DOUBLE,  "H.5: phase unchanged")
+    assertEq(S.s.overcall, nil,          "H.5: s.overcall stays nil")
+
+    -- Scenario 6: Sun contract → BeginOvercall refuses (overcall is Hokm-only)
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    S.s.phase = K.PHASE_DOUBLE
+    S.s.overcall = nil
+    ok = S.BeginOvercall(nil, 4)
+    assertEq(ok, false,                  "H.6: Sun contract → BeginOvercall refuses")
+
+    -- Scenario 7: lock-out — once a seat decides, can't change
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    local first = S.RecordOvercallDecision(2, "WAIVE")
+    local second = S.RecordOvercallDecision(2, "TAKE")  -- attempt to change
+    assertEq(first,  true,   "H.7: first decision recorded")
+    assertEq(second, false,  "H.7: second attempt rejected (lock-out)")
+    assertEq(S.s.overcall.decisions[2], "WAIVE", "H.7: original WAIVE preserved")
+    S.FinalizeOvercall()  -- cleanup
+
+    -- Scenario 8: invalid decision string rejected
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    local invalid = S.RecordOvercallDecision(2, "GARBAGE")
+    assertEq(invalid, false, "H.8: invalid decision → rejected")
+    S.FinalizeOvercall()
+
+    -- Scenario 9: invalid seat rejected
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    assertEq(S.RecordOvercallDecision(0, "WAIVE"), false, "H.9a: seat=0 rejected")
+    assertEq(S.RecordOvercallDecision(5, "WAIVE"), false, "H.9b: seat=5 rejected")
+    S.FinalizeOvercall()
+
+    -- Scenario 10: Bot.PickOvercall returns WAIVE for non-M3lm tier
+    WHEREDNGNDB.advancedBots     = false
+    WHEREDNGNDB.m3lmBots         = false
+    WHEREDNGNDB.fzlokyBots       = false
+    WHEREDNGNDB.saudiMasterBots  = false
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    S.s.hostHands = {
+        [1] = { "AS","AH","AD","AC","TS","TH","TD","TC" },  -- max sunStrength
+        [2] = { "JS","9S","KS","QS","8S","7S","JH","9H" },
+        [3] = { "JD","9D","KD","QD","8D","7D","JC","9C" },
+        [4] = { "KH","QH","8H","7H","KC","QC","8C","7C" },
+    }
+    assertEq(Bot.PickOvercall(1), "WAIVE", "H.10: Basic tier → bidder always WAIVE")
+    assertEq(Bot.PickOvercall(2), "WAIVE", "H.10: Basic tier → non-bidder always WAIVE")
+    S.FinalizeOvercall()
+
+    -- Scenario 11: Bot.PickOvercall — M3lm bidder UPGRADE on Sun-strong hand
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots     = true
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    S.s.hostHands = {
+        [1] = { "AS","AH","AD","AC","TS","TH","TD","TC" },  -- 4 A + 4 T = max sunStrength
+        [2] = { "JS","9S","KS","QS","8S","7S","JH","9H" },
+        [3] = { "JD","9D","KD","QD","8D","7D","JC","9C" },
+        [4] = { "KH","QH","8H","7H","KC","QC","8C","7C" },
+    }
+    local pick = Bot.PickOvercall(1)
+    assertEq(pick, "UPGRADE",
+             "H.11: M3lm bidder + Sun-strong + non-Ace bid → UPGRADE")
+    S.FinalizeOvercall()
+
+    -- Scenario 12: Bot.PickOvercall — M3lm bidder Ace-bid-card → WAIVE
+    setup(1, "C", false, "AC", 4)
+    S.BeginOvercall("AC", 4)
+    S.s.hostHands = {
+        [1] = { "AS","AH","AD","AC","TS","TH","TD","TC" },
+        [2] = { "JS","9S","KS","QS","8S","7S","JH","9H" },
+        [3] = { "JD","9D","KD","QD","8D","7D","JC","9C" },
+        [4] = { "KH","QH","8H","7H","KC","QC","8C","7C" },
+    }
+    pick = Bot.PickOvercall(1)
+    assertEq(pick, "WAIVE",
+             "H.12: M3lm bidder + Ace bid card → WAIVE (Ace-special blocks UPGRADE)")
+    S.FinalizeOvercall()
+
+    -- Scenario 13: Bot.PickOvercall — M3lm non-bidder Sun-strong → TAKE
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    S.s.hostHands = {
+        [1] = { "JC","9C","KC","QC","8C","7C","JS","9S" },
+        [2] = { "8H","7H","8S","7S","8D","7D","KS","QS" },
+        [3] = { "AS","AH","AD","AC","TS","TH","TD","TC" },  -- Sun-strong
+        [4] = { "JH","JD","9H","9D","QH","QD","KH","KD" },
+    }
+    pick = Bot.PickOvercall(3)
+    assertEq(pick, "TAKE",
+             "H.13: M3lm non-bidder + Sun-strong → TAKE")
+    S.FinalizeOvercall()
+
+    -- Scenario 14: Bot.PickOvercall — weak hand → WAIVE
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    S.s.hostHands = {
+        [1] = { "8H","7H","8S","7S","8D","7D","8C","7C" },
+        [2] = { "JS","9S","KS","QS","JH","9H","KH","QH" },
+        [3] = { "AS","AH","AD","TS","TH","TD","KD","JD" },
+        [4] = { "AC","TC","9D","JC","9C","QC","QD","KC" },
+    }
+    pick = Bot.PickOvercall(1)
+    assertEq(pick, "WAIVE", "H.14: M3lm bidder + weak hand → WAIVE")
+    S.FinalizeOvercall()
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

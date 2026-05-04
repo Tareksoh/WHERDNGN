@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.7.0-pre1 — Sun-overcall window: Phase 1 (state machine + bot AI)
+
+User-requested feature: post-Hokm-bid 5-second window where the bidder
+may upgrade their Hokm to Sun, AND non-bidder seats may take the
+contract as their own Sun. Implements `Q1=A, Q2=simultaneous-bid-order
+priority, Q3=A, Q4=other-takes-or-bidder-self-upgrade, Q5=before Bel,
+D1=bid-order-priority, D2=no-Takweesh, D3=M3lm+, D4=SWA-style popup`
+from the design discussion.
+
+This release ships **Phase 1 only** — the pure-host state-machine
+primitives, bot AI, and headless tests. Network plumbing (Phase 2)
+and UI (Phase 3) follow in subsequent releases.
+
+### Added (Constants.lua)
+
+- `K.PHASE_OVERCALL = "overcall"` — new game phase between bid
+  resolution and PHASE_DOUBLE.
+- `K.OVERCALL_TIMEOUT_SEC = 5` — 5-second window per spec.
+- `K.BOT_OVERCALL_SELF_TH = 75` — bidder self-upgrade strength.
+- `K.BOT_OVERCALL_TAKE_TH = 80` — non-bidder take strength (stricter).
+
+### Added (Rules.lua)
+
+- `R.CanOvercall(seat, contract, bidCard)` — eligibility predicate.
+  Returns false for forced/Takweesh contracts, Sun contracts, the
+  bidder when bid card is Ace (anti-trap rule), nil inputs.
+- `R.ResolveOvercall(decisions, contract, bidCard, dealerSeat)` —
+  conflict resolver. Bidder UPGRADE wins; otherwise earliest TAKE
+  in bid order (starting from dealer's right).
+
+### Added (State.lua)
+
+- `S.BeginOvercall(bidCard, dealerSeat)` — opens the window,
+  transitions phase to PHASE_OVERCALL, initializes `s.overcall`.
+  Refuses on Sun/forced contracts.
+- `S.RecordOvercallDecision(seat, decision)` — locks in a per-seat
+  decision (UPGRADE/TAKE/WAIVE). Once decided, no take-backs.
+- `S.FinalizeOvercall()` — runs `R.ResolveOvercall`, mutates
+  `s.contract` if an overcall wins (rewrites bidder + clears trump
+  + re-derives defender pair), transitions phase to PHASE_DOUBLE,
+  clears `s.overcall`.
+
+### Added (Bot.lua)
+
+- `Bot.PickOvercall(seat)` returns `"UPGRADE"`, `"TAKE"`, or
+  `"WAIVE"`. Tier-gated: lower-than-M3lm always WAIVE per D3.
+  Uses `sunStrength(hand)` against the two thresholds; respects
+  Ace-bid-card via `R.CanOvercall`.
+
+### Added (tests)
+
+- `test_rules.lua` section P (22 assertions): `R.CanOvercall` +
+  `R.ResolveOvercall` covering bidder UPGRADE, non-bidder TAKE,
+  Ace-bid blocks, forced contracts, bid-order priority,
+  multi-TAKE arbitration across different dealer positions, nil
+  inputs.
+- `test_state_bot.lua` section H (43 assertions): full state-
+  machine integration — BeginOvercall/Record/Finalize lifecycle,
+  contract rewriting on UPGRADE vs TAKE, phase transitions, lock-out
+  semantics, invalid-input rejection, Bot.PickOvercall tier gating
+  + strength-decision sweep.
+
+### Phase-1 explicitly NOT included
+
+- **No networking yet.** `MSG_OVERCALL_TAKE` / `MSG_OVERCALL_WAIVE`
+  / `HostBeginOvercall` / `HostResolveOvercall` are Phase 2.
+- **No UI.** The 5s popup mirroring SWA's flow is Phase 3.
+- **No integration with `S.ApplyContract`.** Existing post-bid
+  flow still goes directly to PHASE_DOUBLE — Phase 2 will hook
+  the overcall window in.
+
+### Tests
+
+- 291/291 regression tests pass (was 226; +65 in sections P + H).
+- Headless tournament unaffected (overcall window not yet wired
+  into the natural game loop).
+
 ## v0.6.1 — BotMaster sampler biases + bidder-branch styleTrumpTempo wire
 
 Three clean wires that were dead infrastructure or partial.

@@ -2895,6 +2895,39 @@ end
 -- option but bots had to play unwinnable hands. Decision is
 -- unconditional: if eligible, call. The hand has no honors, no length,
 -- no scoring potential — redeal is strictly better than playing it.
+-- ---------------------------------------------------------------------
+-- Sun-overcall (Hokm → Sun) decision
+-- ---------------------------------------------------------------------
+-- Returns one of: "UPGRADE", "TAKE", "WAIVE".
+-- Tier-gated: M3lm+ only. Lower tiers always WAIVE — overcall is a
+-- tournament-strategy nuance and should not surprise basic-bot games.
+-- Sources: bot_picker_gaps.md (Sun-overcall feature), user spec.
+function Bot.PickOvercall(seat)
+    if not Bot.IsM3lm() then return "WAIVE" end
+    if not S.s or not S.s.contract or not S.s.overcall then return "WAIVE" end
+    local hand = S.s.hostHands and S.s.hostHands[seat]
+    if not hand or #hand == 0 then return "WAIVE" end
+    local contract = S.s.contract
+    local bidCard  = S.s.overcall.bidCard
+    if not R.CanOvercall(seat, contract, bidCard) then return "WAIVE" end
+
+    local strength = sunStrength(hand)
+    if seat == contract.bidder then
+        -- UPGRADE option (non-Ace-bid only — CanOvercall already
+        -- filters Ace case). Threshold is BOT_OVERCALL_SELF_TH.
+        if strength >= K.BOT_OVERCALL_SELF_TH then
+            return "UPGRADE"
+        end
+        return "WAIVE"
+    end
+    -- Non-bidder TAKE option. Stricter threshold per the
+    -- BOT_OVERCALL_TAKE_TH > BOT_OVERCALL_SELF_TH ordering.
+    if strength >= K.BOT_OVERCALL_TAKE_TH then
+        return "TAKE"
+    end
+    return "WAIVE"
+end
+
 function Bot.PickKawesh(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     if not hand then return false end
