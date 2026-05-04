@@ -981,10 +981,20 @@ local function pickLead(legal, contract, seat)
         -- dominant case. A non-trump boss IS safe in Hokm when
         -- opponents have no trump left to ruff with — verifiable
         -- via S.HighestUnplayedRank(contract.trump) == nil.
+        -- v0.5.3 BUG fix: boss-scan was greedy — returned the FIRST
+        -- boss in hand-iteration order, not the best. With multiple
+        -- bosses on trick 8 (especially when trumpExhausted opens up
+        -- ALL non-trump bosses), throwing a 7-of-spades-boss instead
+        -- of a Ten-of-clubs-boss costs up to 10 face-value points
+        -- PLUS the +10 LAST_TRICK_BONUS goes to whichever card wins
+        -- the trick. Collect all qualifying safe bosses, then pick
+        -- the best by face value (highestByFaceValue is contract-
+        -- aware via C.PointValue).
         if S.HighestUnplayedRank then
             local trumpExhausted = (contract.type == K.BID_HOKM
                                     and contract.trump
                                     and S.HighestUnplayedRank(contract.trump) == nil)
+            local safeBosses = {}
             for _, c in ipairs(legal) do
                 local r = C.Rank(c)
                 local su = C.Suit(c)
@@ -992,7 +1002,10 @@ local function pickLead(legal, contract, seat)
                 local isSafe = (contract.type ~= K.BID_HOKM)
                                 or C.IsTrump(c, contract)
                                 or trumpExhausted
-                if isBoss and isSafe then return c end
+                if isBoss and isSafe then safeBosses[#safeBosses + 1] = c end
+            end
+            if #safeBosses > 0 then
+                return highestByFaceValue(safeBosses, contract)
             end
         end
         -- Else: just lead our highest-rank or highest-face-value
@@ -1955,8 +1968,14 @@ function Bot.PickFour(seat)
         -- don't collapse the threshold below 50% of base.
         local triples = m and (m.triples or 0) or 0
         if triples >= 2 then th = th - 5 end
-        if th < K.BOT_FOUR_TH - 16 then th = K.BOT_FOUR_TH - 16 end
     end
+    -- v0.5.3 BUG fix: lift the floor cap OUT of the IsM3lm() block.
+    -- Even non-M3lm tiers (Basic/Advanced/Fzloky/Master) can drop
+    -- `th` below safe levels via scoreUrgency("defend") and
+    -- matchPointUrgency above. The floor is a defensive cap on the
+    -- combined drop; it should apply unconditionally (matching
+    -- PickDouble's v0.5.2 unconditional floor at line ~1850).
+    if th < K.BOT_FOUR_TH - 16 then th = K.BOT_FOUR_TH - 16 end
     return escalateDecision(strength, th)
 end
 

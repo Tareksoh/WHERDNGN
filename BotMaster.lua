@@ -696,14 +696,32 @@ function BM.PickPlay(seat)
     elseif numTricks <= 5 then numWorlds = 60
     else numWorlds = BASE_NUM_WORLDS end
 
-    for w = 1, numWorlds do
-        local world = sampleConsistentDeal(seat, unseen)
-        if world then
-            for _, card in ipairs(legal) do
-                scores[card] = scores[card]
-                              + rolloutValue(seat, card, world, S.s.contract)
+    -- v0.5.3 BUG fix: wrap the rollout loop in pcall so a mid-rollout
+    -- error (sampler nil-deref, malformed card, ScoreRound edge case)
+    -- cannot escape with B.Bot._inRollout left = true. Without this,
+    -- a single rollout error would silently disable Saudi Master ISMCTS
+    -- for the rest of the session — every subsequent Bot.PickPlay
+    -- would skip the BotMaster delegation guard at Bot.lua and fall
+    -- through to heuristics. The outer pcall in Net.lua's MaybeRunBot
+    -- catches the error but never restores _inRollout, hence this fix.
+    local ok, err = pcall(function()
+        for w = 1, numWorlds do
+            local world = sampleConsistentDeal(seat, unseen)
+            if world then
+                for _, card in ipairs(legal) do
+                    scores[card] = scores[card]
+                                  + rolloutValue(seat, card, world, S.s.contract)
+                end
             end
         end
+    end)
+    if not ok then
+        -- Rollout failed: clear flag, return nil so Bot.PickPlay
+        -- falls through to heuristics. The error itself is silently
+        -- swallowed (no taint risk in Lua 5.1; geterrorhandler() in
+        -- WoW would surface a Lua error message which we don't want
+        -- here for a recoverable degradation).
+        return _restore(nil)
     end
 
     local best, bestScore = legal[1], -math.huge

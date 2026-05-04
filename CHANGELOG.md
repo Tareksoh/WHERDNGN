@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.5.3 — second ultra-test follow-up: 3 BUGs fixed
+
+A 6-agent verification swarm against shipped v0.5.2 surfaced three
+new bugs that the previous round missed. All three are now fixed.
+
+### Fixed (BUGs)
+
+- **BUG #1: `Bot._inRollout` flag leaked on rollout error
+  (BotMaster.lua).** `BM.PickPlay` set `B.Bot._inRollout = true` and
+  relied on the explicit `_restore` calls at every return path. But
+  the rollout loop had no `pcall` around it. If `rolloutValue`,
+  `R.IsLegalPlay`, `C.TrickRank`, or `R.ScoreRound` errored mid-
+  rollout (malformed card, bad meld, nil ref), the error escaped to
+  Net.lua's outer `pcall` — but `_inRollout` was never restored.
+  Every subsequent `Bot.PickPlay` would then skip the BotMaster
+  delegation guard and silently degrade Saudi Master to heuristic
+  for the rest of the session. Now: rollout loop is wrapped in
+  `pcall`; on error, `_restore(nil)` clears the flag and Bot.PickPlay
+  falls through to heuristics for THIS pick only.
+
+- **BUG #2: `PickFour` threshold floor was gated on `Bot.IsM3lm()`
+  (Bot.lua).** v0.5.2's PickDouble unconditional floor cited "matches
+  PickFour's defensive cap" — but PickFour's own floor was INSIDE
+  the IsM3lm() block at line ~1958, so non-M3lm tiers (Basic /
+  Advanced / Fzloky / Master) had no floor at all. With
+  `scoreUrgency("defend")` and `matchPointUrgency` capable of
+  dropping the threshold by 12+, this allowed false-Four bids on
+  hands below the safe minimum strength. Lifted the floor cap OUT
+  of the IsM3lm block so it applies unconditionally — symmetric
+  with PickDouble's v0.5.2 behavior.
+
+- **BUG #3: Trick-8 boss-scan was greedy (Bot.lua pickLead).** The
+  v0.5.2 fix correctly added `trumpExhausted` to isSafe, but the
+  boss-scan loop returned the FIRST boss in hand-iteration order
+  rather than the BEST. With multiple bosses on trick 8 (especially
+  when `trumpExhausted` opens up ALL non-trump bosses), throwing a
+  7-of-spades-boss instead of a Ten-of-clubs-boss costs up to 10
+  face-value points PLUS the +10 LAST_TRICK_BONUS goes to whichever
+  card actually wins. Fix: collect all qualifying safe bosses into
+  a list, then pick by `highestByFaceValue` (which is contract-aware
+  via C.PointValue, correctly handling Hokm / Sun trump-vs-plain
+  scoring).
+
+### Notes
+
+- No data shape changes; v0.5.2 saved games load as v0.5.3 unchanged.
+- All Lua files pass syntax check; 177/177 regression tests pass.
+- 100-round baseline tournament unchanged from v0.5.2 (the fixes
+  affect rare paths: rollout errors, non-M3lm Four bids, and
+  trick-8 multi-boss scenarios — none common enough to shift
+  large-N tournament metrics).
+
 ## v0.5.2 — ultra-test follow-up: 2 BUGs + 3 WARNINGs fixed
 
 A 12-agent ultra-verification swarm read the v0.5.0+v0.5.1 patches
