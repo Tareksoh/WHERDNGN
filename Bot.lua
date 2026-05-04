@@ -1368,25 +1368,33 @@ local function pickLead(legal, contract, seat)
         end
     end
 
-    -- v0.5.10 Section 8 Tahreeb receiver. M3lm+ tier reads partner's
-    -- recorded Tahreeb signals (discards while we were winning) and
-    -- biases the lead. Higher confidence than Fzloky's first-discard
-    -- signal — Tahreeb is a deliberate sender-side encoding, not a
-    -- forced shed. Two-event sequence = ~90% confidence; Bargiya
-    -- (Ace-discard) = strongest single-event invite. Only honor
-    -- when partner is a bot (signals from human partners are noise
-    -- per the same Fzloky reasoning below).
+    -- v0.5.10 Section 8 Tahreeb receiver + v0.5.14 Section 9 N-3
+    -- receiver. M3lm+ tier reads BOTH partner's and opponents'
+    -- recorded Tahreeb signals:
+    --   • Partner positive (want/bargiya) → prefer leading that suit.
+    --   • Partner negative (dontwant)     → avoid leading that suit.
+    --   • Opp positive    (want/bargiya) → avoid (deny opp tempo).
+    --   • Opp negative    (dontwant)     → ignored (low value).
+    -- Bargiya (Ace-discard) = strongest single-event invite; "want" =
+    -- 2-event ascending. Conflict resolution: if partner-pref-suit is
+    -- ALSO in opp-avoid set, drop the partner pref (defending against
+    -- opp's signal dominates partner-help). Only honor when the
+    -- relevant seat is a bot (signals from humans are noise per the
+    -- Fzloky reasoning below).
     -- Sources: decision-trees.md Section 8 (Definite, videos 01,
-    -- 02, 09, 10).
-    local tahreebPrefSuit, tahreebAvoidSuit = nil, nil
+    -- 02, 09, 10) + Section 9 N-3 (Common, video 10).
+    local tahreebPrefSuit = nil
+    local tahreebAvoidSet = {}  -- v0.5.14: revives former dead
+                                -- `tahreebAvoidSuit` — set is now
+                                -- consumed by the conflict-resolution
+                                -- step below.
     if Bot.IsM3lm() and Bot._partnerStyle then
+        -- Partner-side signals: positive = pref, negative = avoid.
         local p = R.Partner(seat)
         if Bot.IsBotSeat(p) then
             local pStyle = Bot._partnerStyle[p]
             local signals = pStyle and pStyle.tahreebSent
             if signals then
-                -- Score each suit; pick the strongest "want"/"bargiya"
-                -- and the strongest "dontwant" if any.
                 local best, bestScore = nil, 0
                 for _, su in ipairs({ "S", "H", "D", "C" }) do
                     -- Don't bias toward trump (leading trump has its
@@ -1399,11 +1407,38 @@ local function pickLead(legal, contract, seat)
                         if score > bestScore then
                             best, bestScore = su, score
                         end
-                        if cls == "dontwant" then tahreebAvoidSuit = su end
+                        if cls == "dontwant" then
+                            tahreebAvoidSet[su] = true
+                        end
                     end
                 end
                 if best then tahreebPrefSuit = best end
             end
+        end
+        -- v0.5.14 Section 9 N-3 receiver: opp positive signals → avoid.
+        -- Opp's "want"/"bargiya" indicates they want their partner to
+        -- lead that suit; we deny them tempo by not leading it.
+        for s = 1, 4 do
+            if R.TeamOf(s) ~= R.TeamOf(seat) and Bot.IsBotSeat(s) then
+                local oStyle = Bot._partnerStyle[s]
+                local osignals = oStyle and oStyle.tahreebSent
+                if osignals then
+                    for _, su in ipairs({ "S", "H", "D", "C" }) do
+                        if su ~= contract.trump then
+                            local cls = tahreebClassify(osignals[su])
+                            if cls == "bargiya" or cls == "want" then
+                                tahreebAvoidSet[su] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- Conflict resolution: if partner pref-suit is in opp-avoid
+        -- set, drop the pref. Denying opp dominates helping partner
+        -- when both signals point at the same suit (rare).
+        if tahreebPrefSuit and tahreebAvoidSet[tahreebPrefSuit] then
+            tahreebPrefSuit = nil
         end
     end
     if tahreebPrefSuit then
@@ -2188,6 +2223,72 @@ local function pickFollow(legal, hand, trick, contract, seat)
             return highestByRank(follow, contract)
         end
     end
+
+    -- v0.5.14 Section 9 N-1 sender (Tanfeer / تنفير).
+    -- When opp is winning AND we're VOID in led (so we're discarding
+    -- from a non-led suit), the discarded SUIT itself signals to
+    -- partner "I want this returned." Inverse of Tahreeb (which uses
+    -- direction-encoding while partner wins); Tanfeer uses suit-
+    -- only positive signaling while opp wins. Pick the LOWEST card
+    -- of a "wanted suit" — a non-trump suit where we hold a high
+    -- card (A or T) and at least one low to spare (so we don't burn
+    -- the high card on a losing trick).
+    --
+    -- N-2 default semantics (decision-trees.md Section 9 N-2):
+    -- "uncertain winner → default to Tahreeb." The pickFollow code
+    -- branches on `partnerWinning` (computed via R.CurrentTrickWinner)
+    -- — it's a best-estimate determination, not certainty.
+    -- The Tahreeb sender block above is the partnerWinning path; the
+    -- Tanfeer sender here is the opp-winning path. Ambiguous-winner
+    -- cases naturally fall to lowestByRank (no encoding) — closer
+    -- to "Tahreeb default" since lowest = positive Tahreeb signal.
+    -- Sufficient for the current rule set; revisit if a future video
+    -- demands explicit uncertain-handling.
+    --
+    -- Tier-gated to M3lm+ (partner-coordination convention) and
+    -- bot-partner-only (signals to humans = noise per Fzloky logic).
+    -- Sources: decision-trees.md Section 9 N-1, N-2 (Common, video 03).
+    if Bot.IsM3lm() and Bot.IsBotSeat(R.Partner(seat))
+       and trick.leadSuit then
+        local voidInLed = true
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == trick.leadSuit then
+                voidInLed = false
+                break
+            end
+        end
+        if voidInLed then
+            -- Find a wanted suit + a low card in it. Prefer the first
+            -- non-trump suit where we have BOTH a high card (A or T)
+            -- AND at least one low (non-A non-T) to spare.
+            for _, su in ipairs({ "S", "H", "D", "C" }) do
+                local skipTrump = (contract.type == K.BID_HOKM
+                                   and su == contract.trump)
+                if not skipTrump then
+                    local hasHigh = false
+                    local lows = {}
+                    for _, c in ipairs(legal) do
+                        if C.Suit(c) == su then
+                            local r = C.Rank(c)
+                            if r == "A" or r == "T" then
+                                hasHigh = true
+                            else
+                                lows[#lows + 1] = c
+                            end
+                        end
+                    end
+                    if hasHigh and #lows >= 1 then
+                        -- Discard lowest non-A non-T → suit signal
+                        -- without burning the high card.
+                        return lowestByRank(lows, contract)
+                    end
+                end
+            end
+            -- No wanted-suit-with-spare-low matched. Fall through to
+            -- lowestByRank.
+        end
+    end
+
     return lowestByRank(legal, contract)
 end
 

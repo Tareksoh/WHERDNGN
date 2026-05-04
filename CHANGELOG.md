@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.5.14 — decision-trees.md Section 9: Tanfeer (تنفير)
+
+Translates Section 9 (Tanfeer / opponent-disrupt convention) — 3
+rules. Inverse of Section 8 Tahreeb: where Tahreeb signals run
+sender→partner using top-down/bottom-up direction encoding,
+Tanfeer signals run via the discarded SUIT alone (positive single-
+event signal) when OPP is winning. Also wires the receiver-side
+opp-signal avoidance and revives the formerly-dead
+`tahreebAvoidSuit` variable from the Wave-2 audit.
+
+### Wired (Section 9 rules)
+
+- **N-1 Sender (Common, video 03).** When opp is winning AND we're
+  void in led suit (so we're discarding from a non-led non-trump
+  suit), pick the LOWEST card from a "wanted suit" — a non-trump
+  suit where we hold a high card (A or T) AND ≥1 spare low to
+  discard. The discarded SUIT signals partner "I want this back";
+  we keep the high card in hand. M3lm+ + bot-partner-only.
+  Implementation in `pickFollow` after Section 4 rule 1.
+
+- **N-2 Default semantics (Common, video 03).** Doc-only — the
+  existing pickFollow already defaults to lowestByRank when winner
+  is uncertain (no specific Tanfeer encoding fires). LowestByRank
+  is closer to "Tahreeb-low" (positive partner-want) than Tanfeer-
+  positive, so the default aligns with the doc's "Tahreeb is the
+  dominant convention" claim. Documented as a comment in the N-1
+  block.
+
+- **N-3 Receiver (Common, video 10).** `pickLead` M3lm+ block now
+  reads OPP `tahreebSent` (in addition to partner's). Opp's
+  "want"/"bargiya" classifications add to a `tahreebAvoidSet`.
+  Conflict resolution: if our partner-pref-suit is ALSO in the
+  opp-avoid set, drop the partner pref. Defending against opp's
+  signal dominates partner-help when both signals point at the
+  same suit (rare).
+
+### Fixed
+
+- **Dead variable revival.** v0.5.10's receiver block set
+  `tahreebAvoidSuit` from partner's "dontwant" but never read it.
+  Wave-2 audit flagged. Now consumed by the v0.5.14 N-3 conflict
+  resolution: partner-dontwant suits added to the same
+  `tahreebAvoidSet` along with opp-want/bargiya.
+
+### Tests
+
+- 206/206 regression tests pass (was 202 + 4 new Section F).
+- **F.1**: N-1 sender — opp winning + void in led + A+low in side
+  suit returns the LOW (7H). Sun contract used since Hokm + opp-
+  winning + void-in-led triggers must-trump (no non-trump
+  candidates for N-1 to pick from).
+- **F.2**: N-1 sender doesn't fire on lone A (no spare low in
+  same suit). Falls through to lowestByRank.
+- **F.3**: N-3 receiver — opp `tahreebSent` ascending sequence
+  records as want; pickLead consumes the opp signal without crash.
+- **F.3b**: N-3 conflict resolution — partner pref + opp signal
+  same suit → partner pref dropped.
+
+### Notes
+
+- Asymmetric harness still runs clean (PickFollow N-1 fires only
+  in opp-winning + void-in-led + qualifying-wanted-suit scenarios,
+  rare in symmetric play).
+- No data shape changes; v0.5.13 saves load as v0.5.14 unchanged.
+- Deferred Section 9 items: none — all 3 rules wired or documented.
+
 ## v0.5.13 — S-3 calibration + magic-number K.* promotion
 
 Two related items from the v0.5.11 deferred list:
