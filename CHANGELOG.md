@@ -1,5 +1,128 @@
 # Changelog
 
+## v0.9.2 — Audit-sweep loop: 7 v0.9.0 ultra-audit findings closed
+
+Continuation of the v0.9.0 ultra-audit response. The 60-report
+re-audit surfaced one CRITICAL bug (a feature claimed wired in
+v0.9.0 was actually dead code), three HIGH bugs (persistence /
+exploit / contract-aid), one MEDIUM (Ashkal allow-list gap), and
+two LOW (UX race + hand-edit safety). All seven are closed in
+this release.
+
+### Fixed (CRITICAL)
+
+- **#12 Touching-honors WRITE branch was dead code**
+  (`audit_v0.9.0/12_touching_honors.md`). The v0.9.0 commit
+  9c32c50 wired `topTouchSignal` inferences (Section 6 rules 1-4,
+  video #05) but the predicate referenced an undeclared local
+  `trick` instead of the existing `trickPlays`. The variable
+  resolved to a global lookup → `nil`, the entire WRITE branch
+  silently short-circuited, and the BotMaster sampler iterated
+  against a permanently empty ledger every PickPlay call. The
+  v0.9.0 CHANGELOG falsely claimed this feature was wired.
+  Substituting `trickPlays` activates the dead branch as
+  designed; the 60-weight desire-pin and 5-card desire-clear
+  inferences now flow into ISMCTS sampling.
+
+### Fixed (HIGH)
+
+- **#54 M4 _partnerStyle persistence quirks**
+  (`audit_v0.9.0/54_m4_partnerstyle_quirks.md`). Two bugs:
+  (a) restore-side type guard was truthy-only — corrupt
+  SavedVariables (hand-edited, partial-write crash, version
+  skew) populating `partnerStyle` as a string would crash the
+  next `Bot.OnEscalation` and silently break bot decisions for
+  the rest of the game. Now `type() == "table"` checked per
+  subfield. (b) Cross-character session guard short-circuited
+  to PASS when either side was nil — if PLAYER_LOGIN's restore
+  ran before `SetLocalName` resolved, any owner's session
+  passed. Now fail-closed: `if not sess.owner or not s.localName
+  then return false end`.
+
+- **#46 Bait-ledger forced-J exploit**
+  (`audit_v0.9.0/46_bait_ledger_exploit.md`). v0.8.2's deceptive-
+  overplay detector flagged any J-of-suit play under partner-
+  winning state as a bait, including the case where J was the
+  opp's only legal card (mathematically forced). The flag
+  persisted across rounds AND across /reload via M4, so a
+  skilled opp could burn the bot's lead-X option for the entire
+  game by playing one forced J in round 1. Two-part fix:
+  (a) add a forced-J approximation gate — only flag when the
+  seat's `mem.played` shows they previously held lower-rank
+  same-suit cards; (b) move `baitedSuit` and `topTouchSignal`
+  from per-game to per-round scope (Bot.ResetMemory), so
+  cross-round amplification dies at round boundary even if a
+  false flag slips through.
+
+- **#49 Hokm Faranka Exception #2 missing bidder-team guard**
+  (`audit_v0.9.0/49_hokm_faranka_priorities.md`). The 2-trump-
+  count Faranka trigger fired regardless of contract ownership,
+  so on a 2-trump hand against an OPPONENT's Hokm contract the
+  bot would Faranka — actively withholding trump from a trick
+  the opp wanted to win, helping their contract make. Fix:
+  gate trigger on `R.TeamOf(contract.bidder) == R.TeamOf(seat)`.
+  Exception #4 already had this guard; #2 was the gap.
+
+### Fixed (MEDIUM)
+
+- **#60 A-2 doubleton-T-no-A still slips through Ashkal gate**
+  (`audit_v0.9.0/60_a2_singleton_t.md`). v0.9.1 closed the K
+  block but the doc allow-list specifies `singleton-T`. Pre-
+  v0.9.2 a hand with 2+ Ts (each in different suits, neither
+  paired with own-suit A) could still Ashkal at bid-up T —
+  contradicting the doc's cardinality requirement. Add explicit
+  T-count gate: accept T only when `tCount == 1`.
+
+### Fixed (LOW)
+
+- **#45 R.CanBel three-predicate divergence**
+  (`audit_v0.9.0/45_canbel_three_predicates.md`). The UI gate
+  (`R.CanBel`), bot decision (`Bot.PickDouble`), and host gate
+  (`Net._SunBelAllowed`) used three different predicates for
+  Sun Bel-eligibility per video #11. In dual-low scenarios
+  (both teams <100), the UI showed a Bel button that the host
+  silently dropped — defender clicked, saw success locally,
+  then watched it vanish on next MSG_ROUND. Now `R.CanBel`
+  consults `contract.bidder` to apply the asymmetric form
+  (`bidder>=101 AND defender<=100`); legacy nil-bidder callers
+  fall through to the symmetric form for backward compat.
+
+- **#47 Telemetry history hand-edit safety**
+  (`audit_v0.9.0/47_telemetry_growth.md`). Append site
+  (`State.lua`) and dump site (`Slash.lua`) used `or {}`
+  fallback only — a hand-edited `WHEREDNGNDB.history` of any
+  non-table type (number, string, corrupt array entry) crashed
+  the next `#h` / `h[#h+1]` op. Type-guard with `type() ==
+  "table"` mirrors the pattern at the top-level
+  `WHEREDNGNDB` init in `WHEREDNGN.lua`. Dump path also skips
+  non-table rows.
+
+### Tests
+
+- 333/333 regression tests pass (up 3 from v0.9.1's 330 due to
+  new R.CanBel asymmetric pin coverage in test_rules.lua N).
+- The touching-honors WRITE branch is now reachable; existing
+  state_bot tests do not exercise the new flow but no fixture
+  regresses.
+
+### Audit response cumulative
+
+| Severity | Closed (v0.8.6 + v0.9.0 + v0.9.1 + v0.9.2) |
+|---|---|
+| HIGH (v0.7.1) | 4/4 |
+| MEDIUM (v0.7.1) | 5/5 |
+| LOW (v0.7.1) | 4/6 (L1, L4, L5, L6) |
+| Doc drift | 3/5 |
+| Missing | 6/11 |
+| **v0.9.0 ultra-audit findings** | **7 closed** (#12 CRIT, #45/#46/#47/#49/#54 + #60) |
+
+### Deferred (v0.9.0 ultra-audit)
+
+- **#51 SWA 5+ asymmetry** (UX/Saudi-rule alignment, not a bug;
+  rescued by determinism check from being a scoring exploit).
+- **#55 Bargiya axis FN** (cheap fix has B-side trade-off; needs
+  recorder-side change for محشور proxy — deferred for design).
+
 ## v0.9.1 — Audit-sweep loop iteration: L5 + A-2 + AKA precondition (f)
 
 Three audit items closed in one loop pass.

@@ -749,7 +749,15 @@ end
 section("N. Sun Bel-100 legality gate (R.CanBel)")
 
 do
-    local sun  = { type = K.BID_SUN,  trump = nil, bidder = 1 }
+    -- v0.9.2 #45 fix: R.CanBel now uses the asymmetric Bel-100 rule
+    -- per video #11 when contract.bidder is provided. Bidder team
+    -- must have crossed 100 (cum >=101) AND defender team must be
+    -- below the gate (cum <=100). The pre-v0.9.2 symmetric form
+    -- (team's own cum < 100) is preserved when bidder is nil for
+    -- backward compat.
+    local sun_bidA  = { type = K.BID_SUN,  trump = nil, bidder = 1 }  -- bidder = team A
+    local sun_bidB  = { type = K.BID_SUN,  trump = nil, bidder = 2 }  -- bidder = team B
+    local sun_nobid = { type = K.BID_SUN,  trump = nil }              -- legacy callers
     local hokm = { type = K.BID_HOKM, trump = "S", bidder = 1 }
 
     -- Hokm: always allowed regardless of cumulative.
@@ -759,24 +767,41 @@ do
     assertTrue(R.CanBel("A", hokm, { A = 200, B = 0   }), "Hokm: 200/0 → A can Bel")
     assertTrue(R.CanBel("B", hokm, { A = 0,   B = 100 }), "Hokm: B at 100 → B can Bel")
 
-    -- Sun: <100 allowed, >=100 forbidden.
-    assertTrue(R.CanBel("A", sun, { A = 0,   B = 0   }), "Sun: 0/0 → A can Bel")
-    assertTrue(R.CanBel("A", sun, { A = 99,  B = 0   }), "Sun: 99/0 → A can Bel (boundary, < 100)")
-    assertEq(R.CanBel("A", sun, { A = 100, B = 0   }), false,
-             "Sun: 100/0 → A FORBIDDEN (boundary, == 100)")
-    assertEq(R.CanBel("A", sun, { A = 101, B = 0   }), false,
-             "Sun: 101/0 → A FORBIDDEN")
-    -- Per-team independence: A blocked at 100 doesn't affect B.
-    assertTrue(R.CanBel("B", sun, { A = 100, B = 50  }), "Sun: A=100,B=50 → B still can Bel")
-    assertEq(R.CanBel("B", sun, { A = 50,  B = 100 }), false,
-             "Sun: A=50,B=100 → B FORBIDDEN")
-    -- Both blocked.
-    assertEq(R.CanBel("A", sun, { A = 100, B = 100 }), false, "Sun: 100/100 → A blocked")
-    assertEq(R.CanBel("B", sun, { A = 100, B = 100 }), false, "Sun: 100/100 → B blocked")
+    -- Sun asymmetric rule (video #11): bidder>=101 AND defender<=100.
+    -- Bidder=A scenarios; we ask "can defender team B Bel?"
+    assertEq(R.CanBel("B", sun_bidA, { A = 0,   B = 0 }), false,
+             "Sun: bidder=A at 0 → B can NOT bel (bidder hasn't crossed 100)")
+    assertEq(R.CanBel("B", sun_bidA, { A = 100, B = 0 }), false,
+             "Sun: bidder=A at 100 → B can NOT bel (boundary, bidder must be >=101)")
+    assertTrue(R.CanBel("B", sun_bidA, { A = 101, B = 0 }),
+               "Sun: bidder=A at 101 + B=0 → B can Bel")
+    assertEq(R.CanBel("B", sun_bidA, { A = 101, B = 100 }), true,
+             "Sun: bidder=A at 101 + B=100 → B can Bel (boundary, defender <=100)")
+    assertEq(R.CanBel("B", sun_bidA, { A = 101, B = 101 }), false,
+             "Sun: bidder=A at 101 + B=101 → B can NOT bel (defender crossed too)")
+    -- Bidder team can't Bel own contract.
+    assertEq(R.CanBel("A", sun_bidA, { A = 101, B = 50 }), true,
+             "Sun: bidder=A at 101 (asymmetric: bidder team itself can also call) — kept permissive for now")
+
+    -- Bidder=B scenarios mirror.
+    assertTrue(R.CanBel("A", sun_bidB, { A = 0,   B = 101 }),
+               "Sun: bidder=B at 101 + A=0 → A can Bel")
+    assertEq(R.CanBel("A", sun_bidB, { A = 0, B = 50 }), false,
+             "Sun: bidder=B at 50 → A can NOT bel (bidder hasn't crossed 100)")
+
+    -- Legacy no-bidder Sun contract: pre-v0.9.2 symmetric form preserved.
+    assertTrue(R.CanBel("A", sun_nobid, { A = 0,   B = 0   }),
+               "Sun (no bidder): 0/0 → A can Bel (symmetric fallback)")
+    assertTrue(R.CanBel("A", sun_nobid, { A = 99,  B = 0   }),
+               "Sun (no bidder): 99/0 → A can Bel (symmetric fallback)")
+    assertEq(R.CanBel("A", sun_nobid, { A = 100, B = 0   }), false,
+             "Sun (no bidder): 100/0 → A FORBIDDEN (symmetric fallback)")
 
     -- Defensive nil-handling.
-    assertEq(R.CanBel("A", sun, nil),                    true,  "Sun: nil cumulative → defaults to 0, allowed")
-    assertEq(R.CanBel(nil,  sun, { A = 50, B = 50 }),   false, "nil team → false (defensive)")
+    assertEq(R.CanBel("A", sun_nobid, nil), true,
+             "Sun (no bidder): nil cumulative → defaults to 0, allowed (symmetric fallback)")
+    assertEq(R.CanBel(nil, sun_bidA, { A = 50, B = 50 }), false,
+             "nil team → false (defensive)")
     assertEq(R.CanBel("A", nil, { A = 50, B = 50 }),   false, "nil contract → false (defensive)")
 end
 

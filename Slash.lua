@@ -230,7 +230,12 @@ local function dispatch(msg)
             say("history capture ON")
             return
         end
-        local h = WHEREDNGNDB.history or {}
+        -- v0.9.2 #47 fix (audit_v0.9.0/47_telemetry_growth.md):
+        -- type-guard the dump path so a hand-edited non-table
+        -- history doesn't crash the slash command. Mirrors the
+        -- append-site guard in State.lua.
+        local h = WHEREDNGNDB.history
+        if type(h) ~= "table" then h = {} end
         local n = tonumber(histArg) or 20
         local total = #h
         if total == 0 then
@@ -242,16 +247,21 @@ local function dispatch(msg)
             total, total == 1 and "" or "s", math.min(n, total)))
         for i = startIdx, total do
             local r = h[i]
-            print(("  r%-3d  %-4s  trump=%-1s bidder=%d  Δ=%+d/%+d  cum=%d/%d  bel=%d trp=%d for=%d gah=%d  swp=%s  made=%d  br%d  bidc=%s"):format(
-                r.roundNumber or 0, r.type or "?",
-                r.trump or "-", r.bidder or 0,
-                r.addA or 0, r.addB or 0,
-                r.totA or 0, r.totB or 0,
-                r.doubled or 0, r.tripled or 0, r.foured or 0, r.gahwa or 0,
-                (r.sweep ~= "" and r.sweep) or "-",
-                r.bidderMade or -1,
-                r.bidRound or 0,
-                r.bidCard or "-"))
+            -- v0.9.2 #47: skip non-table rows (corrupt hand-edits)
+            -- to prevent `r.field` indexing crashes on a string/
+            -- number row.
+            if type(r) == "table" then
+                print(("  r%-3d  %-4s  trump=%-1s bidder=%d  Δ=%+d/%+d  cum=%d/%d  bel=%d trp=%d for=%d gah=%d  swp=%s  made=%d  br%d  bidc=%s"):format(
+                    r.roundNumber or 0, r.type or "?",
+                    r.trump or "-", r.bidder or 0,
+                    r.addA or 0, r.addB or 0,
+                    r.totA or 0, r.totB or 0,
+                    r.doubled or 0, r.tripled or 0, r.foured or 0, r.gahwa or 0,
+                    (r.sweep ~= "" and r.sweep) or "-",
+                    r.bidderMade or -1,
+                    r.bidRound or 0,
+                    r.bidCard or "-"))
+            end
         end
         say(("see SavedVariables/WHEREDNGN.lua for the full table " ..
              "(WHEREDNGNDB.history)"))

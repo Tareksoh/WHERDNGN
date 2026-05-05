@@ -491,9 +491,47 @@ function R.CanBel(team, contract, cumulative)
     if contract.type ~= K.BID_SUN then
         return true                         -- Hokm: always allowed
     end
-    -- Sun: team at >= K.SUN_BEL_CUMULATIVE_GATE is forbidden from Bel.
-    -- v0.5.13: 100 promoted to K.* constant for ruleset-variant tunability.
+    -- Sun: per video #11, the Bel-eligibility predicate is asymmetric:
+    --   • bidder team must have ALREADY crossed 100 (cumulative >=101)
+    --     — Bel is a counter-escalation against an entrenched bidder
+    --   • defender team must be BELOW 100 (cumulative <=100) — gates
+    --     the team allowed to escalate.
+    --
+    -- v0.9.2 #45 fix (audit_v0.9.0/45_canbel_three_predicates.md):
+    -- pre-v0.9.2 `R.CanBel` used a SYMMETRIC `mine < 100` predicate
+    -- — passed only the defender's own cumulative. This contradicted
+    -- `Net._SunBelAllowed` (the host-side gate at Net.lua:68), which
+    -- correctly enforced the asymmetric form. The divergence created
+    -- a UX race: in dual-<100 scenarios (e.g., 80/50), the UI gate
+    -- (R.CanBel) said TRUE → Bel button rendered → defender clicked
+    -- → host's `_OnDouble` phase guard silently dropped it (host had
+    -- already advanced past PHASE_DOUBLE). Defender saw their click
+    -- "succeed locally then vanish."
+    --
+    -- Now: when contract.bidder is provided, gate against BOTH the
+    -- defender's cumulative AND the bidder's cumulative crossing the
+    -- BEL_CUMULATIVE_GATE. This collapses the three-predicate set
+    -- (R.CanBel UI gate, Bot.PickDouble strength gate, _SunBelAllowed
+    -- host gate) to one consistent source of truth.
+    --
+    -- Backwards compatibility: callers that don't pass contract.bidder
+    -- (or pass a contract with bidder=nil) fall through to the
+    -- pre-v0.9.2 symmetric form so legacy fixtures still pass.
     local mine = (cumulative and cumulative[team]) or 0
+    if contract.bidder then
+        local bidderTeam = R.TeamOf(contract.bidder)
+        local bidderCum = (cumulative and bidderTeam and cumulative[bidderTeam]) or 0
+        -- bidder must be STRICTLY past the gate (>=101 ≡ > 100), AND
+        -- defender must be at-or-below the gate (<=100). With
+        -- K.SUN_BEL_CUMULATIVE_GATE=100, the comparisons are:
+        --   bidderCum > GATE  (i.e., bidderCum >= 101)
+        --   defenderCum <= GATE  (i.e., defenderCum <= 100)
+        if bidderCum <= K.SUN_BEL_CUMULATIVE_GATE then return false end
+        if team ~= bidderTeam and mine > K.SUN_BEL_CUMULATIVE_GATE then
+            return false
+        end
+        return true
+    end
     return mine < K.SUN_BEL_CUMULATIVE_GATE
 end
 

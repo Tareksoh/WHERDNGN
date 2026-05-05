@@ -67,12 +67,23 @@ N.Whisper   = whisper
 -- Hokm has no such gate (Bel/Triple/Four open from any score).
 function N._SunBelAllowed(bidderSeat)
     if not bidderSeat then return false end
-    local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
-    local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+    -- v0.9.2 #45 unification (audit_v0.9.0/45_canbel_three_predicates.md):
+    -- defer to R.CanBel which now encodes the same asymmetric rule.
+    -- Pre-v0.9.2 these two predicates disagreed (R.CanBel was symmetric)
+    -- and produced a UX race where the Bel button rendered briefly
+    -- before being silently dropped by the host. Now both call sites
+    -- read the same predicate.
+    --
+    -- This function asks "is ANY defender allowed to Bel?" Since the
+    -- asymmetric rule treats both defenders symmetrically (only the
+    -- bidder cum + defender cum matter), checking either defender
+    -- team is equivalent.
     local bidderTeam = R.TeamOf(bidderSeat)
-    local cumBidder   = (bidderTeam == "A") and cumA or cumB
-    local cumDefender = (bidderTeam == "A") and cumB or cumA
-    return cumBidder >= 101 and cumDefender < 101
+    if not bidderTeam then return false end
+    local defenderTeam = (bidderTeam == "A") and "B" or "A"
+    return R.CanBel(defenderTeam,
+                    { type = K.BID_SUN, bidder = bidderSeat },
+                    S.s.cumulative)
 end
 
 -- High-level senders. These are called by State / UI; they format and

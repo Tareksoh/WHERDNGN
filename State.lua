@@ -295,9 +295,17 @@ function S.RestoreSession()
     end
     -- Cross-character guard. WHEREDNGNDB is per-account; a session
     -- saved by character A must not restore on character B.
-    if sess.owner and s.localName and sess.owner ~= s.localName then
-        return false
-    end
+    --
+    -- v0.9.2 #54 fail-closed (audit_v0.9.0/54_m4_partnerstyle_quirks.md):
+    -- previous predicate `if sess.owner and s.localName and ...` would
+    -- short-circuit to PASS when EITHER side was nil. If
+    -- PLAYER_LOGIN's RestoreSession path runs before the local-name
+    -- has resolved (`SetLocalName(GetUnitName("player", true))`),
+    -- s.localName is nil and any owner's session passes the guard
+    -- → cross-character data leak. Fail closed: require BOTH sides
+    -- present AND matching.
+    if not sess.owner or not s.localName then return false end
+    if sess.owner ~= s.localName then return false end
     if not sess.state then return false end
     -- Hard-reset s, then overlay the saved fields. Without the wipe a
     -- field that was nil at save time would carry over from reset()'s
@@ -345,14 +353,21 @@ function S.RestoreSession()
     end
     -- v0.9.0 M4 fix: rehydrate Bot module-level state. Defensive nil
     -- guards — older session snapshots won't have a `.bot` field.
+    -- v0.9.2 #54 fix (audit_v0.9.0/54_m4_partnerstyle_quirks.md):
+    -- TYPE-check each subfield before assigning. A corrupted
+    -- SavedVariables (hand-edited, partial-write crash, version
+    -- skew) could populate these as strings/numbers; assigning
+    -- them blindly causes downstream nil-index crashes the moment
+    -- any consumer indexes them. `type() == "table"` is the same
+    -- pattern WHEREDNGN.lua uses for the top-level `WHEREDNGNDB`.
     if sess.bot and B.Bot then
-        if sess.bot.partnerStyle then
+        if type(sess.bot.partnerStyle) == "table" then
             B.Bot._partnerStyle = sess.bot.partnerStyle
         end
-        if sess.bot.memory then
+        if type(sess.bot.memory) == "table" then
             B.Bot._memory = sess.bot.memory
         end
-        if sess.bot.r1WasAllPass ~= nil then
+        if type(sess.bot.r1WasAllPass) == "boolean" then
             B.Bot.r1WasAllPass = sess.bot.r1WasAllPass
         end
     end
@@ -1462,7 +1477,16 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     -- Sources: v0.5_FINAL_REPORT Priority 1 — Bel calibration from
     -- real game data; menu item #4 in design discussion.
     if WHEREDNGNDB and WHEREDNGNDB.historyEnabled ~= false and s.contract then
-        WHEREDNGNDB.history = WHEREDNGNDB.history or {}
+        -- v0.9.2 #47 fix (audit_v0.9.0/47_telemetry_growth.md): the
+        -- pre-v0.9.2 init was `or {}` only — a hand-edited
+        -- WHEREDNGNDB.history of any non-table type (number, string,
+        -- corrupt array entry like `{"oops"}`) survived the OR fallback
+        -- and crashed the very next `#h` / `h[#h+1]` operation. Mirror
+        -- the type-guard pattern used at the top-level WHEREDNGNDB
+        -- init in WHEREDNGN.lua's PLAYER_LOGIN handler.
+        if type(WHEREDNGNDB.history) ~= "table" then
+            WHEREDNGNDB.history = {}
+        end
         local h = WHEREDNGNDB.history
         local row = {
             roundNumber  = s.roundNumber or 0,

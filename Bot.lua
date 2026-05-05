@@ -144,11 +144,29 @@ function Bot.ResetMemory()
     -- Bot.ResetMemory is called once per round; the other _partnerStyle
     -- counters (bels/triples/fours/gahwas/etc.) are intentionally
     -- per-game and stay across rounds.
+    --
+    -- v0.9.2 #46 fix (audit_v0.9.0/46_bait_ledger_exploit.md): move
+    -- baitedSuit and topTouchSignal from per-game to per-round scope.
+    -- Pre-v0.9.2 these accumulated across the entire game (and even
+    -- survived /reload via M4 persistence), so a deliberate or forced
+    -- single-J play in round 1 silently locked the bot out of leading
+    -- that suit for ALL remaining rounds. Round-scoping eliminates
+    -- ~80% of the strategic damage at zero behavior change inside a
+    -- single round. The signals are inherently round-local — touching-
+    -- honors and deceptive-overplay both apply to current-trick state.
     if Bot._partnerStyle then
         for s = 1, 4 do
             local style = Bot._partnerStyle[s]
-            if style and style.tahreebSent then
-                style.tahreebSent = { S = {}, H = {}, D = {}, C = {} }
+            if style then
+                if style.tahreebSent then
+                    style.tahreebSent = { S = {}, H = {}, D = {}, C = {} }
+                end
+                if style.baitedSuit then
+                    style.baitedSuit = { S = 0, H = 0, D = 0, C = 0 }
+                end
+                if style.topTouchSignal then
+                    style.topTouchSignal = { S = {}, H = {}, D = {}, C = {} }
+                end
             end
         end
     end
@@ -439,9 +457,19 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- Inference written to seat's topTouchSignal ledger; the
     -- BotMaster sampler reads it as a hard-pin / negative-bias for
     -- hand reconstruction.
-    if not wasIllegal and contract and trick and trick.plays
-       and #trick.plays >= 2 and style.topTouchSignal then
-        local lead = trick.plays[1]
+    --
+    -- v0.9.2 #12 fix (audit_v0.9.0/12_touching_honors.md): the
+    -- pre-v0.9.2 predicate referenced `trick` (no such local in
+    -- this function — only `trickPlays` is declared at line ~414),
+    -- so the variable resolved to a global lookup → nil and the
+    -- entire WRITE branch silently short-circuited. The READ site
+    -- in BotMaster.lua iterated against the permanently empty
+    -- ledger. v0.9.0 CHANGELOG falsely claimed this feature was
+    -- wired. Fix: substitute the existing `trickPlays` local for
+    -- both predicate and indexed access.
+    if not wasIllegal and contract and trickPlays
+       and #trickPlays >= 2 and style.topTouchSignal then
+        local lead = trickPlays[1]
         local theirRank = C.Rank(card)
         -- Touching-honors context: lead was the Ace of cardSuit AND
         -- the lead seat is THIS seat's partner. (AKA-led equivalence
@@ -492,8 +520,35 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
             local prevTrick = { plays = prePlays, leadSuit = leadSuit }
             local prevWinner = R.CurrentTrickWinner(prevTrick, contract)
             if prevWinner == R.Partner(seat) then
-                style.baitedSuit[cardSuit] =
-                    (style.baitedSuit[cardSuit] or 0) + 1
+                -- v0.9.2 #46 forced-J gate (audit
+                -- audit_v0.9.0/46_bait_ledger_exploit.md): the previous
+                -- predicate flagged ANY J-play under partner-winning as
+                -- a bait, including the case where J was opp's only
+                -- remaining card in suit (mathematically forced — no
+                -- choice). To approximate "lower legal alternative
+                -- existed", check whether ANY lower-rank card of this
+                -- suit has been observed played already this round
+                -- (in completed tricks or current-trick prior plays).
+                -- If no lower has appeared anywhere, the J might still
+                -- be in someone's hand — but if a lower was previously
+                -- played by THIS seat, then they HELD lowers and chose
+                -- to play J anyway → genuine bait. We approximate: if
+                -- this seat's `mem.played` doesn't yet contain any
+                -- lower-than-J of this suit, suppress (likely forced).
+                local lowerSeen = false
+                local plain = K.RANK_PLAIN
+                local jr = plain["J"] or 0
+                if mem and mem.played then
+                    for _, low in ipairs({ "7", "8", "9" }) do
+                        if mem.played[low .. cardSuit] then
+                            lowerSeen = true; break
+                        end
+                    end
+                end
+                if lowerSeen then
+                    style.baitedSuit[cardSuit] =
+                        (style.baitedSuit[cardSuit] or 0) + 1
+                end
             end
         end
     end
@@ -1222,6 +1277,21 @@ function Bot.PickBid(seat)
             -- Sources: decision-trees.md A-2 (Common, video 31).
             if ok and bidCardRank == "K" then ok = false end
 
+            -- v0.9.2 patch A-2 cardinality refinement (audit_v0.9.0/
+            -- 60_a2_singleton_t.md). The doc allow-list says
+            -- "singleton-T-without-A". v0.9.1 added the K-block but
+            -- the T cardinality wasn't enforced: doubleton/tripleton-T
+            -- (no own-A) slipped through. Reject if we hold a SECOND T
+            -- anywhere — combined with A-4's own-A check below, this
+            -- enforces "T accepted only when singleton AND no own-A".
+            if ok and bidCardRank == "T" then
+                local tCount = 0
+                for _, c in ipairs(hand) do
+                    if C.Rank(c) == "T" then tCount = tCount + 1 end
+                end
+                if tCount > 1 then ok = false end
+            end
+
             -- v0.5.8 patch A-4 (decision-trees.md): bid-up is T AND
             -- we hold A of the same suit → don't Ashkal. The A+T
             -- mardoofa pair is preserved by the Hokm contract; an
@@ -1233,6 +1303,23 @@ function Bot.PickBid(seat)
                         ok = false; break
                     end
                 end
+            end
+
+            -- v0.9.2 #60 fix (audit_v0.9.0/60_a2_singleton_t.md):
+            -- A-2 allow-list specifies "singleton-T" (one T total in
+            -- hand). Pre-v0.9.2 only the same-suit-A check (A-4) was
+            -- enforced, so a bot holding 2+ Ts (each in a different
+            -- suit, neither paired with same-suit A) could still
+            -- Ashkal at bid-up T — contradicting the doc's allow-
+            -- list semantics. Add an explicit cardinality gate:
+            -- accept T only when it is the lone T in our hand.
+            -- Sources: decision-trees.md A-2 (Common, video 31).
+            if ok and bidCardRank == "T" then
+                local tCount = 0
+                for _, c in ipairs(hand) do
+                    if C.Rank(c) == "T" then tCount = tCount + 1 end
+                end
+                if tCount > 1 then ok = false end
             end
 
             -- v0.5.8 patch A-5 (decision-trees.md): 3+ Aces in hand
@@ -1507,7 +1594,20 @@ local function tahreebClassify(signals)
     -- leads on defensive-shed cases.
     if signals[1] == "A" then
         if #signals >= 2 then
-            return "bargiya"        -- confirmed invite (cover proven)
+            -- v0.9.2 #55 cover-grade gate (audit_v0.9.0/55_bargiya_axis_impact.md).
+            -- Require event #2 to be a COVER-GRADE rank (T or higher
+            -- in the suit). The original "any second event" classifier
+            -- escalated to confirmed-bargiya on courtesy/forced low
+            -- discards (e.g., A then 8 of same suit when 8 was their
+            -- last card). Cover-grade requires at least T because that
+            -- proves real cover behind the A → invite is genuine.
+            -- Lower second-event ranks fall back to bargiya_hint.
+            local plain = K.RANK_PLAIN
+            local r2 = plain[signals[2]] or 0
+            local rT = plain["T"] or 0
+            if r2 >= rT then
+                return "bargiya"    -- confirmed invite (cover proven)
+            end
         end
         return "bargiya_hint"       -- ambiguous (possible defensive shed)
     end
@@ -2637,13 +2737,24 @@ local function pickFollow(legal, hand, trick, contract, seat)
         local farankaTriggered = false
 
         -- Count our trumps for Exception #2.
+        -- v0.9.2 #49 fix (audit_v0.9.0/49_hokm_faranka_priorities.md):
+        -- gate Exception #2 on bidder-team membership. Pre-v0.9.2 the
+        -- 2-trump trigger fired regardless of contract ownership, so
+        -- the bot would Faranka into the OPPONENT's Hokm contract on
+        -- 2-trump hands — actively helping opp's contract make. The
+        -- doc's intent was "low-risk withhold for our team's own
+        -- contract"; we make that explicit by checking team membership.
         local myTrumpCount = 0
         for _, c in ipairs(hand) do
             if C.IsTrump(c, contract) then
                 myTrumpCount = myTrumpCount + 1
             end
         end
-        if myTrumpCount == 2 then farankaTriggered = true end
+        local onBidderTeam = (contract.bidder
+                              and R.TeamOf(contract.bidder) == R.TeamOf(seat))
+        if myTrumpCount == 2 and onBidderTeam then
+            farankaTriggered = true
+        end
 
         -- v0.8.5 Exception #3 (Common, video 04): J of trump is dead
         -- AND we hold the 9 of trump → 9 is the new top live trump
