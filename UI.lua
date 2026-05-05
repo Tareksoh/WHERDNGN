@@ -3031,31 +3031,75 @@ local function renderBanner()
     -- Takweesh result (caught-or-false-call) takes priority over the
     -- normal score breakdown, with the offending card + reason called
     -- out so the player learns WHY the call succeeded.
-    -- SWA result banner: same priority position as Takweesh — both
-    -- replace the normal score breakdown with the claim's outcome.
+    -- SWA result banner: same priority position as Takweesh — but
+    -- v0.11.2 user-reported UX: the SWA banner no longer REPLACES the
+    -- normal score breakdown. Instead it overrides only the title
+    -- (with an "SWA verified / SWA failed" prefix) and shows the same
+    -- per-team breakdown rows the regular round-end banner shows.
+    -- WIN/LOST is computed from the actual score delta (relative to
+    -- local team), not from SWA validity — a valid claim can still
+    -- coincide with a contract loss when the bidder team's trick
+    -- points fall short of the make threshold.
     if S.s.swaResult then
         local sw = S.s.swaResult
-        local d = S.s.lastRoundDelta or { A = 0, B = 0 }
+        local r  = S.s.lastRoundResult
+        local d  = S.s.lastRoundDelta or { A = 0, B = 0 }
         local cName = (sw.caller and S.s.seats[sw.caller]
                        and shortName(S.s.seats[sw.caller].name)) or "?"
-        local callerTeam = sw.caller and R.TeamOf(sw.caller)
-        local oppTeam = callerTeam and ((callerTeam == "A") and "B" or "A") or nil
+
+        -- WIN/LOST relative to actual round outcome (score delta),
+        -- NOT to SWA validity. Tied delta → no headline.
+        local roundWinner = nil
+        if (d.A or 0) > (d.B or 0) then roundWinner = "A"
+        elseif (d.B or 0) > (d.A or 0) then roundWinner = "B"
+        end
+        setOutcome(roundWinner)
+
         banner:Show()
         if sw.valid then
-            -- valid SWA → caller's team wins
-            setOutcome(callerTeam)
             banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
-            banner.title:SetText(("|cffffd055SWA!|r %s claimed the rest%s"):format(
-                cName, yaMrw7(oppTeam)))
-            banner.bidder:SetText("Claim verified — all remaining tricks awarded.")
+            banner.title:SetText(
+                ("|cffffd055SWA!|r %s claimed — |cff66ff88verified|r"):format(cName))
         else
-            -- invalid SWA → opp team wins (penalty paid by caller)
-            setOutcome(oppTeam)
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
-            banner.title:SetText(("|cffff5544SWA failed|r — %s claimed wrongly%s"):format(
-                cName, yaMrw7(callerTeam)))
-            banner.bidder:SetText("Penalty applied (full hand to opponents).")
+            banner.title:SetText(
+                ("|cffff5544SWA failed|r — %s claimed wrongly"):format(cName))
         end
+
+        -- Show the regular per-team breakdown (mirrors the host's
+        -- full breakdown path below) when lastRoundResult is available.
+        -- Non-host fallback: show the SWA explanation in the bidder line.
+        if r and r.bidderTeam and r.teamPoints and r.meldPoints then
+            local bidT = r.bidderTeam
+            local oppT = (bidT == "A") and "B" or "A"
+            banner.bidder:SetText(("%s: cards %d + melds %d"):format(
+                teamLabel(bidT), r.teamPoints[bidT] or 0, r.meldPoints[bidT] or 0))
+            banner.defender:SetText(("%s: cards %d + melds %d"):format(
+                teamLabel(oppT), r.teamPoints[oppT] or 0, r.meldPoints[oppT] or 0))
+            local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN)
+                and "Sun" or "Hokm"
+            local mods = { typeStr }
+            if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Bel" end
+            if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
+            if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
+            if S.s.contract and S.s.contract.gahwa  then mods[#mods + 1] = "Gahwa (match-win)" end
+            if r.multiplier and r.multiplier > 1 then
+                mods[#mods + 1] = ("×%d"):format(r.multiplier)
+            end
+            banner.modifiers:SetText("|cffaaaaaa" .. table.concat(mods, "  ·  ") .. "|r")
+            if r.belote then
+                banner.belote:SetText(("Belote (K+Q ♥): %s +20 raw"):format(
+                    teamLabel(r.belote)))
+            end
+        else
+            -- Degraded (non-host or pre-host-result) view: keep the
+            -- SWA explanation visible in the bidder slot rather than
+            -- showing a blank breakdown.
+            banner.bidder:SetText(sw.valid
+                and "Claim verified — all remaining tricks awarded."
+                or  "Penalty applied (full hand to opponents).")
+        end
+
         banner.final:SetText(("%s +%d   %s +%d"):format(
             colorTeam("A", "A"), d.A or 0,
             colorTeam("B", "B"), d.B or 0))

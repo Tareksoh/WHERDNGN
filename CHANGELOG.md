@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.11.2 — SWA banner UX: per-team breakdown + WIN/LOST relative to round outcome
+
+User-reported UX hotfix surfaced from a screenshot: the SWA result
+banner was overwriting the regular round-end score breakdown, and
+its "WIN" headline was driven by SWA-validity rather than the actual
+round outcome. Concretely the user's screenshot showed: team A bid
+HOKM, Bot 3 (team A) called SWA, claim was verified, but team A's
+trick total fell short of the make threshold so team B got +20 raw.
+The banner showed a green "WIN" headline despite team A losing the
+contract, and the regular per-team cards-and-melds breakdown was
+hidden behind the SWA's three-line text.
+
+### Fixed
+
+- **`UI.lua:3036` `renderBanner` SWA branch (UX, MED)** — the SWA
+  banner now:
+  - Computes WIN/LOST from the actual round score delta
+    (`lastRoundDelta`) relative to the local team — replacing the
+    prior `setOutcome(callerTeam)` proxy which used SWA validity.
+    A valid SWA claim can still coincide with a contract loss when
+    the bidder team's trick points fall short of the make threshold
+    (and likewise an invalid claim can coincide with a sweep
+    elsewhere); the score delta is the only authoritative source
+    of round outcome.
+  - Shows the same per-team breakdown as the regular round-end path
+    (`bidderTeam: cards X + melds Y`, `defenderTeam: cards X + melds
+    Y`, modifiers row with contract type + Bel/Triple/Four/Gahwa +
+    multiplier, Belote line if applicable) instead of replacing those
+    rows with a single `Claim verified — all remaining tricks
+    awarded.` line. The SWA-specific text is now confined to the
+    banner title.
+  - Title becomes either `SWA! <name> claimed — verified` (green
+    backdrop) or `SWA failed — <name> claimed wrongly` (red
+    backdrop).
+  - Non-host degraded view (no `lastRoundResult` broadcast yet) keeps
+    the prior single-line explanation in the bidder slot as a
+    graceful fallback.
+
+  Preserved: the `final` score-delta line stays unchanged at the
+  bottom (`A +X   B +Y` with team-color highlights). Sounds (e.g.
+  `SND_HOKM_LOST` from State.lua) continue to fire through the
+  existing State.lua paths — no Sound code touched.
+
+### Investigated, not reproduced
+
+- **Sun overcall bottom contract banner not updating** (user-reported,
+  same message): traced the wire flow end-to-end and could not find
+  a code-level bug. After `S.FinalizeOvercall` mutates `s.contract`
+  (host-side) and `S.ApplyContract` is called via `MSG_CONTRACT`
+  receive (client-side), the bottom contract strip in `renderStatus`
+  reads `S.s.contract.type` / `.trump` / `.bidder` on every UI
+  refresh and rebuilds the text unconditionally — there's no caching
+  layer that could hold stale values. The dispatcher fires `UI.Refresh`
+  after every `CHAT_MSG_ADDON` event (`Net.lua:677`), and the host's
+  `_HostResolveOvercall` calls `UI.Refresh` explicitly at line 1345
+  (or via `HostFinishDeal` in the Sun-Bel-skip path).
+
+  If the user can reproduce reliably, useful diagnostics would be:
+  - Were they host or client when the bug fired?
+  - The SavedVariables `WHEREDNGN.lua` dump at the moment of the bug
+    (specifically `WHEREDNGN.s.contract` and `WHEREDNGN.s.phase`)
+  - Whether the chat showed the `Sun overcall by <name>` log line
+  - A screenshot of the moment AFTER the resolve
+
+  Filing as `OPEN-1` for now; ready to fix once we have a repro.
+
+### Tests
+
+- `429 / 429 pass` — no test changes (UI.lua doesn't have a Lua
+  harness; the change is mechanical and source-isolated to the SWA
+  banner branch).
+
 ## v0.11.1 — C-14 BotMaster heuristicPick → Bot.PickPlay delegation
 
 Single architectural fix: the audit-flagged HIGH item from v0.11.0's
