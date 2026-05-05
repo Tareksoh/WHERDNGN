@@ -1,5 +1,162 @@
 # Changelog
 
+## v0.10.5 — scoring-track audit closures (HIGH-2 + 4 MED + helpers + UI hotfix)
+
+10-agent scoring sub-audit (S-Score-01..10) traced end-to-end
+scoring pipelines that per-function audits couldn't see.
+**Verdict: scoring is broadly correct; HIGH-1 was already shipped
+in v0.10.4; HIGH-2 + 4 MED gaps close in this release.** Plus
+two shared helpers extract divergent logic that had been
+duplicated (and drifting) across 3 call sites each. Plus
+user-reported UI hotfix for round-end "Next Round" stick.
+
+### Fixed (UI hotfix — round-end "Next Round" sticks for human host)
+
+- **`Net.lua:N.HostStartRound` + `N.HostFinishDeal`**: both
+  functions advance host-side state and rely on the subsequent
+  bot action's loopback to trigger `B.UI.Refresh()`. When the
+  new round's first bidder (HostStartRound) or trick-1 leader
+  (HostFinishDeal) is the human host, no bot fires → no loopback
+  → UI stays on the prior PHASE_SCORE view. The Awal sound still
+  plays because it's queued from `S.ApplyStart`, but the bid
+  panel / play table never renders. **User-reported: "sometimes
+  the round ends screen gets stuck even when pushing the next
+  round button, you hear awal sound but it does not show you
+  cards."** Fix: explicit `B.UI.Refresh()` at the tail of both
+  functions. Harmless when a bot DID fire (Refresh runs again
+  on the bot's loopback).
+
+### Fixed (HIGH-2 — Reverse Al-Kaboot type-blind defender over-pay)
+
+- **`Constants.lua` new `K.AL_KABOOT_REVERSE = 88`**: per video #16
+  (canonical Saudi reverse Al-Kaboot / الكبوت المقلوب), defender
+  sweep is awarded uniformly 88 raw across contracts — not the
+  forward-AK 250/220.
+- **`Rules.lua` `R.ScoreRound` sweep block**: branch on bidder-team
+  vs defender-team detection. Forward-AK (bidder team sweeps):
+  existing 250/220 logic unchanged. Reverse-AK (defender team
+  sweeps): gated on `tricks[1].plays[1].seat == contract.bidder`.
+  If bidder didn't lead trick 1, the sweep falls through to
+  normal scoring (no AK bonus). The gating reflects the canonical
+  Saudi asymmetry — forward-AK rewards crushing the contract;
+  reverse-AK is a smaller "humiliation" payout that requires the
+  bidder to have actively engaged.
+
+  **Pre-v0.10.5 over-paid defender by ~16 gp/round (Hokm) or
+  ~35 gp/round (Sun) — game-deciding in a 152-target match.**
+  Source: S-Score-06.
+
+### Fixed (MED-1 — Belote-cancellation team-level rule shared helper)
+
+- **`Rules.lua` new `R.IsBeloteCancelled(team, meldsByTeam)`**:
+  the canonical post-v0.9.0 M5 team-level form.
+- **3 call sites consolidated**: `R.ScoreRound`,
+  `Net.HostResolveTakweesh`, `Net.HostResolveSWA` (invalid SWA
+  branch). Pre-v0.10.5 the Net.lua qaid handlers used a
+  `m.declaredBy == kWho` SAME-PLAYER check, which missed
+  cancellation when the K+Q holder's PARTNER declared the ≥100
+  meld — over-crediting the bidder team by +2 gp on Qaid-context
+  rounds. Source: S-Score-07.
+
+### Fixed (MED-2 — Game-end H3 tiebreak shared helper)
+
+- **`Rules.lua` new `R.GameEndWinner(cumA, cumB, target, result)`**:
+  canonical post-v0.8.6 H3 logic — Gahwa winner > bidderMade-side
+  > defensive "A".
+- **3 call sites consolidated**: `Net.lua` normal round-end (was
+  already canonical), Takweesh, SWA-invalid (both used pre-v0.8.6
+  raw bidder-team logic that could award the match to the OFFENDER
+  team on simultaneous-target hits during Qaid resolution).
+  Source: S-Score-08.
+
+### Fixed (MED-3 — Gahwa Sun-stale-flag defensive type-gate)
+
+- **`Rules.lua` Gahwa match-win branch**: type-gated on
+  `contract.type == K.BID_HOKM`. Sun has no Gahwa rung; a stale
+  `contract.gahwa = true` on a Sun contract (resync, hostile peer,
+  incomplete reset) would otherwise fire a spurious match-win.
+  The multiplier path (lines 904-913) and inversion path (825-832)
+  already collapse Sun's stale tripled/foured/gahwa flags
+  defensively; this branch was missed. Source: S-Score-02 +
+  S-Score-08.
+
+### Fixed (MED-4 — Belote sweep-override / cancellation ordering)
+
+- **`Rules.lua` `R.ScoreRound`**: cancellation walk now runs
+  BEFORE sweep-override. Pre-v0.10.5 ordering: sweep-override
+  flipped Belote ownership to the sweeping team FIRST, then
+  cancellation walked meldsByTeam for the (possibly-flipped)
+  Belote owner. In rare configs where the K+Q-holder's team had
+  a ≥100 meld AND the OTHER team swept, the override moved
+  Belote to the sweeper before cancellation could fire — net
+  ~2 gp swing. Source: S-Score-04 + B-Rules-02 F-01.
+
+### Doc — citation drift fixes
+
+- **`docs/strategy/saudi-rules.md` Q1**: stale `Rules.lua:694`
+  reference (was line of `R.ScoreRound` start) refreshed to
+  current `~795` (Belote-Hokm gate inside that function).
+- **`docs/strategy/glossary.md`**: "Match target | 152 raw"
+  corrected to "152 game points" — the target is compared against
+  per-team cumulative GAME points after div10 rounding, not raw.
+- **`CLAUDE.md`**: "Bidder fails on tied 81/162" extended to
+  cover Sun's 65/130 threshold too. Both Hokm and Sun require
+  strictly more than half; doc previously implied Hokm-only.
+
+### Tests
+
+- **`tests/test_rules.lua` Section H.10-H.13**: Reverse Al-Kaboot
+  pins (Hokm reverse → 88 raw, Sun reverse → 88×2=176, no AK fires
+  when bidder didn't lead trick 1, forward-AK regression pin
+  unchanged at 250).
+- **`tests/test_rules.lua` Section L**: MED-3 Sun-Gahwa malformed
+  flag does NOT fire match-win.
+- **`tests/test_rules.lua` Section Q+**: 5 pins for
+  `R.IsBeloteCancelled`, 7 pins for `R.GameEndWinner` (covers all
+  H3 tiebreak branches), 1 pin for MED-4 ordering (Belote
+  cancelled by 100-meld BEFORE sweep-override).
+- **411 / 411 pass** (up from 387 in v0.10.4, +24 new pins).
+
+### Removed from §4.2 backlog (verified false alarm)
+
+- "MED | `Net.lua:2185-2190, 2930-2935` | R2 Sun mult collapse not
+  backported to Takweesh / SWA-invalid". Verified by S-Score-07:
+  both Net.HostResolveTakweesh and Net.HostResolveSWA invalid
+  branches correctly apply `K.MULT_SUN`. Not a bug.
+
+### Deferred to v0.10.6+ (per scoring-audit §"LOW")
+
+- LOW-1: Net.lua qaid handlers don't apply v0.10.0 R2 Sun-rung
+  defensive normalization (production-unreachable; defense-in-depth
+  gap).
+- LOW-2: `K.GAME_TARGET = 152` constant — replace 6+ hardcoded
+  `or 152` literals across the codebase. Hygiene.
+- LOW-4: `R.TeamOf(nil)` returns "B" silently (defensive only;
+  same root cause as several existing audit refs).
+- LOW-5/6: additional test pins for Belote multiplier-immunity at
+  ×3/×4 + Carré-A 400 integration through R.ScoreRound.
+
+### Pre-existing deferred items (carried from v0.10.4)
+
+- D-RedTeam-01 E4 — T-AKA trick-locking exploit
+- B-Net-02 H1/H2 — Forced-flag dead branches + bidder out-of-range
+- B-State-02 H1 — ApplyBid value validation gap
+- Bargiya FN → FP swing (cross-cite)
+- B-Bot-06 F-01/F-02 — L07 cascade fail at M3lm+
+- Dead-code redundancy at `Bot.lua:1336-1342` / `1366-1372`
+- Bargiya inner-discriminator axis flip
+- ISMCTS akaCalled-respecting sample pool
+- `S.s.swaDenied` UI banner read
+- Sun-Mathlooth-K pos-4 smother gate
+- Test-harness gap (Net.lua + BotMaster.lua not loaded by run.py)
+
+### References
+
+Audit reports under
+`.swarm_findings/review_v0.10.2/_track_S_scoring/`:
+- `SCORING_SUMMARY.md` (~300-line synthesis)
+- `S-Score-01..10.md` (per-pipeline sub-reports)
+
 ## v0.10.4 — review_v0.10.2 validation closures (4 HIGH + 1 calibration + tooling + doctrine doc)
 
 Validation pass against the v0.10.3 audit synthesis caught 1 UI-

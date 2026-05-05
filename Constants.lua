@@ -114,6 +114,25 @@ K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped
 K.AL_KABOOT_HOKM = 250
 K.AL_KABOOT_SUN  = 220
 
+-- Reverse Al-Kaboot (الكبوت المقلوب) — defenders sweep all 8 tricks,
+-- gated on bidder having led trick 1. Per video #16 (the canonical
+-- Saudi source for reverse Al-Kaboot), the defender sweep is much
+-- less rewarding than forward Al-Kaboot — 88 raw uniformly across
+-- contracts, not the 250/220 that forward-AK pays. Awarded only when
+-- the bidder team led trick 1; if defenders led the first trick, the
+-- sweep falls through to normal scoring (no reverse-AK bonus). This
+-- is the SAUDI-canonical asymmetry: forward-AK rewards the bidder for
+-- crushing the contract; reverse-AK is a smaller "humiliation" payout
+-- that requires the bidder to have actively engaged (led trick 1) and
+-- still lost everything.
+--
+-- v0.10.5 fix (review_v0.10.2 SCORING_SUMMARY HIGH-2): pre-v0.10.5
+-- Rules.lua:742-745 + 847-853 awarded the same 250/220 to ANY
+-- 8-trick sweeper regardless of bidder/defender, over-paying defender
+-- by ~16 gp/round (Hokm) or ~35 gp/round (Sun) — game-deciding in a
+-- 152-target match. Source: S-Score-06.
+K.AL_KABOOT_REVERSE = 88
+
 -- -- Game phases ------------------------------------------------------
 
 K.PHASE_IDLE     = "idle"        -- no game, lobby visible

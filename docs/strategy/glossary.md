@@ -156,7 +156,7 @@ score higher per round.
 | HAND_TOTAL_HOKM | 162 | 152 cards + 10 last trick |
 | HAND_TOTAL_SUN | 130 | 120 (30/suit × 4) + 10 last trick (pre ×2 multiplier) |
 | LAST_TRICK_BONUS | 10 | bonus to whoever wins trick 8 |
-| Match target | 152 raw | `S.s.target` |
+| Match target | 152 game points | `S.s.target` (compared against per-team cumulative GAME points after div10 rounding, not raw) |
 
 ---
 

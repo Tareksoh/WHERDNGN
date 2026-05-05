@@ -171,7 +171,7 @@ Cross-checked against `R.IsLegalPlay`, `R.ScoreRound`, and
 `Constants.lua`. Status:
 
 **Q1: Belote (K+Q of trump) in Sun?** ✗ **NOT in code.**
-`R.ScoreRound` line 694 gates Belote scoring on
+`R.ScoreRound` line ~795 gates Belote scoring on
 `contract.type == K.BID_HOKM`. Single-source from video #41 says
 "ملكي" K+Q meld scores in Sun. Could be regional house variant
 or genuine convention. **Open question** — verify with another

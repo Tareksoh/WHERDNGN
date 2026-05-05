@@ -1718,33 +1718,17 @@ function N._HostStepAfterTrick()
         local totB = S.s.cumulative.B + addB
         S.ApplyRoundEnd(addA, addB, totA, totB, res.sweep, res.bidderMade)
         N.SendRound(addA, addB, totA, totB, res.sweep, res.bidderMade)
-        if totA >= S.s.target or totB >= S.s.target then
-            -- v0.8.6 H3 fix (audit AUDIT_REPORT_v0.7.1.md): tiebreaker
-            -- on cumulative tie at target previously read raw
-            -- contract.bidder, but on a FAILED contract (bidderMade==
-            -- false) the bidder team is the LOSER of the round. Awarding
-            -- the match to the failing team contradicts the round result.
-            -- Now: respect res.gahwaWinner first (canonical for Gahwa
-            -- rounds), then bidderMade (bidder won round → bidder team;
-            -- bidder failed → opp team won round).
-            local winner
-            if totA == totB then
-                if res.gahwaWonGame and res.gahwaWinner then
-                    winner = res.gahwaWinner
-                elseif S.s.contract and S.s.contract.bidder then
-                    local bidderTeam = R.TeamOf(S.s.contract.bidder)
-                    if res.bidderMade then
-                        winner = bidderTeam       -- bidder made → they win tie
-                    else
-                        winner = (bidderTeam == "A") and "B" or "A"
-                                                  -- bidder failed → opp won round
-                    end
-                else
-                    winner = "A"                  -- defensive fallback
-                end
-            elseif totA > totB then winner = "A"
-            elseif totB > totA then winner = "B"
-            else                    winner = "A" end
+        -- v0.10.5 MED-2: game-end + H3 tiebreak via shared
+        -- R.GameEndWinner helper. Same canonical post-v0.8.6 logic
+        -- (Gahwa winner > bidderMade-side > defensive "A"); now also
+        -- used by Takweesh + SWA-invalid Qaid paths.
+        local winner = R.GameEndWinner(totA, totB, S.s.target, {
+            gahwaWinner = res.gahwaWonGame and res.gahwaWinner or nil,
+            bidderTeam  = S.s.contract and S.s.contract.bidder
+                            and R.TeamOf(S.s.contract.bidder) or nil,
+            bidderMade  = res.bidderMade,
+        })
+        if winner then
             S.ApplyGameEnd(winner)
             N.SendGameEnd(winner)
         end
@@ -1859,6 +1843,14 @@ function N.HostStartRound()
     S.ApplyTurn(first, "bid")
     N.SendTurn(first, "bid")
     N.MaybeRunBot()
+    -- v0.10.5 user-reported bug fix: round-end screen sticks on
+    -- "Next Round" when the new round's first bidder is the human
+    -- host (no bot fires → no loopback Refresh → UI stays on prior
+    -- PHASE_SCORE view). The Awal sound still plays because it's
+    -- queued from S.ApplyStart, but the bid panel doesn't render.
+    -- Force a Refresh after host-side state advance; harmless when
+    -- a bot DID fire (Refresh runs again on the bot's loopback).
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
 function N.LocalBid(bid)
@@ -2059,6 +2051,10 @@ function N.HostFinishDeal()
     S.ApplyTurn(leader, "play")
     N.SendTurn(leader, "play")
     N.MaybeRunBot()
+    -- v0.10.5 user-reported bug fix: same shape as HostStartRound. If
+    -- the trick-1 leader is the human host, no bot loopback Refresh
+    -- fires → UI stays on prior phase. Force a Refresh.
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
 function N.LocalPlay(card)
@@ -2256,8 +2252,13 @@ function N.HostResolveTakweesh(callerSeat)
     local mpB = (offenderTeam == "B") and 0 or meldB
 
     -- Belote (Hokm only, played cards only — Saudi rule rb3haa).
-    -- Cancelled when the K+Q holder also declared a ≥100 meld (per
-    -- "ماهو البلوت في لعبة البلوت"). Same rule as R.ScoreRound.
+    -- Cancelled when the K+Q holder's TEAM declared a ≥100 meld
+    -- (per "ماهو البلوت في لعبة البلوت"). v0.10.5 MED-1: switched
+    -- from SAME-PLAYER check to TEAM-level via R.IsBeloteCancelled
+    -- so this Qaid path matches R.ScoreRound's canonical post-v0.9.0
+    -- M5 form. Pre-v0.10.5 the same-player check missed cancellation
+    -- when the K+Q holder's PARTNER declared the ≥100 meld, over-
+    -- crediting the bidder team by +2 gp on Takweesh-context rounds.
     local belote
     if c.type == K.BID_HOKM and c.trump then
         local kWho, qWho
@@ -2273,12 +2274,8 @@ function N.HostResolveTakweesh(callerSeat)
         if S.s.trick then scan(S.s.trick.plays) end
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
-            local list = (S.s.meldsByTeam and S.s.meldsByTeam[belote]) or {}
-            for _, m in ipairs(list) do
-                if m.declaredBy == kWho and (m.value or 0) >= 100 then
-                    belote = nil
-                    break
-                end
+            if R.IsBeloteCancelled(belote, S.s.meldsByTeam) then
+                belote = nil
             end
         end
     end
@@ -2359,14 +2356,20 @@ function N.HostResolveTakweesh(callerSeat)
         foundIllegal and foundIllegal.card or "",
         foundIllegal and (foundIllegal.illegalReason or "") or ""))
 
-    if totA >= S.s.target or totB >= S.s.target then
-        -- Same Saudi tie-rule as the normal-round path above.
-        local winner
-        if totA == totB and S.s.contract and S.s.contract.bidder then
-            winner = R.TeamOf(S.s.contract.bidder)
-        elseif totA > totB then winner = "A"
-        elseif totB > totA then winner = "B"
-        else                    winner = "A" end
+    -- v0.10.5 MED-2: shared R.GameEndWinner with Qaid-context
+    -- adapter. The Takweesh winner team (winnerTeam) wins the
+    -- tiebreak — it was the team whose Takweesh call resolved the
+    -- round. We map this onto bidderTeam/bidderMade by treating
+    -- the Takweesh winner AS IF it were bidderMade=true. Pre-v0.10.5
+    -- this path used pre-v0.8.6 raw-bidder-team logic, which could
+    -- award the match to the OFFENDER team on simultaneous-target
+    -- hits (the offender team was bidder team but lost the round).
+    local winner = R.GameEndWinner(totA, totB, S.s.target, {
+        gahwaWinner = nil,            -- Takweesh preempts Gahwa scoring
+        bidderTeam  = winnerTeam,
+        bidderMade  = true,
+    })
+    if winner then
         S.ApplyGameEnd(winner)
         N.SendGameEnd(winner)
     end
@@ -2981,6 +2984,9 @@ function N.HostResolveSWA(callerSeat, callerHand)
         local mpB = (callerTeam == "B") and 0 or meldB
         -- Belote scan (played cards only — Saudi rule rb3haa).
         -- Cancelled when the K+Q holder also declared a ≥100 meld.
+        -- v0.10.5 MED-1: Belote cancellation switched from SAME-PLAYER
+        -- to TEAM-level via R.IsBeloteCancelled — matches R.ScoreRound
+        -- and HostResolveTakweesh after their parallel v0.10.5 update.
         local beloteOwner
         if c.type == K.BID_HOKM and c.trump then
             local kWho, qWho
@@ -2996,12 +3002,8 @@ function N.HostResolveSWA(callerSeat, callerHand)
             if S.s.trick then scan(S.s.trick.plays) end
             if kWho and qWho and kWho == qWho then
                 beloteOwner = R.TeamOf(kWho)
-                local list = (S.s.meldsByTeam and S.s.meldsByTeam[beloteOwner]) or {}
-                for _, m in ipairs(list) do
-                    if m.declaredBy == kWho and (m.value or 0) >= 100 then
-                        beloteOwner = nil
-                        break
-                    end
+                if R.IsBeloteCancelled(beloteOwner, S.s.meldsByTeam) then
+                    beloteOwner = nil
                 end
             end
         end
@@ -3088,13 +3090,19 @@ function N.HostResolveSWA(callerSeat, callerHand)
     N.SendSWAOut(callerSeat, valid, addA, addB, totA, totB,
                  sweepTeam, contractMade)
 
-    if totA >= S.s.target or totB >= S.s.target then
-        local winner
-        if totA == totB and S.s.contract and S.s.contract.bidder then
-            winner = R.TeamOf(S.s.contract.bidder)
-        elseif totA > totB then winner = "A"
-        elseif totB > totA then winner = "B"
-        else                    winner = "A" end
+    -- v0.10.5 MED-2: shared R.GameEndWinner with SWA-context adapter.
+    -- Round-winner team is the caller (valid SWA) or the opp (invalid
+    -- SWA). Map to bidderTeam/bidderMade via "round-winner = bidderMade
+    -- side" so the H3 tiebreak resolves correctly. Pre-v0.10.5 used raw
+    -- bidder-team logic which could award the match to the OFFENDER on
+    -- simultaneous-target hits during invalid-SWA Qaid resolution.
+    local roundWinnerTeam = valid and callerTeam or oppOfCaller
+    local winner = R.GameEndWinner(totA, totB, S.s.target, {
+        gahwaWinner = nil,             -- SWA preempts Gahwa scoring
+        bidderTeam  = roundWinnerTeam,
+        bidderMade  = true,
+    })
+    if winner then
         S.ApplyGameEnd(winner)
         N.SendGameEnd(winner)
     end

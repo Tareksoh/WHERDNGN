@@ -497,6 +497,81 @@ do
     assertEq(res.final.B, 44, "Sun sweep: final B = 44")
 end
 
+-- v0.10.5 HIGH-2 — Reverse Al-Kaboot (الكبوت المقلوب). Defender team
+-- sweeps all 8 tricks, gated on bidder having led trick 1. Source:
+-- video #16 (canonical Saudi reverse-AK). Pre-v0.10.5 awarded the
+-- forward-AK bonus (250/220) to ANY 8-trick sweeper, over-paying
+-- defender by ~16 gp/round Hokm or ~35 gp/round Sun.
+
+-- H.10 — Hokm reverse-AK with bidder lead → +88 raw (not 250)
+do
+    -- Bidder = seat 1 (team A); defender team B sweeps. Bidder must
+    -- lead trick 1 for reverse-AK to fire. sweptTricks(2) sets all
+    -- winners=2 AND lead=seat 1 (sweptTricks iterates s=1..4 in
+    -- play order). So this is the bidder-led + defender-sweeps case.
+    local tricks = sweptTricks(2)
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
+    assertEq(res.sweep, "B", "H.10: defender team sweeps")
+    -- raw.B should be K.AL_KABOOT_REVERSE = 88 (+ optional belote).
+    local expectedRawB = K.AL_KABOOT_REVERSE
+    if res.belote == "B" then expectedRawB = expectedRawB + K.MELD_BELOTE end
+    assertEq(res.raw.B, expectedRawB,
+             "H.10: Hokm reverse-AK raw B = 88 (+20 if belote)")
+    assertEq(res.raw.A, 0, "H.10: bidder team gets 0")
+end
+
+-- H.11 — Sun reverse-AK with bidder lead → +88 × MULT_SUN raw
+do
+    local tricks = sweptTricks(2)
+    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} })
+    assertEq(res.sweep, "B", "H.11: defender team sweeps Sun")
+    assertEq(res.raw.B, K.AL_KABOOT_REVERSE * K.MULT_SUN,
+             "H.11: Sun reverse-AK raw B = 88 × 2 = 176 (NOT 440)")
+    assertEq(res.final.B, 18, "H.11: Sun reverse-AK final B = 18 (NOT 44)")
+end
+
+-- H.12 — Reverse-AK NOT triggered when bidder didn't lead trick 1.
+-- Defender team sweeps but defender led trick 1 → fall through to
+-- normal scoring (no AK bonus).
+do
+    -- Build manual tricks with seat 2 (defender team B) leading trick 1.
+    local cards = fullDeck()
+    local idx = 1
+    local tricks = {}
+    for i = 1, 8 do
+        local plays = {}
+        -- Order plays so seat 2 leads trick 1 (defender lead, not bidder).
+        local order = (i == 1) and { 2, 3, 4, 1 } or { 1, 2, 3, 4 }
+        for _, s in ipairs(order) do
+            plays[#plays + 1] = { seat = s, card = cards[idx] }
+            idx = idx + 1
+        end
+        tricks[#tricks + 1] = {
+            winner = 2,
+            leadSuit = C.Suit(plays[1].card),
+            plays = plays,
+        }
+    end
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
+    -- sweep flag was suppressed by reverse-AK gate failing.
+    assertEq(res.sweep, nil,
+             "H.12: defender sweep without bidder-led trick 1 → no AK fires")
+    -- Falls through to normal scoring; defender team B has the trick
+    -- points (counted via teamPoints in R.ScoreRound).
+end
+
+-- H.13 — Forward Al-Kaboot still pays 250/220 (regression pin for
+-- the existing behaviour after the v0.10.5 split).
+do
+    local tricks = sweptTricks(1)   -- bidder = seat 1, team A sweeps
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
+    assertEq(res.sweep, "A", "H.13: forward-AK bidder team sweeps")
+    local expectedRawA = K.AL_KABOOT_HOKM
+    if res.belote == "A" then expectedRawA = expectedRawA + K.MELD_BELOTE end
+    assertEq(res.raw.A, expectedRawA,
+             "H.13: forward-AK raw A = 250 (+20 if belote) — unchanged")
+end
+
 -- =====================================================================
 -- I. ScoreRound — tie inversion (rule 4-10)
 -- =====================================================================
@@ -739,6 +814,19 @@ do
     local res = R.ScoreRound(sweptTricks(2), c, { A = {}, B = {} })
     assertTrue(res.gahwaWonGame, "Failed Gahwa: gahwaWonGame = true (still set)")
     assertEq(res.gahwaWinner, "B", "Failed Gahwa winner = defenders (B)")
+end
+
+-- v0.10.5 MED-3 — Gahwa Sun-stale-flag defensive type-gate.
+-- Sun has no Gahwa rung; a stale `contract.gahwa = true` on a Sun
+-- contract (resync, hostile peer, incomplete reset) must NOT fire
+-- the match-win override. Source: S-Score-02 + S-Score-08.
+do
+    local c = sun(1, { doubled = true, gahwa = true })   -- malformed: Sun + gahwa
+    local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
+    assertFalse(res.gahwaWonGame,
+                "v0.10.5 MED-3: Sun-Gahwa malformed flag does NOT fire match-win")
+    assertEq(res.gahwaWinner, nil,
+             "v0.10.5 MED-3: gahwaWinner stays nil on Sun-Gahwa malformed")
 end
 
 -- =====================================================================
@@ -1307,6 +1395,130 @@ do
     -- So 9H trump must be played; AS off-suit illegal.
     assertEq(R.IsLegalPlay("AS", recvHand, recvTrick, hokmH, 4, malformedAka), false,
              "Q.13 (v0.10.4 E1): trump-suit malformed akaCalled does NOT grant relief — must-trump fires")
+end
+
+-- =====================================================================
+-- Q+. v0.10.5 shared-helper pins (R.IsBeloteCancelled + R.GameEndWinner)
+--
+-- MED-1: Belote cancellation extracted from R.ScoreRound into a
+-- shared helper, used by all 3 sites (R.ScoreRound, Net.HostResolveTakweesh,
+-- Net.HostResolveSWA-invalid) so they apply the same TEAM-level rule.
+--
+-- MED-2: Game-end H3 tiebreak extracted into a shared helper, used by
+-- all 3 game-end sites (normal round-end, Takweesh, SWA-invalid) so
+-- they apply the same canonical post-v0.8.6 logic.
+-- =====================================================================
+section("Q+. v0.10.5 shared helpers (Belote-cancel + GameEndWinner)")
+
+do
+    -- Q+.1 — IsBeloteCancelled: empty meld list returns false
+    assertEq(R.IsBeloteCancelled("A", { A = {}, B = {} }), false,
+             "Q+.1: IsBeloteCancelled empty list → false")
+    -- Q+.2 — IsBeloteCancelled: 100-meld on team triggers cancel
+    local melds = { A = { { value = 100 } }, B = {} }
+    assertEq(R.IsBeloteCancelled("A", melds), true,
+             "Q+.2: IsBeloteCancelled with 100-meld → true")
+    -- Q+.3 — IsBeloteCancelled: <100 melds don't cancel
+    local sub100 = { A = { { value = 50 }, { value = 20 } }, B = {} }
+    assertEq(R.IsBeloteCancelled("A", sub100), false,
+             "Q+.3: IsBeloteCancelled with sub-100 melds (50, 20) → false")
+    -- Q+.4 — IsBeloteCancelled: nil meldsByTeam doesn't crash
+    assertEq(R.IsBeloteCancelled("A", nil), false,
+             "Q+.4: IsBeloteCancelled with nil meldsByTeam → false (defensive)")
+    -- Q+.5 — IsBeloteCancelled: nil team doesn't crash
+    assertEq(R.IsBeloteCancelled(nil, melds), false,
+             "Q+.5: IsBeloteCancelled with nil team → false (defensive)")
+end
+
+do
+    -- Q+.6 — GameEndWinner: neither team at target → nil
+    assertEq(R.GameEndWinner(100, 100, 152, {}), nil,
+             "Q+.6: GameEndWinner both below target → nil")
+    -- Q+.7 — GameEndWinner: only A at target → A wins
+    assertEq(R.GameEndWinner(160, 100, 152, {}), "A",
+             "Q+.7: GameEndWinner only A above target → A")
+    -- Q+.8 — GameEndWinner: only B at target → B wins
+    assertEq(R.GameEndWinner(100, 160, 152, {}), "B",
+             "Q+.8: GameEndWinner only B above target → B")
+    -- Q+.9 — GameEndWinner tiebreak: gahwa winner overrides
+    assertEq(R.GameEndWinner(160, 160, 152, { gahwaWinner = "B" }), "B",
+             "Q+.9: GameEndWinner tied with gahwaWinner=B → B")
+    -- Q+.10 — GameEndWinner tiebreak: bidderMade=true → bidder wins
+    assertEq(R.GameEndWinner(160, 160, 152, {
+        bidderTeam = "A", bidderMade = true,
+    }), "A", "Q+.10: GameEndWinner tied with bidderTeam=A made → A")
+    -- Q+.11 — GameEndWinner tiebreak: bidderMade=false → opp wins
+    --         (the H3 fix — pre-v0.8.6 awarded to bidder team).
+    assertEq(R.GameEndWinner(160, 160, 152, {
+        bidderTeam = "A", bidderMade = false,
+    }), "B", "Q+.11 (H3): GameEndWinner tied + bidderTeam=A failed → B (NOT A)")
+    -- Q+.12 — GameEndWinner: nil result table → defensive A
+    assertEq(R.GameEndWinner(160, 160, 152, {}), "A",
+             "Q+.12: GameEndWinner tied with empty result → defensive A")
+end
+
+do
+    -- Q+.13 — MED-4 ordering: Belote-cancellation runs BEFORE
+    -- sweep-override. K+Q-holder's team (A) declared a 100-meld;
+    -- the OTHER team (B) sweeps. Pre-v0.10.5 ordering: sweep
+    -- moves Belote A→B, cancellation walks B's melds (empty) and
+    -- doesn't cancel → +20 swings to B. Post-v0.10.5: cancellation
+    -- walks A's melds first (100-meld present, Belote nullified),
+    -- THEN sweep-override is a no-op on a nil Belote.
+    local cards = fullDeck()
+    local idx = 1
+    local tricks = {}
+    -- Force seat 1 (team A) to play KH+QH (Belote) on tricks 1+2,
+    -- then have team B win all 8 tricks.
+    -- Manual fixture: 8 tricks, all winner=2; trick 1 has KH played
+    -- by seat 1, trick 2 has QH played by seat 1, others fill.
+    local placed = { ["KH"] = 1, ["QH"] = 2 }   -- card → trick index for seat 1
+    for i = 1, 8 do
+        local plays = {}
+        for s = 1, 4 do
+            local card
+            if s == 1 then
+                if i == placed["KH"] then card = "KH"
+                elseif i == placed["QH"] then card = "QH"
+                else
+                    -- pick a unique non-trump card
+                    while cards[idx] == "KH" or cards[idx] == "QH" do
+                        idx = idx + 1
+                    end
+                    card = cards[idx]
+                    idx = idx + 1
+                end
+            else
+                while cards[idx] == "KH" or cards[idx] == "QH" do
+                    idx = idx + 1
+                end
+                card = cards[idx]
+                idx = idx + 1
+            end
+            plays[#plays + 1] = { seat = s, card = card }
+        end
+        tricks[#tricks + 1] = {
+            winner = 2,
+            leadSuit = C.Suit(plays[1].card),
+            plays = plays,
+        }
+    end
+    local melds = {
+        A = { { kind = "carre", value = 100, top = "K", len = 4,
+                declaredBy = 1 } },
+        B = {},
+    }
+    -- Bidder = seat 1 (team A); team B sweeps with bidder leading
+    -- trick 1 → reverse-AK fires. Belote was held by seat 1 (team A
+    -- declared K+Q in tricks 1+2). Team A also has the 100-meld.
+    -- Cancellation should fire BEFORE sweep-override:
+    --   pre-v0.10.5: Belote → B (sweep override) → walk B's melds
+    --     (empty) → Belote stays B → +20 raw to B
+    --   post-v0.10.5: walk A's melds (100 present) → Belote=nil →
+    --     sweep-override no-op on nil Belote → no +20 swing
+    local res = R.ScoreRound(tricks, hokm("H", 1), melds)
+    assertEq(res.belote, nil,
+             "Q+.13 (MED-4): Belote cancelled by 100-meld BEFORE sweep-override (no +20 swing)")
 end
 
 -- =====================================================================

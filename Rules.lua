@@ -689,6 +689,76 @@ end
 --   multiplier = N,
 --   final = { A = N, B = N },              -- after multipliers + contract pen
 -- }
+
+-- Belote-cancellation predicate (Saudi rule «100 يلتهم البلوت» / "100
+-- subsumes belote"). Returns true iff `team` declared at least one
+-- meld with value >= 100 — implying the +20 belote bonus is absorbed
+-- into the 100-meld and should not be added.
+--
+-- v0.10.5 MED-1 fix (review_v0.10.2 SCORING_SUMMARY MED-1, S-Score-07):
+-- pre-v0.10.5 the cancellation check diverged across 3 call sites:
+--   • R.ScoreRound:769-777 used TEAM-level (the canonical post-v0.9.0
+--     M5 form — partner's 100-meld also cancels)
+--   • Net.HostResolveTakweesh:2278 used SAME-PLAYER-only check
+--     (`m.declaredBy == kWho`)
+--   • Net.HostResolveSWA:3001 used SAME-PLAYER-only check
+-- Per «المشروع للفريق» the rule is team-level, not per-player. The
+-- divergence over-credited the bidder team by +2 gp on Qaid-context
+-- rounds where the bidder held K+Q-trump and the bidder's PARTNER
+-- declared a quarte. Single helper consumed by all 3 sites.
+function R.IsBeloteCancelled(team, meldsByTeam)
+    if not team or not meldsByTeam then return false end
+    local list = meldsByTeam[team]
+    if not list then return false end
+    for _, m in ipairs(list) do
+        if (m.value or 0) >= 100 then
+            return true
+        end
+    end
+    return false
+end
+
+-- Game-end winner with H3 tiebreak (post-v0.8.6 canonical). Returns
+-- "A" or "B" if either cumulative crossed `target`, else nil. When
+-- both teams hit target simultaneously, applies the H3 tiebreak:
+--   1. Gahwa winner (if `result.gahwaWinner` is set)
+--   2. bidderMade side (bidder team if true, opp team if false)
+--   3. Defensive fallback "A"
+--
+-- v0.10.5 MED-2 fix (review_v0.10.2 SCORING_SUMMARY MED-2, S-Score-08):
+-- pre-v0.10.5 the tiebreak diverged across 3 call sites:
+--   • Net.lua:1721-1750 (normal round-end) — canonical H3 tiebreak ✓
+--   • Net.lua:2362-2372 (Takweesh) — pre-v0.8.6 raw bidder-team logic
+--   • Net.lua:3091-3100 (SWA) — pre-v0.8.6 raw bidder-team logic
+-- Both stale paths could award the match to the OFFENDER team on
+-- Takweesh / invalid-SWA simultaneous-target hits. Shared helper.
+--
+-- `result` shape (subset used here):
+--   { gahwaWinner = "A"|"B"|nil, bidderTeam = "A"|"B",
+--     bidderMade = bool|nil }
+function R.GameEndWinner(cumA, cumB, target, result)
+    if not target then return nil end
+    cumA = cumA or 0
+    cumB = cumB or 0
+    if cumA < target and cumB < target then return nil end
+    if cumA >= target and cumB >= target then
+        -- H3 tiebreak.
+        if result and result.gahwaWinner then
+            return result.gahwaWinner
+        end
+        if result and result.bidderTeam then
+            if result.bidderMade then
+                return result.bidderTeam
+            else
+                return (result.bidderTeam == "A") and "B" or "A"
+            end
+        end
+        return "A"  -- defensive fallback
+    end
+    if cumA >= target then return "A" end
+    return "B"
+end
+
 function R.ScoreRound(tricks, contract, meldsByTeam)
     local teamPoints = { A = 0, B = 0 }
     local trickCount = { A = 0, B = 0 }
@@ -740,40 +810,85 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     end
 
     -- Al-kaboot: one team won all 8 tricks. Replaces normal scoring.
+    --
+    -- v0.10.5 HIGH-2 fix (review_v0.10.2 SCORING_SUMMARY HIGH-2,
+    -- S-Score-06): two distinct cases by sweep direction —
+    --
+    --   FORWARD Al-Kaboot (bidder team sweeps): full bonus per
+    --     `K.AL_KABOOT_HOKM`=250 / `K.AL_KABOOT_SUN`=220.
+    --   REVERSE Al-Kaboot (defender team sweeps, الكبوت المقلوب):
+    --     uniform `K.AL_KABOOT_REVERSE = 88` raw — gated on the
+    --     bidder having led trick 1. If bidder didn't lead trick 1,
+    --     fall through to normal scoring (no AK bonus). Per video
+    --     #16 the asymmetry is canonical Saudi: forward-AK rewards
+    --     the bidder for crushing; reverse-AK is a smaller payout
+    --     that requires the bidder to have actively engaged.
+    --
+    -- Pre-v0.10.5 awarded 250/220 to ANY 8-trick sweeper regardless
+    -- of bidder/defender, over-paying defender by ~16 gp/round
+    -- (Hokm) or ~35 gp/round (Sun) — game-deciding in a 152-target
+    -- match.
     local sweepTeam
     if trickCount.A == 8 then sweepTeam = "A"
     elseif trickCount.B == 8 then sweepTeam = "B" end
+
+    local sweepIsBidderTeam = sweepTeam and (sweepTeam == bidderTeam) or false
+    local sweepIsReverseAK = false
+    local reverseAKBidderLed = false
+    if sweepTeam and not sweepIsBidderTeam then
+        -- Reverse Al-Kaboot candidate. Gate on bidder leading trick 1.
+        local trick1 = tricks[1]
+        if trick1 and trick1.plays and trick1.plays[1]
+           and trick1.plays[1].seat == contract.bidder then
+            sweepIsReverseAK = true
+            reverseAKBidderLed = true
+        end
+        -- If bidder did not lead trick 1, the defender sweep falls
+        -- through to normal scoring (no AK bonus). Suppress sweepTeam
+        -- so the cardA/cardB block below skips its sweep branch.
+        if not reverseAKBidderLed then
+            sweepTeam = nil
+        end
+    end
+
+    -- v0.10.5 MED-4 fix (review_v0.10.2 SCORING_SUMMARY MED-4,
+    -- S-Score-04 + B-Rules-02 F-01): apply Belote cancellation
+    -- BEFORE the sweep-override. Pre-v0.10.5 ordering had the
+    -- override flip Belote ownership to the sweeping team FIRST,
+    -- then the cancellation walk read meldsByTeam for the
+    -- (possibly-flipped) Belote owner. In rare configs where the
+    -- K+Q-holder's team has a ≥100 meld AND the OTHER team
+    -- sweeps, the override moved Belote to the sweeper before
+    -- cancellation could fire on the original holder's team —
+    -- net ~2 gp swing. The canonical order is:
+    --   1. Detect Belote (K+Q same-seat in trump)
+    --   2. Cancel if holder's TEAM has ≥100 meld (v0.9.0 M5)
+    --   3. Apply sweep-override only if the cancellation didn't
+    --      already null Belote
+    -- This preserves the «100 subsumes belote» rule even when
+    -- the holder's team is on the losing side of an Al-Kaboot.
+
+    -- Belote cancellation (Gemini #8 audit fix, v0.9.0 M5 team-level
+    -- promotion, v0.10.5 MED-1 shared helper): the 100-meld
+    -- "subsumes" the belote when the holder's team declared a ≥100
+    -- meld. Walk meldsByTeam of the BELOTE-HOLDER's team (pre-sweep-
+    -- override), not the post-override owner. Helper extracted so
+    -- Net.lua's Qaid handlers (Takweesh + SWA-invalid) use the same
+    -- TEAM-level rule (pre-v0.10.5 they used same-player-only check).
+    if belote and kWho and R.IsBeloteCancelled(belote, meldsByTeam) then
+        belote = nil
+    end
 
     -- Saudi sweep convention: the sweeping team takes EVERYTHING,
     -- including the +20 belote bonus. Pagat-strict would keep belote
     -- with the K+Q holder regardless, but the Saudi "winner takes all"
     -- reading covers belote too. Override here so the belote-add-to-raw
-    -- below routes the bonus to the sweep winner.
+    -- below routes the bonus to the sweep winner. Only fires when an
+    -- AK actually fires (sweepTeam still set after the reverse-AK
+    -- gate above) AND Belote wasn't already cancelled by a ≥100 meld
+    -- on the holder's team (per the reordered M5 above).
     if sweepTeam and belote and belote ~= sweepTeam then
         belote = sweepTeam
-    end
-
-    -- Belote cancellation (Gemini #8 audit fix): the 100-meld "subsumes"
-    -- the belote ONLY when the meld and the belote both score for the
-    -- same team. After the sweep override above moves belote to the
-    -- sweeping team, the holder's 100-meld may no longer be relevant
-    -- (sweeper discards loser's melds). Apply cancellation AFTER sweep
-    -- so the +20 follows the sweep winner correctly.
-    --
-    -- v0.9.0 M5 fix (audit AUDIT_REPORT_v0.7.1.md): cancellation is
-    -- TEAM-level. Pre-v0.9.0 the predicate required `m.declaredBy ==
-    -- kWho` (same player) which silently ignored partner's ≥100 meld
-    -- AND silently failed when declaredBy was nil. Saudi rule "≥100
-    -- subsumes belote" applies to the team's collective scoring side
-    -- — partner's quarte cancels K+Q-holder's belote.
-    if belote and kWho then
-        local list = (meldsByTeam and meldsByTeam[belote]) or {}
-        for _, m in ipairs(list) do
-            if (m.value or 0) >= 100 then
-                belote = nil
-                break
-            end
-        end
     end
 
     -- Saudi rule 4-2/4-3: bidder must STRICTLY beat defender's total.
@@ -846,7 +961,15 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
 
     local cardA, cardB
     if sweepTeam then
-        local bonus = (contract.type == K.BID_HOKM) and K.AL_KABOOT_HOKM or K.AL_KABOOT_SUN
+        -- v0.10.5 HIGH-2: branch on direction. Forward-AK pays the
+        -- contract-specific bonus; reverse-AK pays the uniform 88.
+        local bonus
+        if sweepIsReverseAK then
+            bonus = K.AL_KABOOT_REVERSE
+        else
+            bonus = (contract.type == K.BID_HOKM) and K.AL_KABOOT_HOKM
+                                                  or  K.AL_KABOOT_SUN
+        end
         cardA = (sweepTeam == "A") and bonus or 0
         cardB = (sweepTeam == "B") and bonus or 0
         meldPoints.A = (sweepTeam == "A") and meldA or 0
@@ -954,9 +1077,21 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- defenders. Override the per-round delta to push cumulative-to-
     -- target by signaling a "match-win" flag the caller (Net.lua's
     -- HostStepAfterTrick) can read off the result struct.
+    --
+    -- v0.10.5 MED-3 fix (review_v0.10.2 SCORING_SUMMARY MED-3,
+    -- S-Score-02 + S-Score-08): type-gate the Gahwa branch on
+    -- HOKM. Sun has no Gahwa rung per "في الصن لايوجد الثري والفور
+    -- والقهوة" (PDF 02 K-21 + L34 + video #11). The multiplier path
+    -- (lines 904-913) and inversion path (825-832) BOTH defensively
+    -- collapse Sun's stale tripled/foured/gahwa flags; this branch
+    -- was missed. A stale `contract.gahwa = true` on a Sun contract
+    -- — possible via incomplete state reset, resync, or hostile
+    -- peer — would otherwise fire a spurious match-win for the
+    -- bidder. Phase machine guards prevent normal state from
+    -- setting gahwa=true on Sun, but state-corruption paths exist.
     local gahwaWonGame = false
     local gahwaWinner
-    if contract.gahwa then
+    if contract.gahwa and contract.type == K.BID_HOKM then
         -- Caller's team = bidder team. They "win" if bidderMade
         -- (made or doubled-tie inversion), "lose" otherwise.
         if bidderMade then

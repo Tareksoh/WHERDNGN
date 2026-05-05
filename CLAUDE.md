@@ -55,7 +55,9 @@ These trip up anyone who knows French Belote:
   use English shorthand (`PickTriple`, `PickFour`, `PickGahwa`) —
   use Saudi names in docs and player-visible text, code names only
   inside Lua.
-- **Bidder fails on tied 81/162** — strict majority required.
+- **Bidder fails on tied half-and-half** — strict majority
+  required. Hokm: tied 81/162. Sun: tied 65/130 (post-mult). Either
+  case, bidder needs strictly more than half.
 - **Last trick = +10 raw** — bonus to whoever wins trick 8.
 - **AKA (إكَهْ) is the only explicit partner signal.** No
   echoing, no "petit" announcements.
