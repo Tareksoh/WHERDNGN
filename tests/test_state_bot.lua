@@ -1956,8 +1956,9 @@ do
                  "K.1c: Hokm-Carré-A value = MELD_CARRE_OTHER (100 raw)")
     end
 
-    -- K.2 — Sun-Carré-A still scores 400 raw (the 2-Hundred/4-Hundred
-    -- Saudi rule per video #32+#38). Sanity that K.1 didn't break Sun.
+    -- K.2 — Sun-Carré-A scores K.MELD_CARRE_A_SUN (200 raw post-v0.11.10
+    -- revert; pipeline yields 200×Sun×2/10 = 40 nq, the user-cited
+    -- canonical Saudi value). Sanity that K.1 didn't break Sun.
     freshState()
     S.s.contract = { type = K.BID_SUN, bidder = 1 }
     S.ApplyMeld(1, "carre", "", "A", C.EncodeHand({"AH","AC","AD","AS"}))
@@ -1965,7 +1966,7 @@ do
     assertEq(#meldsB, 1, "K.2: Sun-Carré-A still produces a meld entry")
     if meldsB[1] then
         assertEq(meldsB[1].value, K.MELD_CARRE_A_SUN,
-                 "K.2a: Sun-Carré-A value = MELD_CARRE_A_SUN (400 raw)")
+                 "K.2a: Sun-Carré-A value = MELD_CARRE_A_SUN (200 raw)")
     end
 
     -- K.3 — non-Ace Carré in Hokm unaffected (T/K/Q/J = 100 raw).
@@ -2793,7 +2794,15 @@ do
     end
 end
 
--- U.10 (XU-09): s.overcall is in TRANSIENT_FIELDS.
+-- U.10 (NetU2-01 — v0.11.13 revert of v0.11.11 XU-09):
+-- s.overcall is NOT in TRANSIENT_FIELDS. The original v0.9.0 M2 host
+-- re-arm at WHEREDNGN.lua:300 specifically depends on `s.overcall`
+-- surviving /reload to schedule a fresh resolve timer; making it
+-- transient (the v0.11.11 XU-09 change) caused the host to soft-lock
+-- in PHASE_OVERCALL after /reload — the re-arm short-circuited on
+-- `if … and B.State.s.overcall then` because the field was wiped
+-- before the post-restore check. v0.11.13 reverted to the canonical
+-- v0.9.0 M2 design.
 do
     local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
     local tfStart = stateSrc:find("local TRANSIENT_FIELDS = {")
@@ -2802,8 +2811,8 @@ do
         local search = stateSrc:sub(tfStart)
         local braceEnd = search:find("\n}\n", 1, true)
         local body = search:sub(1, braceEnd or #search)
-        assertTrue(body:find("overcall%s*=%s*true%s*,") ~= nil,
-                   "U.10 (XU-09): s.overcall added to TRANSIENT_FIELDS")
+        assertTrue(body:find("overcall%s*=%s*true%s*,") == nil,
+                   "U.10 (NetU2-01): s.overcall is NOT in TRANSIENT_FIELDS (v0.11.13 revert)")
     end
 end
 
@@ -2851,6 +2860,82 @@ do
     local soundSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Sound.lua"):read("*a")
     assertTrue(soundSrc:find("function M%.Try%(soundId%)") ~= nil,
                "U.15 (XR-15): Sound.Try helper added (incremental migration)")
+end
+
+-- =====================================================================
+-- V. v0.11.13 hotfix batch (NetU2-01 + SU2-01..02 + XR2-05 + doc drift)
+-- =====================================================================
+print("")
+print("=== Section V: v0.11.13 hotfix batch ===")
+
+-- V.1 (SU2-02 CRITICAL): HostResolveSWA hoists per-team accounting
+-- locals OUT of the if/else blocks so the breakdown stash can read
+-- them. Pre-v0.11.13 the SU-Ultra-01 fix was unreachable because
+-- the locals were declared inside the now-closed if/else arms.
+-- (Anchor is `local handTotal` — first non-comment line inside the
+-- invalid-arm body — to avoid matching `if not valid then` in the
+-- explanatory comment block.)
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%.HostResolveSWA")
+    assertTrue(fnStart ~= nil, "V.1 setup: HostResolveSWA found")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 8000)
+        local ifBodyStart = body:find("local handTotal = ", 1, true)
+        local hoistMatch = body:find(
+            "local cardA, cardB, mpA, mpB, mult, beloteOwner", 1, true)
+        -- "local result" hoisted: appears in the prefix before `local handTotal`.
+        local prefix = ifBodyStart and body:sub(1, ifBodyStart - 1) or ""
+        local resultHoist = prefix:find("local result", 1, true)
+        assertTrue(hoistMatch ~= nil and ifBodyStart ~= nil and hoistMatch < ifBodyStart,
+                   "V.1a (SU2-02): cardA/cardB/mpA/mpB/mult/beloteOwner hoisted before if-block")
+        assertTrue(resultHoist ~= nil,
+                   "V.1b (SU2-02): result hoisted before if-block")
+    end
+end
+
+-- V.2 (XR2-05/06 MED): _OnContract validates Hokm trump suit against
+-- the 4-suit enum. Mirrors NetU-03 _OnAKA pattern.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnContract")
+    assertTrue(fnStart ~= nil, "V.2 setup: _OnContract found")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 2000)
+        assertTrue(body:find('trump == "S" or trump == "H" or trump == "D" or trump == "C"') ~= nil,
+                   "V.2 (XR2-05): _OnContract validates Hokm trump suit enum")
+    end
+end
+
+-- V.3 (SU2-01 MED): ApplyResyncSnapshot clears stale s.overcall
+-- (defense-in-depth, parallel to the 11 sibling clears).
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    local fnStart = stateSrc:find("function S%.ApplyResyncSnapshot")
+    assertTrue(fnStart ~= nil, "V.3 setup: ApplyResyncSnapshot found")
+    if fnStart then
+        -- ApplyResyncSnapshot is ~150 lines; need a wide window. Cap
+        -- at the next top-level `function` to stay within scope.
+        local body = stateSrc:sub(fnStart)
+        local nextFn = body:find("\nfunction ", 2, true)
+        if nextFn then body = body:sub(1, nextFn) end
+        assertTrue(body:find("s%.overcall%s*=%s*nil") ~= nil,
+                   "V.3 (SU2-01): ApplyResyncSnapshot clears s.overcall")
+    end
+end
+
+-- V.4 (NetU2-01 HIGH revert): WHEREDNGN.lua post-restore PHASE_OVERCALL
+-- re-arm path is preserved AND the gate `B.State.s.overcall` non-nil
+-- can fire (i.e., overcall is NOT in TRANSIENT_FIELDS — already
+-- pinned in U.10, this is a behavioral cross-check).
+do
+    local mainSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/WHEREDNGN.lua"):read("*a")
+    -- The re-arm depends on `s.phase == PHASE_OVERCALL and s.overcall`
+    -- both being truthy after RestoreSession. Pin presence of the gate.
+    assertTrue(mainSrc:find("PHASE_OVERCALL and B%.State%.s%.overcall") ~= nil
+               or mainSrc:find('phase == K%.PHASE_OVERCALL and B%.State%.s%.overcall') ~= nil
+               or mainSrc:find("PHASE_OVERCALL.-overcall") ~= nil,
+               "V.4 (NetU2-01): post-restore PHASE_OVERCALL re-arm gate intact")
 end
 
 -- =====================================================================

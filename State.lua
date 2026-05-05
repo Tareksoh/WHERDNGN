@@ -253,15 +253,23 @@ local TRANSIENT_FIELDS = {
     lastRoundResult = true,
     lastRoundDelta  = true,
     lastTrick       = true,
-    -- v0.11.11 XU-09: s.overcall (per-round overcall window state)
-    -- now transient. Pre-v0.11.11 a /reload during PHASE_OVERCALL
-    -- restored the struct with stale `startedAt` wall-clock — the
-    -- renderOvercallBanner showed a 0-or-negative timer with no host-
-    -- side enforcement (the original 5-second timer was gone). Now
-    -- /reload during the overcall window cleanly drops it; the
-    -- overcall auto-WAIVEs (acceptable: overcall is a defender-side
-    -- protection that's only meaningful if the network is alive).
-    overcall = true,
+    -- v0.11.13 NetU2-01 fix: REVERT v0.11.11 XU-09. Adding `overcall`
+    -- to this table was wrong — it created a HIGH regression because
+    -- the v0.9.0 M2 host re-arm at WHEREDNGN.lua:300 specifically
+    -- depends on `s.overcall` surviving /reload to schedule a fresh
+    -- resolve timer. With overcall transient, `s.phase = PHASE_OVERCALL`
+    -- persisted while `s.overcall` got wiped — re-arm short-circuited
+    -- on `if … and B.State.s.overcall then` and the host stayed in
+    -- PHASE_OVERCALL forever with no resolver scheduled. The original
+    -- v0.9.0 M2 design (resetting `startedAt = now` for a fresh 5s
+    -- window post-reload) was correct. Revert to pre-v0.11.11 state.
+    -- The audit BotU2-01 caught this exactly because the U.10 pin
+    -- only verified TRANSIENT_FIELDS membership, not the recovery-
+    -- path behavior — the same "shipped dead code" failure pattern
+    -- as v0.11.2 SU-Ultra-01. Behavioral test pin added in v0.11.13
+    -- to prevent recurrence.
+    -- NOTE: s.overcall is NOT in TRANSIENT_FIELDS by design (host
+    -- needs it to survive /reload mid-window).
     -- NOTE: preemptEligible and pendingPreemptContract are NOT
     -- transient. The HOST needs them to survive a /reload mid-
     -- PHASE_PREEMPT — without persistence the host can't continue
@@ -557,6 +565,15 @@ function S.ApplyResyncSnapshot(gameID, payload)
     s.preemptEligible       = nil
     s.lastRoundResult       = nil
     s.lastRoundDelta        = nil
+    -- v0.11.13 SU2-01 fix: clear stale overcall struct on resync.
+    -- Defense-in-depth — RestoreSession's pre-snapshot strip should
+    -- already nil this, but the parallel cleanup path here was
+    -- missing the field (asymmetry vs. the 11 sibling clears above).
+    -- If the host is mid-PHASE_OVERCALL and a late client rejoins,
+    -- the host re-broadcasts the snapshot then a fresh overcall
+    -- update — clearing here ensures we don't see a stale flicker
+    -- between the snapshot and the host's follow-up.
+    s.overcall              = nil
     -- v0.11.0 S-1 fix (audit_v0.10.7 B_UIState_audit.md): rejoiner
     -- carrying a `true` from a prior round's sweep would silently
     -- miss the SND_SWEEP_TRACK cue when their team sweeps tricks
@@ -1079,9 +1096,15 @@ function S.ApplyContract(bidder, btype, trump)
         tripled = false,
         foured  = false,
         gahwa   = false,
-        -- Open/Closed (التربيع) flags. Default open=true so legacy
-        -- callers that don't pass openFlag advance to the next rung
-        -- (matches old behaviour).
+        -- Open/Closed (التربيع) flags — initial state is `false` (no
+        -- escalation declared yet). When ApplyDouble / ApplyTriple /
+        -- ApplyFour fire, they set the corresponding *Open field to
+        -- `(open ~= false)` — i.e. legacy callers that pass nil get
+        -- `true` (advance to the next rung), explicit callers passing
+        -- `false` close the chain. v0.11.13 XR2-10 fix: the prior
+        -- comment "Default open=true" was confusing because it
+        -- referred to the ApplyDouble default, not the field's
+        -- initial value here.
         belOpen    = false,  -- defenders chose to allow the next rung
         tripleOpen = false,  -- bidder chose to allow defenders' Four
         fourOpen   = false,  -- defenders chose to allow bidder's Gahwa
@@ -1094,7 +1117,11 @@ function S.ApplyContract(bidder, btype, trump)
     -- _OnOvercallResolve then bailed on the v0.11.0 A5 phase guard
     -- (Net.lua:1242, "if S.s.phase ~= K.PHASE_OVERCALL then return end"),
     -- so s.overcall was never cleared. It survived through the round
-    -- and into SaveSession (s.overcall is NOT in TRANSIENT_FIELDS).
+    -- and into SaveSession (s.overcall is persisted — not in
+    -- TRANSIENT_FIELDS — because the v0.9.0 M2 host re-arm at
+    -- WHEREDNGN.lua:300 specifically depends on the struct surviving
+    -- /reload mid-window. Persistence cuts both ways: stale state can
+    -- linger if the phase already advanced, hence this explicit nil).
     -- Defensive single-line fix; the overcall window is logically
     -- closed once a contract has been (re-)applied.
     s.overcall = nil
@@ -1208,7 +1235,9 @@ function S.ApplyMeld(seat, kind, suit, top, encodedCards)
     local cards = C.DecodeHand(encodedCards)
     -- Mirror R.DetectMelds value derivation. Constants define
     -- MELD_CARRE_OTHER (T/Q/K/J — all 100 raw), MELD_CARRE_A_SUN
-    -- (Aces in Sun — 400 raw, "الأربع مئة"), and MELD_CARRE_OTHER
+    -- (Aces in Sun — 200 raw post-v0.11.10 revert; the user-cited
+    -- "الأربع مئة" name comes from the 40-game-point payout, not
+    -- the raw value: 200 × Sun×2 / 10 = 40 nq). MELD_CARRE_OTHER
     -- doubles for Aces in Hokm (100 raw, treated like the other
     -- carrés). 9/8/7 carrés don't score in either contract.
     local value

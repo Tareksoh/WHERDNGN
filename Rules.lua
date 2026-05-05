@@ -285,7 +285,11 @@ function R.DetectMelds(hand, contract)
     -- Carré (Pagat-strict):
     --   T, K, Q, J  -> 100 raw (One Hundred)
     --   A in Hokm   -> 100 raw (One Hundred — treated like T/K/Q/J carré)
-    --   A in Sun    -> 400 raw (Four Hundred, الأربع مئة)
+    --   A in Sun    -> 200 raw (post-v0.11.10 revert; the user-cited
+    --                  Arabic name "الأربع مئة" / "Four Hundred"
+    --                  refers to the post-multiplier value 200×Sun×2
+    --                  = 400 effective, not the stored constant. Pipeline
+    --                  yields 200 × Sun×2 / 10 = 40 nq).
     --   9, 8, 7     -> don't score (omitted from K.CARRE_RANKS for 9)
     --
     -- v0.10.0 X5 fix (review_v0.10.0/xref_X5_*.md): pre-v0.10.0 the

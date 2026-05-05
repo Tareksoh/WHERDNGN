@@ -1,5 +1,157 @@
 # Changelog
 
+## v0.11.13 — hotfix: 4-agent ultra-audit findings (NetU2-01 HIGH revert + SU2-02 CRITICAL scope fix + XR2-05 wire validation)
+
+Hotfix release closing 5 findings from the post-v0.11.12 4-agent ultra
+audit. **One CRITICAL** (the v0.11.11 SU-Ultra-01 fix was itself
+unreachable due to a Lua block-scoping error — the same "shipped
+dead code" failure pattern it was meant to fix). **One HIGH regression**
+introduced in v0.11.11 XU-09 (host /reload mid-PHASE_OVERCALL
+soft-locked). **Two MED** wire-validation gap + defense-in-depth
+asymmetry. **Several LOW** doc-drift closures.
+
+The audit caught the CRITICAL and HIGH issues precisely because the
+existing source-string pins (U.10, U.11) matched the *text* but
+couldn't prove the *behavior*. Test-harness extension (XU-01 phase
+2 — Net.lua wire-injection harness) is now the single highest-
+leverage debt item; both regressions in this batch would have been
+caught at commit time with phase-2 coverage.
+
+### Fixed (CRITICAL)
+
+- **SU2-02 — `N.HostResolveSWA` per-team breakdown was UNREACHABLE
+  due to Lua block-scoping.** v0.11.11's SU-Ultra-01 fix declared
+  `local result` inside the valid-arm `else` block and `local cardA/
+  cardB/mpA/mpB/mult/beloteOwner` inside the invalid-arm `if` block.
+  Both blocks closed at the `end` BEFORE the breakdown-stash code
+  (line 3406+), so all six locals resolved to undefined globals
+  (= `nil`) at the read sites. Net effect: VALID-SWA showed the
+  same degraded "Claim verified — all remaining tricks awarded."
+  banner that v0.11.2 was meant to fix; INVALID-SWA wrote a
+  breakdown table with `nil` entries that displayed as "cards 0 +
+  melds 0" rows. Hoisted all six locals to outer scope before the
+  if/else. The unreachable-fix-shipping-with-the-same-bug pattern
+  is exactly what v0.11.12 XU-01 phase 1 was introduced to address;
+  phase 2 (Net.lua wire-injection harness) would have caught this
+  at commit time. Audit anchor: `Net.lua:3251-3266`.
+
+### Fixed (HIGH regressions)
+
+- **NetU2-01 — REVERT v0.11.11 XU-09. `s.overcall` is no longer
+  in `TRANSIENT_FIELDS`.** The v0.11.11 XU-09 addition broke the
+  v0.9.0 M2 host re-arm at `WHEREDNGN.lua:300`: that block is gated
+  by `if B.State.s.phase == K.PHASE_OVERCALL and B.State.s.overcall
+  then`, scheduling a fresh `_HostResolveOvercall` timer with
+  `startedAt = now` for a clean 5-second window post-restore. With
+  `overcall` made transient, `s.phase` (still persisted) stayed
+  `PHASE_OVERCALL` while `s.overcall` got wiped on `SaveSession` —
+  the re-arm short-circuited on the gate, no timer was scheduled,
+  the host stayed in `PHASE_OVERCALL` forever with no path forward.
+  Same shape as the v0.10.6 RT07-01 redeal-recovery regression
+  v0.11.0 fixed — a lifecycle change broke gated-on-presence
+  recovery. The pre-v0.11.11 design (overcall persisted, M2 resets
+  startedAt) was correct. Pin behavior in test_state_bot.lua U.10
+  inverted from "asserts present" to "asserts absent" with full
+  rationale block (and added V.4 cross-check for the re-arm gate).
+  Audit anchor: `State.lua:256-272`.
+
+### Fixed (MED — wire validation + defense-in-depth)
+
+- **XR2-05/06 — `N._OnContract` validates Hokm trump-suit against
+  the 4-suit enum.** Pre-v0.11.13 a buggy/old host fork could
+  broadcast `MSG_CONTRACT;3;HOKM;X` and `S.ApplyContract` would
+  write `contract.trump = "X"` verbatim. Downstream `R.IsLegalPlay`
+  consults `contract.trump` for trump-overcut logic — non-suit
+  trump means `C.IsTrump("XS", contract)` returns false for ALL
+  cards, silently neutering the bidder's trump declaration (Hokm
+  degrades to suit-following without trump). `fromHost` gate
+  prevents non-host forging, but a buggy host fork would slip
+  through. Mirrors the NetU-03 `_OnAKA` suit-enum gate from
+  v0.11.11. Sun contracts (empty trump) allowed through.
+  Audit anchor: `Net.lua:961-973`.
+
+- **SU2-01 — `S.ApplyResyncSnapshot` clears stale `s.overcall`.**
+  The cleanup block at `State.lua:557-573` explicitly nils 12
+  transient fields (akaCalled, lastTrick, takweeshResult, swaResult,
+  swaRequest, swaDenied, redealing, pendingPreemptContract,
+  preemptEligible, lastRoundResult, lastRoundDelta, sweepTrack-
+  Announced) but was missing `s.overcall`. Defense-in-depth:
+  `RestoreSession`'s pre-snapshot strip handles the /reload path,
+  but the parallel resync-from-host path didn't clear, leaving
+  stale state if a late client rejoined mid-overcall. Now nil'd
+  symmetrically with the 12 sibling fields.
+
+### Fixed (LOW — doc-drift)
+
+- **SU2-04 — `State.lua:1227` `S.ApplyMeld` block comment.**
+  Said "MELD_CARRE_A_SUN (Aces in Sun — 400 raw, الأربع مئة)".
+  Post-v0.11.10 revert the constant is **200 raw**. The Arabic
+  name "الأربع مئة" / "Four Hundred" refers to the post-mult value
+  (200 × Sun×2 = 400 effective), not the stored constant. Updated
+  to clarify.
+
+- **SU2-05 — `State.lua:1107-1117` `S.ApplyContract` block comment.**
+  Said "It survived through the round and into SaveSession (s.overcall
+  is NOT in TRANSIENT_FIELDS)" — the parenthetical was correct
+  pre-v0.11.11, became wrong with XU-09, and is correct again
+  post-v0.11.13 revert. Replaced with a fuller explanation of the
+  v0.9.0 M2 design + why the explicit nil here is still needed.
+
+- **SU2-06 — `CHANGELOG.md` v0.11.12 XR-15 site-count off-by-one.**
+  Said "11 sites migrated" / "State.lua (9 sites)". Actual count is
+  10/8/1/1. Corrected. (The 13→10 reduction reflects compound-gate
+  sites that retain explicit guards.)
+
+- **XR2-10 — `State.lua:1099-1104` belOpen comment-vs-code mismatch.**
+  Said "Default open=true" while the field initial values were
+  `false`. Confusion stemmed from conflating the *field's initial
+  state* (which IS false; escalation is opt-in) with the *ApplyDouble
+  argument default* (which IS true; legacy callers passing nil
+  advance to the next rung). Rewrote comment to disambiguate.
+
+- **`Rules.lua:288` `R.DetectMelds` comment.** Same "400 raw" stale
+  reference as SU2-04. Updated to point at the 200-raw constant +
+  explain the post-mult Arabic-name origin.
+
+- **`tests/test_state_bot.lua` K.2a pin comment.** Said "value =
+  MELD_CARRE_A_SUN (400 raw)". The constant is 200 raw post-revert;
+  the assertion still passes (`K.MELD_CARRE_A_SUN` is the constant
+  symbol, value-agnostic), but the comment was misleading.
+
+### Test coverage (v0.11.13 hotfix-specific)
+
+- **U.10 inverted** from "asserts overcall in TRANSIENT_FIELDS"
+  to "asserts overcall is NOT in TRANSIENT_FIELDS". Renamed from
+  XU-09 to NetU2-01 with full rationale block.
+- **V.1a/b** — pin SU2-02 hoist: `local cardA, cardB, mpA, mpB,
+  mult, beloteOwner` and `local result` declared BEFORE the
+  if-block in `N.HostResolveSWA`.
+- **V.2** — pin XR2-05/06: `_OnContract` checks trump enum.
+- **V.3** — pin SU2-01: `ApplyResyncSnapshot` clears `s.overcall`.
+- **V.4** — pin NetU2-01 cross-check: `WHEREDNGN.lua` post-restore
+  PHASE_OVERCALL re-arm gate intact (depends on overcall persisting).
+
+577/577 tests pass.
+
+### Deferred to v0.11.14+
+
+- **XU-01 phase 2** — Net.lua wire-injection harness. **Single
+  highest-leverage debt item** post-v0.11.13. Would have caught
+  both v0.11.13 HIGH/CRITICAL regressions at commit time. Required
+  precondition for XR-16 (MaybeRunBot 638-line refactor).
+- **XR2-08** — OPEN-1 NetU-01 250ms re-broadcast may not fully
+  close the chat-throttle window. Structural fix is collapsing
+  MSG_OVERCALL_RESOLVE + MSG_CONTRACT into one message; deferred
+  pending phase 2 harness for empirical validation.
+- **SU2-07** — `B.Sound.Try` removes the existence guard for
+  migrated sites. Theoretical risk only (Sound.lua loads via .toc
+  before State/UI), but worth a top-level shim in Sound.lua's
+  tail.
+- **XR2-07** — Sun calibration empirical telemetry (~100 rounds
+  via `WHEREDNGNDB.history` → `tools/calibrate.py`). Latent risk
+  that cumulative bonuses post-v0.11.10 over-fire Sun. Pin coverage
+  exists for constants, not fire-rate distribution.
+
 ## v0.11.12 — test-harness extension + Sound.Try migration + doc updates
 
 Continues the v0.11.9 ultra-audit queue. The previous batch (v0.11.11)
@@ -44,9 +196,9 @@ pattern to the v0.11.11 helper, and documents the calibration journey.
 
 ### Changed (refactor — XR-15 site migration)
 
-- **11 sites migrated** from `if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_X) end`
+- **10 sites migrated** from `if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_X) end`
   to `B.Sound.Try(K.SND_X)`:
-  - `State.lua` (9 sites)
+  - `State.lua` (8 sites)
   - `Net.lua` (1 site)
   - `UI.lua` (1 site)
 
@@ -56,10 +208,10 @@ pattern to the v0.11.11 helper, and documents the calibration journey.
   in `test_state_bot.lua` and `test_botmaster.lua` ensures the
   harness picks up the new helper.
 
-  The 13 → 11 site count reflects two pre-existing patterns that
-  use compound gates (e.g., `if not isReplay and B.Sound and B.Sound.Cue then ...`)
-  which can't be simply replaced with `Try` — those keep the
-  guard form but with consistent gate ordering.
+  Compound-gate sites (e.g., `if not isReplay and B.Sound and B.Sound.Cue then ...`)
+  retain the explicit guard form because they layer additional
+  conditions (replay suppression, trick-8 gating) that don't
+  belong inside the simple Try wrapper.
 
 ### Updated (XU-12 / XU-14 — doc drift closures)
 

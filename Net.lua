@@ -958,6 +958,20 @@ function N._OnContract(sender, bidder, btype, trump)
     -- forward-compat hint we don't support yet — either way reject).
     if bidder < 1 or bidder > 4 then return end
     if btype ~= K.BID_HOKM and btype ~= K.BID_SUN then return end
+    -- v0.11.13 XR2-05/06 fix: validate Hokm trump suit against the
+    -- 4-suit enum. Pre-v0.11.13 a buggy/old host fork could broadcast
+    -- MSG_CONTRACT;3;HOKM;X (non-suit trump). S.ApplyContract writes
+    -- contract.trump = "X" verbatim, then R.IsLegalPlay's Hokm cases
+    -- silently neuter — C.IsTrump("XS", contract) returns false for
+    -- ALL cards, so trump-overcut logic disappears, Hokm degrades to
+    -- pure suit-following, and the bidder's team is silently
+    -- disadvantaged. Mirrors the NetU-03 _OnAKA suit-enum gate
+    -- (v0.11.11). Sun contracts have empty trump; allow that case.
+    if btype == K.BID_HOKM and trump ~= nil and trump ~= "" then
+        if not (trump == "S" or trump == "H" or trump == "D" or trump == "C") then
+            return
+        end
+    end
     S.ApplyContract(bidder, btype, trump)
 end
 
@@ -3248,6 +3262,22 @@ function N.HostResolveSWA(callerSeat, callerHand)
     end
 
     local addA, addB, sweepTeam, contractMade
+    -- v0.11.13 SU2-02 fix: hoist the per-team accounting locals out of
+    -- the if/else blocks below. Pre-v0.11.13 these were declared with
+    -- `local` INSIDE the `if not valid then ... else ... end` arms,
+    -- which closes at the `end` BEFORE the breakdown-stash block. The
+    -- breakdown reads at lines below (cardA/cardB/mpA/mpB/mult/
+    -- beloteOwner for the invalid arm; `result` for the valid arm)
+    -- therefore resolved to undefined globals (= nil), making both
+    -- breakdown branches silently empty. SU-Ultra-01 (v0.11.11) was
+    -- shipped UNREACHABLE — the same "shipped dead code" failure
+    -- pattern as v0.11.2 SU-Ultra-01 itself was meant to fix. The
+    -- audit U.11 source-string pin matched `breakdown = breakdown`
+    -- but couldn't catch the scope error — only behavioral testing
+    -- (XU-01 phase 2) would've caught it. Hoisted to outer scope so
+    -- both arms can populate them and the breakdown block can read.
+    local result
+    local cardA, cardB, mpA, mpB, mult, beloteOwner
 
     if not valid then
         -- INVALID SWA → Qayd penalty (Saudi rule): opp takes
@@ -3257,7 +3287,7 @@ function N.HostResolveSWA(callerSeat, callerHand)
         -- THEIR OWN melds × mult. Belote independent.
         local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
         -- v0.11.10 revert to canonical: cards + melds × full mult.
-        local mult = K.MULT_BASE
+        mult = K.MULT_BASE
         if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
         if     c.gahwa   then mult = mult * K.MULT_FOUR
         elseif c.foured  then mult = mult * K.MULT_FOUR
@@ -3265,8 +3295,8 @@ function N.HostResolveSWA(callerSeat, callerHand)
         elseif c.doubled then mult = mult * K.MULT_BEL end
         local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
-        local cardA = (oppOfCaller == "A") and handTotal or 0
-        local cardB = (oppOfCaller == "B") and handTotal or 0
+        cardA = (oppOfCaller == "A") and handTotal or 0
+        cardB = (oppOfCaller == "B") and handTotal or 0
         -- Saudi Qaid rule (offender melds forfeited).
         --
         -- v0.10.1 M1 fix (user-arbitrated): an invalid-SWA call is a
@@ -3278,14 +3308,14 @@ function N.HostResolveSWA(callerSeat, callerHand)
         -- non-offender team; that team also keeps THEIR own melds.
         -- Belote independent. Pre-v0.10.1 the 14th-audit fix kept
         -- both teams' melds; v0.10.1 reverses for the Qaid context.
-        local mpA = (callerTeam == "A") and 0 or meldA
-        local mpB = (callerTeam == "B") and 0 or meldB
+        mpA = (callerTeam == "A") and 0 or meldA
+        mpB = (callerTeam == "B") and 0 or meldB
         -- Belote scan (played cards only — Saudi rule rb3haa).
         -- Cancelled when the K+Q holder also declared a ≥100 meld.
         -- v0.10.5 MED-1: Belote cancellation switched from SAME-PLAYER
         -- to TEAM-level via R.IsBeloteCancelled — matches R.ScoreRound
         -- and HostResolveTakweesh after their parallel v0.10.5 update.
-        local beloteOwner
+        -- (beloteOwner hoisted to outer scope per v0.11.13 SU2-02 fix.)
         if c.type == K.BID_HOKM and c.trump then
             local kWho, qWho
             local function scan(p_)
@@ -3366,7 +3396,7 @@ function N.HostResolveSWA(callerSeat, callerHand)
             end
         end
 
-        local result = R.ScoreRound(synth, c, S.s.meldsByTeam)
+        result = R.ScoreRound(synth, c, S.s.meldsByTeam)
         addA = result.final.A
         addB = result.final.B
         sweepTeam = result.sweep
