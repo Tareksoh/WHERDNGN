@@ -2551,6 +2551,49 @@ do
 end
 
 -- =====================================================================
+-- R. v0.11.8 bidcalc trace toggle (diagnostic, gated on WHEREDNGNDB.debugBidcalc)
+--
+-- /baloot bidcalc toggles a per-call print of Bot.PickBid's hand
+-- evaluation + thresholds + decision path. Off-by-default so
+-- production users see no spam; on for diagnosing user-reported
+-- "bots not bidding Sun" patterns. Gated via the same WHEREDNGNDB
+-- flag pattern as the existing /baloot debug toggle.
+-- =====================================================================
+section("R. v0.11.8 bidcalc trace toggle")
+
+-- R.1: Slash.lua wires the bidcalc toggle command.
+do
+    local slashSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Slash.lua"):read("*a")
+    assertTrue(slashSrc:find('msg == "bidcalc"') ~= nil,
+               "R.1a (v0.11.8): /baloot bidcalc toggle wired in Slash.lua")
+    assertTrue(slashSrc:find("WHEREDNGNDB%.debugBidcalc") ~= nil,
+               "R.1b (v0.11.8): toggle flips WHEREDNGNDB.debugBidcalc")
+end
+
+-- R.2: Bot.PickBid defines the btrace helper gated on the toggle.
+-- PickBid is ~330 lines (~30k chars) so we slice a generous 40k from
+-- the function start to cover R1 + R2 + fall-through decision sites.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickBid")
+    assertTrue(fnStart ~= nil, "R.2 setup: Bot.PickBid found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 40000)
+        assertTrue(body:find("local function btrace") ~= nil,
+                   "R.2a (v0.11.8): Bot.PickBid defines btrace helper")
+        assertTrue(body:find("WHEREDNGNDB%.debugBidcalc") ~= nil,
+                   "R.2b (v0.11.8): btrace short-circuits when toggle is off (zero overhead in prod)")
+        -- Verify trace fires at key Sun-vs-Hokm decision points.
+        assertTrue(body:find("R1 direct Sun") ~= nil,
+                   "R.2c (v0.11.8): trace covers R1 direct Sun decision")
+        assertTrue(body:find("R2 Sun fires") ~= nil,
+                   "R.2d (v0.11.8): trace covers R2 Sun-vs-Hokm decision")
+        assertTrue(body:find('btrace%("hand=') ~= nil,
+                   "R.2e (v0.11.8): trace logs hand+thresholds at top of bid call")
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

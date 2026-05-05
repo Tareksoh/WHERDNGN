@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.11.8 — bidcalc trace toggle (diagnostic for Sun-bidding investigation)
+
+User-reported "bots not bidding Sun in 30 bidding rounds = 0".
+Analysis of a 13-game-round SavedVariables snapshot showed bots
+ARE bidding Sun (2/5 bot bids = 40% Sun rate, both made), but the
+user's 30-bidding-round observation covers a wider sample than the
+file. To get definitive data, this release adds a chat-output
+diagnostic trace toggle.
+
+### Added (diagnostic)
+
+- **`/baloot bidcalc`** (alias `/baloot bidtrace` / `/baloot biddebug`)
+  — toggles `WHEREDNGNDB.debugBidcalc`. When ON, every `Bot.PickBid`
+  call prints to chat with seat + bidRound prefix. Output covers:
+  - **Top-of-call**: hand, sunStrength, aceCount, mardoofa pairs,
+    urgency stack, all three thresholds (thSun, thHokmR1, thHokmR2)
+    with jitter applied
+  - **Each decision branch**: which path fired (R1 direct Sun, R1
+    Hokm-on-flipped, R2 Sun, R2 Hokm, fall-through PASS) with the
+    specific values that led to it
+  - **Negative paths**: when a Sun bid is *blocked* by the
+    sunMinShape gate, threshold gap, or Hokm-margin rule
+
+  Off-by-default. Zero overhead in production (the helper short-
+  circuits on the toggle check before any string formatting). Format
+  pcall'd so a bad fmt-string can't crash bot dispatch.
+
+  Independent of the master `/baloot debug` flag (which gates
+  Log.lua-level output) — this is a focused short-term diagnostic
+  toggle aimed at the Sun-bidding question. Sample output:
+  ```
+  [bid s3 r1] hand=[7H 9C TS QH AC 8S JD AH] sun=42 aces=2 mardoofa=0 urgency=0 thSun=47 thHokmR1=42 thHokmR2=36
+  [bid s3 r1] R1 direct Sun skipped: sunMinShape=true sun=42 thSun=47
+  [bid s3 r1] R1 Hokm-on-flipped blocked: anyHokm=false anySun=false bidCardSuit=nil
+  [bid s3 r1] R1 falls through to PASS
+  ```
+
+### Use case
+
+Enable the toggle, play 5-10 rounds, capture the chat log. The
+output reveals whether bots:
+- Have hands that should bid Sun but don't (calibration regression)
+- Have weak Sun-shape hands that legitimately stay Hokm (sampling)
+- Run into a specific threshold/jitter pattern that pre-v0.11.8
+  invisibly biased away from Sun
+
+The bidcalc-instrumented data closes the diagnostic loop without
+needing additional `/dump` commands.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section R** (7 source-match pins):
+  - R.1a-b: Slash.lua wires the toggle via `WHEREDNGNDB.debugBidcalc`
+  - R.2a-e: Bot.PickBid defines `btrace` + gates on the flag + traces
+    R1/R2 Sun decisions + hand-state at the top of each call
+- **510 / 510 pass** (up from 502, +8 new pins).
+
 ## v0.11.7 — SWA UX fixes (user-reported): bot-1-card short-circuit + result-banner cards
 
 Two user-reported SWA UX bugs:

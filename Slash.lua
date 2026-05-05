@@ -22,6 +22,7 @@ local function help()
     print("  /baloot preempt      - toggle Triple-on-Ace pre-emption (default on)")
     print("  /baloot start        - host: start the round once lobby is full")
     print("  /baloot debug        - toggle debug logging")
+    print("  /baloot bidcalc      - toggle Sun-vs-Hokm bidding-decision trace (chat output)")
     print("  /baloot log [N]      - dump last N log lines (default 50)")
     print("  /baloot log clear    - wipe log buffer")
     print("  /baloot target <N>   - set game-win cumulative target (default 152)")
@@ -137,6 +138,21 @@ local function dispatch(msg)
         WHEREDNGNDB = WHEREDNGNDB or {}
         WHEREDNGNDB.debug = not WHEREDNGNDB.debug
         say("debug = " .. tostring(WHEREDNGNDB.debug))
+        return
+    end
+
+    -- v0.11.8 — toggle bidding-decision trace. Prints each Bot.PickBid
+    -- call's hand strength + thresholds + decision to chat. Used for
+    -- diagnosing the user-reported "bots not bidding Sun" pattern:
+    -- with this on, the player can see EXACTLY why each bot chose
+    -- Hokm vs Sun vs Pass, including the jittered threshold and the
+    -- urgency stack on each bid. Independent of the master `debug`
+    -- flag (which gates Log.lua behavior); bidcalc is a focused
+    -- short-term diagnostic toggle.
+    if msg == "bidcalc" or msg == "bidtrace" or msg == "biddebug" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.debugBidcalc = not WHEREDNGNDB.debugBidcalc
+        say("bidcalc trace = " .. tostring(WHEREDNGNDB.debugBidcalc))
         return
     end
 

@@ -1204,6 +1204,20 @@ function Bot.PickBid(seat)
     local bidCardSuit = S.s.bidCard and C.Suit(S.s.bidCard) or nil
     local bidCardRank = S.s.bidCard and C.Rank(S.s.bidCard) or nil
 
+    -- v0.11.8 — bidcalc trace helper. Toggled via /baloot bidcalc.
+    -- Used for diagnosing user-reported "bots not bidding Sun" patterns.
+    -- Each call prints to chat with `[bid sN rR]` prefix so the user
+    -- can correlate against the visible bid sequence. Returns silently
+    -- when the toggle is off (zero overhead in production). Format
+    -- pcall'd so a bad fmt-string can't crash bot dispatch.
+    local function btrace(fmt, ...)
+        if not (WHEREDNGNDB and WHEREDNGNDB.debugBidcalc) then return end
+        local ok, msg = pcall(string.format, fmt, ...)
+        if not ok then return end
+        print(("|cff66ddff[bid s%d r%s]|r %s"):format(
+            seat or 0, tostring(round or "?"), msg))
+    end
+
     -- v0.5.8 patch S-4 (decision-trees.md Section 1, Sun bidding):
     -- Carré of Aces (الأربع مئة, "Four Hundred") = 200 raw × 2 (Sun
     -- multiplier) = 400 effective. Saudi rule: ALWAYS Sun, regardless
@@ -1211,7 +1225,10 @@ function Bot.PickBid(seat)
     -- every other bid path.
     -- Sources: decision-trees.md S-4 (Definite, videos 25, 32, 38).
     local aceCount, mardoofaCount = aceCountAndMardoofa(hand)
-    if aceCount >= 4 then return K.BID_SUN end
+    if aceCount >= 4 then
+        btrace("S-4 auto-Sun: 4 Aces in hand → BID_SUN")
+        return K.BID_SUN
+    end
 
     -- Inspect prior bids to know what's still available to us.
     local anyHokm, anySun = false, false
@@ -1280,6 +1297,11 @@ function Bot.PickBid(seat)
     local thHokmR1 = jitter(r1Base    - urgency, BID_JITTER)
     local thHokmR2 = jitter(r2Base    - urgency, BID_JITTER)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
+
+    -- v0.11.8 bidcalc: log thresholds + base strength once per call.
+    btrace("hand=[%s] sun=%d aces=%d mardoofa=%d urgency=%d thSun=%d thHokmR1=%d thHokmR2=%d",
+           table.concat(hand, " "), sun, aceCount, mardoofaCount,
+           urgency, thSun, thHokmR1, thHokmR2)
 
     -- v0.6.0 B-7: Bel-fear bias for Sun bidding (Common, video 25).
     -- When OUR team's cumulative is at >= K.SUN_BEL_CUMULATIVE_GATE
@@ -1436,7 +1458,12 @@ function Bot.PickBid(seat)
         -- locks on the first direct Sun. Bot bids Sun whenever its
         -- threshold passes; if another seat already won the Sun chair
         -- earlier, the host silently treats this as a no-op.
-        if sunMinShape(hand) and sun >= thSun then return K.BID_SUN end
+        if sunMinShape(hand) and sun >= thSun then
+            btrace("R1 direct Sun fires: sun=%d >= thSun=%d (sunMinShape=true)", sun, thSun)
+            return K.BID_SUN
+        end
+        btrace("R1 direct Sun skipped: sunMinShape=%s sun=%d thSun=%d",
+               tostring(sunMinShape(hand)), sun, thSun)
 
         -- Hokm-on-flipped only available if no prior Hokm/Sun.
         -- v0.5.8 patches B-1, B-4, B-6: gate on hokmMinShape (J of
@@ -1454,11 +1481,22 @@ function Bot.PickBid(seat)
                 if belote == bidCardSuit then
                     strength = strength + K.BOT_PICKBID_BELOTE_BONUS
                 end
+                btrace("R1 Hokm-on-flipped consider: suit=%s strength=%d thHokmR1=%d belote=%s",
+                       bidCardSuit, strength, thHokmR1, tostring(belote == bidCardSuit))
                 if strength >= thHokmR1 then
+                    btrace("R1 Hokm fires: %s strength=%d >= thHokmR1=%d",
+                           bidCardSuit, strength, thHokmR1)
                     return K.BID_HOKM .. ":" .. bidCardSuit
                 end
+            else
+                btrace("R1 Hokm-on-flipped skipped: hokmMinShape(%s)=false",
+                       tostring(bidCardSuit))
             end
+        else
+            btrace("R1 Hokm-on-flipped blocked: anyHokm=%s anySun=%s bidCardSuit=%s",
+                   tostring(anyHokm), tostring(anySun), tostring(bidCardSuit))
         end
+        btrace("R1 falls through to PASS")
         return K.BID_PASS
     end
 
@@ -1514,18 +1552,31 @@ function Bot.PickBid(seat)
     if sunMinShape(hand) and sun >= thSun then
         local hokmViable = (bestSuit and bestScore >= thHokmR2)
         if not hokmViable then
+            btrace("R2 Sun fires (Hokm not viable): sun=%d thSun=%d bestSuit=%s bestScore=%d",
+                   sun, thSun, tostring(bestSuit), bestScore or 0)
             return K.BID_SUN
         end
         -- v0.5.13: B-5 +5 margin → K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN.
         if sun >= bestScore + K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN then
+            btrace("R2 Sun fires (margin clears): sun=%d >= bestScore=%d + margin=%d",
+                   sun, bestScore, K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN)
             return K.BID_SUN
         end
+        btrace("R2 Sun considered but blocked: sun=%d hokm-bestScore=%d margin-needed=%d (sun must >= %d)",
+               sun, bestScore, K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN,
+               bestScore + K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN)
         -- Otherwise: both viable, Sun's margin too thin → stay Hokm
         -- (falls through to Hokm return below).
+    else
+        btrace("R2 Sun skipped: sunMinShape=%s sun=%d thSun=%d",
+               tostring(sunMinShape(hand)), sun, thSun)
     end
     if bestSuit and bestScore >= thHokmR2 then
+        btrace("R2 Hokm fires: %s bestScore=%d >= thHokmR2=%d", bestSuit, bestScore, thHokmR2)
         return K.BID_HOKM .. ":" .. bestSuit
     end
+    btrace("R2 falls through to PASS: bestSuit=%s bestScore=%d thHokmR2=%d",
+           tostring(bestSuit), bestScore or 0, thHokmR2)
     return K.BID_PASS
 end
 
