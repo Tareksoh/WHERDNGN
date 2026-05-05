@@ -117,6 +117,8 @@ local function reset()
     s.swaDenied             = nil
     s.pendingHost           = nil
     s.hostDeckRemainder     = nil
+    -- v0.10.7: per-round one-shot flag for SND_SWEEP_TRACK gate.
+    s.sweepTrackAnnounced   = nil
     -- Clear persisted resync hint and session so we don't re-request
     -- or restore a finished game after the next /reload.
     if type(WHEREDNGNDB) == "table" then
@@ -789,6 +791,9 @@ function S.ApplyStart(roundNumber, dealer)
     -- Per-hand played-cards set used by the AKA helper to compute the
     -- highest unplayed card in any non-trump suit. Reset every round.
     s.playedCardsThisRound = {}
+    -- v0.10.7: per-round one-shot flag for SND_SWEEP_TRACK gate.
+    -- Cleared at round-start so the cue can fire again next round.
+    s.sweepTrackAnnounced = nil
     -- Latest AKA call display state. {seat, suit} while a call is in
     -- effect (banner shown). Cleared at the start of the next trick so
     -- the visual cue doesn't linger past its tactical relevance.
@@ -1301,6 +1306,33 @@ function S.ApplyPlay(seat, card)
     -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.
     if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CARD_PLAY) end
 
+    -- v0.10.7 user-requested cue — TRUMP CUT.
+    -- Fires when this play is the FIRST trump played in a non-trump-
+    -- led trick (Hokm only). Detection at this point in ApplyPlay:
+    --   • Trick already has the new play recorded (s.trick.plays
+    --     above), so checking "first trump" means scanning all plays
+    --     so far and confirming this card is the only trump.
+    --   • Hokm contract with leadSuit ≠ trump (otherwise the trump-
+    --     led path is just normal trump-vs-trump comparison, not a
+    --     "cut").
+    -- Single fire per cut event; if pos-3 trumps after pos-2 cut
+    -- already, no second cue (`countTrumpsBefore > 0` short-circuits).
+    if B.Sound and B.Sound.Cue and s.contract
+       and s.contract.type == K.BID_HOKM and s.contract.trump
+       and s.trick.leadSuit and s.trick.leadSuit ~= s.contract.trump
+       and B.Cards and B.Cards.IsTrump
+       and B.Cards.IsTrump(card, s.contract) then
+        local trumpsBefore = 0
+        for i, p in ipairs(s.trick.plays) do
+            if i < #s.trick.plays and B.Cards.IsTrump(p.card, s.contract) then
+                trumpsBefore = trumpsBefore + 1
+            end
+        end
+        if trumpsBefore == 0 then
+            B.Sound.Cue(K.SND_TRUMP_CUT)
+        end
+    end
+
     if seat == s.localSeat then
         for i, c in ipairs(s.hand) do
             if c == card then table.remove(s.hand, i); break end
@@ -1347,6 +1379,120 @@ function S.ApplyTrickEnd(winner, points)
         if R.TeamOf(winner) == R.TeamOf(s.localSeat)
            and B.Sound and B.Sound.Cue then
             B.Sound.Cue(K.SND_TRICK_WON)
+        end
+    end
+
+    -- v0.10.7 user-requested cue — SWEEP TRACK.
+    -- After trick 3 closes, if all three winners are on the same team,
+    -- the sweep pursuit is on track. Fires once per round (gated on
+    -- s.sweepTrackAnnounced), all clients. Mirrors the v0.5.19 sweep-
+    -- pursuit-early heuristic in pickLead — same pattern detection,
+    -- audio cue layered on top.
+    if B.Sound and B.Sound.Cue and #s.tricks == 3
+       and not s.sweepTrackAnnounced
+       and R and R.TeamOf then
+        local t1 = R.TeamOf(s.tricks[1].winner)
+        local t2 = R.TeamOf(s.tricks[2].winner)
+        local t3 = R.TeamOf(s.tricks[3].winner)
+        if t1 and t1 == t2 and t2 == t3 then
+            s.sweepTrackAnnounced = true
+            B.Sound.Cue(K.SND_SWEEP_TRACK)
+        end
+    end
+
+    -- v0.10.7 user-requested cue — LAST TRICK WIN (option 3c).
+    -- Fires when local seat plays a card that's GUARANTEED unbeatable
+    -- by remaining seats — the "100% obvious win" criterion. NOT
+    -- just "wins this trick" but "no opponent could possibly beat
+    -- this card given public state". Local-only.
+    --
+    -- Conditions (any one suffices):
+    --   (a) Local was pos-4 of the trick AND won — pos-4 has full
+    --       trick info, win is determined by definition.
+    --   (b) Local played the boss of led suit (highest-unplayed of
+    --       that suit) AND no remaining seat could ruff:
+    --        • Sun contract — no trump exists, boss is unbeatable.
+    --        • Hokm contract — trump pool exhausted (no trump left
+    --          to ruff with) so non-trump boss is safe.
+    --   (c) Local played the boss of trump (highest-unplayed trump)
+    --       — no over-trump possible.
+    --
+    -- Conservative on non-host clients: opp trump-void status from
+    -- Bot._memory is host-side only, so we only treat (b)/(c) as
+    -- "obvious" when the public-state checks succeed (trump pool
+    -- visibly exhausted via S.HighestUnplayedRank). False negatives
+    -- (won-but-not-fired) are acceptable; false positives are not.
+    if B.Sound and B.Sound.Cue and s.localSeat and winner == s.localSeat
+       and s.lastTrick and s.lastTrick.plays then
+        local plays = s.lastTrick.plays
+        local localPlay
+        for _, p in ipairs(plays) do
+            if p.seat == s.localSeat then localPlay = p; break end
+        end
+        local obvious = false
+        if localPlay then
+            -- (a) Pos-4 case: the local play is the LAST one in the
+            -- trick (i.e., its index in plays equals 4).
+            local localPos
+            for i, p in ipairs(plays) do
+                if p.seat == s.localSeat then localPos = i; break end
+            end
+            if localPos == 4 then
+                obvious = true
+            else
+                -- (b)/(c) Boss-of-suit checks. Need post-trick-end
+                -- state but s.playedCardsThisRound is already updated
+                -- to include this trick's plays.
+                local trump = s.contract and s.contract.type == K.BID_HOKM
+                              and s.contract.trump or nil
+                local cardSuit = localPlay.card:sub(2, 2)
+                local cardRank = localPlay.card:sub(1, 1)
+                -- For (c) — local played a trump card AND it's the
+                -- highest-unplayed trump. Since playedCardsThisRound
+                -- now includes this card, HighestUnplayedRank returns
+                -- the next-highest still unplayed. If that's nil OR
+                -- ranks below cardRank, our card is/was the boss.
+                if trump and cardSuit == trump and S.HighestUnplayedRank then
+                    local nextHigh = S.HighestUnplayedRank(trump)
+                    if not nextHigh then
+                        obvious = true   -- trump pool fully exhausted
+                    end
+                    -- If nextHigh exists, our card may have been the
+                    -- boss-at-time-of-play but a higher-ranked card is
+                    -- still in someone's hand. Conservative: not obvious.
+                end
+                -- For (b) — non-trump boss + trump exhausted (no opp
+                -- can ruff). Sun trivially has no trump.
+                if not obvious and S.HighestUnplayedRank then
+                    -- Was the played card the boss of its (non-trump)
+                    -- suit at the time of play? Walk the rank order
+                    -- from highest; if we encounter cardRank without
+                    -- hitting an unplayed-higher, it WAS the boss.
+                    local order = { "A", "T", "K", "Q", "J", "9", "8", "7" }
+                    local wasBoss = false
+                    for _, r in ipairs(order) do
+                        if r == cardRank then wasBoss = true; break end
+                        -- A higher rank still unplayed (after this
+                        -- trick is recorded)? If so, played card was
+                        -- not the highest-unplayed at its time.
+                        if not (s.playedCardsThisRound
+                                and s.playedCardsThisRound[r .. cardSuit]) then
+                            break
+                        end
+                    end
+                    if wasBoss then
+                        if not trump then
+                            obvious = true   -- Sun: no trump to ruff
+                        elseif cardSuit ~= trump
+                           and not S.HighestUnplayedRank(trump) then
+                            obvious = true   -- Hokm: trump pool empty
+                        end
+                    end
+                end
+            end
+        end
+        if obvious then
+            B.Sound.Cue(K.SND_LAST_TRICK_WIN)
         end
     end
 end
@@ -1499,6 +1645,49 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
        and (sweep ~= nil or bidderMade == false) then
         B.Sound.Cue(K.SND_BALOOT)
     end
+
+    -- v0.10.7 user-requested specialized round-end cues. Layer on
+    -- top of the generic SND_BALOOT fanfare; the generic SND_LOST_ROUND
+    -- stinger is suppressed when one of the more-specific cues
+    -- (SND_HOKM_LOST or SND_KABOOT_AGAINST) fires, to avoid stacking
+    -- two stingers on the local client.
+    --
+    -- Priority order (per user spec):
+    --   1. SND_HOKM_LOST takes precedence over SND_KABOOT_AGAINST
+    --      (when bidder team fails Hokm AND opps sweep, the user
+    --      wants the Hokm-fail cue, not the kaboot-against cue —
+    --      the contract loss is the dominant outcome).
+    --   2. SND_KABOOT_AGAINST fires only if SND_HOKM_LOST didn't.
+    --   3. SND_KABOOT (winning-team) fires independently — distinct
+    --      audience (winners vs losers) so no priority conflict.
+    --   4. SND_LOST_ROUND generic fallback fires only if neither
+    --      SND_HOKM_LOST nor SND_KABOOT_AGAINST fired.
+    local specificLossCueFired = false
+    if B.Sound and B.Sound.Cue and s.localSeat and R and R.TeamOf then
+        local localTeam = R.TeamOf(s.localSeat)
+        local localOnBidderTeam = s.contract and s.contract.bidder
+                                  and R.TeamOf(s.contract.bidder) == localTeam
+        local hokmLostFires = (bidderMade == false) and s.contract
+                              and s.contract.type == K.BID_HOKM
+                              and localOnBidderTeam
+        -- SND_KABOOT — local team achieved Al-Kaboot. Winning-team-only.
+        -- Independent of the loss-cluster priority below.
+        if sweep and localTeam and sweep == localTeam then
+            B.Sound.Cue(K.SND_KABOOT)
+        end
+        -- Priority cluster: HOKM_LOST > KABOOT_AGAINST > generic LOST_ROUND.
+        if hokmLostFires then
+            B.Sound.Cue(K.SND_HOKM_LOST)
+            specificLossCueFired = true
+        elseif sweep and localTeam and sweep ~= localTeam then
+            -- SND_KABOOT_AGAINST — local team is on the receiving end
+            -- of an opp-team Al-Kaboot. Losing-team-only. Only fires
+            -- when SND_HOKM_LOST didn't claim priority above.
+            B.Sound.Cue(K.SND_KABOOT_AGAINST)
+            specificLossCueFired = true
+        end
+    end
+
     -- Player-supplied "lost round" stinger. Fires on the losing
     -- client only. Winning team is inferred from the round deltas:
     -- the team with the larger delta won (works uniformly for
@@ -1506,7 +1695,12 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     -- Takweesh penalties — none ever leave both deltas equal in
     -- a non-trivial round). Spectators (no localSeat) and tied
     -- deltas (rare; e.g. all-pass redeal path) get no stinger.
-    if B.Sound and B.Sound.Cue and s.localSeat and R and R.TeamOf then
+    --
+    -- v0.10.7: suppress when SND_HOKM_LOST or SND_KABOOT_AGAINST
+    -- already fired — we don't want two stacked loss stingers on
+    -- the same round.
+    if B.Sound and B.Sound.Cue and s.localSeat and R and R.TeamOf
+       and not specificLossCueFired then
         local winnerTeam
         if (addA or 0) > (addB or 0) then winnerTeam = "A"
         elseif (addB or 0) > (addA or 0) then winnerTeam = "B" end

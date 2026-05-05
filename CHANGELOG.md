@@ -1,5 +1,72 @@
 # Changelog
 
+## v0.10.7 — 6 specialized sound cues (user-supplied)
+
+User-driven audio polish — six new specialized cues layered on top
+of the existing sound system. All six OGG files supplied by the user
+and wired into appropriate trigger sites in `State.lua`. Cues fire
+on the appropriate audience (some all-clients, some local-only,
+some team-specific). The generic `SND_LOST_ROUND` stinger is now
+suppressed when one of the new specific loss cues fires so the
+local client doesn't hear two stacked stingers.
+
+### Added — 6 new sound cues
+
+| Constant | File | Trigger | Audience |
+|---|---|---|---|
+| `K.SND_SWEEP_TRACK` | `sounds/sweep_track.ogg` | After trick 3 closes when same team won 1+2+3 — sweep pursuit confirmed. Once per round. | All clients |
+| `K.SND_KABOOT` | `sounds/kaboot.ogg` | Round-end when local team achieved Al-Kaboot (won all 8 tricks). | Winning team only |
+| `K.SND_TRUMP_CUT` | `sounds/trump_cut.ogg` | First trump played in a non-trump-led trick (Hokm only). One cue per cut event. | All clients |
+| `K.SND_LAST_TRICK_WIN` | `sounds/last_trick_win.ogg` | Local seat plays a card that's GUARANTEED unbeatable by remaining seats (option 3c). Pos-4 win OR boss-of-suit with trump pool exhausted OR boss-of-trump. | Local seat only |
+| `K.SND_HOKM_LOST` | `sounds/hokm_lost.ogg` | Hokm contract failed (`bidderMade=false`); fires for the bidder team (losers) only. **Takes priority over `SND_KABOOT_AGAINST`** when both would fire. Supersedes generic `SND_LOST_ROUND`. | Bidder team (losers) only |
+| `K.SND_KABOOT_AGAINST` | `sounds/kaboot_against.ogg` | Round-end when Al-Kaboot was scored against local team. Suppressed if `SND_HOKM_LOST` fired (Hokm-fail dominates kaboot-against per user spec). Supersedes generic `SND_LOST_ROUND`. | Losing team only |
+
+### Loss-cue priority order (per user spec)
+
+1. **`SND_HOKM_LOST`** wins when bidder team failed Hokm AND local on bidder team — even when opp also achieved Al-Kaboot. The contract loss is the dominant outcome.
+2. **`SND_KABOOT_AGAINST`** fires only when `SND_HOKM_LOST` didn't claim priority above (e.g., defender team got swept on a Sun contract, or sweep without contract failure).
+3. **`SND_LOST_ROUND`** generic fallback fires only when neither of the above did (e.g., normal Sun-fail loss, Takweesh penalty loss).
+4. **`SND_KABOOT`** (winning team) fires independently — distinct audience so no priority conflict.
+
+### Last-trick-win cadence (option 3c)
+
+Fires only when the local play is **provably unbeatable** from public state:
+- **Position 4** AND local won → always (last-to-play has full trick info)
+- **Earlier positions**: card is the boss of its suit AND for Hokm: trump pool fully exhausted (no remaining seat can ruff)
+- **Trump-led tricks**: card is the highest-unplayed trump
+
+Conservative — false negatives (won-but-not-fired) acceptable, false positives (cued-but-could've-been-beaten) not. Bot._memory void inferences are host-side only and not consulted client-side; cue relies on `S.HighestUnplayedRank` public state.
+
+### Trigger-site wiring
+
+- **`State.lua` `S.ApplyPlay`** (trump-cut detection): scan plays
+  in the current trick for trump count BEFORE the new play; fire
+  if zero prior trump AND new play IS trump AND lead-suit ≠ trump
+  AND contract is Hokm.
+- **`State.lua` `S.ApplyTrickEnd`** (sweep-track + last-trick-win):
+  when `#tricks == 3`, if all 3 winners are on the same team,
+  fire SND_SWEEP_TRACK once per round (gated by
+  `s.sweepTrackAnnounced`); when `#tricks == 8` AND
+  `winner == localSeat`, fire SND_LAST_TRICK_WIN.
+- **`State.lua` `S.ApplyRoundEnd`** (kaboot/hokm-lost cluster):
+  branch on local team membership relative to `sweep` and
+  `bidderMade` parameters. Layered on top of existing
+  `SND_BALOOT` round-end fanfare; suppresses `SND_LOST_ROUND`
+  when a more specific loss cue (HOKM_LOST or KABOOT_AGAINST)
+  fires.
+
+### State additions
+
+- **`s.sweepTrackAnnounced`**: per-round one-shot flag for the
+  SND_SWEEP_TRACK gate. Reset at round-start (`S.ApplyStart`)
+  and on full-state Reset.
+
+### Tests
+
+- 412 / 412 still pass — sound wiring is non-blocking
+  (`B.Sound.Cue` checks for module presence; tests run with
+  `B.Sound = nil`, all calls no-op).
+
 ## v0.10.6 — bidding-calibration step 3 + redeal-stuck fix (Lever C + Lever A + UX)
 
 Calibration-probe agent (read-only) traced source-canonical Saudi

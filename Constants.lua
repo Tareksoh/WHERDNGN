@@ -293,6 +293,18 @@ K.SND_VOICE_FOUR   = SND_BASE .. "four.ogg"       -- "فور" (×4 — defenders
 K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.ogg"      -- "قهوة" (Coffee — bidder's terminal, match-win)
 K.SND_VOICE_AKA    = SND_BASE .. "aka.ogg"        -- "إكَهْ" (AKA signal)
 
+-- v0.10.7 user-requested specialized cues. All file names below must
+-- exist as .ogg files under sounds/ — drop user-supplied audio under
+-- those names to enable the cues. Until the files exist, PlaySoundFile
+-- silently no-ops (WoW's documented behaviour for missing paths) so
+-- the wiring is safe to ship even before files land.
+K.SND_SWEEP_TRACK   = SND_BASE .. "sweep_track.ogg"   -- after trick 3 closes when same team won 1+2+3 (sweep pursuit confirmed). Fires once per round on all clients.
+K.SND_KABOOT        = SND_BASE .. "kaboot.ogg"        -- round-end when local team achieved Al-Kaboot (won all 8 tricks). Winning-team-only.
+K.SND_TRUMP_CUT     = SND_BASE .. "trump_cut.ogg"     -- first trump played in a non-trump-led trick (Hokm-only). Fires on all clients per cut.
+K.SND_LAST_TRICK_WIN = SND_BASE .. "last_trick_win.ogg" -- local seat plays the winning card of trick 8 (round-final climax). Once per round at most, local-only.
+K.SND_HOKM_LOST     = SND_BASE .. "hokm_lost.ogg"     -- Hokm contract failed (bidderMade=false). Fires on the bidder team (losers) only; supersedes generic SND_LOST_ROUND.
+K.SND_KABOOT_AGAINST = SND_BASE .. "kaboot_against.ogg" -- round-end when Al-Kaboot was scored against local team. Losing-team-only; supersedes SND_LOST_ROUND.
+
 -- -- Tunables ---------------------------------------------------------
 
 K.LOBBY_BROADCAST_SEC = 3.0   -- host re-announces lobby every N sec until full
