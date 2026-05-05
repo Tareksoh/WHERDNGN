@@ -2029,9 +2029,21 @@ local function renderActions()
                 local already = S.s.swaRequest.responses
                                 and S.s.swaRequest.responses[S.s.localSeat]
                 if already == nil then
+                    -- v0.11.0 U-7 fix (audit_v0.10.7 B_UIState_audit.md
+                    -- HIGH): Deny SWA was single-click via addAction —
+                    -- a misclick costs the team ~30 game points (handTotal
+                    -- × mult, awarded as the qaid penalty against the
+                    -- caller). Takweesh has confirm-action protection;
+                    -- Deny didn't, even though the consequence is
+                    -- comparable. Switching to addConfirmAction matches
+                    -- the protection level. Accept stays single-click —
+                    -- accepting an SWA where caller could lose is the
+                    -- BENIGN outcome for the responder (the loss falls
+                    -- on the caller if they're wrong).
                     addAction("|cff66ff88Accept SWA|r",
                         function() net().LocalSWAResp(true) end)
-                    addAction("|cffff5544Deny SWA|r",
+                    addConfirmAction("|cffff5544Deny SWA|r",
+                        "|cffff7755Confirm Deny — caller's invalid claim costs them ~30 pts; if Deny is wrong, your team takes the penalty.|r",
                         function() net().LocalSWAResp(false) end)
                 end
             end

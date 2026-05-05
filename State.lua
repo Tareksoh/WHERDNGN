@@ -205,10 +205,24 @@ local TRANSIENT_FIELDS = {
     -- own LocalPlay would be locked out until something else triggers
     -- a turn change. Treat it as a fresh-session local-only flag.
     localPlayedThisTrick = true,
-    -- Timer-backed banner ("Next dealer: NAME"). The C_Timer.After
-    -- that clears it doesn't survive /reload, so persisting the field
-    -- would leave a stale banner that never auto-dismisses.
-    redealing = true,
+    -- v0.11.0 RT07-01 fix (audit_v0.10.7 D_RedTeam_audit.md): pre-
+    -- v0.11.0 `redealing = true` was in TRANSIENT_FIELDS so SaveSession
+    -- wiped it before persistence. The v0.10.6 redeal-stuck recovery
+    -- code at WHEREDNGN.lua PLAYER_LOGIN + Net.lua LocalPause resume
+    -- both gate on `s.redealing` — meaning the recovery NEVER FIRED
+    -- in production (the field was always nil after restore). Test-
+    -- harness gap (Net.lua/WHEREDNGN.lua not loaded by run.py) masked
+    -- the dead recovery. The exact user-reported scenario ("paused
+    -- mid-redeal + /reload") still soft-locked despite the v0.10.6
+    -- shipped fix. Removing from TRANSIENT_FIELDS so the recovery
+    -- has data to act on. The auto-clear concern from the prior
+    -- comment is moot: the recovery itself executes the deal within
+    -- ~3 seconds (PLAYER_LOGIN + LocalPause re-arms call
+    -- N._HostExecuteRedeal which calls S.ApplyStart — that zeroes
+    -- s.redealing as part of its normal round-start reset). So
+    -- persisting through /reload is the correct lifecycle: the
+    -- C_Timer-based auto-dismiss path is replaced by the recovery
+    -- path post-/reload.
     -- Takweesh result banner is also transient — its display lifetime
     -- ends when the next round starts (handled by ApplyStart).
     takweeshResult = true,
@@ -534,6 +548,12 @@ function S.ApplyResyncSnapshot(gameID, payload)
     s.preemptEligible       = nil
     s.lastRoundResult       = nil
     s.lastRoundDelta        = nil
+    -- v0.11.0 S-1 fix (audit_v0.10.7 B_UIState_audit.md): rejoiner
+    -- carrying a `true` from a prior round's sweep would silently
+    -- miss the SND_SWEEP_TRACK cue when their team sweeps tricks
+    -- 1-2-3 of the new round. Reset on resync to keep the cue
+    -- gate fresh for the post-resync round.
+    s.sweepTrackAnnounced   = nil
 
     -- Trick / hand are not snapshotted; they'll arrive via the next
     -- play broadcast and the re-whispered MSG_HAND respectively.
@@ -1215,7 +1235,7 @@ function S.ApplyPlayPhase()
     s.trick = { leadSuit = nil, plays = {} }
 end
 
-function S.ApplyPlay(seat, card)
+function S.ApplyPlay(seat, card, isReplay)
     if not s.trick then s.trick = { leadSuit = nil, plays = {} } end
     -- One-play-per-seat-per-trick: reject ANY second play from the same
     -- seat in the current trick (not just an identical card). This stops
@@ -1317,7 +1337,11 @@ function S.ApplyPlay(seat, card)
     --     "cut").
     -- Single fire per cut event; if pos-3 trumps after pos-2 cut
     -- already, no second cue (`countTrumpsBefore > 0` short-circuits).
-    if B.Sound and B.Sound.Cue and s.contract
+    --
+    -- v0.11.0 RT07-03 fix: skip the cue on resync-replay frames —
+    -- they reconstruct past plays, the trump-cut event already
+    -- happened in real time, no need to re-announce.
+    if not isReplay and B.Sound and B.Sound.Cue and s.contract
        and s.contract.type == K.BID_HOKM and s.contract.trump
        and s.trick.leadSuit and s.trick.leadSuit ~= s.contract.trump
        and B.Cards and B.Cards.IsTrump
@@ -1345,7 +1369,7 @@ function S.ApplyPlay(seat, card)
     end
 end
 
-function S.ApplyTrickEnd(winner, points)
+function S.ApplyTrickEnd(winner, points, isReplay)
     if not s.trick or not s.trick.plays or #s.trick.plays == 0 then return end
     -- Audit fix: only accept a complete 4-play trick. A malformed or
     -- partial broadcast (e.g. host bug, replayed mid-trick frame
@@ -1388,7 +1412,11 @@ function S.ApplyTrickEnd(winner, points)
     -- s.sweepTrackAnnounced), all clients. Mirrors the v0.5.19 sweep-
     -- pursuit-early heuristic in pickLead — same pattern detection,
     -- audio cue layered on top.
-    if B.Sound and B.Sound.Cue and #s.tricks == 3
+    --
+    -- v0.11.0 RT07-03 fix: skip on resync-replay frames so a rejoiner
+    -- doesn't hear sweep-track / last-trick cues for past tricks
+    -- during the snapshot replay flood.
+    if not isReplay and B.Sound and B.Sound.Cue and #s.tricks == 3
        and not s.sweepTrackAnnounced
        and R and R.TeamOf then
         local t1 = R.TeamOf(s.tricks[1].winner)
@@ -1422,7 +1450,9 @@ function S.ApplyTrickEnd(winner, points)
     -- "obvious" when the public-state checks succeed (trump pool
     -- visibly exhausted via S.HighestUnplayedRank). False negatives
     -- (won-but-not-fired) are acceptable; false positives are not.
-    if B.Sound and B.Sound.Cue and s.localSeat and winner == s.localSeat
+    --
+    -- v0.11.0 RT07-03 fix: skip on resync-replay frames.
+    if not isReplay and B.Sound and B.Sound.Cue and s.localSeat and winner == s.localSeat
        and s.lastTrick and s.lastTrick.plays then
         local plays = s.lastTrick.plays
         local localPlay

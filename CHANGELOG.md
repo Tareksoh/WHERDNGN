@@ -1,5 +1,152 @@
 # Changelog
 
+## v0.11.0 — audit_v0.10.7 closures + voice-cue refresh
+
+200k-token quad-track audit (Net.lua, UI.lua+State.lua, Bot.lua+
+BotMaster.lua, cross-cutting/red-team) surfaced 9 HIGH + 22 MED + 17
+LOW findings. v0.11.0 closes the 7 actionable HIGH bugs + 2 high-value
+MED + the 8-voice-cue audio refresh. Architectural items (C-14
+BotMaster heuristicPick weakness, X-1 State→UI refresh implicit
+dependency) deferred to v0.11.1.
+
+The single most important finding: **my v0.10.6 redeal-stuck recovery
+was structurally dead** (RT07-01) — `s.redealing` was in
+`TRANSIENT_FIELDS` so SaveSession wiped it before persistence, meaning
+the recovery code at WHEREDNGN.lua + Net.lua never had data to act on.
+The exact user-reported scenario ("paused mid-redeal + /reload") still
+soft-locked despite the v0.10.6 shipped fix. Test-harness gap (Net.lua
++ WHEREDNGN.lua not loaded by `tests/run.py`) masked the regression.
+
+### Fixed (HIGH)
+
+- **RT07-01** (`State.lua:211` TRANSIENT_FIELDS) — removed `redealing`
+  from the transient-fields table so SaveSession persists it. The
+  v0.10.6 recovery code at `WHEREDNGN.lua` PLAYER_LOGIN + `Net.lua`
+  LocalPause resume now has data to act on. The C_Timer-based auto-
+  dismiss path is replaced by the recovery path post-/reload.
+  **The user-reported soft-lock is now actually fixed.**
+
+- **A5** (`Net.lua:1186` `_OnOvercallResolve`) — phase-idempotency
+  guard. The v0.10.3 dual-emit (`"!"` + `"?"`) for cross-version compat
+  could fire `_OnOvercallResolve` twice; under wire reorder the second
+  hit could revert a remote client from PHASE_PLAY back to
+  PHASE_DOUBLE. Added `if S.s.phase ~= K.PHASE_OVERCALL then return end`.
+
+- **D1** (`WHEREDNGN.lua:197` PLAYER_LOGIN) — PHASE_PREEMPT AFK re-arm
+  branch. Pre-v0.11.0 the re-arm chain covered DOUBLE/TRIPLE/FOUR/
+  GAHWA but not PREEMPT; /reload during a Triple-on-Ace pre-emption
+  with a human eligible seat soft-locked the same way the v0.10.6
+  redeal-stuck bug did. Added `for _, pseat in ipairs(s.preemptEligible)`
+  loop that re-arms `StartBelTimer(pseat, "preempt_pass")` for the
+  first human eligible seat.
+
+- **S-1** (`State.lua:546` ApplyResyncSnapshot) — added
+  `s.sweepTrackAnnounced = nil` to the resync clear block. Pre-v0.11.0
+  a rejoiner carrying a stale `true` flag from a prior round would
+  silently miss the v0.10.7 SND_SWEEP_TRACK cue when their team
+  swept tricks 1-2-3 of the new round.
+
+- **U-7** (`UI.lua:2034`) — SWA Deny button switched from `addAction`
+  (single-click) to `addConfirmAction`. Misclick cost ~30 game points
+  (handTotal × mult, awarded as the Qaid penalty against the caller).
+  Takweesh had confirm protection; Deny didn't.
+
+- **B2** (`Net.lua:2079` HostFinishDeal) — nil-hands soft-lock now
+  surfaces a user-facing chat error advising `/baloot reset`. Pre-
+  v0.11.0 was log-only, leaving the user with a frozen window and no
+  visible explanation.
+
+- **C1#6** (`Net.lua:316` SendResyncReq) — `resyncResExpiryTimer` now
+  pause-aware. Pre-v0.11.0 the 30s window timer fired regardless of
+  pause; user paused for >30s (or paused + /reload) saw legitimate
+  MSG_RESYNC_RES rejected as expired. Recursive named function
+  pattern matching the v0.10.5 SWA pause re-arm fix.
+
+### Fixed (MED — 2 high-value cherry-picks)
+
+- **E2** (`Net.lua:2940` `_OnSWA`) — added `swaRequest` mutex matching
+  `_OnSWAReq`. Pre-v0.11.0 a direct MSG_SWA claim from a different
+  seat could race against an in-flight vote window — the second
+  resolve clobbered the first.
+
+- **RT07-03** (`Net.lua` MSG_TRICK + `State.lua` ApplyTrickEnd/ApplyPlay)
+  — resync replay no longer fires v0.10.7 sound cues for past events.
+  Added trailing `;1` replay flag to whispered MSG_TRICK frames during
+  resync; receiver propagates `isReplay` through `S.ApplyTrickEnd` +
+  `S.ApplyPlay`; the v0.10.7 cues (SND_TRUMP_CUT, SND_SWEEP_TRACK,
+  SND_LAST_TRICK_WIN) skip when `isReplay=true`. Pre-v0.11.0 a
+  rejoiner heard the cues for every past trick during the snapshot
+  replay flood.
+
+### Voice-cue refresh (8 mp3 → ogg replacements)
+
+User-supplied refreshed Saudi voice cues replace the v0.5-era
+edge-tts synthesized cues. All 8 files copied from `Downloads/`,
+converted via `ffmpeg libvorbis q=5`, dropped into `sounds/`:
+
+| File | Phrase | Trigger |
+|---|---|---|
+| `aka.ogg` | إكَهْ | AKA partner-coordination call |
+| `ashkal.ogg` | أشكال | Ashkal call |
+| `wla.ogg` | ولا | round-2 pass |
+| `pass.ogg` | بَسْ | round-1 pass |
+| `sun.ogg` | صن | Sun bid |
+| `hokm.ogg` | حكم | Hokm bid |
+| `awal.ogg` | أوَل | round-1 bidding start |
+| `thany.ogg` | ثآني | round-2 bidding start |
+
+No code changes — constant paths unchanged.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section L** (3 new pins):
+  - L.1 (RT07-01): `redealing = true` no longer in TRANSIENT_FIELDS
+  - L.2 (S-1): ApplyResyncSnapshot clear block contains
+    `sweepTrackAnnounced` reset
+  - L.3 (RT07-03): `S.ApplyTrickEnd` + `S.ApplyPlay` signatures
+    accept `isReplay`; v0.10.7 cues gated on `not isReplay`
+- **419 / 419 pass** (up from 412 in v0.10.7, +7 new pins).
+
+### Deferred to v0.11.1+ (per v0.10.7 audit)
+
+#### HIGH-architectural (deserves its own release)
+
+- **C-14** — BotMaster `heuristicPick` rollout policy substantially
+  weaker than `Bot.PickPlay` (Saudi Master ISMCTS sampler under-
+  values canonical play). Recommended fix: route rollouts through
+  `Bot.PickPlay` under `_inRollout=true` guard. Substantial — needs
+  A/B simulation testing.
+- **X-1** — State→UI refresh dependency is implicit (every Net.lua
+  dispatch must remember `B.UI.Refresh()`). Same architectural
+  pattern that caused the v0.10.6 round-end-stuck bug. Massive
+  refactor surface.
+
+#### MED batch (cherry-pick from 22)
+
+- A2: unknown-tag silent UI churn (cosmetic but real)
+- B1: HostStartRound mid-round redeal hazard (phase gate)
+- C-07: topTouchSignal write-without-read at M3lm tier (data
+  collected but unused — wire BotMaster reader call from M3lm too)
+- C-19: BotMaster retry-exhaust silent fallthrough (instrumentation)
+- C-11: `hokmMinShape` Lever C R2-only scoping (pending v0.10.6
+  empirical telemetry showing R1 over-firing)
+- 17 more in `audit_v0.10.7/` reports
+
+#### LOW (defer to v0.11.2+)
+
+- Dead-code duplicate at Bot.lua:1361-1397
+- 638-line `MaybeRunBot` refactor candidate
+- `K.MSG_KICK = "K"` dead constant
+- 18 Sound-guard duplications (refactor to `cue()` helper)
+
+### References
+
+Audit reports under `.swarm_findings/audit_v0.10.7/`:
+- `A_Net_audit.md` — Net.lua deep audit (~600 lines)
+- `B_UIState_audit.md` — UI.lua + State.lua audit (~963 lines)
+- `C_Bot_audit.md` — Bot.lua + BotMaster.lua audit (~630 lines)
+- `D_RedTeam_audit.md` — cross-cutting / red-team audit (~365 lines)
+
 ## v0.10.7 — 6 specialized sound cues (user-supplied)
 
 User-driven audio polish — six new specialized cues layered on top

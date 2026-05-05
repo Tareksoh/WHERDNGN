@@ -319,11 +319,29 @@ function N.SendResyncReq(gameID)
     if resyncResExpiryTimer and resyncResExpiryTimer.Cancel then
         resyncResExpiryTimer:Cancel()
     end
+    -- v0.11.0 C1#6 fix (audit_v0.10.7 A_Net_audit.md HIGH): pause-
+    -- aware re-arm. Pre-v0.11.0 the 30-second window timer fired
+    -- regardless of pause state; if the user paused for >30 seconds
+    -- (or paused + /reload), the timer expired and a legitimate
+    -- MSG_RESYNC_RES arriving after resume was rejected by the
+    -- `if not expectingResyncRes` early-return at the receive site.
+    -- Mirrors the SWA pause-aware re-arm pattern at LocalSWA / etc.
+    -- Named function so it can recursively re-arm itself.
+    local function expiryTick()
+        if S.s.paused then
+            -- Defer expiry until resume; re-arm a fresh 30s window
+            -- so a long pause doesn't compound. The window is anchored
+            -- to RESUME-TIME, not original-request-time.
+            if C_Timer and C_Timer.NewTimer then
+                resyncResExpiryTimer = C_Timer.NewTimer(30, expiryTick)
+            end
+            return
+        end
+        expectingResyncRes = false
+        resyncResExpiryTimer = nil
+    end
     if C_Timer and C_Timer.NewTimer then
-        resyncResExpiryTimer = C_Timer.NewTimer(30, function()
-            expectingResyncRes = false
-            resyncResExpiryTimer = nil
-        end)
+        resyncResExpiryTimer = C_Timer.NewTimer(30, expiryTick)
     end
 end
 
@@ -436,12 +454,20 @@ function N.SendResyncRes(target, gameID)
     -- Replay closed-trick history (fed via MSG_TRICK so the receiver
     -- runs the same ApplyTrickEnd path; we provide the fully-encoded
     -- plays so they don't depend on MSG_PLAY arrival order).
+    --
+    -- v0.11.0 RT07-03 fix (audit_v0.10.7 D_RedTeam_audit.md MED):
+    -- trailing ";1" replay flag so the receiver's _OnTrick can
+    -- propagate isReplay to ApplyTrickEnd, suppressing the v0.10.7
+    -- SND_SWEEP_TRACK + SND_LAST_TRICK_WIN cues. Pre-v0.11.0 a
+    -- rejoiner heard those cues for every past trick during the
+    -- resync replay flood. The MSG_TRICK wire format is now 6
+    -- fields including the trailing flag (was 5).
     for _, t in ipairs(S.s.tricks or {}) do
         local enc = ""
         for _, p in ipairs(t.plays or {}) do
             enc = enc .. (p.card or "??") .. tostring(p.seat or 0)
         end
-        whisper(target, ("%s;%d;%d;%s;%s"):format(
+        whisper(target, ("%s;%d;%d;%s;%s;1"):format(
             K.MSG_TRICK, t.winner or 0, t.points or 0,
             t.leadSuit or "", enc))
     end
@@ -562,8 +588,11 @@ function N.HandleMessage(prefix, message, channel, sender)
         -- fields[4] is the optional replay flag (see _OnPlay).
         N._OnPlay(sender, tonumber(fields[2]), fields[3], fields[4])
     elseif tag == K.MSG_TRICK then
+        -- v0.11.0 RT07-03: fields[6] is the optional replay flag
+        -- ("1" iff this MSG_TRICK was whispered during a resync
+        -- replay; tells _OnTrick to suppress v0.10.7 sound cues).
         N._OnTrick(sender, tonumber(fields[2]), tonumber(fields[3]),
-                   fields[4], fields[5])
+                   fields[4], fields[5], fields[6])
     elseif tag == K.MSG_ROUND then
         local sweep = fields[6]
         if sweep == "" or sweep == nil then sweep = nil end
@@ -1183,6 +1212,20 @@ function N._OnOvercallResolve(sender, takenStr, by, otype)
     -- the function signature for forward-compat / debug logging — but
     -- not consulted for state mutation. The host is server-of-truth
     -- via MSG_CONTRACT.
+    --
+    -- v0.11.0 A5 fix (audit_v0.10.7 A_Net_audit.md HIGH): phase-
+    -- idempotency guard. The v0.10.3 dual-emit (`"!"` + `"?"`) for
+    -- cross-version compat means this handler can fire TWICE per
+    -- resolve event: once for each tag. The second hit was assumed
+    -- benign (same state mutation), but under wire reorder the
+    -- second hit can arrive AFTER subsequent MSG_CONTRACT +
+    -- MSG_DEAL "play" → reverting a remote client from PHASE_PLAY
+    -- back to PHASE_DOUBLE. Bail if we're not currently in
+    -- PHASE_OVERCALL — phase has already advanced past the
+    -- overcall window, the resolve is stale and would corrupt
+    -- state. The first-arrival path still works correctly because
+    -- it fires WITHIN PHASE_OVERCALL.
+    if S.s.phase ~= K.PHASE_OVERCALL then return end
     S.s.overcall = nil
     S.s.phase = K.PHASE_DOUBLE
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -1489,7 +1532,11 @@ function N._OnPlay(sender, seat, card, replayFlag)
     -- Capture lead suit BEFORE ApplyPlay so the bot memory observer
     -- knows whether `card` followed suit or was off-suit (a void tell).
     local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
-    S.ApplyPlay(seat, card)
+    -- v0.11.0 RT07-03 fix (audit_v0.10.7 D_RedTeam_audit.md MED): pass
+    -- isReplay through to ApplyPlay so the v0.10.7 SND_TRUMP_CUT cue
+    -- doesn't fire on resync-replay frames (those are reconstructive,
+    -- not new — the cue would announce a long-past trump-cut event).
+    S.ApplyPlay(seat, card, isReplay)
     -- 50-agent playtest audit fix: do not feed Bot.OnPlayObserved on
     -- replay frames during a resync. The plays are reconstructive,
     -- not new — observing them would corrupt void / firstDiscard /
@@ -1509,7 +1556,7 @@ function N._OnPlay(sender, seat, card, replayFlag)
     end
 end
 
-function N._OnTrick(sender, winner, points, leadSuit, encPlays)
+function N._OnTrick(sender, winner, points, leadSuit, encPlays, replayFlag)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
@@ -1517,6 +1564,12 @@ function N._OnTrick(sender, winner, points, leadSuit, encPlays)
     -- the encoded plays so ApplyTrickEnd's lastTrick stash is complete
     -- regardless of MSG_PLAY arrival order. Older hosts (pre-v0.1.25)
     -- send empty leadSuit/encPlays — fall back to the local view.
+    --
+    -- v0.11.0 RT07-03 fix (audit_v0.10.7 D_RedTeam_audit.md MED):
+    -- accept and propagate isReplay so ApplyTrickEnd suppresses
+    -- v0.10.7 cues (SND_SWEEP_TRACK + SND_LAST_TRICK_WIN) on
+    -- replayed past tricks during a resync flood.
+    local isReplay = (replayFlag == "1") and fromHost(sender)
     if encPlays and #encPlays >= 3 then
         local plays = {}
         for i = 1, #encPlays, 3 do
@@ -1534,7 +1587,7 @@ function N._OnTrick(sender, winner, points, leadSuit, encPlays)
             end
         end
     end
-    S.ApplyTrickEnd(winner, points)
+    S.ApplyTrickEnd(winner, points, isReplay)
     if S.s.isHost then N._HostStepAfterTrick() end
 end
 
@@ -2058,13 +2111,21 @@ function N.HostFinishDeal()
     if not S.s.isHost then return end
     local hands = S.HostDealRest()
     if not hands then
-        -- HostDealRest returns nil only when hostHands or
-        -- hostDeckRemainder is missing — that means the bidding ended
-        -- without a fresh HostDealInitial having run, OR the state was
-        -- partly reset. Log it so a freeze is visible.
+        -- v0.11.0 B2 fix (audit_v0.10.7 A_Net_audit.md HIGH): pre-
+        -- v0.11.0 this branch silently returned with only a Log line,
+        -- soft-locking the round with no user-facing surface. Reachable
+        -- from 11+ call paths after a Reset/restore corruption (e.g.,
+        -- /baloot reset between bid windows, hand-edited SavedVariables
+        -- losing hostDeckRemainder, etc.). Now also surfaces an
+        -- in-chat error so the player has a visible signal AND advises
+        -- them to /baloot reset to recover. The log line is preserved
+        -- for debug traces.
         log("Error", "HostFinishDeal: HostDealRest returned nil (hostHands=%s remainder=%s phase=%s)",
             tostring(S.s.hostHands ~= nil), tostring(S.s.hostDeckRemainder ~= nil),
             tostring(S.s.phase))
+        print("|cffff5544WHEREDNGN error|r: deal state was lost between bidding windows "
+            .. "(hostHands or hostDeckRemainder missing). Run |cffaaaaaa/baloot reset|r "
+            .. "to recover and start a fresh round.")
         return
     end
     dealHandsToHumans(hands)
@@ -2896,6 +2957,17 @@ function N._OnSWA(sender, seat, encodedHand)
     -- late-arriving wire from a peer who hadn't seen the toggle yet.
     if S.s.isHost and WHEREDNGNDB
        and WHEREDNGNDB.allowSWA == false then
+        return
+    end
+    -- v0.11.0 E2 fix (audit_v0.10.7 A_Net_audit.md MED): swaRequest
+    -- mutex. _OnSWAReq has this guard at line 2783; _OnSWA didn't.
+    -- A direct MSG_SWA claim from a different seat could race against
+    -- an in-flight _OnSWAReq vote window — the second resolve would
+    -- clobber the first. Reject the second when a request from a
+    -- different caller is pending. Same-caller is also a no-op (the
+    -- existing request is authoritative; we don't want to double-
+    -- resolve).
+    if S.s.swaRequest and S.s.swaRequest.caller then
         return
     end
     -- Host is the source of truth. Decode and resolve.

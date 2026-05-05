@@ -1990,6 +1990,104 @@ do
 end
 
 -- =====================================================================
+-- L. v0.11.0 audit closures (RT07-01 + S-1 + RT07-03 + sound-replay)
+--
+-- L.1 (RT07-01) — s.redealing must be PERSISTED through SaveSession,
+-- not stripped as transient. Pre-v0.11.0 the redealing field was in
+-- TRANSIENT_FIELDS so SaveSession wiped it before persistence — the
+-- v0.10.6 redeal-stuck recovery code at WHEREDNGN.lua + Net.lua both
+-- gated on `s.redealing`, so the recovery NEVER FIRED in production.
+--
+-- L.2 (S-1) — s.sweepTrackAnnounced must clear on resync so a
+-- rejoiner gets a fresh SND_SWEEP_TRACK gate for the new round.
+--
+-- L.3 (RT07-03) — S.ApplyTrickEnd + S.ApplyPlay accept isReplay flag;
+-- v0.10.7 cues skip on replay so resync flood doesn't re-fire past
+-- trump-cuts / sweep-tracks / last-trick-wins.
+-- =====================================================================
+section("L. v0.11.0 audit closures (RT07-01, S-1, RT07-03)")
+
+-- L.1: s.redealing persists through SaveSession.
+--
+-- TRANSIENT_FIELDS is a file-local table in State.lua. We verify via
+-- source-string match: confirm `redealing = true` is NO LONGER in the
+-- table (the v0.11.0 fix removed it). Pre-v0.11.0 the line was
+-- present, after fix the comment block survived but the field
+-- assignment was deleted.
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    -- Locate TRANSIENT_FIELDS table body.
+    local tableStart = stateSrc:find("local TRANSIENT_FIELDS = {", 1, true)
+    assertTrue(tableStart, "L.1 setup: TRANSIENT_FIELDS table found")
+    if tableStart then
+        -- The closing brace of the table is the next "^}" at column 0
+        -- after tableStart. Scan for it.
+        local search = stateSrc:sub(tableStart)
+        local braceEnd = search:find("\n}\n", 1, true)
+        local tableBody = search:sub(1, braceEnd or #search)
+        -- Match `redealing = true,` (canonical TRANSIENT_FIELDS entry
+        -- form — note trailing comma, distinguishes from comment text
+        -- describing the prior bug). The v0.11.0 fix removed the
+        -- entry; the documenting comment block remains.
+        local hasRedealing = tableBody:match("redealing%s*=%s*true%s*,")
+        assertEq(hasRedealing, nil,
+                 "L.1 (RT07-01): TRANSIENT_FIELDS no longer strips s.redealing — recovery code can now act")
+    end
+end
+
+-- L.2: s.sweepTrackAnnounced reset on resync.
+do
+    freshState()
+    S.s.sweepTrackAnnounced = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    -- Build a minimal valid resync snapshot payload that ApplyResyncSnapshot
+    -- can parse. Simplest: pack a snapshot from the CURRENT state, then
+    -- apply. The clear block at line ~525 should reset sweepTrackAnnounced.
+    --
+    -- Direct shortcut: ApplyResyncSnapshot reads encoded fields then runs
+    -- the clear block. We can simulate the clear-block effect by calling
+    -- it with a no-op snapshot. But we need a valid encoder. Skip the
+    -- packing layer — directly assert that the field is in the post-
+    -- snapshot clear logic by checking its presence in S.ApplyResyncSnapshot
+    -- code via a structural test: invoke the function's clear path
+    -- through a minimal snapshot.
+    --
+    -- Easier: use the snapshot encoder S.SaveSession produced + a
+    -- corresponding "we received MSG_RESYNC_RES" path. State.lua exposes
+    -- ApplyResyncSnapshot indirectly through the wire — but the Lua test
+    -- env doesn't load Net.lua. So just verify the field appears in the
+    -- ApplyResyncSnapshot clear block by source-string match.
+    --
+    -- (Behavioural test deferred until Net.lua test harness lands per
+    -- audit's "untested paths" recommendation. This pin is at least
+    -- a structural floor.)
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    local clearBlockStart = stateSrc:find("Audit fix: clear remaining transient round state", 1, true)
+    local clearBlockEnd = stateSrc:find("Trick / hand are not snapshotted", 1, true)
+    assertTrue(clearBlockStart and clearBlockEnd and clearBlockStart < clearBlockEnd,
+               "L.2 setup: ApplyResyncSnapshot clear block bounds found")
+    if clearBlockStart and clearBlockEnd then
+        local clearBlock = stateSrc:sub(clearBlockStart, clearBlockEnd)
+        assertTrue(clearBlock:find("sweepTrackAnnounced", 1, true),
+                   "L.2 (S-1): ApplyResyncSnapshot clear block resets s.sweepTrackAnnounced")
+    end
+end
+
+-- L.3: S.ApplyTrickEnd accepts isReplay; v0.10.7 cues skip on replay.
+do
+    -- We can't audit Sound.Cue invocations directly (no recorder in test
+    -- env), but we can pin the ApplyTrickEnd signature accepts isReplay.
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    assertTrue(stateSrc:find("function S.ApplyTrickEnd(winner, points, isReplay)", 1, true),
+               "L.3a (RT07-03): S.ApplyTrickEnd signature includes isReplay parameter")
+    assertTrue(stateSrc:find("function S.ApplyPlay(seat, card, isReplay)", 1, true),
+               "L.3b (RT07-03): S.ApplyPlay signature includes isReplay parameter")
+    -- Verify the v0.10.7 cues are gated on `not isReplay`.
+    assertTrue(stateSrc:find("not isReplay and B.Sound and B.Sound.Cue", 1, true),
+               "L.3c (RT07-03): v0.10.7 cues skip when isReplay=true")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

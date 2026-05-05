@@ -195,6 +195,26 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                         B.Net.StartBelTimer(bidder, "gahwa")
                     end
                 end
+                -- v0.11.0 D1 fix (audit_v0.10.7 A_Net_audit.md HIGH):
+                -- PHASE_PREEMPT was missing from the AFK re-arm chain
+                -- above. /reload during a Triple-on-Ace pre-emption
+                -- window with a human eligible seat soft-locked: the
+                -- BelTimer (kind="preempt_pass") didn't survive the
+                -- /reload and no recovery path re-armed it. Same shape
+                -- as the v0.10.6 redeal-stuck bug pattern. Pre-empt
+                -- has a LIST of eligible seats (S.s.preemptEligible);
+                -- arm for the first human in the list (only one timer
+                -- can be in flight; if that seat passes, the host
+                -- advances and remaining bots fire via MaybeRunBot).
+                if B.Net and s.phase == K.PHASE_PREEMPT
+                   and s.preemptEligible and B.Net.StartBelTimer then
+                    for _, pseat in ipairs(s.preemptEligible) do
+                        if s.seats[pseat] and not s.seats[pseat].isBot then
+                            B.Net.StartBelTimer(pseat, "preempt_pass")
+                            break
+                        end
+                    end
+                end
                 -- 6th-audit fix: re-fire _HostStepPlay if a 4-play
                 -- trick was stuck mid-resolution at /reload time.
                 -- _HostStepPlay's 2.2s C_Timer doesn't survive a
