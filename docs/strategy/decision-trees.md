@@ -120,12 +120,22 @@ actual bot logic.** Each rule maps to a specific picker function
 | **Hokm trump suit**, you hold NON-consecutive top trumps (gap in rank order) | **INVERT** — preserve top, lead/play side first | Opp can ambush between your two ranks. Your top is a "lone top" with no immediate cover. | `pickFollow` Hokm-trump non-consecutive branch `(not yet wired)`. | Definite | 22 |
 | Hokm; must over-cut and hold consecutive trumps | Over-cut with the SMALLER (preserve top for ambush) | Save top for true ambush opportunity. | `pickFollow` over-cut branch `(not yet wired)`. | Definite | 22 |
 
-### K-tripled (مثلوث الشايب) — 3-card K-holding
+### J-tripled (مثلوث الولد) — 3-card J-holding under Sun
+
+> **v0.10.0 review correction (R7):** the canonical case is
+> **J-tripled** (الولد = J), not K-tripled. Under Sun's `A > T > J`
+> rank order, after A and T are spent in tricks 1-2, the J becomes
+> the top live card of that suit and wins trick 3 — that's the
+> whole point of the holding. Earlier docs called this "K-tripled"
+> / "مثلوث الشايب" (شايب = K), which video #17 does NOT actually
+> cover; the bug came from a romanization artifact (Source F
+> flagged it explicitly during the v0.10.0 review). Source:
+> `review_v0.10.0/reaudit_R7_glossary.md`.
 
 | WHEN | RULE | WHY | MAPS-TO | CONFIDENCE | SOURCES |
 |---|---|---|---|---|---|
-| Sun, you hold K + 2 lower in side suit (مثلوث الشايب); side suit is led | Play SMALLEST first across tricks 1-2; K lands trick 3 | The 3rd-trick K-capture is the entire point of the holding; opp's high cards typically go in tricks 1-2. | `pickFollow` Bot.lua:1457 K-tripled trickle branch `(not yet wired)`. | Common | 17 |
-| Sun, you suspect opp holds مثلوث الشايب in suit X | Lead إكَه but withhold the T for trick 1 | Bait: opp Tanfeers a card from their مثلوث (preserving K for late capture). Forces info reveal. | `pickLead` Bot.lua:953 K-tripled exploit branch `(not yet wired)`. | Sometimes | 17 |
+| Sun, you hold J + 2 lower in side suit (مثلوث الولد); side suit is led | Play SMALLEST first across tricks 1-2; J lands trick 3 | Sun rank A>T>J: after A and T spent on tricks 1-2, J is top live and wins trick 3. | `pickFollow` J-tripled trickle branch `(not yet wired)`. | Common | 17 |
+| Sun, you suspect opp holds مثلوث الولد in suit X | Lead إكَه but withhold the T for trick 1 | Bait: opp Tanfeers a card from their مثلوث (preserving J for late capture). Forces info reveal. | `pickLead` J-tripled exploit branch `(not yet wired)`. | Sometimes | 17 |
 
 ---
 

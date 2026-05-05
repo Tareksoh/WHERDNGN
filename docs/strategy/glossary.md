@@ -222,7 +222,7 @@ bot that doesn't implement them isn't playing Saudi Baloot.
 |---|---|
 | **Mechanic** | A discard played while **partner is winning** the current trick. Every such discard encodes a directional preference. |
 | **Direction encoding** | **Top-down** within a suit (high then lower next opportunity) = "I do NOT want this suit". **Bottom-up** within a suit (low then higher next) = "I DO want this suit, but I don't hold its Ace". |
-| **Bargiya (برقية, "telegram")** | Special form: discarding the **Ace** of a suit on partner's winning trick. **Two semantic flavors** (per video #14): (a) **Come-to-me invite** — partner should lead this suit so you can SWA on the back-end; (b) **Defensive shed** (شرد بالاكة) — denying the opp a chance to capture the Ace later. Distinguish by hand shape: Bargiya-as-invite when محشور بلون واحد (cornered in one suit, 5+ cards there); Bargiya-as-shed otherwise. |
+| **Bargiya (برقية, "telegram") — also romanized "Burqia"** | Special form: discarding the **Ace** of a suit on partner's winning trick. **Two semantic flavors** (per video #14): (a) **Come-to-me invite** — partner should lead this suit so you can SWA on the back-end; (b) **Defensive shed** (شرد بالاكة) — denying the opp a chance to capture the Ace later. **Distinguish by hand shape, not event count**: Bargiya-as-invite when محشور بلون واحد (cornered in one suit, 5+ cards there); Bargiya-as-shed otherwise. *Canonical code identifier: `bargiya` (`Bot.tahreebClassify` → "bargiya"/"bargiya_hint"). "Burqia" in Source A is the same word — both transliterate برقيّة.* |
 | **Bargiya receiver phase-split** | Endgame (≤4 cards in your hand): lead the Bargiya'd suit immediately. Opening (≥5 cards): burn 1-2 of your own tricks first to set up the eventual lead-back. (Per video #14.) |
 | **Two-trick confirmation** | A second Tahreeb in the **same suit** (continuing the direction) raises reliability from ~70% to ~90%. Single Tahreeb is a hint; double is near-certain. |
 | **Receiver prior** | One Tahreeb event → 70% partner wants opposite-color high suit; 25% same-color other-shape; 5% the suit you started in. Wait for second Tahreeb to disambiguate. |
@@ -330,7 +330,7 @@ is significant inter-speaker variation** — flagged below.
 | Arabic | Meaning | Source |
 |---|---|---|
 | مردوفة (mardoofa) | "Doubled" — exactly 2 cards in a suit, especially a top + 1 cover (e.g., A+T, K+Q, J+9). Critical Saudi term. | 02, 25, 26, 31 |
-| مثلوث (mathlooth) | "Tripled" — 3 cards in a suit | 02, 17 |
+| مثلوث (mathlooth) | "Tripled" — 3 cards in a suit. The canonical worked case is **مثلوث الولد (J-tripled)** under Sun: J + 2 sidekicks lets J win trick 3 after A and T are spent. Earlier docs called this "K-tripled" / "مثلوث الشايب" — that was a romanization error per v0.10.0 review (R7). | 02, 17 |
 | إكة مردوفة (ikkah mardoofa) | A+T mardoofa: Ace + Ten of same suit | 25 |
 | **الصن المغطى (Sun-Mughataa)** | "Covered Sun" — Sun bid where bidder holds A+T mardoofa as anchor | 25 |
 | **الحكم المغطى (Hokm-Mughataa)** | "Covered Hokm" — Hokm bid with explicit J+مردوفة+A safety pattern | 26 |

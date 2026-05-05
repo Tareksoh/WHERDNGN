@@ -227,8 +227,18 @@ function R.DetectMelds(hand, contract)
 
     -- Carré (Pagat-strict):
     --   T, K, Q, J  -> 100 raw (One Hundred)
-    --   A           -> 200 raw, but ONLY in Sun (Four Hundred)
+    --   A in Hokm   -> 100 raw (One Hundred — treated like T/K/Q/J carré)
+    --   A in Sun    -> 400 raw (Four Hundred, الأربع مئة)
     --   9, 8, 7     -> don't score (omitted from K.CARRE_RANKS for 9)
+    --
+    -- v0.10.0 X5 fix (review_v0.10.0/xref_X5_*.md): pre-v0.10.0 the
+    -- Hokm-A branch had no `else` — `value` stayed nil and the meld
+    -- was silently dropped. Per videos #32 line 245 + #38 line 61,
+    -- four-Aces in Hokm scores 100 like the other carrés. The drop
+    -- cascaded into bidder strict-majority threshold checks,
+    -- R.CompareMelds winner-takes-all, AND the Belote-cancellation
+    -- v0.9.0 M5 path (the holder's missing 100-meld left Belote
+    -- uncancelled → silent +20 over-scoring).
     local byRank = {}
     for _, c in ipairs(hand) do
         local r = C.Rank(c)
@@ -236,19 +246,17 @@ function R.DetectMelds(hand, contract)
     end
     for rank, count in pairs(byRank) do
         if count == 4 and K.CARRE_RANKS[rank] then
-            local value = nil
+            local value
             if rank == "A" then
-                if isSun then value = K.MELD_CARRE_A_SUN end
+                value = isSun and K.MELD_CARRE_A_SUN or K.MELD_CARRE_OTHER
             else
                 value = K.MELD_CARRE_OTHER
             end
-            if value then
-                local cards = {}
-                for _, s in ipairs(K.SUITS) do cards[#cards + 1] = rank .. s end
-                out[#out + 1] = {
-                    kind = "carre", value = value, top = rank, cards = cards, len = 4,
-                }
-            end
+            local cards = {}
+            for _, s in ipairs(K.SUITS) do cards[#cards + 1] = rank .. s end
+            out[#out + 1] = {
+                kind = "carre", value = value, top = rank, cards = cards, len = 4,
+            }
         end
     end
 
@@ -491,48 +499,39 @@ function R.CanBel(team, contract, cumulative)
     if contract.type ~= K.BID_SUN then
         return true                         -- Hokm: always allowed
     end
-    -- Sun: per video #11, the Bel-eligibility predicate is asymmetric:
-    --   • bidder team must have ALREADY crossed 100 (cumulative >=101)
-    --     — Bel is a counter-escalation against an entrenched bidder
-    --   • defender team must be BELOW 100 (cumulative <=100) — gates
-    --     the team allowed to escalate.
+    -- Sun: SCORE-SPLIT, ROLE-IRRELEVANT.
     --
-    -- v0.9.2 #45 fix (audit_v0.9.0/45_canbel_three_predicates.md):
-    -- pre-v0.9.2 `R.CanBel` used a SYMMETRIC `mine < 100` predicate
-    -- — passed only the defender's own cumulative. This contradicted
-    -- `Net._SunBelAllowed` (the host-side gate at Net.lua:68), which
-    -- correctly enforced the asymmetric form. The divergence created
-    -- a UX race: in dual-<100 scenarios (e.g., 80/50), the UI gate
-    -- (R.CanBel) said TRUE → Bel button rendered → defender clicked
-    -- → host's `_OnDouble` phase guard silently dropped it (host had
-    -- already advanced past PHASE_DOUBLE). Defender saw their click
-    -- "succeed locally then vanish."
+    -- v0.10.0 R1 fix (review_v0.10.0/reaudit_R1_bel100.md): three
+    -- sources unanimous on the rule once parsed verbatim:
+    --   • Video #11: "في الصن لازم يكون فريق 100 نقطه او اعلى والفريق
+    --     الثاني يكون اقل من 100" + "الفريق اللي اقل من 100 لوحه حقيقيه
+    --     يدبل لكن الفريق اللي فوق الميه ما يدبل"
+    --   • PDF 02: "ولايحق للاعب ان يدبل خصمة الا بعد ان يتجاوز المئة اي
+    --     101" — `يدبل خصمة` is verb + DIRECT OBJECT; opponent is the
+    --     team being Bel'd, NOT the caller.
+    --   • PDF 07: "ويكون الدبل للمتأخر فقط وهو الذي لم يتجاوز عدده 100"
+    --     — Bel belongs to the trailing one only.
     --
-    -- Now: when contract.bidder is provided, gate against BOTH the
-    -- defender's cumulative AND the bidder's cumulative crossing the
-    -- BEL_CUMULATIVE_GATE. This collapses the three-predicate set
-    -- (R.CanBel UI gate, Bot.PickDouble strength gate, _SunBelAllowed
-    -- host gate) to one consistent source of truth.
+    -- All three reduce to: caller.cum ≤ GATE AND opposite.cum > GATE.
+    -- Bidder/defender role does not enter — only score position.
     --
-    -- Backwards compatibility: callers that don't pass contract.bidder
-    -- (or pass a contract with bidder=nil) fall through to the
-    -- pre-v0.9.2 symmetric form so legacy fixtures still pass.
-    local mine = (cumulative and cumulative[team]) or 0
-    if contract.bidder then
-        local bidderTeam = R.TeamOf(contract.bidder)
-        local bidderCum = (cumulative and bidderTeam and cumulative[bidderTeam]) or 0
-        -- bidder must be STRICTLY past the gate (>=101 ≡ > 100), AND
-        -- defender must be at-or-below the gate (<=100). With
-        -- K.SUN_BEL_CUMULATIVE_GATE=100, the comparisons are:
-        --   bidderCum > GATE  (i.e., bidderCum >= 101)
-        --   defenderCum <= GATE  (i.e., defenderCum <= 100)
-        if bidderCum <= K.SUN_BEL_CUMULATIVE_GATE then return false end
-        if team ~= bidderTeam and mine > K.SUN_BEL_CUMULATIVE_GATE then
-            return false
-        end
-        return true
-    end
-    return mine < K.SUN_BEL_CUMULATIVE_GATE
+    -- Pre-v0.9.2 was MISSING the dual-team check (only `mine < 100`).
+    -- v0.9.2 #45 added the dual-team check but anchored on bidder/
+    -- defender role, breaking the edge case where the bidder team is
+    -- TRAILING (e.g., A=130, B=60, B bids Sun: B is the trailing side
+    -- and per Saudi rule may Bel; v0.9.2 wrongly forbade this).
+    --
+    -- The three-predicate consistency story still holds: R.CanBel,
+    -- Net._SunBelAllowed, and Bot.PickDouble must all use the same
+    -- score-split predicate. `contract.bidder` is no longer consulted
+    -- here (kept in the contract table for log-readability and other
+    -- consumers, but harmless to omit).
+    local mine     = (cumulative and cumulative[team]) or 0
+    local otherTeam = (team == "A") and "B" or "A"
+    local otherCum  = (cumulative and cumulative[otherTeam]) or 0
+    if mine     >  K.SUN_BEL_CUMULATIVE_GATE then return false end
+    if otherCum <= K.SUN_BEL_CUMULATIVE_GATE then return false end
+    return true
 end
 
 -- v0.7 Sun-overcall predicate. Returns true iff `seat` is currently
@@ -766,8 +765,15 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         --      tie path is only reached when ScoreRound is called from
         --      an SWA / takweesh penalty path that doesn't trigger
         --      the match-win branch.)
+        -- v0.10.0 R2 normalization: Sun has no Triple/Four/Gahwa rungs
+        -- (canonical rule, all 3 sources). If any of those flags are
+        -- set on a Sun contract (stale resync, hand-edited save, etc.),
+        -- ignore them for inversion purposes too — Sun's only rung is
+        -- doubled/Bel.
         local highest
-        if     contract.gahwa   then highest = "gahwa"
+        if contract.type == K.BID_SUN then
+            highest = contract.doubled and "double" or "none"
+        elseif contract.gahwa   then highest = "gahwa"
         elseif contract.foured  then highest = "four"
         elseif contract.tripled then highest = "triple"
         elseif contract.doubled then highest = "double"
@@ -838,12 +844,27 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     --   Gahwa  → match-win (special-cased below; mult kept at ×4 for
     --           any per-round computation, but the match-win branch
     --           overrides cumulative totals).
+    -- v0.10.0 R2 defensive normalization (review_v0.10.0/reaudit_R2_*.md):
+    -- Sun has NO Triple/Four/Gahwa rungs (canonical rule, all 3 sources).
+    -- The phase machine prevents these flags from being set on Sun
+    -- contracts in practice (State.ApplyDouble jumps Sun directly to
+    -- PHASE_PLAY); but if any caller, hand-edited save, or stale resync
+    -- frame slips a Sun-tripled/foured/gahwa flag through, collapse the
+    -- multiplier to Sun-Bel. Pre-v0.10.0 the multiplier path applied
+    -- `K.MULT_SUN * K.MULT_TRIPLE` (×6) etc. — encoded an invariant
+    -- violation in test_rules.lua sections K and (Sun-tied) inversion
+    -- tests. Now those rungs are silently ignored on Sun.
     local mult = K.MULT_BASE
-    if contract.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if     contract.gahwa   then mult = mult * K.MULT_FOUR  -- ×4 baseline
-    elseif contract.foured  then mult = mult * K.MULT_FOUR
-    elseif contract.tripled then mult = mult * K.MULT_TRIPLE
-    elseif contract.doubled then mult = mult * K.MULT_BEL end
+    if contract.type == K.BID_SUN then
+        mult = mult * K.MULT_SUN
+        if contract.doubled then mult = mult * K.MULT_BEL end
+        -- intentionally ignore tripled/foured/gahwa on Sun
+    else
+        if     contract.gahwa   then mult = mult * K.MULT_FOUR  -- ×4 baseline
+        elseif contract.foured  then mult = mult * K.MULT_FOUR
+        elseif contract.tripled then mult = mult * K.MULT_TRIPLE
+        elseif contract.doubled then mult = mult * K.MULT_BEL end
+    end
 
     local rawA = (cardA + meldPoints.A) * mult
     local rawB = (cardB + meldPoints.B) * mult

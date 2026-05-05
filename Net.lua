@@ -67,21 +67,17 @@ N.Whisper   = whisper
 -- Hokm has no such gate (Bel/Triple/Four open from any score).
 function N._SunBelAllowed(bidderSeat)
     if not bidderSeat then return false end
-    -- v0.9.2 #45 unification (audit_v0.9.0/45_canbel_three_predicates.md):
-    -- defer to R.CanBel which now encodes the same asymmetric rule.
-    -- Pre-v0.9.2 these two predicates disagreed (R.CanBel was symmetric)
-    -- and produced a UX race where the Bel button rendered briefly
-    -- before being silently dropped by the host. Now both call sites
-    -- read the same predicate.
-    --
-    -- This function asks "is ANY defender allowed to Bel?" Since the
-    -- asymmetric rule treats both defenders symmetrically (only the
-    -- bidder cum + defender cum matter), checking either defender
-    -- team is equivalent.
-    local bidderTeam = R.TeamOf(bidderSeat)
-    if not bidderTeam then return false end
-    local defenderTeam = (bidderTeam == "A") and "B" or "A"
-    return R.CanBel(defenderTeam,
+    -- v0.10.0 R1 fix (review_v0.10.0/reaudit_R1_bel100.md): Sun-Bel
+    -- is score-split, role-irrelevant. Either team is eligible iff
+    -- that team is at ≤100 AND the other is at ≥101. The two teams
+    -- are mutually exclusive on this gate (only one team can be the
+    -- trailer on a strict-split), so we just ask whichever team is
+    -- currently trailing. Passing `bidder = bidderSeat` no longer
+    -- affects R.CanBel's output but documents intent.
+    local cumA = (S.s.cumulative and S.s.cumulative.A) or 0
+    local cumB = (S.s.cumulative and S.s.cumulative.B) or 0
+    local trailingTeam = (cumA <= cumB) and "A" or "B"
+    return R.CanBel(trailingTeam,
                     { type = K.BID_SUN, bidder = bidderSeat },
                     S.s.cumulative)
 end

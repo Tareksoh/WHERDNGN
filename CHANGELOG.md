@@ -1,5 +1,191 @@
 # Changelog
 
+## v0.10.0 — Source-of-truth review: 9 silent bugs closed + doc-drift sweep
+
+A 24-agent triangulation across 38 video transcripts, 8 PDFs, and the
+addon code surfaced silent bugs in scoring, signaling, and bot
+decision-making — most of which had been silently mis-attributed to
+"framing" in earlier audits. Full review at
+`.swarm_findings/review_v0.10.0/REVIEW.md` with cite trails.
+
+### Fixed (HIGH — silent scoring bugs)
+
+- **R5 — Carré-A in Sun under-scored 2×**
+  (`review_v0.10.0/reaudit_R5_carre_a_sun.md`). Per videos #32 + #38,
+  الأربع ميه names a **400 raw direct** value (the meld's name IS its
+  value); per video #43 Sun divides raw by 5 → 80 game points. Pre-
+  v0.10.0 `K.MELD_CARRE_A_SUN = 200` produced 200×Sun×2 ÷ 10 = 40 gp
+  — exactly half. An earlier "Gemini scoring-audit catch" 400→200 was
+  a misinterpretation: it eliminated the correct value as if it were
+  double-counting. Fixed: `Constants.lua:95` 200 → 400 with rewritten
+  comment tracing the math.
+
+- **X5 — Carré-A in Hokm meld silently dropped**
+  (`review_v0.10.0/xref_X5_meld_coverage.md`). `R.DetectMelds:240-242`
+  had no `else` branch for Ace+Hokm — `value` stayed `nil` and the
+  meld was never emitted. Per videos #32 line 245 + #38 line 61,
+  Carré-A in Hokm scores 100 (treated like Carré-T/K/Q). Cascade:
+  silent drop broke bidder strict-majority threshold check,
+  `R.CompareMelds` winner-takes-all path, AND the Belote-cancellation
+  v0.9.0 M5 path (holder's missing 100-meld left Belote uncancelled →
+  silent +20 over-scoring). Fixed: added Hokm `value =
+  K.MELD_CARRE_OTHER` branch with regression test inverted at
+  `tests/test_rules.lua:365-379`.
+
+### Fixed (HIGH — bot-decision corrections)
+
+- **R1 — Bel-100 over-corrected by v0.9.2 #45**
+  (`review_v0.10.0/reaudit_R1_bel100.md`). Three sources unanimous on
+  the rule once parsed verbatim: **caller.cum ≤ 100 AND opposite.cum
+  ≥ 101**, score-split and role-irrelevant. Pre-v0.9.2 was missing
+  the dual-team check (`mine < 100` only). v0.9.2 #45 added the
+  check but anchored on bidder/defender role, breaking the edge case
+  where the bidder team is TRAILING (e.g., A=130/B=60, B bids Sun
+  to catch up — B is the trailing side and per Saudi rule may Bel;
+  v0.9.2 wrongly forbade this). Fixed: collapsed to score-split
+  predicate; dropped `contract.bidder` consultation in `R.CanBel`;
+  simplified `Net._SunBelAllowed` to query trailing team. Test
+  fixtures rewritten in Section N.
+
+- **R6 — Touching-honors K-signal interpretation INVERTED**
+  (`review_v0.10.0/reaudit_R6_touching_honors.md`). Per video #05
+  lines 783-884, when follower plays K after partner's bare-A: K is
+  a singleton; Q and J are NOT in their hand ("Can he have Q or J?
+  No, impossible — he would have played those instead"). Pre-v0.10.0
+  code at `Bot.lua:491-492` set `entry.nextDown = "Q"` — pinning Q
+  to the seat that the source EXPLICITLY says doesn't have Q. v0.9.2
+  #12 fix activated the previously dead WRITE branch, turning dead-
+  code-wrong into reachable-mispredicting-wrong. Fixed: K-signal now
+  emits `entry.cleared = {"Q", "J"}` (negative-bias); reader at
+  `BotMaster.lua` handles the new field by clearing those rank
+  desires. Also extended `entry.broke` to fire on rank 9 (per Source
+  D R3e: "9/8/7 → discourage further A-runs"; pre-v0.10.0 only 7/8).
+
+- **R6 — Trust-asymmetry now enforced at READ site**
+  (`review_v0.10.0/reaudit_R6_*.md` + `xref_X4_pro2_deal.md`). Per
+  video #05 @ 03:17-03:22: "trust partner signals at face value,
+  discount opponent signals (تقيد)." Pre-v0.10.0 the BotMaster
+  topTouchSignal reader applied pins/clears uniformly to all 4 seats;
+  opponents could weaponize the mis-pin via deceptive K-plays. Fixed:
+  reader now gates on `s == R.Partner(seat)` — opponent inferences
+  no longer feed sampler bias. (Self is also skipped; bot's own
+  hand is known.)
+
+- **X3 — Hokm Faranka Exception "#3" missing bidder-team gate**
+  (`review_v0.10.0/xref_X3_faranka.md`). v0.9.2 #49 fixed the same-
+  class bug for code's Exception "#2"; Exception "#3" (J-dead, hold
+  9) at `Bot.lua:2795-2804` had the same gap and would Faranka into
+  opp's Hokm contract on J-dead+9-only hands. Fixed: same `and
+  onBidderTeam` gate.
+
+- **X3 — Code's Faranka Exception "#4" relaxed from bidder-only to
+  bidder-team**. Per Source C (video #04), bidder-team is sufficient
+  for the "both opps trump-void" exception — partner of bidder also
+  qualifies. Pre-v0.10.0's strict `contract.bidder == seat` check
+  silently fell through for the partner; now uses the same
+  `onBidderTeam` flag.
+
+- **X3 — F-16 anti-rule enforced** ("no K of trump → don't
+  Faranka"). Pre-v0.10.0 the code accepted T-as-cover when K was
+  absent, violating Source C's explicit anti-rule. Faranka without
+  K-cover has no defensive backbone (any opponent A-of-trump
+  punishes the preserved card directly). Fixed: explicit
+  `hasKtrump` check before allowing `farankaTriggered = true`.
+
+- **X4/L07 — Hokm-needs-Ace tier-gated for M3lm+**
+  (`review_v0.10.0/xref_X4_pro2_deal.md`). Per Pro-2 PDF L07, Hokm
+  bid SHOULD require an Ace (defensive vs Sun-overcall, Kaboot,
+  4-Hundred). Per Source H this is STRATEGY not hard rule — gated
+  at M3lm+ (Basic/Advanced stay permissive). Pre-v0.10.0
+  `hokmMinShape` enforced `hasSideAce` only at `count == 3`; the
+  `count >= 4` self-sufficient branch passed without ANY Ace check
+  (half-implemented L07). Fixed: M3lm+ requires `hasAnyAce` (side-
+  Ace OR trump-A) at any trump count.
+
+### Fixed (MEDIUM — invariant defense)
+
+- **R2 — Sun escalation defensive normalization**
+  (`review_v0.10.0/reaudit_R2_sun_escalation.md`). Sun has NO
+  Triple/Four/Gahwa rungs (canonical rule, 3 sources unanimous —
+  PDF 02 K-21, PDF 07 L34, video #11). The phase machine prevents
+  these flags in practice (`State.ApplyDouble` jumps Sun directly
+  to `PHASE_PLAY`), but if any caller / hand-edited save / stale
+  resync slips a Sun-tripled/foured/gahwa flag through, the
+  multiplier path used to apply ×6 / ×8 — encoding the invariant
+  violation. Fixed: `R.ScoreRound` collapses Sun multipliers to
+  Sun×Bel maximum; inversion logic ignores Sun-tripled/foured/gahwa
+  for outcome determination too. Defense-in-depth Sun guards added
+  at `Bot.PickTriple` / `Bot.PickFour` / `Bot.PickGahwa` (return
+  `false, false` on Sun). Test fixtures rewritten to assert
+  collapse instead of codifying the wrong invariant.
+
+### Documented (M2 — deferred fix with diagnostic comment)
+
+- **AKA receiver-relief at `Bot.lua:2451-2475` is effectively dead
+  code in canonical scenarios** per `xref_X2_aka.md` B1.
+  `R.IsLegalPlay` doesn't consult `S.s.akaCalled` — must-trump-ruff
+  fires whenever seat is void in led suit and has trump. The
+  proper fix is upstream (R.IsLegalPlay AKA-aware), but that's a
+  broader change with cross-test implications (J-066/J-067 AKA-on-T
+  trick-locking, J-069 false-AKA = Qaid). Inline diagnostic comment
+  added; deferred to a later release.
+
+### Doc drift (no code change)
+
+- `saudi-rules.md` Q3 reconciliation rewritten (was incorrectly
+  declaring "no change needed" — see R5).
+- `saudi-rules.md` Q3b added for the Carré-A in Hokm cascade (X5).
+- `saudi-rules.md` Q4 footnote refreshed (rounding resolved at
+  v0.5.6, double-confirmed in v0.10.0 review).
+- `saudi-rules.md` Q6 closed: سيكل (sykl) is colloquial name for
+  9-8-7 tierce, scores 20 like any tierce — no separate code path.
+- `saudi-rules.md` melds table: Carré-J corrected (was "trump-
+  implicit 200"; canonical = 100 in any contract per videos).
+- `decision-trees.md` Section 4: "K-tripled (مثلوث الشايب)" →
+  "J-tripled (مثلوث الولد)" with v0.10.0 review note explaining the
+  romanization-artifact bug. Per Source F, video #17 covers J-tripled
+  (Sun A>T>J → J wins trick 3), not the Hokm-K case earlier docs
+  imagined.
+- `glossary.md` Mathlooth entry expanded with the J-tripled
+  correction.
+- `glossary.md` Bargiya entry now annotates "Burqia" as a
+  transliteration alias (same Arabic word برقيّة, both spellings
+  appear in source materials) and emphasizes the **hand-shape**
+  (محشور) classification axis vs event-count.
+- `CLAUDE.md` SWA section: 5-second auto-approve timer now correctly
+  framed as **addon UX construct, NOT Saudi rule** (per video #35
+  verbatim — no timer terminology in source). Plus 5+-card mandatory
+  permission framing.
+
+### Tests
+
+- 340/340 regression tests pass.
+- New: Hokm Carré-A meld emit test (was inverted to assert "no
+  meld" — flipped to assert 100 raw).
+- Updated: R.CanBel Section N rewritten for score-split rule with
+  bidder-trailing edge case fixtures.
+- Updated: Sun-tripled / Sun-foured tests now assert collapse to
+  Sun×Bel multiplier instead of codifying the ×6 / ×8 invariant
+  violation.
+
+### Open: M1 — Qaid-offender-melds (human arbitration required)
+
+The v0.10.0 review surfaced a rule-reading ambiguity that this
+release does NOT close — left for user arbitration:
+
+- **Source H H-36.12**: offender's melds on Qaid are "zeroed/
+  forfeited"
+- **PDF K-04**: "the buyer's meld is forfeited (kept by neither
+  side, just lost)"
+- **PDF K-08**: "stays with owner" (ambiguous — does "stays" mean
+  "owner scores it" or "stays in their pile but doesn't count"?)
+- **Current code**: keeps melds with offender (`Net.lua:2207-2208`,
+  `Rules.lua:807-808`). The 14th-audit fix cited K-08 as basis.
+- **Concrete impact**: ~10-20 game points per round when Qaid
+  triggers.
+
+Pending user decision in next release.
+
 ## v0.9.6 — Telemetry schema v=2: bot-vs-human bidder split for calibration
 
 Audit `audit_v0.9.0/41_v083_telemetry.md` flagged two missing fields

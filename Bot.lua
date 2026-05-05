@@ -450,23 +450,29 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- honors-down inferences. When `seat` plays in a trick led by
     -- their PARTNER's Ace of the same suit (or AKA-led), Saudi
     -- convention reads:
-    --   plays T  → has the K  (rule 1)
-    --   plays K  → has the Q  (rule 2)
-    --   plays Q  → has the J  (rule 3)
-    --   plays 7/8 → broke in the suit's high cards  (rule 4)
-    -- Inference written to seat's topTouchSignal ledger; the
-    -- BotMaster sampler reads it as a hard-pin / negative-bias for
-    -- hand reconstruction.
+    --   plays T  → seat HAS the K (rule 1)
+    --   plays K  → seat is K-singleton; Q AND J are ELSEWHERE (rule 2)
+    --   plays Q  → seat HAS the J (rule 3)
+    --   plays 7/8/9 → broke in the suit's high cards (rule 4)
     --
-    -- v0.9.2 #12 fix (audit_v0.9.0/12_touching_honors.md): the
-    -- pre-v0.9.2 predicate referenced `trick` (no such local in
-    -- this function — only `trickPlays` is declared at line ~414),
-    -- so the variable resolved to a global lookup → nil and the
-    -- entire WRITE branch silently short-circuited. The READ site
-    -- in BotMaster.lua iterated against the permanently empty
-    -- ledger. v0.9.0 CHANGELOG falsely claimed this feature was
-    -- wired. Fix: substitute the existing `trickPlays` local for
-    -- both predicate and indexed access.
+    -- v0.10.0 R6 fix (review_v0.10.0/reaudit_R6_touching_honors.md):
+    --   * K-signal interpretation was INVERTED. Pre-v0.10.0 set
+    --     `entry.nextDown = "Q"` — pinning Q to the seat that the
+    --     source EXPLICITLY says does NOT hold Q. Per video #05 lines
+    --     783-884: "Can he have Q or J? No, impossible — he would
+    --     have played those instead." K-played means K-singleton.
+    --     Use `entry.cleared = {"Q","J"}` to negative-bias instead.
+    --   * 9 added to broke handler (per Phase1-D R3e: "9/8/7 →
+    --     discourage further A-runs"; pre-v0.10.0 only handled 7/8).
+    --   * Trust-asymmetry note: writer remains symmetric (records
+    --     observation for any seat); the READER (BotMaster.lua)
+    --     applies the team-gate so opponent inferences don't
+    --     weaponize against the bot.
+    --
+    -- v0.9.2 #12 fix (audit_v0.9.0/12_touching_honors.md): activated
+    -- the previously dead branch by substituting `trickPlays` for the
+    -- undeclared `trick` variable. Without R6's K-fix the activation
+    -- turned dead-code-wrong into reachable-mispredicting-wrong.
     if not wasIllegal and contract and trickPlays
        and #trickPlays >= 2 and style.topTouchSignal then
         local lead = trickPlays[1]
@@ -487,13 +493,15 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
         if touchContext then
             local entry = style.topTouchSignal[cardSuit] or {}
             if theirRank == "T" then
-                entry.nextDown = "K"            -- rule 1
+                entry.nextDown = "K"                       -- rule 1
             elseif theirRank == "K" then
-                entry.nextDown = "Q"            -- rule 2
+                -- v0.10.0 R6 fix: K-signal = K-singleton, not has-Q.
+                entry.cleared = { "Q", "J" }               -- rule 2
             elseif theirRank == "Q" then
-                entry.nextDown = "J"            -- rule 3
-            elseif theirRank == "7" or theirRank == "8" then
-                entry.broke = true              -- rule 4
+                entry.nextDown = "J"                       -- rule 3
+            elseif theirRank == "7" or theirRank == "8"
+                or theirRank == "9" then
+                entry.broke = true                         -- rule 4
             end
             style.topTouchSignal[cardSuit] = entry
         end
@@ -735,22 +743,38 @@ end
 --   (count == 3 AND hasJ AND hasSideAce)  ← B-1 minimum
 -- Returns true if the minimum shape is met.
 --
+-- v0.10.0 X4/L07 fix (review_v0.10.0/xref_X4_pro2_deal.md):
+-- Pro-2 PDF L07 says "Hokm bid REQUIRES Ace" as a defensive rule
+-- against Sun-overcall, Kaboot, and 4-Hundred (Carré-A) by opp.
+-- Per Phase 1 Source H this is STRATEGY (not a hard rule), so it's
+-- tier-gated: M3lm+ enforces it; Basic/Advanced stay permissive.
+-- Pre-v0.10.0 the `count >= 4` self-sufficient branch passed
+-- without ANY Ace check — half-implemented L07. Now M3lm+ must
+-- have at least ONE Ace anywhere in hand (side-suit OR trump-A).
+--
 -- Sources: decision-trees.md Section 1 rules B-1, B-2, B-4 (all
--- Definite, video 26).
+--   Definite, video 26); Pro-2 PDF L07 (review_v0.10.0).
 local function hokmMinShape(hand, suit)
     if not suit then return false end
     local hasJ, count = false, 0
     local hasSideAce = false
+    local hasAnyAce  = false
     for _, c in ipairs(hand) do
         local r, su = C.Rank(c), C.Suit(c)
         if su == suit then
             count = count + 1
             if r == "J" then hasJ = true end
+            if r == "A" then hasAnyAce = true end
         elseif r == "A" then
             hasSideAce = true
+            hasAnyAce  = true
         end
     end
     if not hasJ then return false end          -- B-4 absolute floor
+    -- v0.10.0 L07 tier-gated requirement: any Ace in hand.
+    if Bot.IsM3lm and Bot.IsM3lm() and not hasAnyAce then
+        return false
+    end
     if count >= 4 then return true end         -- B-2 self-sufficient
     if count == 3 and hasSideAce then return true end  -- B-1 minimum
     return false
@@ -2424,6 +2448,26 @@ local function pickFollow(legal, hand, trick, contract, seat)
             implicitAKA = true
         end
     end
+    -- v0.10.0 M2 diagnosis (review_v0.10.0/xref_X2_aka.md, B1):
+    -- The AKA-receiver-relief branch below is effectively dead code
+    -- in the canonical scenario it was meant to handle. Per video
+    -- #18, AKA's purpose is to ASK partner to defer the must-trump-
+    -- ruff. But R.IsLegalPlay (Rules.lua:151-158) does NOT consult
+    -- S.s.akaCalled — must-ruff fires whenever the seat has trump
+    -- and is void in led suit. In that canonical case, `legal`
+    -- contains ONLY trumps, the `discards` filter returns `{}`,
+    -- and the branch falls through to natural ruff. In the must-
+    -- follow case (have led suit), the branch's lowestByRank is
+    -- redundant with the line 2737 fallthrough.
+    --
+    -- Proper fix is upstream — R.IsLegalPlay must skip must-ruff
+    -- when AKA is active for this seat. Deferred to a later
+    -- release because that's a broader rule change with test
+    -- implications across J-066/J-067 (AKA-on-T trick-locking),
+    -- J-069 (false-AKA = Qaid), and host-side AKA validation.
+    -- Leaving the branch in place since it's defensive and may
+    -- still fire in rare scenarios (e.g., seat void in both led
+    -- suit and trump, AKA active — pick lowest non-trump).
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM and contract.trump
        and trick.leadSuit and partnerWinning
        and (explicitAKA or implicitAKA) then
@@ -2788,11 +2832,20 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- because withholding the new boss to ambush opp's other
         -- high cards has clear EV.
         --
+        -- v0.10.0 X3 fix (review_v0.10.0/xref_X3_*.md): bidder-team
+        -- gate added (parallel with v0.9.2 #49's Exception "#2" fix).
+        -- Pre-v0.10.0 Exception "#3" fired regardless of contract
+        -- ownership — the bot would Faranka into opp's Hokm contract
+        -- on J-dead+9-only hands, withholding trump from a trick
+        -- the opp wanted to win and helping their contract make.
+        -- Source C: pro-Faranka triggers must be bidder-team-only.
+        --
         -- Detection uses S.HighestUnplayedRank(trump) which is
         -- trump-aware as of v0.8.5 (was buggy plain-rank-order
         -- pre-v0.8.5). When it returns "9", J has been played AND 9
         -- is still live — which exactly matches the rule's WHEN.
-        if not farankaTriggered and S.HighestUnplayedRank
+        if not farankaTriggered and onBidderTeam
+           and S.HighestUnplayedRank
            and S.HighestUnplayedRank(contract.trump) == "9" then
             local hold9 = false
             for _, c in ipairs(hand) do
@@ -2803,8 +2856,16 @@ local function pickFollow(legal, hand, trick, contract, seat)
             if hold9 then farankaTriggered = true end
         end
 
-        -- Exception #4: we are bidder + both opps void in trump.
-        if not farankaTriggered and contract.bidder == seat then
+        -- Exception #4: bidder-team + both opps void in trump.
+        --
+        -- v0.10.0 X3 fix (review_v0.10.0/xref_X3_*.md): relaxed
+        -- `contract.bidder == seat` (over-tight, only the bidder
+        -- themselves) to bidder-team membership. Source C: Saudi
+        -- convention says ANY member of the bidder-team can take
+        -- the risk-free Faranka when both opps are void — partner
+        -- of the bidder also qualifies. Pre-v0.10.0 the partner
+        -- silently fell through to natural play, missing the EV.
+        if not farankaTriggered and onBidderTeam then
             local oppTrumpExhausted = true
             for s2 = 1, 4 do
                 if R.TeamOf(s2) ~= R.TeamOf(seat) then
@@ -2816,6 +2877,23 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
             if oppTrumpExhausted then farankaTriggered = true end
+        end
+
+        -- v0.10.0 X3 anti-rule F-16 (review_v0.10.0/xref_X3_*.md):
+        -- "no K of trump → don't Faranka". Source C F-16 is an
+        -- explicit anti-rule: the K is the canonical "cover" card
+        -- for a Faranka — without it, the withhold has no
+        -- defensive backbone (any opponent A-of-trump punishes the
+        -- preserved card directly). Pre-v0.10.0 the code accepted
+        -- T-as-cover when K was absent — F-16 violated.
+        if farankaTriggered then
+            local hasKtrump = false
+            for _, c in ipairs(hand) do
+                if C.IsTrump(c, contract) and C.Rank(c) == "K" then
+                    hasKtrump = true; break
+                end
+            end
+            if not hasKtrump then farankaTriggered = false end
         end
 
         -- Anti-trigger (rule 7): opp bidder led trump-Q + we hold J+8.
@@ -3416,6 +3494,11 @@ function Bot.PickTriple(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false, false end
+    -- v0.10.0 R2 defense-in-depth: Sun has no Triple rung. The phase
+    -- machine prevents PHASE_TRIPLE on Sun in practice, but a stale
+    -- caller path (test or future refactor) reaching here on a Sun
+    -- contract should still no-op. Source: review_v0.10.0/reaudit_R2.
+    if contract.type == K.BID_SUN then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_TRIPLE_TH - combinedUrgency(R.TeamOf(seat))
@@ -3447,6 +3530,8 @@ function Bot.PickFour(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false, false end
+    -- v0.10.0 R2 defense-in-depth: Sun has no Four rung.
+    if contract.type == K.BID_SUN then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     -- v0.5 H-8: defender Four uses context="defend" — same logic as Bel.
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
@@ -3497,6 +3582,8 @@ function Bot.PickGahwa(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false, false end
+    -- v0.10.0 R2 defense-in-depth: Sun has no Gahwa rung.
+    if contract.type == K.BID_SUN then return false, false end
     local strength = escalationStrength(seat, hand, contract)
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_GAHWA_TH - combinedUrgency(R.TeamOf(seat))

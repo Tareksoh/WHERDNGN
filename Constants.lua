@@ -85,21 +85,25 @@ K.MULT_FOUR   = 4  -- فور — defender's response after Triple (×4)
 --   4-seq:        5 / 10           = 50
 --   5+seq or
 --   4-of-K/Q/J/T: 10 / 20          = 100  ("One Hundred")
---   4 of A:       —  / 40          = Hokm 0, Sun 200  ("Four Hundred")
+--   4 of A:       10 / 80          = Hokm 100, Sun 400  ("Four Hundred")
 --   4 of 9, 8, 7: don't score
 --   Belote (K+Q of trump): 2 gp = 20 raw, scored independently
 K.MELD_SEQ3        = 20
 K.MELD_SEQ4        = 50
 K.MELD_SEQ5        = 100
-K.MELD_CARRE_OTHER = 100   -- T, K, Q, J (any contract type)
-K.MELD_CARRE_A_SUN = 200   -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
-                           -- Stored as 200 raw so the Sun ×2 multiplier
-                           -- in R.ScoreRound brings the final raw to 400
-                           -- (= 40 gp after div10), matching the canonical
-                           -- "أربع مئة" Saudi value. Previously stored as
-                           -- 400 raw which double-counted with Sun mult
-                           -- and produced 800 raw / 80 gp — twice the
-                           -- intended value (Gemini scoring-audit catch).
+K.MELD_CARRE_OTHER = 100   -- T, K, Q, J (any contract type) AND Carré-A in Hokm
+K.MELD_CARRE_A_SUN = 400   -- v0.10.0 R5 fix (review_v0.10.0/reaudit_R5_*.md):
+                           -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
+                           -- Per videos #32 + #38, the meld's name IS its raw
+                           -- value: 400. Per video #43 the Sun divisor is 5
+                           -- (raw 400 ÷ 5 = 80 game points). Code's
+                           -- `meldRaw × Sun×2 / div10` pipeline correctly
+                           -- produces 80 gp from a stored 400 raw. Previously
+                           -- stored as 200 (a v0.4.x "Gemini scoring-audit
+                           -- catch" that confused the math): 200 × 2 / 10 = 40
+                           -- gp — exactly half the canonical value. Source
+                           -- triangulation in v0.10.0 review confirmed 400 raw
+                           -- direct is correct.
 K.MELD_BELOTE      = 20    -- K+Q of trump in same hand, Hokm only
 
 K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped

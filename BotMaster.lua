@@ -446,11 +446,32 @@ local function sampleConsistentDeal(seat, unseen)
                 -- desire bumps. When this seat showed touching-honors
                 -- in suit X (played T → has K, etc.), HARD-PIN the
                 -- inferred next-down card. Definite-confidence per
-                -- video #05. When they showed broke (rule 4), CLEAR
-                -- the suit's desire so the sampler doesn't pin highs
-                -- in that suit to this seat.
-                -- Sources: decision-trees.md Section 6 rules 1-4.
-                if style and style.topTouchSignal then
+                -- video #05.
+                --
+                -- v0.10.0 R6 fix (review_v0.10.0/reaudit_R6_touching_honors.md):
+                --   * Trust-asymmetry per video #05 @ 03:17-03:22:
+                --     "trust partner signals at face value, discount
+                --     opponent signals." Only apply pins/clears for
+                --     this seat's PARTNER (sIsOpponent == false AND
+                --     s ~= seat). Pre-v0.10.0 the reader applied
+                --     uniformly — opponents could weaponize the
+                --     mis-pin via deceptive K-plays. Skip applying
+                --     for self (s == seat — bot's own hand is known)
+                --     and for opp seats.
+                --   * Handle `entry.cleared` (new field): K-signal
+                --     means the seat does NOT hold the listed ranks.
+                --     Sets desire[rank+suit] = nil to negative-bias
+                --     the sampler away from putting those ranks in
+                --     this seat's hand. Pre-v0.10.0 the K-signal
+                --     wrongly set entry.nextDown="Q", which PINNED
+                --     Q to the seat that explicitly does NOT hold Q.
+                --   * `entry.broke` now also fires for 9 (extended
+                --     from 7/8 only).
+                --
+                -- Sources: decision-trees.md Section 6 rules 1-4;
+                --   review_v0.10.0/reaudit_R6_touching_honors.md.
+                local sIsPartner = (s == R.Partner(seat))
+                if sIsPartner and style and style.topTouchSignal then
                     for suit, entry in pairs(style.topTouchSignal) do
                         if entry.nextDown then
                             local card = entry.nextDown .. suit
@@ -460,6 +481,13 @@ local function sampleConsistentDeal(seat, unseen)
                             -- weight strictly above the existing strong-
                             -- card weights so it dominates random fills.
                             desire[card] = math.max(desire[card] or 0, 60)
+                        end
+                        if entry.cleared then
+                            -- v0.10.0 R6: explicit-NOT-holding inference
+                            -- (K-singleton signal: seat doesn't have Q/J).
+                            for _, rk in ipairs(entry.cleared) do
+                                desire[rk .. suit] = nil
+                            end
                         end
                         if entry.broke then
                             -- Clear high-card desires for this suit;

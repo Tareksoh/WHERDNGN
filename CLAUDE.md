@@ -60,7 +60,18 @@ These trip up anyone who knows French Belote:
 - **AKA (إكَهْ) is the only explicit partner signal.** No
   echoing, no "petit" announcements.
 - **SWA (سوا)** with ≤3 cards = instant claim; with 4+ cards =
-  permission flow with 5-second auto-approve.
+  permission flow.
+  - The **5-second auto-approve timer is an addon UX construct**,
+    NOT a Saudi rule. Per video #35 (verbatim verified in
+    `review_v0.10.0/reaudit_R3_swa.md`), Saudi convention uses
+    verbal negotiation with no timeout — opps either say "نسمح"
+    (allow) or demand شرح (proof). The addon's auto-approve
+    prevents network deadlock when humans don't respond.
+  - **5+ cards is mandatory permission** (per video #35
+    "ما تساوي بدون ما تستاذن مستحيل يمشونها" — "you cannot SWA
+    without asking permission, it's impossible they'd let it
+    pass"). Code's permission flow handles this correctly via
+    the same plumbing.
 
 If a strategy doc and `Rules.lua` disagree, **`Rules.lua` is
 authoritative for legality**; the strategy doc is authoritative

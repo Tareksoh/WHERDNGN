@@ -363,11 +363,20 @@ do
 end
 
 do
+    -- v0.10.0 X5 fix (review_v0.10.0/xref_X5_*.md): pre-v0.10.0 the
+    -- Hokm Carré-A branch in R.DetectMelds had no `else` and the meld
+    -- was silently dropped. Per videos #32 line 245 + #38 line 61,
+    -- four-Aces in Hokm scores 100 (treated like the other carrés).
+    -- This test inverted: now asserts the meld is emitted at 100 raw.
     local hand = {"AS","AH","AD","AC","9D"}
     local melds = R.DetectMelds(hand, hokm("H"))
     local carre
     for _, m in ipairs(melds) do if m.kind == "carre" then carre = m end end
-    assertEq(carre, nil, "carre of A in Hokm: no meld emitted")
+    assertTrue(carre, "carre of A in Hokm: meld emitted (was silently dropped pre-v0.10.0)")
+    if carre then
+        assertEq(carre.value, K.MELD_CARRE_OTHER, "Hokm Carré-A value = 100")
+        assertEq(carre.top, "A", "Hokm Carré-A top = A")
+    end
 end
 
 do
@@ -559,22 +568,36 @@ do
     assertEq(res.raw.B, 0, "Tie doubled: defender raw = 0")
 end
 
--- Tie tripled (×3): bidder is buyer; tie → fail.
+-- v0.10.0 R2 fix (review_v0.10.0/reaudit_R2_sun_escalation.md):
+-- Sun has NO Triple/Four/Gahwa rungs (PDF 02 K-21, PDF 07 L34,
+-- video #11 unanimous). Pre-v0.10.0 R.ScoreRound multiplied
+-- Sun×Triple to ×6 and Sun×Four to ×8, and these tests asserted
+-- those values — codifying an invariant violation. Now any
+-- stale tripled/foured/gahwa flags on a Sun contract are silently
+-- ignored; the multiplier collapses to Sun×Bel (×4) at most.
+--
+-- Inversion behavior (tied 65 → bidder fails / makes per rung
+-- parity) is moot for Sun since rungs collapse — tied Sun-doubled
+-- already covers both sub-cases below.
+
+-- Sun + stale tripled flag: should normalize to Sun×Bel (×4).
 do
     local c = sun(1, { doubled = true, tripled = true })
     local res = R.ScoreRound(buildTieTricks(), c, { A = {}, B = {} })
-    assertFalse(res.bidderMade, "Tie tripled: bidder fails")
-    assertEq(res.raw.B, K.HAND_TOTAL_SUN * K.MULT_SUN * K.MULT_TRIPLE,
-             "Tie tripled: defender raw = 130×2×3 = 780")
+    -- Sun-Bel inverted, so on a tied 65 the bidder TAKES (×Bel = ×2 → 4-10 inversion).
+    assertTrue(res.bidderMade, "Sun stale-tripled: collapses to Sun×Bel; tie → bidder takes")
+    assertEq(res.raw.A, K.HAND_TOTAL_SUN * K.MULT_SUN * K.MULT_BEL,
+             "Sun stale-tripled: bidder raw = 130×2×2 = 520 (Sun×Bel, NOT ×Triple)")
+    assertEq(res.raw.B, 0, "Sun stale-tripled: defender raw = 0")
 end
 
--- Tie foured (×4): defender is buyer; tie → bidder takes.
+-- Sun + stale foured flag: should also collapse to Sun×Bel.
 do
     local c = sun(1, { doubled = true, tripled = true, foured = true })
     local res = R.ScoreRound(buildTieTricks(), c, { A = {}, B = {} })
-    assertTrue(res.bidderMade, "Tie foured: bidder takes")
-    assertEq(res.raw.A, K.HAND_TOTAL_SUN * K.MULT_SUN * K.MULT_FOUR,
-             "Tie foured: bidder raw = 130×2×4 = 1040")
+    assertTrue(res.bidderMade, "Sun stale-foured: still collapses to Sun×Bel inversion")
+    assertEq(res.raw.A, K.HAND_TOTAL_SUN * K.MULT_SUN * K.MULT_BEL,
+             "Sun stale-foured: bidder raw = 130×2×2 = 520 (NOT ×Four)")
 end
 
 -- =====================================================================
@@ -690,12 +713,14 @@ do
     local c = sun(1, { doubled = true })
     local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
     assertEq(res.multiplier, K.MULT_SUN * K.MULT_BEL,
-             "Sun × Bel = 4 (Sun stacks with escalation)")
+             "Sun × Bel = 4 (Sun's only rung)")
 end
 do
+    -- v0.10.0 R2 fix: Sun×Triple/Four collapse to Sun×Bel.
     local c = sun(1, { doubled = true, tripled = true, foured = true })
     local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
-    assertEq(res.multiplier, K.MULT_SUN * K.MULT_FOUR, "Sun × Four = 8")
+    assertEq(res.multiplier, K.MULT_SUN * K.MULT_BEL,
+             "Sun × stale-Four flags = Sun × Bel = 4 (rungs collapse)")
 end
 
 -- =====================================================================
@@ -749,12 +774,12 @@ end
 section("N. Sun Bel-100 legality gate (R.CanBel)")
 
 do
-    -- v0.9.2 #45 fix: R.CanBel now uses the asymmetric Bel-100 rule
-    -- per video #11 when contract.bidder is provided. Bidder team
-    -- must have crossed 100 (cum >=101) AND defender team must be
-    -- below the gate (cum <=100). The pre-v0.9.2 symmetric form
-    -- (team's own cum < 100) is preserved when bidder is nil for
-    -- backward compat.
+    -- v0.10.0 R1 fix (review_v0.10.0/reaudit_R1_bel100.md): R.CanBel
+    -- uses the SCORE-SPLIT, ROLE-IRRELEVANT rule per video #11 +
+    -- PDF 02 + PDF 07: caller's team ≤100 AND opposite team ≥101.
+    -- Bidder/defender role does NOT enter the gate. v0.9.2 #45's
+    -- bidder-anchored form was over-corrected; this restores the
+    -- correct atomic predicate that matches all three sources.
     local sun_bidA  = { type = K.BID_SUN,  trump = nil, bidder = 1 }  -- bidder = team A
     local sun_bidB  = { type = K.BID_SUN,  trump = nil, bidder = 2 }  -- bidder = team B
     local sun_nobid = { type = K.BID_SUN,  trump = nil }              -- legacy callers
@@ -767,39 +792,55 @@ do
     assertTrue(R.CanBel("A", hokm, { A = 200, B = 0   }), "Hokm: 200/0 → A can Bel")
     assertTrue(R.CanBel("B", hokm, { A = 0,   B = 100 }), "Hokm: B at 100 → B can Bel")
 
-    -- Sun asymmetric rule (video #11): bidder>=101 AND defender<=100.
-    -- Bidder=A scenarios; we ask "can defender team B Bel?"
+    -- Sun score-split rule (caller≤100 AND opposite≥101). Common case:
+    -- bidder=A is ahead (≥101) and defender=B is trailing.
     assertEq(R.CanBel("B", sun_bidA, { A = 0,   B = 0 }), false,
-             "Sun: bidder=A at 0 → B can NOT bel (bidder hasn't crossed 100)")
+             "Sun: 0/0 → B can NOT Bel (no team has crossed)")
     assertEq(R.CanBel("B", sun_bidA, { A = 100, B = 0 }), false,
-             "Sun: bidder=A at 100 → B can NOT bel (boundary, bidder must be >=101)")
+             "Sun: A=100 → B can NOT Bel (boundary, opposite must be >=101)")
     assertTrue(R.CanBel("B", sun_bidA, { A = 101, B = 0 }),
-               "Sun: bidder=A at 101 + B=0 → B can Bel")
-    assertEq(R.CanBel("B", sun_bidA, { A = 101, B = 100 }), true,
-             "Sun: bidder=A at 101 + B=100 → B can Bel (boundary, defender <=100)")
+               "Sun: A=101 + B=0 → B (trailing) can Bel")
+    assertTrue(R.CanBel("B", sun_bidA, { A = 101, B = 100 }),
+               "Sun: A=101 + B=100 → B (≤100) can Bel (boundary)")
     assertEq(R.CanBel("B", sun_bidA, { A = 101, B = 101 }), false,
-             "Sun: bidder=A at 101 + B=101 → B can NOT bel (defender crossed too)")
-    -- Bidder team can't Bel own contract.
-    assertEq(R.CanBel("A", sun_bidA, { A = 101, B = 50 }), true,
-             "Sun: bidder=A at 101 (asymmetric: bidder team itself can also call) — kept permissive for now")
+             "Sun: A=101 + B=101 → B can NOT Bel (B itself >100)")
+    -- Bidder team CANNOT Bel its own contract when bidder team is ahead.
+    -- (Pre-v0.10.0 v0.9.2 #45 wrongly allowed this; per video #11 the
+    -- ≥100 team has NO right.)
+    assertEq(R.CanBel("A", sun_bidA, { A = 101, B = 50 }), false,
+             "Sun: bidder=A at 101 → A canNOT Bel own contract (above gate)")
 
-    -- Bidder=B scenarios mirror.
+    -- v0.10.0 R1: BIDDER-TRAILING edge case (v0.9.2 #45 wrongly forbade).
+    -- Score-split rule: trailing team Bels regardless of bidder/defender role.
+    assertTrue(R.CanBel("A", sun_bidA, { A = 50, B = 101 }),
+               "Sun: bidder=A trailing at 50, defender=B at 101 → A (bidder team) can Bel")
+    assertEq(R.CanBel("B", sun_bidA, { A = 50, B = 101 }), false,
+             "Sun: bidder=A trailing, defender=B at 101 → B (defender, above gate) canNOT Bel")
+
+    -- Bidder=B mirror, common case.
     assertTrue(R.CanBel("A", sun_bidB, { A = 0,   B = 101 }),
                "Sun: bidder=B at 101 + A=0 → A can Bel")
     assertEq(R.CanBel("A", sun_bidB, { A = 0, B = 50 }), false,
-             "Sun: bidder=B at 50 → A can NOT bel (bidder hasn't crossed 100)")
+             "Sun: bidder=B at 50 + A=0 → A can NOT Bel (no team crossed)")
 
-    -- Legacy no-bidder Sun contract: pre-v0.9.2 symmetric form preserved.
-    assertTrue(R.CanBel("A", sun_nobid, { A = 0,   B = 0   }),
-               "Sun (no bidder): 0/0 → A can Bel (symmetric fallback)")
-    assertTrue(R.CanBel("A", sun_nobid, { A = 99,  B = 0   }),
-               "Sun (no bidder): 99/0 → A can Bel (symmetric fallback)")
+    -- Legacy no-bidder Sun contract: same score-split rule applies.
+    -- Pre-v0.9.2 symmetric form returned true at 99/0; the correct rule
+    -- says no Bel until SOMEBODY has crossed (PDF 07: "لايفتح الدبل ال
+    -- بعد العدد 100" / "doesn't open until after 100").
+    assertEq(R.CanBel("A", sun_nobid, { A = 0,   B = 0   }), false,
+             "Sun (no bidder): 0/0 → no team crossed, no Bel")
+    assertEq(R.CanBel("A", sun_nobid, { A = 99,  B = 0   }), false,
+             "Sun (no bidder): 99/0 → opposite hasn't crossed, no Bel")
     assertEq(R.CanBel("A", sun_nobid, { A = 100, B = 0   }), false,
-             "Sun (no bidder): 100/0 → A FORBIDDEN (symmetric fallback)")
+             "Sun (no bidder): 100/0 → opposite hasn't crossed, no Bel (boundary)")
+    assertTrue(R.CanBel("A", sun_nobid, { A = 50, B = 101 }),
+               "Sun (no bidder): A=50 + B=101 → A (trailing) can Bel")
+    assertEq(R.CanBel("B", sun_nobid, { A = 50, B = 101 }), false,
+             "Sun (no bidder): A=50 + B=101 → B (above gate) canNOT Bel")
 
     -- Defensive nil-handling.
-    assertEq(R.CanBel("A", sun_nobid, nil), true,
-             "Sun (no bidder): nil cumulative → defaults to 0, allowed (symmetric fallback)")
+    assertEq(R.CanBel("A", sun_nobid, nil), false,
+             "Sun (no bidder): nil cumulative → defaults to 0, no opposite cross, no Bel")
     assertEq(R.CanBel(nil, sun_bidA, { A = 50, B = 50 }), false,
              "nil team → false (defensive)")
     assertEq(R.CanBel("A", nil, { A = 50, B = 50 }),   false, "nil contract → false (defensive)")
