@@ -1488,12 +1488,34 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
             WHEREDNGNDB.history = {}
         end
         local h = WHEREDNGNDB.history
+        -- v0.9.6 telemetry enrichment (audit_v0.9.0/41_v083_telemetry.md):
+        --  • schemaVersion `v=2` — forward-compat for the calibrator
+        --  • per-seat isBot snapshot — calibration NEEDS to separate
+        --    "the BOT is mis-bidding" vs "the HUMAN is mis-bidding";
+        --    otherwise the bidder-fail-rate signal is uninterpretable.
+        --  • bidderIsBot — convenience derivation, same info but
+        --    pre-resolved for analyzer.
+        -- v=1 rows (pre-v0.9.6) lack these fields; the analyzer handles
+        -- both schemas via field-presence checks.
+        local seatIsBot = { 0, 0, 0, 0 }
+        for s2 = 1, 4 do
+            local info = s.seats and s.seats[s2]
+            if info and info.isBot then seatIsBot[s2] = 1 end
+        end
+        local bidder = s.contract.bidder
+        local bidderIsBot = (bidder and seatIsBot[bidder] == 1) and 1 or 0
         local row = {
+            v            = 2,                            -- schema version
             roundNumber  = s.roundNumber or 0,
             ts           = (GetTime and GetTime()) or 0,
             type         = s.contract.type,
             trump        = s.contract.trump,
-            bidder       = s.contract.bidder,
+            bidder       = bidder,
+            bidderIsBot  = bidderIsBot,
+            seat1Bot     = seatIsBot[1],
+            seat2Bot     = seatIsBot[2],
+            seat3Bot     = seatIsBot[3],
+            seat4Bot     = seatIsBot[4],
             doubled      = s.contract.doubled and 1 or 0,
             tripled      = s.contract.tripled and 1 or 0,
             foured       = s.contract.foured  and 1 or 0,

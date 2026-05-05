@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.9.6 — Telemetry schema v=2: bot-vs-human bidder split for calibration
+
+Audit `audit_v0.9.0/41_v083_telemetry.md` flagged two missing fields
+that block meaningful calibration: schema versioning (forward-compat)
+and per-row bot-flags (bot-bidder vs human-bidder distinguishability).
+Both wired now.
+
+### Added (State.lua telemetry row schema v=2)
+
+- `v = 2` — schema version field. Pre-v0.9.6 rows lack this; analyzer
+  treats them as `v=1` and skips bot/human-split analysis.
+- `bidderIsBot` — derived 0/1 flag from `s.seats[bidder].isBot`. The
+  single most important field for calibration: lets the analyzer
+  separate "the BOT is mis-bidding" from "the HUMAN is mis-bidding."
+  Without this, fail-rate / Bel-rate signals are uninterpretable.
+- `seat1Bot` / `seat2Bot` / `seat3Bot` / `seat4Bot` — per-seat
+  isBot snapshot at row write time. Lets the analyzer compute
+  "this round had N bots at the table" cohorts.
+
+### Updated (tools/calibrate.py)
+
+- New "bot vs human bidder" report section. Skips pre-v0.9.6 (v=1)
+  rows. For v=2 rows, splits make/fail by `bidderIsBot` and emits
+  fail-rate spread:
+  - Spread < 15pp = balanced bidder behavior
+  - Spread > 15pp = **CALIBRATION SIGNAL** (tier or threshold
+    mismatch worth investigating)
+- Pre-v0.9.6-only datasets get a graceful "play more rounds with
+  v0.9.6+" hint instead of a confusing empty section.
+
+### Why this matters
+
+The audit framed it well: telemetry's whole purpose is to drive
+threshold refits. Without bot/human distinguishability, every
+signal is averaged across both populations — meaningless for
+saying "raise BOT_BEL_TH" or "lower TH_HOKM_R1_BASE". v=2 makes
+the analyzer's calibration recommendations actually actionable.
+
+### Tests
+
+- 333/333 regression tests pass.
+- Analyzer verified end-to-end on a 5-row synthetic dataset
+  (2 bot bidders + 3 human bidders); produces correct fail-rate
+  split + spread calculation.
+
+### Backward compatibility
+
+- Old v=1 rows in existing SavedVariables remain valid; analyzer
+  reads both schemas.
+- 200-row FIFO cap unchanged — old rows naturally drop as new
+  v=2 rows accumulate.
+
 ## v0.9.5 — Section 4 rule 1B wouldWin gate + saudi-rules.md doc fixes
 
 Audit-sweep loop iter on the saturated queue. Three items closed.

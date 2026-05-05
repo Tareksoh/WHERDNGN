@@ -208,6 +208,47 @@ def report(rows: list[dict[str, Any]]) -> None:
               f"deltaSum={stats['delta']:+5d}")
     print()
 
+    # v0.9.6+ Bot-vs-human bidder split (requires v>=2 rows). Pre-v0.9.6
+    # rows lack `bidderIsBot`; we skip them. This is the most important
+    # signal for calibration: distinguishes "bot bidding too aggressive"
+    # from "human bidding too aggressive."
+    bot_v2 = [r for r in rows if r.get("v", 1) >= 2 and "bidderIsBot" in r]
+    if bot_v2:
+        bot_bids = [r for r in bot_v2 if r.get("bidderIsBot") == 1]
+        human_bids = [r for r in bot_v2 if r.get("bidderIsBot") == 0]
+        def _stats(rs):
+            if not rs:
+                return None
+            made = sum(1 for r in rs if r.get("bidderMade") == 1)
+            failed = sum(1 for r in rs if r.get("bidderMade") == 0)
+            total = made + failed
+            rate = 100 * made / total if total else 0
+            return total, made, failed, rate
+        print("bot vs human bidder (v>=2 rows only):")
+        bs = _stats(bot_bids)
+        if bs:
+            t, m, f, r = bs
+            print(f"  bot bidders   bids={t:3d}  made={m:3d}  failed={f:3d}  fail-rate={100-r:4.1f}%")
+        hs = _stats(human_bids)
+        if hs:
+            t, m, f, r = hs
+            print(f"  human bidders bids={t:3d}  made={m:3d}  failed={f:3d}  fail-rate={100-r:4.1f}%")
+        if bs and hs and bs[0] >= 5 and hs[0] >= 5:
+            bot_fail = 100 - bs[3]
+            human_fail = 100 - hs[3]
+            spread = abs(bot_fail - human_fail)
+            print(f"  spread        |bot - human| fail-rate = {spread:.1f}pp")
+            if spread > 15:
+                print("    >> CALIBRATION SIGNAL: large bot/human gap suggests")
+                print("       a tier or threshold mismatch worth investigating.")
+        print()
+    elif rows:
+        v1_count = sum(1 for r in rows if r.get("v", 1) == 1)
+        if v1_count == len(rows):
+            print("(all rows are v=1, pre-v0.9.6 schema; no bot/human split"
+                  " available. Play more rounds with v0.9.6+ to enable.)")
+            print()
+
     # Calibration recommendations.
     print("calibration signals:")
     bid_rate = 100 * (len(rows) - rounds.get(0, 0) if isinstance(rounds.get(0), int) else len(rows)) / len(rows) if rows else 0
