@@ -657,6 +657,58 @@ local function rolloutValue(seat, card, world, contract)
     end
     rolloutPlayed[card] = true
 
+    -- v0.11.4 Bot1-01 (HIGH from comprehensive audit): also build a
+    -- rollout-local Bot._memory[seat] so pickLead/pickFollow branches
+    -- that read _memory[seat].played[card] and _memory[seat].void[suit]
+    -- see the determinization-sampled view rather than real-state
+    -- observations. Without this, branches like:
+    --   • Ace-exhaustion lead (Bot.lua:2101-2132) — checks if anyone
+    --     has played the side Ace; key for trump-poor cash-side play
+    --   • Faranka exception #4 (Bot.lua:2985-2999) — fires when all
+    --     opps observed-void in trump; key bidder-team Faranka
+    --     pos-4 trump-cut
+    --   • opponentsVoidInAll / anyOpponentVoidIn helpers (Bot.lua:674,692)
+    --   • PickAKA suppression (Bot.lua:3385) — suppress AKA when
+    --     partner is observed void in trump
+    -- ...all read _memory in real-state at trick T, missing the void
+    -- info revealed in the rollout's simulated tail (tricks T+1..T+k).
+    -- v0.11.1 C-14 swapped 5 fields but missed _memory; the audit
+    -- (Bot1-01) called this the partial-coverage gap.
+    --
+    -- Population mirrors Bot.OnPlayObserved (Bot.lua:343-368): for each
+    -- play, set played[card]=true, and if leadSuit existed and the
+    -- card's suit didn't match leadSuit, set void[leadSuit]=true.
+    -- The Sun K/T-loses inference (Bot.lua:385-406) is omitted in the
+    -- rollout — it's a real-observation rule and the rollout's
+    -- simulated picks aren't observed signal events. firstDiscard /
+    -- likelyKawesh / akaSent are omitted (cross-round signal layer
+    -- not relevant to a single-round rollout).
+    local rolloutMemory = {}
+    for s = 1, 4 do
+        rolloutMemory[s] = { played = {}, void = {} }
+    end
+    for _, t in ipairs(simTricks) do
+        for _, p in ipairs(t.plays or {}) do
+            if p.seat and p.card then
+                rolloutMemory[p.seat].played[p.card] = true
+                if t.leadSuit and C.Suit(p.card) ~= t.leadSuit then
+                    rolloutMemory[p.seat].void[t.leadSuit] = true
+                end
+            end
+        end
+    end
+    -- currentTrick has the candidate card already appended above; walk
+    -- ALL its plays (real + candidate) so the seed reflects state at
+    -- the moment heuristicPick is first called for the next seat.
+    for _, p in ipairs(currentTrick.plays) do
+        if p.seat and p.card then
+            rolloutMemory[p.seat].played[p.card] = true
+            if currentTrick.leadSuit and C.Suit(p.card) ~= currentTrick.leadSuit then
+                rolloutMemory[p.seat].void[currentTrick.leadSuit] = true
+            end
+        end
+    end
+
     -- v0.11.1 C-14 (HIGH from C_Bot_audit.md): heuristicPick now delegates
     -- to the full Bot.PickPlay path under the existing _inRollout=true
     -- guard set in BM.PickPlay. The previous Advanced-mirror placeholder
@@ -674,10 +726,11 @@ local function rolloutValue(seat, card, world, contract)
     -- so we run pickLead/pickFollow directly without recursive ISMCTS.
     --
     -- State swap: Bot.PickPlay reads S.s.hostHands[seat], S.s.trick,
-    -- S.s.tricks, S.s.akaCalled, S.s.playedCardsThisRound. We swap these
-    -- to point at rollout-local views (hands, currentTrick, simTricks,
-    -- nil for sim-blind AKA, rolloutPlayed) so the delegated picker sees
-    -- the determinization-sampled state. Restored unconditionally below
+    -- S.s.tricks, S.s.akaCalled, S.s.playedCardsThisRound, and (v0.11.4)
+    -- B.Bot._memory. We swap these to point at rollout-local views
+    -- (hands, currentTrick, simTricks, nil for sim-blind AKA,
+    -- rolloutPlayed, rolloutMemory) so the delegated picker sees the
+    -- determinization-sampled state. Restored unconditionally below
     -- via pcall pattern so a mid-rollout error cannot leak the swap to
     -- subsequent worlds (which would corrupt the next sampleConsistentDeal
     -- call by reading polluted hostHands).
@@ -686,18 +739,32 @@ local function rolloutValue(seat, card, world, contract)
     local prevTricks = S.s.tricks
     local prevAkaCalled = S.s.akaCalled
     local prevPlayed = S.s.playedCardsThisRound
+    local prevMemory = B.Bot and B.Bot._memory or nil
 
     S.s.hostHands = hands
     S.s.trick = currentTrick
     S.s.tricks = simTricks
     S.s.akaCalled = nil   -- sim-blind: rollouts treat AKA as not-yet-called
     S.s.playedCardsThisRound = rolloutPlayed
+    if B.Bot then B.Bot._memory = rolloutMemory end
 
     local function heuristicPick(s, _trick)
         -- _trick param kept for callsite compatibility but unused: the
         -- swap above means S.s.trick == currentTrick at all delegation
         -- points (we re-swap S.s.trick after each trick reset below).
         return B.Bot and B.Bot.PickPlay and B.Bot.PickPlay(s) or nil
+    end
+
+    -- v0.11.4 Bot1-01: helper to update rollout-local memory after a
+    -- pick. Mirrors Bot.OnPlayObserved's played + void inference. Called
+    -- after each `removeCard` + `rolloutPlayed[pick] = true` below.
+    local function recordRolloutMemory(seat, pick, leadSuitAtPlay)
+        local mem = rolloutMemory[seat]
+        if not mem then return end
+        mem.played[pick] = true
+        if leadSuitAtPlay and C.Suit(pick) ~= leadSuitAtPlay then
+            mem.void[leadSuitAtPlay] = true
+        end
     end
 
     -- Play out the rest of the hand. Wrapped in pcall so a mid-rollout
@@ -719,6 +786,9 @@ local function rolloutValue(seat, card, world, contract)
                 if not pick then break end
                 removeCard(hands[nextSeat], pick)
                 rolloutPlayed[pick] = true
+                -- Lead pick: leadSuit was nil at moment of pick; no void
+                -- info to record. (Leader can't be void in their own lead.)
+                recordRolloutMemory(nextSeat, pick, nil)
                 currentTrick.leadSuit = C.Suit(pick)
                 currentTrick.plays[1] = { seat = nextSeat, card = pick }
             else
@@ -728,6 +798,9 @@ local function rolloutValue(seat, card, world, contract)
                 if not pick then break end
                 removeCard(hands[nextSeat], pick)
                 rolloutPlayed[pick] = true
+                -- Follower: leadSuit is set; void inferred if pick's
+                -- suit differs from leadSuit (didn't follow).
+                recordRolloutMemory(nextSeat, pick, currentTrick.leadSuit)
                 currentTrick.plays[#currentTrick.plays + 1] = { seat = nextSeat, card = pick }
             end
         end
@@ -753,6 +826,7 @@ local function rolloutValue(seat, card, world, contract)
     S.s.tricks = prevTricks
     S.s.akaCalled = prevAkaCalled
     S.s.playedCardsThisRound = prevPlayed
+    if B.Bot then B.Bot._memory = prevMemory end
 
     if not ok or not result then return 0 end
 
@@ -799,10 +873,31 @@ function BM.PickPlay(seat)
     -- nil (sim-blind AKA semantics); the outer driver must NOT.
     local trick = S.s.trick or { leadSuit = nil, plays = {} }
     local legal = {}
-    for _, c in ipairs(hand) do
-        local ok = R.IsLegalPlay(c, hand, trick, S.s.contract, seat, S.s.akaCalled)
-        if ok then legal[#legal + 1] = c end
+    -- v0.11.4 Bot1-02 fix: wrap the legal-set construction in pcall so
+    -- a R.IsLegalPlay error (corrupt card, malformed contract,
+    -- AKA-relief edge case) cannot leak `_inRollout = true`. Pre-v0.11.4
+    -- a single legality error inside this loop propagated up to Net.lua's
+    -- outer pcall in MaybeRunBot, which caught the error but never
+    -- restored the flag — silently disabling Saudi-Master ISMCTS for
+    -- the rest of the session (every subsequent Bot.PickPlay would
+    -- short-circuit at the delegation guard, falling through to
+    -- heuristics). The C-14 v0.11.1 expansion widened the surface area
+    -- where errors can occur (full pickLead/pickFollow now exposed via
+    -- the rollout policy delegation), making this leak more likely. On
+    -- failure we _restore(nil) to fall back cleanly to heuristics for
+    -- THIS move only — Saudi-Master tier remains armed for the rest
+    -- of the session. The named-function call form is used (rather
+    -- than an inline closure) so I.4 (H4)'s structural test, which
+    -- enforces per-world rollout granularity, still locates the
+    -- correct rollout-loop entry as the first match.
+    local function buildLegalSet()
+        for _, c in ipairs(hand) do
+            local lok = R.IsLegalPlay(c, hand, trick, S.s.contract, seat, S.s.akaCalled)
+            if lok then legal[#legal + 1] = c end
+        end
     end
+    local legalOk = pcall(buildLegalSet)
+    if not legalOk then return _restore(nil) end
     if #legal == 0 then return _restore(nil) end
     if #legal == 1 then return _restore(legal[1]) end
 

@@ -877,6 +877,11 @@ function N._OnTurn(sender, seat, kind)
     if not fromHost(sender) then return end
     if S.s.isHost then return end
     if not seat then return end
+    -- v0.11.4 NetA-05 fix: validate seat ∈ [1,4]. Pre-v0.11.4 a
+    -- buggy/forked host emitting MSG_TURN;99;play wrote s.turn=99,
+    -- breaking turn-glow UI (S.s.seats[99] is nil) and AFK timer
+    -- arming (isBotSeat returns nil → bot dispatch noops).
+    if seat < 1 or seat > 4 then return end
     S.ApplyTurn(seat, kind)
 end
 
@@ -1470,6 +1475,14 @@ end
 function N._OnPlay(sender, seat, card, replayFlag)
     if fromSelf(sender) then return end
     if not seat or not card then return end
+    -- v0.11.4 XR-11 fix: validate seat ∈ [1,4] and card format
+    -- (2-char rank+suit). Pre-v0.11.4 a malformed card (1-char,
+    -- 5-char, garbage) was passed to S.ApplyPlay → R.IsLegalPlay →
+    -- card:sub(1,1)/sub(2,2) producing bogus rank/suit silently.
+    -- Mirrors the inline check already in _OnTrick's encPlays loop
+    -- (Net.lua:1592).
+    if seat < 1 or seat > 4 then return end
+    if #card ~= 2 then return end
     -- Phase: plays only land during PLAY.
     if S.s.phase ~= K.PHASE_PLAY then return end
     -- Audit fix: replay-frame bypass. During a resync replay the host
@@ -1574,6 +1587,15 @@ function N._OnTrick(sender, winner, points, leadSuit, encPlays, replayFlag)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.4 NetA-04 fix (audit_v0.11.3 cross-cutting MED): validate
+    -- winner ∈ [1,4] and points non-nil before passing to ApplyTrickEnd.
+    -- Pre-v0.11.4 a buggy/forked host sending MSG_TRICK with garbage
+    -- numerics (tonumber returning nil, or seat=99) silently corrupted
+    -- s.tricks[i].winner = nil and downstream R.TeamOf(nil) defaulted
+    -- to "B", miscounting team trick totals. Mirrors RT07-05 wire
+    -- validation shape.
+    if not winner or winner < 1 or winner > 4 then return end
+    if not points then return end
     -- Authoritative trick snapshot from host. We rebuild s.trick from
     -- the encoded plays so ApplyTrickEnd's lastTrick stash is complete
     -- regardless of MSG_PLAY arrival order. Older hosts (pre-v0.1.25)
@@ -1609,6 +1631,13 @@ function N._OnRound(sender, addA, addB, totA, totB, sweep, bidderMade)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.4 NetA-03 / RT07-06 fix: nil-numeric guard on the four
+    -- score fields. Pre-v0.11.4 a buggy/forked host emitting
+    -- MSG_ROUND;<garbage>;... with non-numeric fields → tonumber()
+    -- returns nil → S.ApplyRoundEnd writes s.cumulative.A/B = nil,
+    -- corrupting the score panel until the next valid MSG_ROUND.
+    -- Mirrors RT07-05 wire-validation shape.
+    if not addA or not addB or not totA or not totB then return end
     S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
 end
 
@@ -1616,6 +1645,10 @@ function N._OnGameEnd(sender, winner)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.4 XR-09 fix: validate winner ∈ {"A","B"}. Pre-v0.11.4
+    -- accepted any string and wrote it into s.winner; downstream
+    -- R.TeamOf comparisons silently fall through to default branches.
+    if winner ~= "A" and winner ~= "B" then return end
     S.ApplyGameEnd(winner)
 end
 

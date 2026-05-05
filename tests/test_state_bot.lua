@@ -2219,6 +2219,120 @@ do
 end
 
 -- =====================================================================
+-- O. v0.11.4 audit closures (Bot1-01 + Bot1-02 + NetA-03/04/05 + XR-09/11)
+--
+-- Bot1-01 — C-14 completion: rolloutValue swaps Bot._memory to a
+-- rollout-local copy populated from simTricks + currentTrick.plays so
+-- pickLead/pickFollow branches reading _memory.played and _memory.void
+-- see the determinization-sampled state.
+--
+-- Bot1-02 — _inRollout flag leak fix: BM.PickPlay's legal-set
+-- construction is wrapped in a pcall (named-function form to preserve
+-- I.4 (H4) per-world pcall structural test).
+--
+-- NetA-03 — _OnRound nil-numeric guards on addA/addB/totA/totB.
+-- NetA-04 — _OnTrick winner ∈ [1,4] + points non-nil.
+-- NetA-05 — _OnTurn seat ∈ [1,4].
+-- XR-09  — _OnGameEnd winner ∈ {"A","B"}.
+-- XR-11  — _OnPlay seat ∈ [1,4] + card length == 2.
+-- =====================================================================
+section("O. v0.11.4 audit closures (Bot1-01 + Bot1-02 + wire validation)")
+
+-- O.1 (Bot1-01): rolloutValue saves and swaps Bot._memory.
+do
+    local bm = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bm:find("local prevMemory = B%.Bot and B%.Bot%._memory") ~= nil,
+               "O.1a (Bot1-01): rolloutValue saves prev B.Bot._memory")
+    assertTrue(bm:find("if B%.Bot then B%.Bot%._memory = rolloutMemory end") ~= nil,
+               "O.1b (Bot1-01): rolloutValue swaps B.Bot._memory to rollout-local")
+    assertTrue(bm:find("if B%.Bot then B%.Bot%._memory = prevMemory end") ~= nil,
+               "O.1c (Bot1-01): rolloutValue restores B.Bot._memory after rollout")
+    -- Verify population: rolloutMemory[seat].played and .void built
+    -- from simTricks + currentTrick.plays.
+    assertTrue(bm:find("rolloutMemory%[p%.seat%]%.played%[p%.card%] = true") ~= nil,
+               "O.1d (Bot1-01): rolloutMemory.played populated from simTricks + currentTrick")
+    assertTrue(bm:find("rolloutMemory%[p%.seat%]%.void%[t%.leadSuit%] = true") ~= nil,
+               "O.1e (Bot1-01): rolloutMemory.void populated from simTricks")
+    -- Verify per-pick update helper exists.
+    assertTrue(bm:find("local function recordRolloutMemory") ~= nil,
+               "O.1f (Bot1-01): recordRolloutMemory helper updates rollout memory per pick")
+end
+
+-- O.2 (Bot1-02): BM.PickPlay's legal-set construction is pcall-wrapped.
+do
+    local bm = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bm:find("local function buildLegalSet") ~= nil,
+               "O.2a (Bot1-02): BM.PickPlay defines buildLegalSet helper")
+    assertTrue(bm:find("local legalOk = pcall%(buildLegalSet%)") ~= nil,
+               "O.2b (Bot1-02): BM.PickPlay calls pcall(buildLegalSet) — _inRollout leak guard")
+    -- Confirm the failure path returns _restore(nil) so the flag is
+    -- cleared when the legal-set construction errors.
+    assertTrue(bm:find("if not legalOk then return _restore%(nil%) end") ~= nil,
+               "O.2c (Bot1-02): pcall failure returns _restore(nil) — clears _inRollout")
+end
+
+-- O.3 (NetA-03 / RT07-06): _OnRound nil-numeric guards.
+do
+    local net = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(
+        net:find("if not addA or not addB or not totA or not totB then return end") ~= nil,
+        "O.3 (NetA-03): _OnRound rejects nil score fields")
+end
+
+-- O.4 (NetA-04): _OnTrick winner ∈ [1,4] + points non-nil.
+do
+    local net = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- Locate _OnTrick and scan first 30 lines for both guards.
+    local fnStart = net:find("function N%._OnTrick")
+    assertTrue(fnStart ~= nil, "O.4 setup: _OnTrick function found")
+    if fnStart then
+        local body = net:sub(fnStart, fnStart + 1500)
+        assertTrue(body:find("winner < 1 or winner > 4") ~= nil,
+                   "O.4a (NetA-04): _OnTrick rejects winner outside 1-4")
+        assertTrue(body:find("if not points then return end") ~= nil,
+                   "O.4b (NetA-04): _OnTrick rejects nil points")
+    end
+end
+
+-- O.5 (NetA-05): _OnTurn seat ∈ [1,4].
+do
+    local net = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = net:find("function N%._OnTurn")
+    assertTrue(fnStart ~= nil, "O.5 setup: _OnTurn function found")
+    if fnStart then
+        local body = net:sub(fnStart, fnStart + 700)
+        assertTrue(body:find("seat < 1 or seat > 4") ~= nil,
+                   "O.5 (NetA-05): _OnTurn rejects seat outside 1-4")
+    end
+end
+
+-- O.6 (XR-09): _OnGameEnd winner ∈ {"A","B"}.
+do
+    local net = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = net:find("function N%._OnGameEnd")
+    assertTrue(fnStart ~= nil, "O.6 setup: _OnGameEnd function found")
+    if fnStart then
+        local body = net:sub(fnStart, fnStart + 500)
+        assertTrue(body:find('winner ~= "A" and winner ~= "B"') ~= nil,
+                   "O.6 (XR-09): _OnGameEnd rejects winner outside {A,B}")
+    end
+end
+
+-- O.7 (XR-11): _OnPlay seat ∈ [1,4] + card length == 2.
+do
+    local net = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = net:find("function N%._OnPlay")
+    assertTrue(fnStart ~= nil, "O.7 setup: _OnPlay function found")
+    if fnStart then
+        local body = net:sub(fnStart, fnStart + 1000)
+        assertTrue(body:find("seat < 1 or seat > 4") ~= nil,
+                   "O.7a (XR-11): _OnPlay rejects seat outside 1-4")
+        assertTrue(body:find("if #card ~= 2 then return end") ~= nil,
+                   "O.7b (XR-11): _OnPlay rejects malformed card (length != 2)")
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

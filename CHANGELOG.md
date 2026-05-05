@@ -1,5 +1,144 @@
 # Changelog
 
+## v0.11.4 — comprehensive-audit batch: C-14 completion + Saudi-Master robustness + wire-validation cluster
+
+Closes the highest-value items from the v0.11.3 comprehensive audit
+(four parallel agents covering Net.lua / State+UI.lua / Bot+BotMaster /
+cross-cutting+red-team). Three tracks in one batch.
+
+### Fixed (HIGH)
+
+- **Bot1-01** (`BotMaster.lua` rolloutValue) — **C-14 completion**.
+  v0.11.1 swapped 5 fields (hostHands / trick / tricks / akaCalled /
+  playedCardsThisRound) but missed `Bot._memory`. The audit
+  (`C_Bot_audit.md` Bot1-01) found this was the partial-coverage gap:
+  branches reading `_memory[seat].played[card]` and `_memory[seat].void[suit]`
+  saw real-state observations only — the rollout's simulated forward
+  play never updated `_memory`, so the simulated tail's revealed voids
+  were invisible to the rollout policy. Affected branches:
+  - **Ace-exhaustion lead** (`Bot.lua:2101-2132`) — at trick T+k of a
+    rollout, "have side Aces all been played?" silently answered "no"
+    (only saw real-state plays through trick T). Trump-poor cash-side
+    play was undervalued.
+  - **Faranka exception #4** (`Bot.lua:2985-2999`) — bidder-team
+    Faranka pos-4 trump-cut fires when all opps observed-void in
+    trump. Rollouts couldn't see voids revealed in tricks T+1..T+k.
+  - **`opponentsVoidInAll` / `anyOpponentVoidIn`** helpers
+    (`Bot.lua:674-702`) — opp-void-aware lead branches in pickLead.
+  - **`PickAKA` suppression** (`Bot.lua:3385`) — suppress AKA when
+    partner observed void in trump.
+
+  Fix: rolloutValue now also saves/swaps/restores `B.Bot._memory` to a
+  rollout-local `rolloutMemory[seat] = { played, void }` populated from
+  `simTricks` + `currentTrick.plays` at swap-in (mirrors
+  `Bot.OnPlayObserved`'s populated/void inference rule). A
+  `recordRolloutMemory(seat, pick, leadSuit)` helper updates the
+  rollout-local memory after every pick during the rollout loop, so
+  voids revealed in the simulated tail are visible to subsequent
+  picks. Cross-round signals (`firstDiscard`, `likelyKawesh`,
+  `akaSent`, `_partnerStyle` ledger) are NOT swapped — those are
+  invariant during a single-round rollout and the Bot.PickPlay
+  branches that read them aren't bot-coordination-relevant in
+  rollouts.
+
+### Fixed (MED — Saudi-Master robustness)
+
+- **Bot1-02** (`BotMaster.lua` BM.PickPlay legal-set construction) —
+  `_inRollout` flag leak fix. Pre-v0.11.4 a `R.IsLegalPlay` error
+  inside the legal-set loop propagated up to Net.lua's outer pcall
+  in `MaybeRunBot`, which caught the error but never restored
+  `B.Bot._inRollout` — silently disabling Saudi-Master ISMCTS for the
+  rest of the session (every subsequent `Bot.PickPlay` short-circuited
+  at the delegation guard, falling through to heuristics). The C-14
+  v0.11.1 expansion widened the surface area where errors could
+  occur (full pickLead/pickFollow now exposed via the rollout policy
+  delegation), making this leak more likely.
+
+  Fix: wrap legal-set construction in pcall via named-function
+  `buildLegalSet`. On failure, `_restore(nil)` clears `_inRollout`
+  and returns nil so `Bot.PickPlay` falls back to heuristics for THIS
+  move only — Saudi-Master tier remains armed for the rest of the
+  session. Named-function form (rather than inline closure) preserves
+  the I.4 (H4) per-world pcall structural test that requires the
+  first inline `pcall(function()` to come after the per-world for-loop.
+
+### Fixed (MED — wire-validation cluster, 5 one-liners)
+
+Same defense-in-depth shape as v0.11.3 RT07-05 (`_OnContract` bidder
+range + btype enum). Each guards against a buggy/forked host emitting
+malformed broadcast frames that silently corrupt receiver state.
+
+- **NetA-03 / RT07-06** (`Net.lua:1608` `_OnRound`) — nil-numeric
+  guards on addA/addB/totA/totB. Pre-v0.11.4 `S.ApplyRoundEnd`
+  unconditionally wrote `s.cumulative.A = totA`; nil totals silently
+  corrupted the score panel until the next valid MSG_ROUND.
+- **NetA-04** (`Net.lua:1573` `_OnTrick`) — winner ∈ [1,4] + points
+  non-nil. Pre-v0.11.4 `s.tricks[i].winner = nil` corrupted trick
+  history; downstream `R.TeamOf(nil)` defaulted to "B", miscounting
+  team trick totals.
+- **NetA-05** (`Net.lua:875` `_OnTurn`) — seat ∈ [1,4]. Pre-v0.11.4
+  a bogus `s.turn = 99` broke turn-glow UI (`S.s.seats[99] = nil`)
+  and AFK timer arming (`isBotSeat` returned nil → bot dispatch
+  noops). Garbage seat persisted until next valid MSG_TURN.
+- **XR-09** (`Net.lua:1615` `_OnGameEnd`) — winner ∈ {"A","B"}.
+  Pre-v0.11.4 accepted any string and wrote into `s.winner`; downstream
+  `R.TeamOf` comparisons silently fell through to default branches.
+- **XR-11** (`Net.lua:1475` `_OnPlay`) — seat ∈ [1,4] + `#card == 2`.
+  Pre-v0.11.4 a malformed card (1-char, 5-char, garbage) was passed
+  to `S.ApplyPlay` → `R.IsLegalPlay` → `card:sub(1,1)/sub(2,2)`
+  producing bogus rank/suit silently. Mirrors the inline check
+  already in `_OnTrick`'s encPlays loop.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section O** (20 new source-match pins):
+  - O.1a-f (Bot1-01): Bot._memory swap/restore + rolloutMemory
+    population + recordRolloutMemory helper
+  - O.2a-c (Bot1-02): buildLegalSet + pcall + _restore on failure
+  - O.3 (NetA-03): _OnRound nil-numeric guard
+  - O.4a-b (NetA-04): _OnTrick winner range + points non-nil
+  - O.5 (NetA-05): _OnTurn seat range
+  - O.6 (XR-09): _OnGameEnd winner enum
+  - O.7a-b (XR-11): _OnPlay seat + card-length
+- **454 / 454 pass** (up from 434, +20 new pins).
+
+### Verified-correct items (no action needed; from comprehensive audit)
+
+- **C-14 architecture** (post v0.11.1) — structurally correct. State
+  swap covers every field read by `Bot.PickPlay` descendants.
+- **All v0.11.0/.3 closures hold**: A5, B2, C1#6, D1, E2, RT07-01,
+  RT07-02, RT07-03, RT07-04, RT07-05, S-1, U-7.
+- **TRANSIENT_FIELDS coverage clean** post-RT07-01.
+- **Wire/state Send↔On pairing clean** — no orphans.
+- **Self-broadcast loops** — every `_On*` has `fromSelf` guard.
+- **Tier strict-extension intact**: Master ⊂ Fzloky ⊂ M3lm ⊂ Advanced.
+- **Bot memory lifecycle**: per-round / per-game resets correct.
+- **Resync handshake post-C1#6** fully covers pause-during-resync.
+- **Takweesh banner WIN/LOST**: verified-correct (proxy ≡ score-delta
+  by construction; unlike SWA's v0.11.2 fix).
+
+### Still open (next-batch candidates)
+
+- **OPEN-1** — Sun overcall bottom contract banner not updating.
+  Both Net.lua and State+UI agents confirm no code-level bug from
+  inspection. Most-likely root: AddonMessage chat-throttle drop of
+  MSG_CONTRACT (no redundant rebroadcast in `_HostResolveOvercall`).
+  Defensive mitigation possible: re-send MSG_CONTRACT ~250ms later.
+  Pending user repro details (host vs client, `/dump`, screenshot).
+- **SU-01** — `S.ApplyContract` should clear `s.overcall` on phase
+  advance (defensive single-line; wire-reorder edge case).
+- **SU-06** — `S.ApplyRoundEnd` cue cluster lacks isReplay guard
+  (rejoiner audio flood). Mirror RT07-03 pattern.
+- **XR-01** — Test-harness blind spot. `tests/run.py` doesn't load
+  Net.lua / BotMaster.lua / WHEREDNGN.lua → all v0.11.x pins are
+  source-string matches. Bigger lift; needs WoW API stubs.
+- **Bot1-03** — Performance budget for ISMCTS. Defer until user
+  reports lag.
+- **RT07-07** — `hokmMinShape` weak mardoofa (J+7 passes). Calibration;
+  pending v0.11.1+ telemetry.
+- **LOW**: NetA-06, NetA-07, XR-04, XR-08, XR-14, XR-15, XR-16
+  (dead constant, sound-cue dedup, MaybeRunBot refactor, etc.).
+
 ## v0.11.3 — RT07 batch: SND_LAST_TRICK_WIN trick-8 gate + sweep-track reset + contract wire-validation
 
 Three targeted MED closures from `audit_v0.10.7/D_RedTeam_audit.md`.
