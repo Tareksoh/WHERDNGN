@@ -1,5 +1,103 @@
 # Changelog
 
+## v0.11.9 — bidding calibration (user-arbitrated from bidcalc trace evidence)
+
+User played ~50+ bidding events with the v0.11.8 `bidcalc` trace
+on. Analysis surfaced **three real calibration issues**, all confirmed
+by specific trace events. Each fix is targeted with a defensible
+Saudi-source basis.
+
+### The data
+
+Three Sun-eligible hands (sunMinShape=true) were observed in the
+trace; ALL were filtered out by the strength threshold despite being
+canonical Saudi Sun bids:
+
+| Hand | aces | mardoofa | sunStrength | thSun | Gap |
+|---|---|---|---|---|---|
+| `[QS TH AH 8C KH]` | 1 | 1 | 20 | 43-47 | -23 to -27 |
+| `[8H JC AC TC 7S]` | 1 | 1 | 15 | 48-52 | -33 to -37 |
+| `[AS KH KC JH AD]` | 2 | 0 | 14 | 41 | -27 |
+
+The first two have A+T mardoofa pairs (the canonical "إكة مردوفة"
+pattern, video #25); the third has 2 Aces + 2 Kings (high-card
+concentration). All structurally bid-Sun in Saudi convention but the
+heuristic score values 14-20 were structurally ~25 points below the
+threshold band of 41-52.
+
+Plus one weak-mardoofa Hokm trigger:
+
+```
+[bid s4 r2] hand=[7C KC AC JS 8S] sun=-1 aces=1 mardoofa=1 thSun=51
+[bid s4 r2] R2 Sun skipped: sunMinShape=false sun=-1 thSun=51
+[bid s4 r2] R2 Hokm fires: S bestScore=30 >= thHokmR2=28
+```
+
+J♠+8♠ is NOT a Saudi mardoofa pair (canonical: J+9 or J+A). The bot
+bid Hokm-Spades on a 2-trump hand where the second trump is 8 — the
+exact RT07-07 audit-flagged case ("count==2 admits weak mardoofas").
+
+### Fixed
+
+- **`Constants.lua` `K.BOT_SUN_MARDOOFA_BONUS`: 10 → 20.** The v0.10.4
+  bump (5 → 10) was insufficient. A+T mardoofa is the canonical
+  "must-bid" Sun pattern in Saudi convention; +10 was structurally
+  too small to cross the threshold even after face-value addition.
+  Pair cap (2) preserved so 2-pair hands cap at +40, not unbounded.
+
+- **`Bot.lua:949` `sunStrength` void-penalty cap: 18 → 8.** The
+  void/short-suit penalty is HOKM-think mistakenly applied to Sun.
+  In Hokm voids = ruff vulnerabilities; in Sun (no trump) voids are
+  neutral or POSITIVE for the bidder (free discards on opp leads).
+  Pre-v0.11.9 a hand like `[QS TH AH 8C KH]` (A+T+K hearts locked
+  suit + 3 mid singletons) got 28 face value − 18 cap = 10 base —
+  the penalty wiped out the entire face-value advantage of the
+  A+T+K trio. Cap of 8 preserves "definitely-junk hand" filtering
+  (e.g. all 4 suits void/honorless = -8) without erasing strong
+  single-suit concentrations. History: 25 → 18 (Gemini softening) →
+  8 (v0.11.9).
+
+- **`Bot.lua:794` `hokmMinShape` Lever C tightening (RT07-07 closure).**
+  The v0.10.6 `count == 2 and hasSideAce` clause admitted ANY second
+  trump as a "mardoofa partner" of J — including 7, 8, T, Q, K. The
+  bidcalc trace caught the bot bidding Hokm on J+8+side-Ace, exactly
+  the case RT07-07 audit predicted. Per video #26 R2 the canonical
+  "مردوفة" partner of J is specifically rank 9 (top mardoofa) or A
+  (still strong). v0.11.9 tightens the gate: tracks `hasTrumpNine`
+  and `hasTrumpA` separately and requires `(hasTrumpNine or hasTrumpA)`
+  alongside the existing `hasSideAce`. J+7/J+8/J+T/J+Q/J+K with side
+  Ace no longer triggers — closing the loose gate.
+
+### Expected behavioral change
+
+Re-running the trace's three missed Sun hands with v0.11.9 strength values:
+
+| Hand | New sunStrength | thSun band | Fire rate |
+|---|---|---|---|
+| `[QS TH AH 8C KH]` | 28 − 8 + 20 = **40** | 32-57 (jittered) | ~60% |
+| `[8H JC AC TC 7S]` | 23 − 8 + 20 = **35** | 32-57 | ~40% |
+| `[AS KH KC JH AD]` | 32 − 8 + 0 = **24** | 32-57 | ~5% |
+
+Net: ~50% of A+T-mardoofa hands now bid Sun (was 0%); 2-Ace-no-mardoofa
+hands stay conservative (legitimately marginal in 5-card view).
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section T** (8 new pins):
+  - T.1: `K.BOT_SUN_MARDOOFA_BONUS = 20`
+  - T.2a-b: void-penalty cap = 8 (and old 18 removed)
+  - T.3a-b: hokmMinShape declares trump-rank flags + uses them in count==2
+  - T.4 BEHAVIORAL: J+8+side-Ace 5-card hand → Bot.PickBid returns PASS
+    (RT07-07 closure verified end-to-end via Bot.PickBid path)
+- **518 / 518 pass** (up from 510, +8 new pins).
+
+### Note
+
+`/baloot bidcalc` toggle from v0.11.8 is still available — re-enable
+it to verify v0.11.9 produces the predicted Sun-bid rate. Expected
+trace pattern: `R1 direct Sun fires: sun=NN >= thSun=MM` should now
+appear ~50% of the time on A+T mardoofa hands (was 0% pre-v0.11.9).
+
 ## v0.11.8 — bidcalc trace toggle (diagnostic for Sun-bidding investigation)
 
 User-reported "bots not bidding Sun in 30 bidding rounds = 0".

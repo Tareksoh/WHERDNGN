@@ -2594,6 +2594,95 @@ do
 end
 
 -- =====================================================================
+-- T. v0.11.9 bidding calibration (user-arbitrated from bidcalc trace)
+--
+-- 1. K.BOT_SUN_MARDOOFA_BONUS bumped 10 → 20 (S-8 reinforcement).
+-- 2. sunStrength Advanced void-penalty cap lowered 18 → 8 (Hokm-think
+--    no longer applied to Sun: voids aren't ruff vulnerabilities in
+--    no-trump play).
+-- 3. hokmMinShape Lever C tightened: count==2 branch now requires the
+--    second trump be rank 9 or A (canonical mardoofa partners of J),
+--    not any rank. Closes RT07-07.
+-- =====================================================================
+section("T. v0.11.9 bidding calibration (user-arbitrated)")
+
+-- T.1 — K.BOT_SUN_MARDOOFA_BONUS = 20.
+do
+    assertEq(K.BOT_SUN_MARDOOFA_BONUS, 20,
+             "T.1 (v0.11.9): mardoofa bonus = 20 (was 10 in v0.10.4)")
+end
+
+-- T.2 — sunStrength Advanced penalty cap = 8.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function sunStrength")
+    assertTrue(fnStart ~= nil, "T.2 setup: sunStrength found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 3000)
+        assertTrue(body:find("math%.min%(penalty, 8%)") ~= nil,
+                   "T.2 (v0.11.9): sunStrength void-penalty cap reduced 18 → 8")
+        assertTrue(body:find("math%.min%(penalty, 18%)") == nil,
+                   "T.2b (v0.11.9): old 18-cap removed (no leftover branch)")
+    end
+end
+
+-- T.3 — hokmMinShape Lever C tightened to require second trump = 9 or A.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function hokmMinShape")
+    assertTrue(fnStart ~= nil, "T.3 setup: hokmMinShape found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 3500)
+        -- New gate references hasTrumpNine and hasTrumpA tracked in
+        -- the loop, then requires (hasTrumpNine or hasTrumpA) in the
+        -- count==2 branch.
+        assertTrue(body:find("hasTrumpA, hasTrumpNine") ~= nil,
+                   "T.3a (v0.11.9): hokmMinShape declares hasTrumpA + hasTrumpNine flags")
+        assertTrue(body:find("hasTrumpNine or hasTrumpA") ~= nil,
+                   "T.3b (v0.11.9): count==2 branch requires (9 or A) in trump")
+    end
+end
+
+-- T.4 — Behavioral pin: hokmMinShape rejects [JS 8S + side AC] (J+8
+-- weak-mardoofa, the exact RT07-07 trace case).
+do
+    -- Build a 5-card hand: JS, 8S, AC, 7H, 9D — the structural shape
+    -- of the s4 r2 trace event. count(S)=2 with J+8, hasSideAce=true.
+    local hand = { "JS", "8S", "AC", "7H", "9D" }
+    -- Pre-v0.11.9: hokmMinShape("S") returned true (J+8 + side ace
+    -- passed Lever C). v0.11.9: returns false because second trump is
+    -- 8 (not 9 or A). The function is local to Bot.lua so we can't
+    -- call it directly from this harness — verify via Bot.PickBid
+    -- output instead.
+    --
+    -- Bot.PickBid surfaces hokmMinShape rejection by falling through
+    -- to PASS in R1 (no Hokm fires). Set up state for an R1 bid call.
+    if Bot.PickBid then
+        freshState()
+        S.s.isHost = true
+        S.s.hostHands = { [1] = hand, [2] = {}, [3] = {}, [4] = {} }
+        S.s.bidRound = 1
+        S.s.bidCard = "8S"  -- flipped card matching trump suit S
+        S.s.bids = {}
+        S.s.dealer = 4
+        S.s.cumulative = { A = 0, B = 0 }
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.advancedBots = false
+        WHEREDNGNDB.m3lmBots = false
+        WHEREDNGNDB.fzlokyBots = false
+        WHEREDNGNDB.saudiMasterBots = false
+        local bid = Bot.PickBid(1)
+        -- Pre-v0.11.9: bid would be "HOKM:S" (J+8+side-Ace passed
+        -- Lever C). Post-v0.11.9: should be PASS (Lever C now
+        -- rejects J+8). The basic-tier hokmMinShape gate also
+        -- runs, so even without M3lm the J+8+side-Ace case is now
+        -- caught.
+        assertEq(bid, K.BID_PASS,
+                 "T.4 (v0.11.9 RT07-07): J+8 weak-mardoofa with side-Ace no longer triggers Hokm bid")
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

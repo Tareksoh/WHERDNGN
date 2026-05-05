@@ -796,12 +796,20 @@ local function hokmMinShape(hand, suit)
     local hasJ, count = false, 0
     local hasSideAce = false
     local hasAnyAce  = false
+    -- v0.11.9 RT07-07 fix: track whether the second trump card is a
+    -- canonical mardoofa partner (9 or A). In Saudi Hokm trump order
+    -- J=1st, 9=2nd, A=3rd; J+9 is the top mardoofa pair, J+A is also
+    -- strong. J+7, J+8, J+T, J+Q, J+K are NOT real mardoofa per the
+    -- video #26 R2 canonical rule "الولد + مردوفة معاه" (J + its
+    -- mardoofa partner). Used by the count==2 branch below.
+    local hasTrumpA, hasTrumpNine = false, false
     for _, c in ipairs(hand) do
         local r, su = C.Rank(c), C.Suit(c)
         if su == suit then
             count = count + 1
             if r == "J" then hasJ = true end
-            if r == "A" then hasAnyAce = true end
+            if r == "A" then hasAnyAce = true; hasTrumpA = true end
+            if r == "9" then hasTrumpNine = true end
         elseif r == "A" then
             hasSideAce = true
             hasAnyAce  = true
@@ -818,15 +826,20 @@ local function hokmMinShape(hand, suit)
     -- BIDDING_CALIBRATION_v0.10.5.md §8.1, video #26 R2):
     -- "أقل شي عشان تشتري الحكم: الولد + مردوفة معاه + إكا واحدة"
     -- — "minimum to buy Hokm: J of trump + ONE other trump (mardoofa
-    -- with the J) + ONE Ace on the side." The single most-emphasized
-    -- "minimum confident bid" in the Hokm corpus, currently rejected
-    -- by the prior `count >= 3` lower-bound. The not-hasJ gate above
-    -- already enforces the J-of-trump anchor, so this clause exactly
-    -- matches the R2 pattern (2-trump-with-J + side Ace) — no broader.
-    -- Per 200k-trial Monte Carlo: ~19.23% of random 8-card hands match
-    -- this pattern but were silently rejected pre-v0.10.6, structurally
-    -- under-bidding by ~10pp net bid rate.
-    if count == 2 and hasSideAce then return true end  -- R2 canonical min
+    -- with the J) + ONE Ace on the side."
+    --
+    -- v0.11.9 RT07-07 closure: the v0.10.6 implementation was too
+    -- loose — `count == 2 and hasSideAce` admitted ANY second trump
+    -- (including J+7, J+8, J+T, etc.) as a "mardoofa". Live bidcalc
+    -- trace evidence: bot s4 r2 bid Hokm-S on [JS 8S + AC side],
+    -- which is exactly the "weak mardoofa" RT07-07 audit predicted.
+    -- Per video #26 the "مردوفة" (mardoofa partner of J) is
+    -- specifically 9 or A — the 2nd and 3rd ranks in Saudi Hokm
+    -- trump order. v0.11.9 tightens the count==2 branch to require
+    -- the second trump be 9 or A — closing the loose gate.
+    if count == 2 and hasSideAce and (hasTrumpNine or hasTrumpA) then
+        return true   -- R2 canonical min: J + (9 or A trump) + side Ace
+    end
     return false
 end
 
@@ -944,9 +957,20 @@ local function sunStrength(hand)
         for _, su in ipairs({ "S", "H", "D", "C" }) do
             if count[su] < 2 or not honors[su] then penalty = penalty + 10 end
         end
-        -- Cap softened from 25 to 18 (Gemini): lopsided hands with a
-        -- solid long suit shouldn't bleed all of their headroom.
-        s = s - math.min(penalty, 18)
+        -- v0.11.9 user-arbitrated (bidcalc trace): cap reduced from 18 → 8.
+        -- The void/short-suit penalty is HOKM-think mistakenly applied
+        -- to Sun. In Hokm, voids = ruff vulnerabilities (opponents trump
+        -- from your void). In Sun there's no trump, so voids are
+        -- neutral or even POSITIVE for the bidder (you discard freely
+        -- on opp leads). Pre-v0.11.9 a hand like [QS TH AH 8C KH] —
+        -- A+T+K of hearts (locked suit) plus 3 mid singletons — got
+        -- 28 face value − 18 penalty = 10 base. The penalty wiped out
+        -- the entire face-value advantage of the A+T+K trio. Cap of 8
+        -- preserves "definitely-junk hand" filtering (e.g. all 4
+        -- suits void/honorless = -8 still) without erasing strong
+        -- single-suit concentrations. v0.10.0 history: pre-Gemini
+        -- 25 → softened 18 → v0.11.9 8.
+        s = s - math.min(penalty, 8)
     end
     return s
 end
