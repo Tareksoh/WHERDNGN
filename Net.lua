@@ -2372,19 +2372,17 @@ function N.HostResolveTakweesh(callerSeat)
     local winnerTeam = foundIllegal and callerTeam or oppTeam
 
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-    -- v0.2.0+ multiplier ladder: Bel(×2)/Triple(×3)/Four(×4). Gahwa is
-    -- NOT a multiplier — it's a match-win. But for early-termination
-    -- penalties (takweesh, invalid SWA), the per-round score is still
-    -- computed to charge the bare 26 (Sun) / 16 (Hokm) penalty even
-    -- when Gahwa was called — so we treat Gahwa as ×4 for THIS path
-    -- (highest active rung). The match-win semantic only applies to
-    -- a fully-played-out round, not a forfeit.
-    local mult = K.MULT_BASE
-    if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if     c.gahwa   then mult = mult * K.MULT_FOUR
-    elseif c.foured  then mult = mult * K.MULT_FOUR
-    elseif c.tripled then mult = mult * K.MULT_TRIPLE
-    elseif c.doubled then mult = mult * K.MULT_BEL end
+    -- v0.11.6 user-arbitrated split: cards × contract × escalation;
+    -- melds × escalation only (immune to Sun ×2). See Rules.lua
+    -- R.ScoreRound for the full rationale + cross-check against
+    -- videos #32/#38's Hokm/Sun "100 vs 400" 1:4 ratio.
+    local contractMult = (c.type == K.BID_SUN) and K.MULT_SUN or K.MULT_BASE
+    local escalationMult = K.MULT_BASE
+    if     c.gahwa   then escalationMult = escalationMult * K.MULT_FOUR
+    elseif c.foured  then escalationMult = escalationMult * K.MULT_FOUR
+    elseif c.tripled then escalationMult = escalationMult * K.MULT_TRIPLE
+    elseif c.doubled then escalationMult = escalationMult * K.MULT_BEL end
+    local mult = contractMult * escalationMult
 
     local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
@@ -2443,8 +2441,11 @@ function N.HostResolveTakweesh(callerSeat)
         end
     end
 
-    local rawA = (cardA + mpA) * mult
-    local rawB = (cardB + mpB) * mult
+    -- v0.11.6 user-arbitrated split: cards × full mult, melds ×
+    -- escalation only (immune to Sun's contract-mult), Belote fully
+    -- immune. Matches R.ScoreRound post-v0.11.6.
+    local rawA = cardA * mult + mpA * escalationMult
+    local rawB = cardB * mult + mpB * escalationMult
     if belote == "A" then rawA = rawA + K.MELD_BELOTE
     elseif belote == "B" then rawB = rawB + K.MELD_BELOTE end
 
@@ -3176,15 +3177,16 @@ function N.HostResolveSWA(callerSeat, callerHand)
         -- WITH THEM — does NOT transfer to opp. Opp only adds
         -- THEIR OWN melds × mult. Belote independent.
         local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-        -- v0.2.0+ multiplier ladder. Gahwa is treated as ×4 here (same
-        -- as Four) because the match-win semantic only applies to a
-        -- fully-played-out round; an invalid SWA is a per-round penalty.
-        local mult = K.MULT_BASE
-        if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-        if     c.gahwa   then mult = mult * K.MULT_FOUR
-        elseif c.foured  then mult = mult * K.MULT_FOUR
-        elseif c.tripled then mult = mult * K.MULT_TRIPLE
-        elseif c.doubled then mult = mult * K.MULT_BEL end
+        -- v0.11.6 user-arbitrated split (matches R.ScoreRound +
+        -- HostResolveTakweesh): cards × full mult, melds ×
+        -- escalation only (immune to Sun's contract-mult).
+        local contractMult = (c.type == K.BID_SUN) and K.MULT_SUN or K.MULT_BASE
+        local escalationMult = K.MULT_BASE
+        if     c.gahwa   then escalationMult = escalationMult * K.MULT_FOUR
+        elseif c.foured  then escalationMult = escalationMult * K.MULT_FOUR
+        elseif c.tripled then escalationMult = escalationMult * K.MULT_TRIPLE
+        elseif c.doubled then escalationMult = escalationMult * K.MULT_BEL end
+        local mult = contractMult * escalationMult
         local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         local cardA = (oppOfCaller == "A") and handTotal or 0
@@ -3227,8 +3229,11 @@ function N.HostResolveSWA(callerSeat, callerHand)
                 end
             end
         end
-        local rawA = (cardA + mpA) * mult
-        local rawB = (cardB + mpB) * mult
+        -- v0.11.6 user-arbitrated split: cards × full mult, melds ×
+        -- escalation only (immune to Sun's contract-mult), Belote fully
+        -- immune. Matches R.ScoreRound + HostResolveTakweesh post-v0.11.6.
+        local rawA = cardA * mult + mpA * escalationMult
+        local rawB = cardB * mult + mpB * escalationMult
         if beloteOwner == "A" then rawA = rawA + K.MELD_BELOTE
         elseif beloteOwner == "B" then rawB = rawB + K.MELD_BELOTE end
         -- v0.5.21 scoring-inconsistency fix: same div10 alignment

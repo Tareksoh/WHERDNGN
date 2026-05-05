@@ -92,18 +92,24 @@ K.MELD_SEQ3        = 20
 K.MELD_SEQ4        = 50
 K.MELD_SEQ5        = 100
 K.MELD_CARRE_OTHER = 100   -- T, K, Q, J (any contract type) AND Carré-A in Hokm
-K.MELD_CARRE_A_SUN = 400   -- v0.10.0 R5 fix (review_v0.10.0/reaudit_R5_*.md):
-                           -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
-                           -- Per videos #32 + #38, the meld's name IS its raw
-                           -- value: 400. Per video #43 the Sun divisor is 5
-                           -- (raw 400 ÷ 5 = 80 game points). Code's
-                           -- `meldRaw × Sun×2 / div10` pipeline correctly
-                           -- produces 80 gp from a stored 400 raw. Previously
-                           -- stored as 200 (a v0.4.x "Gemini scoring-audit
-                           -- catch" that confused the math): 200 × 2 / 10 = 40
-                           -- gp — exactly half the canonical value. Source
-                           -- triangulation in v0.10.0 review confirmed 400 raw
-                           -- direct is correct.
+K.MELD_CARRE_A_SUN = 400   -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
+                           -- v0.11.6 R5-supersede (user-arbitrated): all melds
+                           -- (sequence, carré-other, carré-A, belote) are
+                           -- IMMUNE to the contract-type multiplier (Sun ×2).
+                           -- They DO scale with the escalation multiplier (Bel
+                           -- ×2, Triple ×3, Four ×4, Gahwa ×4). Hokm/Sun
+                           -- "100 vs 400" is a 1:4 ratio (10 nq vs 40 nq) —
+                           -- only consistent if Sun's contract ×2 doesn't
+                           -- apply to the meld. Pre-v0.11.6 produced 1:8
+                           -- (10 vs 80). The earlier (v0.10.0) R5 swap
+                           -- 200→400 was correctly motivated (the named
+                           -- value IS the raw value) but the surrounding
+                           -- multiplier rule was wrong. Final: 400 raw is
+                           -- correct; multiplier handling now splits by
+                           -- contract-side vs escalation-side. Math trace:
+                           -- Sun-CarréA  base:    400 / 10 = 40 nq
+                           -- Sun-CarréA  ×Bel:    400 ×2 / 10 = 80 nq
+                           -- Hokm-CarréA = MELD_CARRE_OTHER = 100 raw, 10 nq.
 K.MELD_BELOTE      = 20    -- K+Q of trump in same hand, Hokm only
 
 K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped

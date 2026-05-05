@@ -1,5 +1,121 @@
 # Changelog
 
+## v0.11.6 — split-multiplier scoring: contract-mult vs escalation-mult (R5 supersession)
+
+**User-arbitrated scoring rule fix.** A reported scoring bug ("Sun
+SWA-fail with opp Carré-A meld scored 106, should have been 66")
+exposed that the v0.10.0 R5 fix had the **multiplier rule wrong** for
+melds in Sun. The R5 reasoning that `K.MELD_CARRE_A_SUN = 400` is the
+raw value was correct (matches videos #32 + #38's "أربع مئة"), but
+applying Sun's ×2 multiplier to that meld produced 80 nq game points
+in Sun vs 10 nq in Hokm — a **1:8 ratio** that contradicts the
+videos' clear "Hokm: 100; Sun: 400" 1:4 framing.
+
+The canonical Saudi rule per user clarification:
+- **Cards** scale with contract-mult (Sun ×2 / Hokm ×1) AND
+  escalation-mult (Bel ×2, Triple ×3, Four ×4, Gahwa ×4)
+- **Melds** (sequence, carré-other, carré-A) scale ONLY with
+  escalation-mult — they're contract-mult-immune
+- **Belote** (K+Q of trump) is immune to ALL multipliers
+  (existing rule, unchanged)
+
+Under the new rule the Hokm/Sun ratio is exactly 1:4 (10 nq vs 40 nq),
+matching the Saudi naming convention. The user's reported scenario now
+correctly produces 66 / 0 instead of 106 / 0.
+
+### Fixed (HIGH — scoring correctness)
+
+- **Rules.lua R.ScoreRound** — split the multiplier into
+  `contractMult` (Sun ×2 / Hokm ×1) and `escalationMult` (Bel/Triple/
+  Four/Gahwa). Cards multiply by both via `mult = contractMult ×
+  escalationMult`; melds multiply by `escalationMult` only. Belote
+  stays multiplier-immune (added post-everything). Result struct
+  exports both `contractMult` and `escalationMult` separately so UI
+  consumers can show the breakdown; `multiplier` field preserved as
+  the combined value for backward-compat (test_rules.lua section K
+  pins still pass).
+
+- **Net.lua HostResolveTakweesh** (line 2382) — same split. Takweesh
+  Qaid penalty math now matches R.ScoreRound.
+
+- **Net.lua HostResolveSWA invalid branch** (line 3179) — same split.
+  Resolves the user-reported "Sun SWA-fail with Carré-A scored
+  106 / should be 66" bug.
+
+### Changed (UI — score-banner breakdown)
+
+- **UI.lua renderBanner** — bidder/defender breakdown lines now
+  display the per-bucket multiplier suffix when relevant:
+  `Team A: cards 130 ×2 + melds 400 ×1`. The modifiers row appends a
+  `melds ×N (Sun-immune)` indicator when a Sun contract has melds in
+  play and the meld-side multiplier differs from the card-side
+  multiplier — making the contract-mult-immunity rule visible
+  without needing to compute the math manually.
+
+### Sanity-check / cross-validation (R5 supersession reasoning)
+
+- Hokm-Carré-A = 100 raw → 100 ÷ 10 = **10 nq** (no Sun, no
+  escalation)
+- Sun-Carré-A under R5 = 400 × Sun×2 ÷ 10 = **80 nq** → 1:8 ratio
+- Sun-Carré-A under v0.11.6 = 400 ÷ 10 = **40 nq** → 1:4 ratio ✓
+- Sun-Bel-Carré-A under v0.11.6 = 400 × Bel×2 ÷ 10 = **80 nq**
+  (escalation still applies)
+- Videos #32 line ~245 + #38 line ~61: "in Hokm count as 100; in Sun
+  it's 400" — explicit 1:4 ratio between the named values
+
+The earlier R5 doc's `/5 divisor` analogy with sere/quarte (e.g.,
+sere 20 → 4 nq under Sun) was correctly read but mis-extrapolated to
+Carré-A: the videos' /5 worked-examples for sequences may have been
+demonstrating simplified accumulated arithmetic rather than per-meld
+divisor application. Per user-arbitrated rule, all melds are
+contract-mult-immune.
+
+### Tests
+
+- **`tests/test_rules.lua` Section S** (12 new pins):
+  - S.0a-e: result struct exposes `contractMult` + `escalationMult`
+    correctly across Hokm/Sun ± escalation
+  - S.1a-c: user's reported SWA-fail scenario reproduces correctly
+    (raw 660 → final 66) + Hokm/Sun 1:4 ratio cross-check
+  - S.2a-b: Sun-Bel preserves escalation ×2 on melds (400 × Bel×2 = 80 nq)
+  - S.3a: empty-meld fixture unchanged (regression guard for
+    sections G/H/I/K)
+  - S.4: Hokm-Bel quarte still scales correctly (escalation works)
+  - S.5a-b: Belote stays multiplier-immune (existing rule preserved)
+- **493 / 493 pass** (up from 479, +14 new pins).
+
+### Impact analysis
+
+**Affected (verified via grep):**
+- `Rules.lua` R.ScoreRound, `Net.lua` HostResolveTakweesh + SWA-invalid,
+  `UI.lua` renderBanner — all updated.
+- `BotMaster.lua` rolloutValue uses `R.ScoreRound`, inherits
+  automatically. Saudi-Master ISMCTS now evaluates rollout-team scores
+  with the corrected Sun-meld math.
+- `Net.lua` HostResolveSWA valid branch uses `R.ScoreRound`, inherits
+  automatically.
+
+**Not affected:**
+- `Bot.lua` PickBid/Ashkal/Double/Triple/Four/Gahwa/Preempt/AKA/SWA/
+  PickPlay — none of these compute multiplier × meld directly. The
+  `sunStrength` and `escalationStrength` heuristic functions weight
+  cards/aces, not multiplier-affected meld values.
+- All existing test fixtures in test_rules.lua sections G/H/I/K use
+  empty melds (`{ A = {}, B = {} }`), so meld×mult scoring isn't
+  pinned anywhere — **zero test churn from existing fixtures.**
+
+### Constants.lua + saudi-rules.md updates
+
+- `K.MELD_CARRE_A_SUN = 400` retained; comment rewritten to explain
+  the post-v0.11.6 multiplier rule and reference the math trace
+  (Sun: 40 nq base, 80 nq Bel; Hokm: 10 nq via MELD_CARRE_OTHER).
+- `docs/strategy/saudi-rules.md` Q3 marked "🔁 R5 SUPERSEDED v0.11.6"
+  with the full ratio-cross-check rationale.
+- `docs/strategy/saudi-rules.md` Q5 marked "🔁 REVISED v0.11.6"
+  pointing to the contract-side / escalation-side split and noting
+  that video #43's /5 worked-examples were demonstrating
+  simplified accumulated arithmetic.
+
 ## v0.11.5 — defensive batch: SU-01 + 7 LOW closures + dead-code cleanup
 
 Closes the remaining defensive findings from v0.11.3 comprehensive
