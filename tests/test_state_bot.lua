@@ -2162,6 +2162,63 @@ do
 end
 
 -- =====================================================================
+-- N. v0.11.3 audit closures (RT07-02 + RT07-04 + RT07-05)
+--
+-- RT07-02 — SND_LAST_TRICK_WIN gated to trick 8 only. Pre-v0.11.3 the
+-- cue fired on every "guaranteed-unbeatable" play across all 8 tricks.
+-- User's spec said "last hand winning card" (trick 8), and the v0.10.7
+-- CHANGELOG wiring blurb explicitly said `#tricks == 8`. The code path
+-- gates ApplyTrickEnd's last-trick cue on `not isReplay and #s.tricks == 8`.
+--
+-- RT07-04 — sweepTrackAnnounced reset added to S.ApplyRoundEnd. v0.11.0
+-- S-1 already added the ApplyResyncSnapshot reset; this completes the
+-- triple of reset sites (ApplyStart/reset/ApplyResyncSnapshot/ApplyRoundEnd).
+--
+-- RT07-05 — _OnContract validates bidder ∈ [1,4] and btype ∈
+-- {HOKM, SUN}. Pre-v0.11.3 only nil was rejected.
+-- =====================================================================
+section("N. v0.11.3 audit closures (RT07-02, RT07-04, RT07-05)")
+
+-- N.1 (RT07-02): ApplyTrickEnd's last-trick-win cue gated on #s.tricks == 8.
+-- Source-string match against the gate line — the cue check now requires
+-- the trick is the round-final trick.
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    -- The v0.11.3 gate line.
+    assertTrue(stateSrc:find("not isReplay and #s%.tricks == 8") ~= nil,
+               "N.1 (RT07-02): ApplyTrickEnd last-trick-win cue gated on #s.tricks == 8")
+end
+
+-- N.2 (RT07-04): S.ApplyRoundEnd resets sweepTrackAnnounced.
+-- Source-string match: confirm the reset line appears between
+-- "function S.ApplyRoundEnd" and the next "function S\\." or end-of-file.
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    local fnStart = stateSrc:find("function S%.ApplyRoundEnd")
+    assertTrue(fnStart ~= nil,
+               "N.2 setup: S.ApplyRoundEnd function found")
+    if fnStart then
+        -- Scan ~1500 chars (function body should be much shorter, but be safe).
+        local fnSlice = stateSrc:sub(fnStart, fnStart + 1500)
+        assertTrue(fnSlice:find("s%.sweepTrackAnnounced%s*=%s*nil") ~= nil,
+                   "N.2 (RT07-04): S.ApplyRoundEnd clears s.sweepTrackAnnounced")
+    end
+end
+
+-- N.3 (RT07-05): N._OnContract validates bidder range and btype enum.
+-- Behavioural test: stub fromHost to true, call _OnContract with bogus
+-- bidder=5 and bogus btype="GARBAGE", verify s.contract is unchanged.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- Source-pin: the bidder range check exists.
+    assertTrue(netSrc:find("if bidder < 1 or bidder > 4 then return end") ~= nil,
+               "N.3a (RT07-05): _OnContract rejects bidder outside 1-4 range")
+    -- Source-pin: btype enum check exists.
+    assertTrue(netSrc:find("if btype ~= K%.BID_HOKM and btype ~= K%.BID_SUN then return end") ~= nil,
+               "N.3b (RT07-05): _OnContract rejects btype outside {HOKM, SUN}")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

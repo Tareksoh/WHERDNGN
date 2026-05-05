@@ -901,6 +901,20 @@ function N._OnContract(sender, bidder, btype, trump)
     if not fromHost(sender) then return end
     if S.s.isHost then return end
     if not bidder or not btype then return end
+    -- v0.11.3 RT07-05 fix (defense-in-depth): bidder range check.
+    -- The fromHost trust gate already prevents non-host peers from
+    -- forging MSG_CONTRACT, but a host running a buggy/old fork could
+    -- send MSG_CONTRACT;5;H;X. Pre-v0.11.3 this writes
+    -- s.contract.bidder = 5; downstream R.TeamOf(5) defaults to "B"
+    -- and (5 % 4) + 1 = 2 silently masks the error, leaving a
+    -- corrupted contract that misbills team scores. Reject any
+    -- bidder outside the 1-4 seat range. Same defensive shape as the
+    -- existing nil-check above. Also validate btype against the two
+    -- canonical contract types — the wire protocol only emits
+    -- "HOKM" and "SUN", any other value is corruption (or a
+    -- forward-compat hint we don't support yet — either way reject).
+    if bidder < 1 or bidder > 4 then return end
+    if btype ~= K.BID_HOKM and btype ~= K.BID_SUN then return end
     S.ApplyContract(bidder, btype, trump)
 end
 

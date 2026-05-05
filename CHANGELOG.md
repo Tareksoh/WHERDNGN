@@ -1,5 +1,73 @@
 # Changelog
 
+## v0.11.3 — RT07 batch: SND_LAST_TRICK_WIN trick-8 gate + sweep-track reset + contract wire-validation
+
+Three targeted MED closures from `audit_v0.10.7/D_RedTeam_audit.md`.
+All three are low-risk defense-in-depth or UX-correctness fixes.
+
+### Fixed (MED)
+
+- **RT07-02** (`State.lua` `S.ApplyTrickEnd` last-trick-win cue) —
+  `SND_LAST_TRICK_WIN` is now gated to trick 8 only. Pre-v0.11.3 the
+  cue fired on every "guaranteed-unbeatable" play across all 8 tricks
+  (pos-4 win, boss-of-suit with trump exhausted, boss-of-trump). User's
+  v0.10.7 spec was *"sound for the last hand winning card when it
+  played and 100% it is obvious a win"* — "last hand" = trick 8 in
+  Saudi parlance, and the v0.10.7 CHANGELOG wiring blurb explicitly
+  said `#tricks == 8`. The cue now layers with the natural cluster of
+  round-end cues (SND_TRICK_WON, SND_KABOOT, SND_BALOOT, possibly
+  SND_HOKM_LOST) for a single coherent close-of-round audio moment
+  rather than scattering across mid-round tricks. Note: `s.tricks`
+  already includes the just-resolved trick at the cue site (via
+  `table.insert` earlier in `ApplyTrickEnd`), so `#s.tricks == 8` is
+  the correct test.
+
+- **RT07-04** (`State.lua` `S.ApplyRoundEnd`) — added
+  `s.sweepTrackAnnounced = nil` defensively at round-end. Pre-v0.11.3
+  the flag was only reset by `ApplyStart` and `reset()`; v0.11.0 S-1
+  added the `ApplyResyncSnapshot` reset for rejoiners. v0.11.3
+  completes the triple of reset sites so a corrupted/partial-restore
+  state (orphan PHASE_SCORE without subsequent MSG_START, dropped
+  start-of-round frame) doesn't carry the prior round's announced-flag
+  into the next round. `sweepTrackAnnounced` is not in
+  `TRANSIENT_FIELDS` so it persists across `/reload` via
+  `RestoreSession`; this round-boundary clear is the belt-and-braces
+  guard.
+
+- **RT07-05** (`Net.lua:899` `N._OnContract`) — added
+  `bidder ∈ [1,4]` range check and `btype ∈ {HOKM, SUN}` enum check.
+  Pre-v0.11.3 only `nil` was rejected. The `fromHost` trust gate
+  already prevents non-host peers from forging MSG_CONTRACT, but a
+  host running a buggy/forked client could send `MSG_CONTRACT;5;H;X`,
+  writing `s.contract.bidder = 5` and silently masking the error
+  downstream (`R.TeamOf(5)` defaults to "B", `(5 % 4) + 1 = 2`
+  off-by-one for next-seat math, `S.s.seats[5]` is `nil`). Same
+  defensive shape as the existing nil-check. Originally noted in
+  `review_v0.10.4_ship_readiness.md` deferred items (B-Net-02 H1/H2);
+  this is the explicit closure.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section N** (5 new source-match pins):
+  - N.1 (RT07-02): `ApplyTrickEnd` last-trick-win cue gated on
+    `#s.tricks == 8`
+  - N.2 (RT07-04): `S.ApplyRoundEnd` clears `s.sweepTrackAnnounced`
+  - N.3a (RT07-05): `_OnContract` rejects bidder outside 1-4 range
+  - N.3b (RT07-05): `_OnContract` rejects btype outside `{HOKM, SUN}`
+- **434 / 434 pass** (up from 429, +5 new pins).
+
+### Still open (next batch candidates)
+
+- **OPEN-1** — Sun overcall bottom contract banner not updating
+  (user-reported v0.11.2; needs repro details)
+- **RT07-06** — `_OnRound` accepts nil numeric fields (similar shape
+  to RT07-05; defer to next MED batch)
+- **RT07-07** — `hokmMinShape` Lever C admits weak mardoofa pairs
+  (calibration; pending v0.11.1 telemetry)
+- **B1, C-07, C-19, X-1** — still as-listed in v0.11.0 deferred
+- **Comprehensive ultra audit** — pending v0.11.1+v0.11.2+v0.11.3
+  game-log telemetry from user
+
 ## v0.11.2 — SWA banner UX: per-team breakdown + WIN/LOST relative to round outcome
 
 User-reported UX hotfix surfaced from a screenshot: the SWA result

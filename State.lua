@@ -1452,7 +1452,23 @@ function S.ApplyTrickEnd(winner, points, isReplay)
     -- (won-but-not-fired) are acceptable; false positives are not.
     --
     -- v0.11.0 RT07-03 fix: skip on resync-replay frames.
-    if not isReplay and B.Sound and B.Sound.Cue and s.localSeat and winner == s.localSeat
+    --
+    -- v0.11.3 RT07-02 fix: gate to trick 8 only. Per user's original
+    -- spec ("sound for the last hand winning card") and CHANGELOG
+    -- wiring blurb v0.10.7 (`#tricks == 8`), the cue is intended for
+    -- the FINAL trick of the round only — the "round-closing
+    -- guaranteed win" moment. The pre-v0.11.3 code fired on every
+    -- guaranteed-unbeatable play across all 8 tricks, contradicting
+    -- both the user's "last hand" framing and the file naming
+    -- (`last_trick_win.ogg`). The cue would layer with the natural
+    -- cluster of round-end cues (SND_TRICK_WON, SND_KABOOT,
+    -- SND_BALOOT, possibly SND_HOKM_LOST) for a single coherent
+    -- close-of-round audio moment rather than scattering across
+    -- mid-round tricks. Note: s.tricks already includes the
+    -- just-resolved trick (table.insert at line 1385 above), so
+    -- `#s.tricks == 8` is the right test at this point.
+    if not isReplay and #s.tricks == 8
+       and B.Sound and B.Sound.Cue and s.localSeat and winner == s.localSeat
        and s.lastTrick and s.lastTrick.plays then
         local plays = s.lastTrick.plays
         local localPlay
@@ -1659,6 +1675,17 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     s.lastRoundDelta = { A = addA, B = addB }
     -- Reset peek allowance for the next hand
     s.peekedThisRound = false
+    -- v0.11.3 RT07-04 fix (defense-in-depth): clear sweepTrackAnnounced
+    -- here too. Pre-v0.11.3 the flag was only reset by ApplyStart and
+    -- reset(); v0.11.0 S-1 added the ApplyResyncSnapshot reset for
+    -- rejoiners. ApplyRoundEnd is the natural round-boundary moment
+    -- and the audit recommended this as the third reset site so a
+    -- corrupted/partial-restore state (e.g. orphan PHASE_SCORE without
+    -- a subsequent MSG_START) doesn't carry the prior round's
+    -- announced-flag into the next round. Not in TRANSIENT_FIELDS so
+    -- it persists across /reload via RestoreSession; this clear is
+    -- the round-boundary belt-and-braces guard.
+    s.sweepTrackAnnounced = nil
     -- Round is over; nobody is "up". Clears stale UI glow on whichever
     -- seat won the last trick.
     s.turn = nil
