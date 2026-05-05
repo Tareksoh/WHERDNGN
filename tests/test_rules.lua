@@ -1092,6 +1092,71 @@ do
 end
 
 -- =====================================================================
+-- Q. v0.10.2 AKA-receiver relief (M4 — J-066/J-067 part 2)
+--
+-- R.IsLegalPlay's optional 6th param `akaCalled = {seat, suit}` lifts
+-- the must-trump-ruff obligation for the AKA caller's partner. Per
+-- Source-J: "اذا خويك قال لك تمام يعني اك" — partner's AKA exempts
+-- the receiver from ruffing. Without this relief, R.IsLegalPlay
+-- returned only trump options for a void+has-trump receiver, and
+-- the bot's AKA-receiver branch (Bot.lua:2513) was structurally
+-- dead code per review_v0.10.0 xref_X2_aka.md B1.
+-- =====================================================================
+section("Q. AKA-receiver relief (M4)")
+
+do
+    -- Setup: Hokm with H trump, partner AKA'd on D, opp has cut with
+    -- a trump card. Receiver (seat 4) is partner of AKA caller (seat 2),
+    -- void in D, has trump. Without AKA: must-ruff. With AKA: any card.
+    local hokmH = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+    -- Partner is seat 2. AKA caller seat 2, suit D. Seat 4 is partner of seat 2.
+    local aka = { seat = 2, suit = "D" }
+    -- Seat 2 led KD (declared AKA on the K of D). Opp seat 3 cut with 7H (trump).
+    -- Trick: leadSuit=D, plays = [{2,KD}, {3,7H}]. Seat 4 to play.
+    -- Seat 4 hand: {AS, 9H, 8C} — void in D, has trump 9H, has non-trump AS+8C.
+    local hand = { "AS", "9H", "8C" }
+    local t = { leadSuit = "D", plays = {
+        { seat = 2, card = "KD" },
+        { seat = 3, card = "7H" },
+    } }
+
+    -- Without akaCalled (AKA-blind / simulator behaviour): must-trump fires.
+    assertEq(R.IsLegalPlay("AS", hand, t, hokmH, 4), false,
+             "Q.1: no akaCalled param → must-trump (AS off-suit illegal)")
+    assertTrue(R.IsLegalPlay("9H", hand, t, hokmH, 4),
+               "Q.2: no akaCalled → trump (9H) legal")
+
+    -- With akaCalled (live-game): AKA-receiver relief → any card OK.
+    assertTrue(R.IsLegalPlay("AS", hand, t, hokmH, 4, aka),
+               "Q.3 (M4): partner AKA on led suit → discard non-trump AS legal")
+    assertTrue(R.IsLegalPlay("8C", hand, t, hokmH, 4, aka),
+               "Q.4 (M4): partner AKA → any non-trump discard legal (8C)")
+    assertTrue(R.IsLegalPlay("9H", hand, t, hokmH, 4, aka),
+               "Q.5 (M4): partner AKA does NOT block trump play (9H still legal)")
+
+    -- Negative: AKA from OPP (not partner) does not grant relief.
+    -- Seat 4's partner is seat 2. AKA caller seat 1 = opp.
+    local oppAka = { seat = 1, suit = "D" }
+    assertEq(R.IsLegalPlay("AS", hand, t, hokmH, 4, oppAka), false,
+             "Q.6: opp AKA gives no relief (must-trump still fires)")
+
+    -- Negative: AKA on a different suit than the lead does not relieve.
+    local wrongSuitAka = { seat = 2, suit = "C" }
+    assertEq(R.IsLegalPlay("AS", hand, t, hokmH, 4, wrongSuitAka), false,
+             "Q.7: AKA on suit C does not lift must-trump on D-led trick")
+
+    -- Negative: Sun contract — overall AKA semantics are Hokm-only,
+    -- so the relief should be a no-op (Sun has no must-trump anyway,
+    -- but check the gate for completeness). With Sun + void in led,
+    -- any card is already legal. AKA flag is harmless.
+    local sunC = { type = K.BID_SUN, bidder = 1 }
+    local sunHand = { "AS", "8C" }
+    local tSun = { leadSuit = "D", plays = { { seat = 2, card = "KD" } } }
+    assertTrue(R.IsLegalPlay("AS", sunHand, tSun, sunC, 4, aka),
+               "Q.8: Sun + void in led → any card legal (AKA flag is no-op in Sun)")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

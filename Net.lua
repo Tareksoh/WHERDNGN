@@ -2037,7 +2037,7 @@ function N.LocalPlay(card)
     -- player privately so they know what they're doing, but the card
     -- goes through. Opponents can call Takweesh to catch it.
     if S.s.contract then
-        local ok, why = R.IsLegalPlay(card, S.s.hand, S.s.trick, S.s.contract, S.s.localSeat)
+        local ok, why = R.IsLegalPlay(card, S.s.hand, S.s.trick, S.s.contract, S.s.localSeat, S.s.akaCalled)
         if not ok then
             print(("|cffffaa00WHEREDNGN|r warning: this play is illegal (%s). Opponents can call Takweesh.")
                 :format(why or "?"))
@@ -3409,7 +3409,7 @@ function N._HostTurnTimeout(seat, kind)
         if not hand or not S.s.contract then return end
         local legal = {}
         for _, c in ipairs(hand) do
-            if R.IsLegalPlay(c, hand, S.s.trick, S.s.contract, seat) then
+            if R.IsLegalPlay(c, hand, S.s.trick, S.s.contract, seat, S.s.akaCalled) then
                 legal[#legal + 1] = c
             end
         end
@@ -4133,7 +4133,7 @@ function N.MaybeRunBot()
                     if hand and S.s.contract then
                         local legal = {}
                         for _, c in ipairs(hand) do
-                            if R.IsLegalPlay(c, hand, S.s.trick, S.s.contract, seat) then
+                            if R.IsLegalPlay(c, hand, S.s.trick, S.s.contract, seat, S.s.akaCalled) then
                                 legal[#legal + 1] = c
                             end
                         end

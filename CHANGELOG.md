@@ -1,5 +1,107 @@
 # Changelog
 
+## v0.10.2 — review-cycle MEDIUM/LOW closures (M3+M4+M7+M8+L3)
+
+Five items from the v0.10.0 source-of-truth review closed in one
+sweep. All gated by 360+ tests; bot-side behaviour now matches the
+canonical Saudi pro conventions for AKA mechanics, Sun opening
+leads, and Bargiya signaling.
+
+### Fixed (M4 — AKA-receiver legality relief, J-066/J-067 part 2)
+
+- **`Rules.lua` `R.IsLegalPlay`**: new optional 6th parameter
+  `akaCalled = {seat, suit}`. When partner has called AKA on the
+  led suit (banner state from `S.s.akaCalled`), the receiver is
+  exempt from must-trump-ruff — they may discard freely. Closes
+  `xref_X2_aka.md` B1 + B5: pre-v0.10.2 the bot's AKA-receiver
+  branch was structurally dead code because `R.IsLegalPlay`
+  always enforced must-trump for void+has-trump receivers,
+  filtering non-trump options out of `legal` before the branch
+  could pick them.
+- **`Bot.lua` `legalPlaysFor`**: passes `S.s.akaCalled` through to
+  every live-game legality check. Simulator callers (`R.SunCanRolloff`)
+  deliberately omit the param so rollouts get AKA-blind semantics
+  (transient banner state shouldn't propagate into hypothetical
+  futures).
+- **`Net.lua`**: 3 host-side `R.IsLegalPlay` call sites updated
+  (LocalPlay anti-misclick warn, _OnPlay validation, AFK auto-play).
+  All now AKA-aware on the host.
+- **`Bot.lua` AKA-receiver branch (line ~2513)**: comment updated
+  from "deferred to later release" to "now LIVE" — the upstream
+  legality fix means `discards` filter has live content.
+
+### Fixed (M3 — False AKA = Qaid, J-069)
+
+- **`State.lua` `S.ApplyPlay`**: host-side validation. When the
+  AKA-caller leads, the lead card MUST be the highest-unplayed of
+  the AKA'd suit. Otherwise the AKA was a false claim — mark the
+  lead with `.illegal=true, .illegalReason="false AKA"` and clear
+  `s.akaCalled` so partner doesn't get receiver-relief on a bogus
+  banner. The existing Takweesh resolution path scans `.illegal`
+  marks and resolves the round as a Qaid against the offender's
+  team. Also catches AKA-suit ≠ lead-suit as trivially false.
+- Walks `playedCardsThisRound` from the highest non-trump rank
+  downward; if any rank above the lead's is unplayed, the AKA
+  is invalid. Bot's `Bot.PickAKA` already validates sender-side
+  (line 3217) so legitimate addon traffic never hits this path —
+  it's defensive against hostile/buggy peers that bypass the
+  local `LocalAKAcandidate` gate.
+
+### Added (M8 — Sun seat-1 mardoofa probe lead, Pro-2 L08)
+
+- **`Bot.lua` `pickLead`**: new branch BEFORE the singleton-low /
+  shortest-suit fallthrough. When the Sun bidder (or partner)
+  opens trick 1 holding an A+T mardoofa (إكة مردوفة), they MUST
+  lead the Ace from that pair. Source-L Pro-2 wording: "obligatory
+  on him AND on his partner" — both bidder and partner are bound.
+  Pre-v0.10.2 the Sun-bidder lead path fell through to "Sun
+  shortest-suit lead" which led the LOWEST card from the SHORTEST
+  suit — exactly opposite of L08. Tier-gated at Advanced+.
+
+### Added (M7 — Bargiya canonical FN, محشور بلون واحد proxy)
+
+- **`Bot.lua` `OnPlayObserved` Tahreeb recorder**: when recording
+  a partner-winning A-discard signal, capture sender's pre-discard
+  length-in-suit from `S.s.hostHands` (host-only). Stored as
+  `tahreebSent[suit].lenAtAce`, alongside the existing rank array.
+  Backward-compat: legacy fixtures with raw rank-string entries
+  leave `lenAtAce` nil; only the host's bot updates it.
+- **`Bot.lua` `tahreebClassify`**: when `signals[1] == "A"` AND
+  `signals.lenAtAce >= 5`, return `"bargiya"` directly (confirmed
+  invite per video #14 rule 2 — sender محشور بلون واحد) instead
+  of demoting to `"bargiya_hint"` and waiting for a second event.
+  Closes the FN where genuine 5-card invites were beaten by
+  ascending 2-event "want" signals in another suit.
+
+### Tightened (L3 — PickAKA doubled-contract conservatism)
+
+- **`Bot.lua` `Bot.PickAKA`**: new gate — when `S.s.contract.doubled`
+  is true (any escalation rung in play), suppress AKA categorically.
+  Per `xref_X2_aka.md` B3 / G18-10 paragraph 2: doubled hands raise
+  the info-leak cost of any signal because both sides are extra-
+  motivated to read every banner. The bot now matches Saudi pro
+  reservation: AKA only in normal play, not under Bel/Triple/Four.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section J**: 12 new pins for L3, M3,
+  M7, M8 (with bidder-team and defender-seat sanity cases).
+- **`tests/test_rules.lua` Section Q**: 8 new pins for M4 covering
+  partner AKA / opp AKA / wrong-suit AKA / Sun-no-op / trump-still-
+  legal scenarios.
+- All 360+ tests pass; no regressions in the existing E/F/G/H/I/P
+  sections.
+
+### Status
+
+After this release the v0.10.0 review's confirmed bugs are all
+closed (M1 → M4 → M7 → M8 → L3 + earlier R1-R7 / X1-X5 closures).
+Remaining items are opt-in variants (L4-L6 sessional flags, M5
+Sun Faranka 5-factor weighted accumulator, M9 pre-bid Tawzee Qaid)
+and the broader missing-features catalogue (MF-1..MF-20). Audit
+cycle is genuinely saturated — calibration phase (`tools/calibrate.py`
++ in-game telemetry) is the next bottleneck.
+
 ## v0.10.1 — M1 closure: Qaid offender melds now forfeited (user arbitration)
 
 The v0.10.0 review surfaced an unresolved rule-reading ambiguity (M1):

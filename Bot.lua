@@ -591,6 +591,31 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
                 -- Discard while partner is winning = Tahreeb signal.
                 local list = style.tahreebSent[cardSuit]
                 if list then
+                    -- v0.10.2 M7 — Bargiya canonical FN: محشور بلون
+                    -- واحد (cornered in one suit, video #14 rule 2)
+                    -- promotes a single-event A discard from
+                    -- bargiya_hint to confirmed bargiya WITHOUT a
+                    -- second event. The classifier needs the sender's
+                    -- pre-discard length-in-suit for that suit; capture
+                    -- it host-side from S.s.hostHands (host has all
+                    -- hands; non-host clients can't observe sender
+                    -- shape). Stored as `list.lenAtAce` to keep the
+                    -- numeric array of ranks backward-compatible.
+                    -- Computed BEFORE the rank append so #list reads
+                    -- the pre-record count for the Ace-first guard.
+                    if C.Rank(card) == "A" and #list == 0
+                       and S.s.isHost and S.s.hostHands and S.s.hostHands[seat] then
+                        local preLen = 0
+                        for _, c in ipairs(S.s.hostHands[seat]) do
+                            if C.Suit(c) == cardSuit then
+                                preLen = preLen + 1
+                            end
+                        end
+                        -- ApplyPlay already removed the discarded card,
+                        -- so add 1 back to recover sender's pre-discard
+                        -- length-in-suit (the discard was on cardSuit).
+                        list.lenAtAce = preLen + 1
+                    end
                     list[#list + 1] = C.Rank(card)
                 end
             end
@@ -1573,9 +1598,16 @@ local function highestTrump(cards, contract)
 end
 
 local function legalPlaysFor(hand, trick, contract, seat)
+    -- v0.10.2 M4: pass live `s.akaCalled` to R.IsLegalPlay so the
+    -- AKA-receiver relief (J-066/J-067) is honored at the legality
+    -- layer. Without this, must-trump-ruff fires even when partner
+    -- has AKA'd, defeating AKA's primary purpose. Simulator callers
+    -- (R.SunCanRolloff line 409) deliberately omit the param so
+    -- rollouts get AKA-blind semantics.
+    local aka = S and S.s and S.s.akaCalled or nil
     local out = {}
     for _, c in ipairs(hand) do
-        local ok = R.IsLegalPlay(c, hand, trick, contract, seat)
+        local ok = R.IsLegalPlay(c, hand, trick, contract, seat, aka)
         if ok then out[#out + 1] = c end
     end
     return out
@@ -1617,6 +1649,21 @@ local function tahreebClassify(signals)
     -- Pre-v0.9.0 conflated both as "bargiya", potentially wasting
     -- leads on defensive-shed cases.
     if signals[1] == "A" then
+        -- v0.10.2 M7 — Bargiya canonical FN (review_v0.10.0
+        -- xref X-prep / audit_v0.9.0/55_bargiya_axis_impact.md).
+        -- محشور بلون واحد proxy: when sender held 5+ in this suit
+        -- AT THE MOMENT of the Ace discard, video #14 rule 2 fires
+        -- the early-Bargiya invite — no second event required. The
+        -- recorder captures `lenAtAce` host-side from hostHands; if
+        -- it's >= 5, the single-A signal is a confirmed invite. This
+        -- closes the FN where genuine 5-card invites were demoted
+        -- to bargiya_hint and beaten by ascending 2-event "want" in
+        -- another suit. Falls back to the existing 2-event cover-
+        -- grade gate when lenAtAce is missing (non-host clients,
+        -- legacy fixtures with raw rank-string entries).
+        if (signals.lenAtAce or 0) >= 5 then
+            return "bargiya"        -- confirmed invite (محشور proxy)
+        end
         if #signals >= 2 then
             -- v0.9.2 #55 cover-grade gate (audit_v0.9.0/55_bargiya_axis_impact.md).
             -- Require event #2 to be a COVER-GRADE rank (T or higher
@@ -1738,6 +1785,41 @@ local function pickLead(legal, contract, seat)
             return highestByRank(legal, contract)
         end
         return highestByFaceValue(legal, contract)
+    end
+
+    -- v0.10.2 Pro-2 L08 — Sun bidder-team mardoofa probe lead on
+    -- trick 1 (review_v0.10.0 xref_X4_pro2_deal.md MF-2 + REVIEW.md
+    -- M8). Saudi pro mandate: when the Sun bidder (or partner) opens
+    -- on trick 1 and holds an A+T mardoofa (إكة مردوفة), they MUST
+    -- lead the Ace from that pair. Rationale: probe — "I have the
+    -- backed slam in this suit; let's see who else has length."
+    -- The T cover protects the A from being torn through later. This
+    -- supersedes ALL downstream Sun fallthroughs (singleton-low,
+    -- shortest-suit-low) — those were leading LOW cards which is
+    -- exactly opposite of L08's HIGH probe. Pro-2 wording: "obligatory
+    -- on him AND on his partner", so partner-when-on-lead is also
+    -- bound. Tier-gate at Advanced+ (mardoofa is a structural strength
+    -- concept already used in PickBid sunStrength bonus). Placed
+    -- BEFORE the singleton/free-trick/free-low fallthroughs so it
+    -- supersedes them — those branches were leading low cards which
+    -- contradicts L08's HIGH-probe intent.
+    if Bot.IsAdvanced() and contract.type == K.BID_SUN
+       and trickNum == 1
+       and contract.bidder
+       and myTeam == R.TeamOf(contract.bidder) then
+        local hasA = { S = false, H = false, D = false, C = false }
+        local hasT = { S = false, H = false, D = false, C = false }
+        local aceCard = { S = nil, H = nil, D = nil, C = nil }
+        for _, c in ipairs(legal) do
+            local r, su = C.Rank(c), C.Suit(c)
+            if r == "A" then hasA[su] = true; aceCard[su] = c
+            elseif r == "T" then hasT[su] = true end
+        end
+        for _, su in ipairs({ "S", "H", "D", "C" }) do
+            if hasA[su] and hasT[su] and aceCard[su] then
+                return aceCard[su]
+            end
+        end
     end
 
     -- Advanced (Tier 3 #11): if we hold a card that's currently the
@@ -2448,26 +2530,19 @@ local function pickFollow(legal, hand, trick, contract, seat)
             implicitAKA = true
         end
     end
-    -- v0.10.0 M2 diagnosis (review_v0.10.0/xref_X2_aka.md, B1):
-    -- The AKA-receiver-relief branch below is effectively dead code
-    -- in the canonical scenario it was meant to handle. Per video
-    -- #18, AKA's purpose is to ASK partner to defer the must-trump-
-    -- ruff. But R.IsLegalPlay (Rules.lua:151-158) does NOT consult
-    -- S.s.akaCalled — must-ruff fires whenever the seat has trump
-    -- and is void in led suit. In that canonical case, `legal`
-    -- contains ONLY trumps, the `discards` filter returns `{}`,
-    -- and the branch falls through to natural ruff. In the must-
-    -- follow case (have led suit), the branch's lowestByRank is
-    -- redundant with the line 2737 fallthrough.
-    --
-    -- Proper fix is upstream — R.IsLegalPlay must skip must-ruff
-    -- when AKA is active for this seat. Deferred to a later
-    -- release because that's a broader rule change with test
-    -- implications across J-066/J-067 (AKA-on-T trick-locking),
-    -- J-069 (false-AKA = Qaid), and host-side AKA validation.
-    -- Leaving the branch in place since it's defensive and may
-    -- still fire in rare scenarios (e.g., seat void in both led
-    -- suit and trump, AKA active — pick lowest non-trump).
+    -- v0.10.2 M4 — receiver-relief branch is now LIVE. Upstream
+    -- R.IsLegalPlay was patched (Rules.lua, akaCalled param) to
+    -- exempt AKA-receivers from must-trump-ruff (J-066/J-067 part 2).
+    -- With the legality layer relaxed, `legal` for a void+trump
+    -- seat under AKA includes non-trump cards, so the `discards`
+    -- filter below has live content and the branch picks the
+    -- lowest non-trump discard (preserves trump for later, lets
+    -- partner take the trick with their boss). Implicit-AKA case
+    -- (bare-Ace lead) doesn't reach the legality layer because the
+    -- relief there hinges on `S.s.akaCalled` (only set on explicit
+    -- MSG_AKA). The implicit branch here still fires only when the
+    -- seat has lead-suit cards (partner-winning shortcut keeps
+    -- legality permissive) — see review_v0.10.0/xref_X2_aka.md B1.
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM and contract.trump
        and trick.leadSuit and partnerWinning
        and (explicitAKA or implicitAKA) then
@@ -3242,6 +3317,19 @@ function Bot.PickAKA(seat, leadCard)
             return nil
         end
     end
+
+    -- v0.10.2 AKA doubled-contract conservatism (review_v0.10.0
+    -- xref_X2_aka.md B3 / G18-10 paragraph 2). G18-10 explicitly
+    -- distinguishes regular vs doubled hands: "اللعب طبيعي مش
+    -- دبل" = early permissiveness applies in NORMAL play, not
+    -- doubled. The inverse — "doubled ⇒ tighten AKA" — is the
+    -- Saudi pro convention. With Bel/Triple/Four in play, both
+    -- sides are extra-motivated to read every signal and exploit
+    -- info-leaks; the AKA banner's coordination value drops while
+    -- its leakage cost rises. Suppress AKA categorically once the
+    -- round has been doubled. This loses some legitimate Bel-round
+    -- AKA opportunities but matches expert play and closes B3.
+    if S.s.contract and S.s.contract.doubled then return nil end
 
     -- v0.9.3 AKA precondition (g) (audit_v0.9.0/19_section6_now.md
     -- §2 + decision-trees.md Section 6 row "preconditions" subitem g).

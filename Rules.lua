@@ -86,7 +86,7 @@ end
 --     play any trump (under-trump) — but only if no overcut option exists.
 --  4. Hokm: if you can't follow and partner IS winning, any card.
 --  5. Sun: if you can't follow, any card.
-function R.IsLegalPlay(card, hand, trick, contract, seat)
+function R.IsLegalPlay(card, hand, trick, contract, seat, akaCalled)
     if not C.IsValid(card) then return false, "invalid card" end
     -- card must be in hand
     local has = false
@@ -99,6 +99,26 @@ function R.IsLegalPlay(card, hand, trick, contract, seat)
 
     local leadSuit = trick.leadSuit
     local cardSuit = C.Suit(card)
+
+    -- v0.10.2 M4 — AKA-receiver relief (J-066/J-067 part 2,
+    -- review_v0.10.0 xref_X2_aka.md B1+B5). When partner has called
+    -- AKA on the led suit (banner: `s.akaCalled = {seat, suit}`),
+    -- the receiver is exempt from must-trump-ruff: partner's lead
+    -- card is the boss of the suit, so partner's team is winning
+    -- the trick by default. The 10-substitutes-for-Ace semantic
+    -- (J-067 part 1) collapses to the same rule — whichever AKA
+    -- card is in play, partner's team treats the trick as locked.
+    -- Caller passes `akaCalled` from S.s.akaCalled at live-play
+    -- time; simulators pass nil and get the AKA-blind semantics.
+    -- This relief applies BEFORE must-follow / must-trump checks
+    -- so a void+trump receiver may discard freely.
+    local akaRelief = false
+    if akaCalled and akaCalled.seat and akaCalled.suit
+       and seat and R.Partner(seat) == akaCalled.seat
+       and akaCalled.suit == leadSuit
+       and contract and contract.type == K.BID_HOKM then
+        akaRelief = true
+    end
 
     -- Do we have any card of leadSuit?
     local hasLead = false
@@ -147,6 +167,12 @@ function R.IsLegalPlay(card, hand, trick, contract, seat)
     if curWinner and R.Partner(seat) == curWinner then
         return true
     end
+
+    -- v0.10.2 M4 — AKA-receiver relief: when partner called AKA on
+    -- the led suit, an opp may have over-trumped and now leads, but
+    -- the receiver is still exempt from must-ruff per J-066/J-067.
+    -- Discard freely.
+    if akaRelief then return true end
 
     -- Must trump if we have any trump.
     local hasTrump = false

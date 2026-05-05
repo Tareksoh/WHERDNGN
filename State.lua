@@ -1216,9 +1216,52 @@ function S.ApplyPlay(seat, card)
         for _, p in ipairs(s.trick.plays) do
             trickBefore.plays[#trickBefore.plays + 1] = p
         end
-        local ok, why = R.IsLegalPlay(card, s.hostHands[seat], trickBefore, s.contract, seat)
+        local ok, why = R.IsLegalPlay(card, s.hostHands[seat], trickBefore, s.contract, seat, s.akaCalled)
         illegal = not ok
         illegalWhy = why
+    end
+
+    -- v0.10.2 M3 — false-AKA = Qaid (J-069, review_v0.10.0
+    -- xref_X2_aka.md B2). If `seat` announced AKA on a non-trump
+    -- suit AND is now leading that suit, the lead card MUST be the
+    -- highest-unplayed rank of the suit (i.e. the actual boss).
+    -- Otherwise the AKA is false: mark the lead play as illegal
+    -- with reason "false AKA" so a Takweesh call catches it for a
+    -- Qaid penalty against the false-caller's team. Also clear
+    -- `s.akaCalled` so the false banner doesn't grant AKA-receiver
+    -- relief (M4) to partner. Host-only — only the authoritative
+    -- host needs to mark for Takweesh resolution. The check uses
+    -- `playedCardsThisRound` (deterministic from the trick log) so
+    -- the bot's own PickAKA validator and this defensive layer
+    -- agree; the layer guards against hostile/buggy peers that
+    -- bypass the local LocalAKAcandidate gate.
+    if not illegal and s.isHost and s.akaCalled
+       and s.akaCalled.seat == seat
+       and #s.trick.plays == 0  -- this play IS the lead
+       and s.contract and s.contract.type == K.BID_HOKM then
+        local cardSuit = card:sub(2, 2)
+        if cardSuit == s.akaCalled.suit then
+            local cardRank = card:sub(1, 1)
+            local order = { "A", "T", "K", "Q", "J", "9", "8", "7" }
+            s.playedCardsThisRound = s.playedCardsThisRound or {}
+            local valid = false
+            for _, r in ipairs(order) do
+                if r == cardRank then valid = true; break end
+                if not s.playedCardsThisRound[r .. cardSuit] then
+                    break  -- a higher rank is still out: false claim
+                end
+            end
+            if not valid then
+                illegal = true
+                illegalWhy = "false AKA"
+                s.akaCalled = nil
+            end
+        else
+            -- AKA on suit X but lead is suit Y → trivially false.
+            illegal = true
+            illegalWhy = "false AKA"
+            s.akaCalled = nil
+        end
     end
 
     if #s.trick.plays == 0 then s.trick.leadSuit = C.Suit(card) end

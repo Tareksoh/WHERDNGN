@@ -1587,6 +1587,246 @@ do
 end
 
 -- =====================================================================
+-- J. v0.10.2 review-cycle MEDIUM/LOW closures
+--
+--   J.1 (L3) — PickAKA suppresses on doubled contracts.
+--   J.2 (M8) — Sun bidder-team mardoofa probe lead on trick 1
+--              (Pro-2 L08, MF-2). A+T mardoofa → lead the A.
+-- =====================================================================
+section("J. v0.10.2 review-cycle closures (L3, M8)")
+
+-- J.1 (L3): doubled contract → PickAKA returns nil even when all
+-- other gates would otherwise allow. Reproduces the exact gate-stack:
+-- Hokm contract, mid-round, partner is bot, lead card is non-Ace boss
+-- of a non-trump suit. Without the doubled gate, AKA fires; with it,
+-- nil. Source: review_v0.10.0 xref_X2_aka.md B3 + G18-10 paragraph 2.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost  = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1,
+                     doubled = true }   -- Bel'd by defenders
+    -- Two completed tricks so we're past the trick-1 ban.
+    S.s.tricks = {
+        { winner = 1, plays = { { seat = 1, card = "AS" } } },
+        { winner = 1, plays = { { seat = 1, card = "JS" } } },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Seat 2 leading. Partner = seat 4. Mark all seats as bots
+    -- (Bot.IsBotSeat checks `s.seats[seat].isBot`).
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    Bot._memory = nil
+    -- Lead card KH: non-Ace boss of H (A and T already played out
+    -- so KH is highestUnplayed). Fake S.HighestUnplayedRank to return
+    -- "K" for H, "J" for trump.
+    local origHUR = S.HighestUnplayedRank
+    S.HighestUnplayedRank = function(suit)
+        if suit == "H" then return "K" end
+        if suit == "S" then return "J" end
+        return nil
+    end
+    -- With contract.doubled=true, expect nil.
+    local got = Bot.PickAKA(2, "KH")
+    assertEq(got, nil,
+             "J.1 (L3): doubled contract suppresses AKA banner (xref_X2_aka.md B3)")
+    -- Sanity: clear the doubled flag and the same hand should fire.
+    S.s.contract.doubled = false
+    -- Re-prime per-seat akaSent map (Bot.PickAKA uses Bot._memory[seat].akaSent).
+    Bot._memory = nil
+    local fired = Bot.PickAKA(2, "KH")
+    assertEq(fired, "H",
+             "J.1 sanity: same fixture without doubled flag DOES fire AKA")
+    S.HighestUnplayedRank = origHUR
+end
+
+-- J.2 (M8): Sun bidder-team trick-1 lead with A+T mardoofa → lead
+-- the A from that mardoofa pair (NOT the shortest-suit low). Source:
+-- review_v0.10.0 xref_X4_pro2_deal.md MF-2 / Pro-2 L08.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    -- Sun contract, seat 2 is bidder, partners = seat 4.
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 2 }
+    S.s.tricks = {}                        -- trick 1
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Seat 2 hand: AH+TH mardoofa, plus filler. Without M8 the
+    -- shortest-suit-low would lead 7C (1-card C is shortest). With M8
+    -- we expect AH (the mardoofa Ace).
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "8S", "7S", "JC", "9C", "8C", "7C" },
+        [2] = { "AH", "TH", "KH", "QH", "JH", "9H", "8H", "7C" },
+        [3] = { "AS", "TS", "KS", "QS", "AC", "TC", "KC", "QC" },
+        [4] = { "AD", "TD", "KD", "QD", "JD", "9D", "8D", "7D" },
+    }
+    local card = Bot.PickPlay(2)
+    assertEq(card, "AH",
+             "J.2 (M8): Sun bidder trick-1 with A+T mardoofa → lead the Ace (Pro-2 L08)")
+
+    -- Negative case: same hand but on a NON-bidder seat → fall
+    -- through to the existing Sun shortest-suit lead (LOWEST card
+    -- of SHORTEST non-trump suit). Seat-1 vs bidder seat-2 → opp
+    -- team. Hand has 7C as singleton — shortest. Expect 7C.
+    S.s.hostHands[1] = { "AH", "TH", "KH", "QH", "JH", "9H", "8H", "7C" }
+    local oppCard = Bot.PickPlay(1)
+    assertEq(oppCard, "7C",
+             "J.2 sanity: same A+T mardoofa from defender seat falls through to shortest-suit-low (7C)")
+end
+
+WHEREDNGNDB.advancedBots = nil
+
+-- J.3 (M3) — False AKA = Qaid (J-069). When a seat calls AKA on a suit
+-- and then leads a card that is NOT the highest-unplayed of that suit,
+-- S.ApplyPlay marks the lead .illegal=true with reason "false AKA"
+-- so a Takweesh call catches the offense. Source: review_v0.10.0
+-- xref_X2_aka.md B2.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    -- Seat 1 hand contains KH but NOT AH (so AH is somewhere else, still unplayed).
+    -- Seat 1 announces AKA on H, then leads KH (false claim — AH is still out).
+    S.s.hostHands = {
+        [1] = { "KH", "QH", "9H", "8C", "7C", "JC", "9C", "TC" },
+        [2] = { "AH", "TH", "JH", "AS", "TS", "KS", "QS", "JS" },
+        [3] = { "AC", "KC", "QC", "9S", "8S", "7S", "AD", "TD" },
+        [4] = { "7H", "8H", "KD", "QD", "JD", "9D", "8D", "7D" },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.tricks = {}
+    S.s.playedCardsThisRound = {}
+
+    -- Seat 1 announces AKA on H (false — they don't actually hold the boss).
+    S.ApplyAKA(1, "H")
+    assertEq(S.s.akaCalled and S.s.akaCalled.suit, "H",
+             "J.3 setup: AKA banner set on H by seat 1")
+
+    -- Seat 1 plays KH (false — AH is still in seat 2's hand).
+    S.ApplyPlay(1, "KH")
+    local lead = S.s.trick.plays[1]
+    assertEq(lead.illegal, true,
+             "J.3 (M3): false AKA on KH (when AH is unplayed) → lead marked .illegal=true")
+    assertEq(lead.illegalReason, "false AKA",
+             "J.3 (M3): illegalReason = 'false AKA' for Takweesh display")
+    assertEq(S.s.akaCalled, nil,
+             "J.3 (M3): false-AKA banner cleared (no receiver-relief on bogus claim)")
+
+    -- Sanity: a TRUE AKA (lead is the actual boss) does NOT mark illegal.
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    -- Seat 1 holds AH (the actual boss of H, since H is non-trump).
+    S.s.hostHands = {
+        [1] = { "AH", "9H", "8H", "7H", "JC", "9C", "8C", "7C" },
+        [2] = { "TH", "KH", "QH", "JH", "AS", "TS", "KS", "QS" },
+        [3] = { "AC", "KC", "QC", "9S", "8S", "7S", "AD", "TD" },
+        [4] = { "JS", "KD", "QD", "JD", "9D", "8D", "7D", "TC" },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.tricks = {}
+    S.s.playedCardsThisRound = {}
+
+    S.ApplyAKA(1, "H")
+    S.ApplyPlay(1, "AH")
+    local lead2 = S.s.trick.plays[1]
+    assertEq(lead2.illegal, nil,
+             "J.3 sanity: TRUE AKA on actual boss (AH) → lead NOT marked illegal")
+    assertEq(S.s.akaCalled and S.s.akaCalled.suit, "H",
+             "J.3 sanity: TRUE AKA banner persists for receiver-relief")
+
+    -- Edge: AKA on suit X but lead is suit Y → trivially false.
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    S.s.hostHands = {
+        [1] = { "AH", "AS", "JC", "9C", "8C", "7C", "JS", "TS" },
+        [2] = { "TH", "KH", "QH", "JH", "9H", "8H", "7H", "KS" },
+        [3] = { "AC", "KC", "QC", "QS", "9S", "8S", "7S", "AD" },
+        [4] = { "TC", "TD", "KD", "QD", "JD", "9D", "8D", "7D" },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.tricks = {}
+    S.s.playedCardsThisRound = {}
+
+    S.ApplyAKA(1, "H")        -- claims AKA on H
+    S.ApplyPlay(1, "AS")      -- but leads S
+    local lead3 = S.s.trick.plays[1]
+    assertEq(lead3.illegal, true,
+             "J.3 edge: AKA-on-H then lead-on-S → false AKA (suit mismatch)")
+    assertEq(lead3.illegalReason, "false AKA",
+             "J.3 edge: suit-mismatch reason matches")
+end
+
+-- J.4 (M7) — Bargiya canonical FN closure: محشور بلون واحد proxy
+-- (sender held 5+ of suit at A-discard time) promotes single-event A
+-- to confirmed `bargiya` without needing a second event. Source:
+-- audit_v0.9.0/55_bargiya_axis_impact.md Example A.
+do
+    -- Direct classifier invocation. Reach the local function via
+    -- rebuilding the relevant bits — actually tahreebClassify is
+    -- file-local; we exercise it indirectly through pickLead's
+    -- partner-pref path, OR via Bot._partnerStyle priming.
+    --
+    -- Preferred: prime the per-seat tahreebSent with `lenAtAce` and
+    -- exercise the receiver's partner-pref pickLead branch. Verify
+    -- the bot leads the bargiya suit (proves classifier returned
+    -- "bargiya" weight 3, not "bargiya_hint" weight 1).
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 4 }
+    S.s.tricks = { { winner = 4, plays = {
+        { seat = 4, card = "AC" }, { seat = 1, card = "9C" },
+        { seat = 2, card = "8C" }, { seat = 3, card = "7C" },
+    } } }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Seat 1's hand (we are seat 1, leading trick 2). Mix of suits;
+    -- prefer the bargiya-flagged suit.
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "8S", "JH", "9H", "8H", "JD", "9D" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    -- Mark all bots so partner-pref read fires (Bot.IsBotSeat check).
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+
+    -- Prime: partner (seat 3) sent ONE A-event in S with lenAtAce=5.
+    -- Without M7 this would classify as bargiya_hint (weight 1).
+    -- Other suits get an "ascending 2-event want" (weight 2) — the
+    -- محشور-confirmed A in S (weight 3) must dominate.
+    Bot._partnerStyle = Bot._partnerStyle or {
+        [1] = {}, [2] = {}, [3] = {}, [4] = {},
+    }
+    -- Reset partner style for seat 3.
+    Bot._partnerStyle[3] = {
+        tahreebSent = { S = {}, H = {}, D = {} },
+    }
+    Bot._partnerStyle[3].tahreebSent.S = { "A", lenAtAce = 5 }   -- محشور proxy
+    Bot._partnerStyle[3].tahreebSent.H = { "7", "9" }            -- 2-event ascending = "want"
+    Bot._partnerStyle[3].tahreebSent.D = {}
+
+    -- pickLead is called on lead. Read partner pref via
+    -- tahreebClassify; with M7 wired, S beats H by weight (3>2).
+    -- Verify the chosen lead suit is S.
+    local card = Bot.PickPlay(1)
+    assertEq(C.Suit(card), "S",
+             "J.4 (M7): محشور-proxy single-A bargiya beats 2-event 'want' (S over H)")
+
+    -- Negative: same fixture WITHOUT lenAtAce → bargiya_hint (weight 1).
+    -- Now H ('want', weight 2) should win over S (weight 1).
+    Bot._partnerStyle[3].tahreebSent.S = { "A" }   -- no lenAtAce
+    local card2 = Bot.PickPlay(1)
+    assertEq(C.Suit(card2), "H",
+             "J.4 (M7) sanity: WITHOUT lenAtAce, single-A is bargiya_hint → 'want'(H) dominates")
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
