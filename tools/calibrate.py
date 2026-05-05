@@ -49,9 +49,14 @@ from pathlib import Path
 from typing import Any
 
 
-# Pattern that matches a Lua-table key=value pair. Handles strings,
-# numbers, and nested tables (one level deep is enough for history rows).
-_KV_RE = re.compile(r'(\w+)\s*=\s*("(?:[^"\\]|\\.)*"|-?\d+\.?\d*|true|false|nil|\{[^{}]*\})')
+# Pattern that matches a Lua-table key=value pair. Handles both bare
+# (`key = value`) and bracket-string (`["key"] = value`) forms — WoW
+# SavedVariables emits the latter for all named keys. Values may be
+# strings, numbers, booleans, nil, or one-level-nested tables.
+_KV_RE = re.compile(
+    r'(?:\[\s*"(\w+)"\s*\]|(\w+))\s*=\s*'
+    r'("(?:[^"\\]|\\.)*"|-?\d+\.?\d*|true|false|nil|\{[^{}]*\})'
+)
 
 
 def parse_lua_table_block(text: str) -> list[dict[str, Any]]:
@@ -59,29 +64,78 @@ def parse_lua_table_block(text: str) -> list[dict[str, Any]]:
     Parse `WHEREDNGNDB.history = { {row}, {row}, ... }` into a list of dicts.
 
     Robust to row order, missing fields, hand-edits. Skips malformed rows.
+
+    Handles both Lua-source forms WoW emits:
+      * `history = { ... }`              (dot-or-bare key)
+      * `["history"] = { ... }`          (bracketed-string key — actual WoW
+                                          SavedVariables format)
     """
-    # Locate the history table assignment.
-    history_match = re.search(
-        r'(?:WHEREDNGNDB\s*=\s*\{[^}]*?)?'  # WHEREDNGNDB outer (optional)
-        r'history\s*=\s*\{(.*?)^\s*\}\s*,?\s*$',
+    # Locate the `history = {` opener. WoW emits `["history"] = {` for
+    # subkeys of WHEREDNGNDB; bare `history = {` is the older form. Search
+    # for either, then walk braces from the opening `{` to find the matching
+    # close — non-greedy regex `.*?\n\s*\}` was wrong because it terminated
+    # at the FIRST `\n}` (= the close of the first row, not the whole table).
+    opener = re.search(
+        r'(?:\[\s*"history"\s*\]|history)\s*=\s*\{',
         text,
-        re.DOTALL | re.MULTILINE,
     )
-    if not history_match:
-        # Fallback: simpler pattern, accept whatever's between history = { ... }
-        m = re.search(r'\["?history"?\]\s*=\s*\{(.*?)\n\s*\}', text, re.DOTALL)
-        if m:
-            inner = m.group(1)
+    if not opener:
+        return []
+    open_brace = opener.end() - 1   # index of the `{` itself
+
+    # Walk forward from the opening brace, tracking depth, to find the
+    # matching close. depth starts at 0 BEFORE reading the open brace;
+    # when we read it, depth becomes 1; when matching close drops back
+    # to 0, we've found the end.
+    depth = 0
+    close_brace = None
+    in_string = False
+    str_quote = None
+    i = open_brace
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == str_quote:
+                in_string = False
+                str_quote = None
         else:
-            return []
-    else:
-        inner = history_match.group(1)
+            if ch in ('"', "'"):
+                in_string = True
+                str_quote = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    close_brace = i
+                    break
+        i += 1
+    if close_brace is None:
+        return []
+
+    inner = text[open_brace + 1 : close_brace]
 
     # Split into row blocks. Each row is `{ key = val, key = val, ... },`
     rows: list[dict[str, Any]] = []
     depth = 0
     start = None
+    in_string = False
+    str_quote = None
     for i, ch in enumerate(inner):
+        if in_string:
+            if ch == "\\":
+                continue
+            if ch == str_quote:
+                in_string = False
+                str_quote = None
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            str_quote = ch
+            continue
         if ch == "{":
             if depth == 0:
                 start = i
@@ -99,8 +153,10 @@ def parse_lua_table_block(text: str) -> list[dict[str, Any]]:
 
 def parse_row(text: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for k, v in _KV_RE.findall(text):
-        out[k] = parse_value(v)
+    for bracket_k, bare_k, v in _KV_RE.findall(text):
+        key = bracket_k or bare_k
+        if key:
+            out[key] = parse_value(v)
     return out
 
 

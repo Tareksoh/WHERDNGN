@@ -326,8 +326,20 @@ K.BOT_PREEMPT_TH      = 75    -- earlier seat pre-empts a Sun-on-Ace bid
 K.BOT_SUN_3ACE_BONUS                = 15  -- S-3 (was inline +12; bumped per Wave-2
                                           --  audit calibration — 3-Ace hands without
                                           --  AKQ triple now reliably clear thSun)
-K.BOT_SUN_MARDOOFA_BONUS            = 5   -- S-8 per A+T mardoofa pair
-K.BOT_SUN_MARDOOFA_PAIR_CAP         = 2   -- S-8 pair count cap (2 pairs = +10 max)
+K.BOT_SUN_MARDOOFA_BONUS            = 10  -- S-8 per A+T mardoofa pair.
+                                          -- v0.10.4 calibration (review_v0.10.2
+                                          -- validation): 5 → 10. Pre-v0.10.4
+                                          -- under-rewarded the canonical Saudi
+                                          -- A+T cover pattern (إكة مردوفة, video
+                                          -- #25); bots passed on legitimate
+                                          -- mardoofa-anchored Sun bids that a
+                                          -- Saudi pro would call. Surgical
+                                          -- alternative to dropping TH_SUN_BASE
+                                          -- (which would also trigger Sun on
+                                          -- non-mardoofa hands — contradicting
+                                          -- the doc-anchored shape).
+K.BOT_SUN_MARDOOFA_PAIR_CAP         = 2   -- S-8 pair count cap (2 pairs = +20
+                                          -- max post-v0.10.4 bonus bump).
 K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN  = 5   -- B-5 (round 2 Sun must beat best Hokm by ≥ this)
 K.BOT_ASHKAL_DIRECT_SUN_PIVOT       = 85  -- A-6 (sun >= this → skip Ashkal, prefer direct Sun)
 K.BOT_PICKBID_BELOTE_BONUS          = K.MELD_BELOTE  -- B-6 (mirrors meld scoring;

@@ -1161,9 +1161,11 @@ function S.ApplyMeld(seat, kind, suit, top, encodedCards)
            and (m.suit or nil) == nsuit then return end
     end
     local cards = C.DecodeHand(encodedCards)
-    -- Mirror R.DetectMelds value derivation. Constants only define
-    -- MELD_CARRE_OTHER (T/Q/K/J — all 100 raw) and MELD_CARRE_A_SUN
-    -- (Aces in Sun only — 200 raw). 9/8/7 carrés don't score.
+    -- Mirror R.DetectMelds value derivation. Constants define
+    -- MELD_CARRE_OTHER (T/Q/K/J — all 100 raw), MELD_CARRE_A_SUN
+    -- (Aces in Sun — 400 raw, "الأربع مئة"), and MELD_CARRE_OTHER
+    -- doubles for Aces in Hokm (100 raw, treated like the other
+    -- carrés). 9/8/7 carrés don't score in either contract.
     local value
     if kind == "seq3" then value = K.MELD_SEQ3
     elseif kind == "seq4" then value = K.MELD_SEQ4
@@ -1171,10 +1173,24 @@ function S.ApplyMeld(seat, kind, suit, top, encodedCards)
     elseif kind == "carre" then
         if K.CARRE_RANKS[top] then
             if top == "A" then
+                -- v0.10.4 X5 half-fix closure (review_v0.10.2 prior
+                -- summary, S-Score-03 + S-Score-10): pre-v0.10.4 the
+                -- Hokm branch fell through with value=nil, dropping
+                -- every Hokm-Carré-A meld silently. v0.10.0's X5 fix
+                -- patched the parallel path in R.DetectMelds but
+                -- missed THIS path (S.ApplyMeld) which fires on the
+                -- wire-receive side and on the host's own ApplyMeld
+                -- self-loopback. Cascade: missing 100-meld broke
+                -- bidder strict-majority threshold, R.CompareMelds
+                -- winner-takes-all, AND v0.9.0 M5 belote-cancellation
+                -- (silent +20 over-credit). Per video #32 line 245 +
+                -- video #38 line 61, Carré-A in Hokm = 100 raw
+                -- (same as Carré-T/K/Q).
                 if s.contract and s.contract.type == K.BID_SUN then
-                    value = K.MELD_CARRE_A_SUN     -- "Four Hundred", Sun only
+                    value = K.MELD_CARRE_A_SUN     -- 400 raw "الأربع مئة"
+                elseif s.contract and s.contract.type == K.BID_HOKM then
+                    value = K.MELD_CARRE_OTHER     -- 100 raw, like T/K/Q
                 end
-                -- Hokm 4-Aces: doesn't score (per Pagat-strict)
             else
                 value = K.MELD_CARRE_OTHER          -- T, K, Q, J → 100 raw
             end
@@ -1961,9 +1977,18 @@ end
 function S.GetLegalPlays()
     if not s.localSeat or not S.IsMyTurn() or not s.contract then return {} end
     if s.phase ~= K.PHASE_PLAY then return {} end
+    -- v0.10.4 M4-completeness (review_v0.10.2 validation, HIGH):
+    -- pass `s.akaCalled` as 6th arg so the UI-dimming legal set
+    -- honors AKA-receiver relief (J-066/J-067 part 2). Without
+    -- this, the v0.10.2 M4 fix at R.IsLegalPlay was effective at
+    -- the bot heuristic + BotMaster outer driver (v0.10.3 fix #5)
+    -- but UI-side card dimming still greyed out non-trump
+    -- discards when partner had AKA'd — visually misleading the
+    -- human player into believing they had to ruff. Same shape as
+    -- the BotMaster fix; same one-arg addition closes the loop.
     local legal = {}
     for _, c in ipairs(s.hand) do
-        local ok = R.IsLegalPlay(c, s.hand, s.trick, s.contract, s.localSeat)
+        local ok = R.IsLegalPlay(c, s.hand, s.trick, s.contract, s.localSeat, s.akaCalled)
         if ok then legal[#legal + 1] = c end
     end
     return legal

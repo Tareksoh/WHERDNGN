@@ -124,11 +124,19 @@ function R.IsLegalPlay(card, hand, trick, contract, seat, akaCalled)
     -- pre-v0.10.2 explicit-AKA bug. Detect from the lead card
     -- itself: partner-led + non-trump + Ace = same relief as
     -- explicit AKA. Symmetric closure to BotMaster.lua:830 fix.
+    -- v0.10.4 E1 companion guard (review_v0.10.2 D-RedTeam-01:29-60,
+    -- B-Net-05 F8a, HIGH): defense-in-depth — even if a malformed
+    -- `s.akaCalled.suit == contract.trump` slipped past the wire-
+    -- entry guard at Net.lua:3122, the relief gate refuses trump-
+    -- suit AKA. AKA's semantic is "I have the boss of a non-trump
+    -- suit"; trump-suit AKA is meaningless and must not grant
+    -- ruff-suppression relief.
     local akaRelief = false
     if akaCalled and akaCalled.seat and akaCalled.suit
        and seat and R.Partner(seat) == akaCalled.seat
        and akaCalled.suit == leadSuit
-       and contract and contract.type == K.BID_HOKM then
+       and contract and contract.type == K.BID_HOKM
+       and akaCalled.suit ~= contract.trump then
         akaRelief = true
     end
     if not akaRelief and seat

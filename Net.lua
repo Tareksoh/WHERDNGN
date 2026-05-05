@@ -3121,6 +3121,26 @@ function N._OnAKA(sender, seat, suit, replayFlag)
     -- so the call has no tactical meaning. Drop the message rather
     -- than display a confusing banner.
     if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then return end
+    -- v0.10.4 E1 wire guard (review_v0.10.2 D-RedTeam-01:29-60,
+    -- B-Net-05 F8a, HIGH): trump-suit AKA is meaningless under Saudi
+    -- convention (the AKA promise is "I have the boss of a non-trump
+    -- suit"). UI hides the AKA button when `cand.suit == trump`, but
+    -- a hostile peer can craft `MSG_AKA;<seat>;<trump>` directly on
+    -- the wire. If accepted, it would mislead a partner-bot's
+    -- pickFollow into suppressing a ruff that should fire — the
+    -- canonical AKA-receiver-relief gate (Rules.lua:115-130) treats
+    -- trump-led tricks specially but the misframed banner could
+    -- still cascade through R.IsLegalPlay's implicit-AKA branch on
+    -- a non-trump-led trick. Reject at wire entry.
+    if suit == S.s.contract.trump then return end
+    -- v0.10.4 E2 wire guard (review_v0.10.2 D-RedTeam-01:63-90,
+    -- B-Net-05 F8b, HIGH): mirror the local-side lead-only gate at
+    -- N.LocalAKA:2358. AKA must be announced AT lead time (zero
+    -- prior plays in the trick); otherwise a hostile peer could
+    -- inject MSG_AKA mid-trick to retroactively suppress the bot's
+    -- subsequent ruff. Pre-v0.10.4 LocalAKA enforced this client-
+    -- side but the wire path didn't, leaving a mispredict window.
+    if S.s.trick and S.s.trick.plays and #S.s.trick.plays > 0 then return end
     S.ApplyAKA(seat, suit)
 end
 

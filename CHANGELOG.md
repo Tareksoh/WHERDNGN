@@ -1,5 +1,222 @@
 # Changelog
 
+## v0.10.4 — review_v0.10.2 validation closures (4 HIGH + 1 calibration + tooling + doctrine doc)
+
+Validation pass against the v0.10.3 audit synthesis caught 1 UI-
+parity miss in M4 + 2 wire-level AKA exploits (HIGH) + 1 Sun-bid
+calibration gap. Pre-shipping ship-readiness pass surfaced two
+1-line wire guards (E1 + E2) on the AKA protocol. Late ship-
+readiness pass surfaced HIGH-1 (X5 half-fix in `S.ApplyMeld` —
+silent Hokm-Carré-A scoring corruption since v0.10.0). Tooling:
+telemetry parser fix unblocks the calibration analyzer. Plus
+doctrine note in `saudi-rules.md` documents the intentional Qaid-
+vs-failed-bid meld asymmetry (v0.10.1 arbitration rationale).
+
+### Fixed (HIGH-1 — X5 half-fix closure: Hokm-Carré-A in `S.ApplyMeld`)
+
+- **`State.lua:1167-1190`**: v0.10.0's X5 fix patched
+  `R.DetectMelds` (the meld-detection path used by `Bot.PickMelds`
+  for declaring) but missed the **parallel path in `S.ApplyMeld`**
+  used on the wire-receive side AND on the host's own ApplyMeld
+  self-loopback. Pre-v0.10.4: `kind == "carre" + top == "A" +
+  contract.type == K.BID_HOKM` fell through with `value = nil`,
+  silently dropping every Hokm-Carré-A meld. Cascade: missing
+  100-meld broke bidder strict-majority threshold, `R.CompareMelds`
+  winner-takes-all, AND v0.9.0 M5 belote-cancellation (silent
+  +20 raw over-credit on rounds where the offender held K+Q of
+  trump alongside the lost Carré-A). Per video #32 line 245 +
+  video #38 line 61, Carré-A in Hokm = 100 raw (treated like
+  Carré-T/K/Q). Fix: added the Hokm branch with
+  `value = K.MELD_CARRE_OTHER`. Stale comments at 1166 ("200 raw"
+  — actual is 400) and 1177 ("Hokm 4-Aces: doesn't score" —
+  opposite of rule) corrected.
+
+  **Real-game impact:** every game with a Hokm-Carré-A round
+  played since v0.10.0 mis-scored. Fix triggers ~1.92% of rounds
+  per the audit's frequency estimate; combined cascade can be
+  10 gp dropped + 20 gp over-credited = ~30 gp swing on affected
+  rounds.
+
+### Fixed (HIGH — `S.GetLegalPlays` AKA-blind, M4 completeness)
+
+- **`State.lua:1975`** (comment header at 1962): pass `s.akaCalled`
+  as the 6th arg to `R.IsLegalPlay`. Without this, the UI-dimming
+  function ignored AKA-receiver relief — the human player saw
+  non-trump discards greyed out even when partner had AKA'd,
+  visually contradicting the M4 rule that legality, bot heuristics,
+  and BotMaster outer driver all already honor. Same one-arg shape
+  as the v0.10.3 BotMaster fix #5; this closes the M4 loop at the
+  final layer.
+
+### Fixed (HIGH — wire-level AKA exploit guards)
+
+Pre-ship validation surfaced two wire-level AKA exploit windows
+the v0.10.3 ship missed. Both are 1-line `if … then return end`
+guards at the host receive boundary; both close real attack
+surfaces with no risk to legitimate traffic.
+
+- **E1 — trump-AKA wire reject** (`Net.lua:3122` `N._OnAKA`,
+  D-RedTeam-01:29-60 / B-Net-05 F8a). AKA is meaningful only on
+  non-trump suits — the AKA promise is "I have the boss of this
+  non-trump suit." The UI hides the AKA button when the candidate
+  suit equals trump, but a hostile peer can craft `MSG_AKA;<seat>;
+  <trump>` directly on the wire. If accepted, it could mislead a
+  partner-bot's `pickFollow` into suppressing a ruff that should
+  fire (multi-trick damage on non-trump-led tricks via the
+  implicit-AKA branch). Reject at wire entry. Companion guard
+  added at `Rules.lua:115-130`: `akaRelief` excludes
+  `akaCalled.suit == contract.trump` regardless of how the banner
+  was set — defense-in-depth even if a malformed banner slipped
+  past the wire-entry guard.
+
+- **E2 — `_OnAKA` mid-trick lead-only gate** (`Net.lua` after E1
+  guard, D-RedTeam-01:63-90 / B-Net-05 F8b). `LocalAKA` enforces
+  lead-only at line 2358 (anti-misclick) but the wire path didn't.
+  A hostile peer sending mid-trick `MSG_AKA` would set
+  `s.akaCalled` after the receiver had already committed to ruff
+  (or just before the next ruff decision), suppressing it. Added
+  the same gate as `LocalAKA`: refuse AKA frames received when
+  `#S.s.trick.plays > 0` (mid-trick).
+
+### Calibrated (Sun-bid threshold — A+T mardoofa surgical bump)
+
+- **`Constants.lua:329` `K.BOT_SUN_MARDOOFA_BONUS` 5 → 10**: the
+  per-pair bonus for the canonical Saudi إكة مردوفة (A+T cover)
+  pattern was under-rewarding hands that a Saudi pro would bid
+  Sun on. Validation's preferred lever over a `TH_SUN_BASE` drop
+  because it's surgical: the bonus only fires for hands with the
+  doc-anchored A+T cover (video #25), not broadly relaxing the
+  Sun threshold for any A-heavy hand. With pair cap = 2, max
+  bonus moves from +10 to +20 for a 2-pair Sun-Mughataa hand.
+
+  **First-step calibration framing:** simulation estimate
+  predicts Sun bid rate moves ~3.1% → ~4.1% per seat. **The
+  user's "bots under-bid Sun" complaint will be partially —
+  but not fully — addressed.** Empirical telemetry (~30+ rounds
+  on v0.10.4) needed to confirm the lift. **Reserved for v0.10.5:
+  if real-play data shows still under-firing, the second pass is
+  `K.TH_SUN_BASE` 50 → 44** (broader, but less doc-anchored).
+  Not stacking both today — A/B comparability requires single-
+  variable steps.
+
+### Fixed (UI — first-launch felt theme mismatch, user report)
+
+- **`UI.lua` `U.Show`**: on first launch with a non-default felt
+  theme saved (e.g. `WHEREDNGNDB.feltTheme = "midnight"`), the
+  cycle button label rendered correctly ("Felt: Midnight") but
+  the backdrop tints rendered the **classic green** values from
+  the COL hardcoded defaults at lines 143-145. Cause: `setBackdrop`
+  reads `COL.feltDark`/`COL.feltLight` at frame-construction time;
+  although `applyThemeColors()` runs at module-load (line 211) and
+  should have updated COL before `buildMain/Lobby/Table` fire, an
+  edge case in the load order left some frames captured against
+  the pre-mutation defaults. Defensive fix: after freshly-built
+  frames exist, force-reapply the theme by re-invoking
+  `SetFeltTheme(active)`. Idempotent (writes the same name back),
+  no behavioural change for users on the default green theme. The
+  cycle button label and the actual backdrop now agree on first
+  launch.
+
+### Tooling — telemetry parser fix
+
+- **`tools/calibrate.py`**: WoW SavedVariables uses bracketed-
+  string key syntax (`["history"] = { ... }`) for all named
+  table keys. The pre-v0.10.4 parser's regexes only matched
+  bare-key form (`history = { ... }`) — the primary regex
+  failed entirely, the fallback regex's non-greedy `.*?\n\s*\}`
+  terminated at the first row's close brace (capturing only ~one
+  row's worth of inner text with no `{}` markers, yielding zero
+  parsed rows). Rewrote the locator to manual brace-walking
+  with string-literal awareness; rewrote the row-key regex to
+  accept both bare and bracketed forms. End-user can now run
+  `python tools/calibrate.py <SavedVariables-path>` and get
+  the calibration report — previously silently returned "no
+  telemetry rows found" against valid SavedVariables files.
+
+### Doc — Qaid meld-asymmetry doctrine note
+
+- **`docs/strategy/saudi-rules.md`**: documents the intentional
+  asymmetry between regular failed-bid (both teams keep own melds
+  per «مشروعي لي ومشروعك لك») and Qaid (offender forfeits melds
+  per «المشتري مشروعه فايد»). The two proverbs describe different
+  round-end scenarios — fair-tricks-fail vs rule-violation —
+  and are consistent in their respective contexts. Captures the
+  v0.10.1 user arbitration rationale so future audits don't
+  re-flag the asymmetry as a bug. Pre-v0.10.4 the doc still
+  reflected the pre-v0.10.1 «keeps melds uniformly» reading.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section J**: GetLegalPlays
+  AKA-relief pin (3 positive cases for non-trump discards +
+  trump-still-legal, 3 sanity cases for the without-AKA
+  must-trump baseline).
+- **`tests/test_state_bot.lua` Section K**: HIGH-1 X5 half-fix
+  parity pin — `S.ApplyMeld` produces 100-raw value for Hokm-
+  Carré-A (was silently dropped pre-v0.10.4); Sun-Carré-A still
+  400 raw; Hokm-Carré-K unchanged at 100 raw; Carré-9 still
+  drops (K.CARRE_RANKS excludes 9).
+- **`tests/test_rules.lua` Q.13**: trump-suit malformed `akaCalled`
+  does not grant ruff-relief (defense-in-depth pin for E1).
+- **387 / 387 pass** (up from 371 in v0.10.3, +16 new pins).
+
+### Notes for v0.10.5 reviewers
+
+The v0.10.3 CHANGELOG cited some HIGH-fix line numbers (1705,
+2128, 830, 2964) that were comment-block headers; actual code
+starts are 1714, 2143, 838, 2980. The fixes themselves are
+correct; only the citation drifted. Won't amend v0.10.3 (already
+on CurseForge) — captured here for forward reference.
+
+### Deferred to v0.10.5+ (per ship-readiness review)
+
+#### Newly catalogued HIGH backlog (absent at v0.10.3 ship too)
+
+These were surfaced by the v0.10.4 ship-readiness pass via the
+red-team and code-audit tracks; they're NOT v0.10.4 ship-blockers
+but should be visible in the §4.2 backlog from now on:
+
+- **D-RedTeam-01 E4** — T-AKA trick-locking exploit. AKA-on-T
+  semantic per J-067 part 1 (10 substitutes for Ace) is partially
+  honored at the bot heuristic but not at the legality layer in
+  the over-trump-required case. Separate from M4 receiver-relief.
+- **B-Net-02 H1/H2** — Forced-flag dead branches + out-of-range
+  bidder. Wire validation gap on `MSG_BID` — accepts bidder seat
+  outside 1..4 → `ApplyBid` writes to invalid seat slot.
+- **B-State-02 H1** — `S.ApplyBid` lacks input value validation;
+  partial mitigation downstream but the gap can corrupt state.
+- **Bargiya FN → FP swing** (cross-cite). The `lenAtAce ≥ 5`
+  promotion to `bargiya` (v0.10.2 M7) closes the FN but introduces
+  a narrow FP path (sender holds 5+ but discarded A defensively
+  on a partner-winning trick where partner was already on the
+  Ace). Need hand-shape disambiguation; deferred per audit §4.2.
+
+#### Pre-existing deferred items (per validation)
+
+- B-Bot-06 F-01/F-02 — L07 cascade fail at M3lm+ for Aceless
+  5-trump J+9 hands (~5–7 gp/match impact).
+- Dead-code redundancy at `Bot.lua:1336-1342` / `1366-1372`
+  (duplicate T-cardinality block in `PickBid`).
+- Reverse Al-Kaboot rewrite (`K.AL_KABOOT_REVERSE = 88` constant
+  doesn't exist yet; needs new bidder-led-trick-1 gate logic).
+- Bargiya inner-discriminator axis flip (event-count → hand-shape).
+- ISMCTS `akaCalled`-respecting sample pool (E-Det-01 #2c).
+- `S.s.swaDenied` UI banner read.
+- Sun-Mathlooth-K pos-4 smother gate (G-Logic-01 §3).
+- Test-harness gap: Net.lua + BotMaster.lua not loaded by
+  `run.py`; H1–H4 pins are source-string matches not behavioural.
+- Backported MED fixes (Net.lua M5 / H3 / R2; State.lua M3
+  false-AKA wipe). The full review notes M5 + H3 should arguably
+  be HIGH per B-Net-04 — re-triage on v0.10.5 cycle.
+
+### Coordination references
+
+Full v0.10.4 ship-readiness analysis at
+`.swarm_findings/review_v0.10.2/REVIEW_v0.10.4_ship_readiness.md`
+(539 lines). Single richest pre-ship document — pulls together
+the synthesis + focused validation + corpus traversal into one
+verdict.
+
 ## v0.10.3 — review_v0.10.2 audit closures (CRIT + 8 HIGH + 7 doc + 4 follow-ups)
 
 Multi-track ~95-agent audit cycle (Tracks A through G + synthesis)

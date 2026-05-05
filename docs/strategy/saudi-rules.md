@@ -124,7 +124,34 @@ docs conflated them under "Takweesh"; that conflation was wrong.
 | Penalty | Phase | Trigger | Outcome |
 |---|---|---|---|
 | **Kasho (كاشو)** | **Pre-bid** | Procedural error during deal (mis-cut, dropped card, mis-deal) | **Redeal**, no points awarded |
-| **Qaid (قيد)** | **Post-bid** | Illegal play during round (failed must-follow, failed must-ruff, undeclared meld, observed cheat, **verbal slip about held cards** (تَوْضِيح لَعِب)) | Non-offending team scores **26 raw (Sun) / 16 raw (Hokm)** + their **own** melds; offending team **keeps** their own melds (per "مشروعي لي ولك مشروعك" — corrected v0.4.3+ per Codex/Gemini 14th-audit); ×multiplier applies on Bel/Bel-x2. Audit `audit_v0.9.0/28_rules_aka_swa_takweesh.md` §4 verified. |
+| **Qaid (قيد)** | **Post-bid** | Illegal play during round (failed must-follow, failed must-ruff, undeclared meld, observed cheat, **verbal slip about held cards** (تَوْضِيح لَعِب), false AKA per J-069) | Non-offending team scores **26 raw (Sun) / 16 raw (Hokm)** + their **own** melds; **offending team FORFEITS their own melds** (per Source H H-36.12 + PDF 02 K-04 «المشتري مشروعه فايد» — "the buyer's meld is forfeited"); ×multiplier applies on Bel/Bel-x2. v0.10.1 user arbitration; see asymmetry doctrine note below. |
+
+#### Doctrine note — meld asymmetry between regular fail and Qaid
+
+**This is intentional**, not an inconsistency. The two scenarios
+fire under different proverbs and must be treated separately:
+
+| Scenario | Path | Melds outcome | Saudi proverb |
+|---|---|---|---|
+| Bidder team plays out tricks but fails to make | `R.ScoreRound` fail branch (v0.4.3+) | Both teams **keep** own declared melds; only the trick-point side flows to defenders | «مشروعي لي ومشروعك لك» — "my meld for me, your meld for you" — the contract resolved fairly via tricks |
+| Round terminates on rule violation (Takweesh / invalid SWA / false AKA) | `Net.lua` Qaid handlers (v0.10.1+) | Offender **forfeits** own melds; non-offender keeps theirs × mult | «المشتري مشروعه فايد» — "the buyer's meld is forfeited" — rule violation revokes the offender's standing to score |
+
+The two readings are CONSISTENT in their respective contexts —
+they describe different terminations of a round. Regular fail is
+a contract-level outcome (try-and-fail); Qaid is a rule-violation
+outcome (illegal play). Saudi convention treats them differently
+on melds because they're different KINDS of round-end.
+
+**Code locations:**
+- Regular fail: `Rules.lua` `R.ScoreRound` line ~854 (`outcome_kind == "fail"` branch)
+- Qaid Takweesh: `Net.lua` `HostResolveTakweesh` line ~2196-2218
+- Qaid invalid SWA: `Net.lua` `HostResolveSWA` line ~2940-2950
+
+The pre-v0.10.1 code applied the «مشروعي لي ولك مشروعك» reading
+uniformly to BOTH paths (Codex/Gemini 14th-audit). v0.10.1's user
+arbitration corrected the Qaid path to «المشتري مشروعه فايد»
+based on Source H H-36.12 + PDF K-04 (the explicit-forfeit
+reading). Historical CHANGELOG entry: v0.10.1 M1.
 
 **Takweesh (تكويش)** is the *verb form* of calling Kasho. Calling
 "Takweesh" during pre-bid invokes Kasho mechanics. Post-bid illegal

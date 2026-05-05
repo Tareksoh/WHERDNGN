@@ -290,6 +290,53 @@ do
     assertFalse(set["JH"], "GetLegalPlays: JH NOT legal (must follow S)")
 end
 
+-- v0.10.4 GetLegalPlays AKA-receiver-relief pin (review_v0.10.2
+-- validation HIGH closure). When partner has called AKA on the led
+-- suit AND we're void+have-trump, the UI-dimming legal set must
+-- include non-trump discards (M4/J-066). Without the akaCalled
+-- arg, GetLegalPlays returned only trumps — UI greyed out the
+-- discards that R.IsLegalPlay (Bot.legalPlaysFor + BotMaster outer
+-- driver) actually permitted, defeating M4 at the UI layer.
+freshState()
+S.s.localSeat = 4
+S.s.turn = 4
+S.s.turnKind = "play"
+S.s.phase = K.PHASE_PLAY
+S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+-- Seat 4's partner is seat 2. Partner AKA'd on D, then led KD.
+-- Opp seat 3 cut with trump 7H. Seat 4's hand: void in D, has
+-- trump 9H, has non-trump AS + 8C.
+S.s.hand = { "AS", "9H", "8C" }
+S.s.trick = { leadSuit = "D", plays = {
+    { seat = 2, card = "KD" },
+    { seat = 3, card = "7H" },
+} }
+S.s.akaCalled = { seat = 2, suit = "D" }
+do
+    local legal = S.GetLegalPlays()
+    local set = {}
+    for _, c in ipairs(legal) do set[c] = true end
+    assertTrue(set["AS"],
+               "v0.10.4 GetLegalPlays AKA-relief: AS (non-trump) legal under partner AKA")
+    assertTrue(set["8C"],
+               "v0.10.4 GetLegalPlays AKA-relief: 8C (non-trump) legal under partner AKA")
+    assertTrue(set["9H"],
+               "v0.10.4 GetLegalPlays AKA-relief: 9H (trump) still legal — relief is permissive, not restrictive")
+end
+-- Sanity: clear akaCalled and the same fixture greys the discards.
+S.s.akaCalled = nil
+do
+    local legal = S.GetLegalPlays()
+    local set = {}
+    for _, c in ipairs(legal) do set[c] = true end
+    assertFalse(set["AS"],
+                "v0.10.4 GetLegalPlays sanity: without AKA, must-trump → AS illegal (UI greys it)")
+    assertFalse(set["8C"],
+                "v0.10.4 GetLegalPlays sanity: without AKA → 8C illegal too")
+    assertTrue(set["9H"],
+               "v0.10.4 GetLegalPlays sanity: trump 9H legal (must-trump satisfied)")
+end
+
 -- MeldVerdict: thin wrapper around CompareMelds; uses s.meldsByTeam.
 -- Guard: returns nil unless at least one trick has been recorded
 -- (verdict is meaningless before trick 1 closes).
@@ -1824,6 +1871,69 @@ do
     assertEq(C.Suit(card2), "H",
              "J.4 (M7) sanity: WITHOUT lenAtAce, single-A is bargiya_hint → 'want'(H) dominates")
     WHEREDNGNDB.m3lmBots = nil
+end
+
+-- =====================================================================
+-- K. v0.10.4 X5 half-fix closure — S.ApplyMeld parity with R.DetectMelds
+--
+-- v0.10.0 fixed Hokm-Carré-A meld scoring at the R.DetectMelds path
+-- (used by Bot.PickMelds for declaring) but the parallel S.ApplyMeld
+-- path (used on the wire-receive side AND on the host's own ApplyMeld
+-- self-loopback) silently dropped Hokm-Carré-A with value=nil. Net
+-- effect since v0.10.0: every game with 4 Aces in a Hokm round
+-- silently lost the 100-meld + cascaded through belote-cancellation
+-- to over-credit +20 raw. Sources: review_v0.10.2 prior summary
+-- (S-Score-03 + S-Score-10) + 3 prior audit references.
+-- =====================================================================
+section("K. v0.10.4 X5 half-fix closure (Hokm-Carré-A parity)")
+
+do
+    -- K.1 — Hokm-Carré-A through ApplyMeld now scores 100 raw.
+    freshState()
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    -- Encoded hand: AH+AC+AD+AS — the 4 Aces.
+    S.ApplyMeld(1, "carre", "", "A", C.EncodeHand({"AH","AC","AD","AS"}))
+    local meldsA = S.s.meldsByTeam.A
+    assertEq(#meldsA, 1,
+             "K.1: Hokm-Carré-A produces a meld entry (was silently dropped pre-v0.10.4)")
+    if meldsA[1] then
+        assertEq(meldsA[1].kind, "carre", "K.1a: meld kind = carre")
+        assertEq(meldsA[1].top,  "A",     "K.1b: meld top = A")
+        assertEq(meldsA[1].value, K.MELD_CARRE_OTHER,
+                 "K.1c: Hokm-Carré-A value = MELD_CARRE_OTHER (100 raw)")
+    end
+
+    -- K.2 — Sun-Carré-A still scores 400 raw (the 2-Hundred/4-Hundred
+    -- Saudi rule per video #32+#38). Sanity that K.1 didn't break Sun.
+    freshState()
+    S.s.contract = { type = K.BID_SUN, bidder = 1 }
+    S.ApplyMeld(1, "carre", "", "A", C.EncodeHand({"AH","AC","AD","AS"}))
+    local meldsB = S.s.meldsByTeam.A
+    assertEq(#meldsB, 1, "K.2: Sun-Carré-A still produces a meld entry")
+    if meldsB[1] then
+        assertEq(meldsB[1].value, K.MELD_CARRE_A_SUN,
+                 "K.2a: Sun-Carré-A value = MELD_CARRE_A_SUN (400 raw)")
+    end
+
+    -- K.3 — non-Ace Carré in Hokm unaffected (T/K/Q/J = 100 raw).
+    freshState()
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    S.ApplyMeld(1, "carre", "", "K", C.EncodeHand({"KH","KC","KD","KS"}))
+    local meldsC = S.s.meldsByTeam.A
+    assertEq(#meldsC, 1, "K.3: Hokm-Carré-K produces a meld entry")
+    if meldsC[1] then
+        assertEq(meldsC[1].value, K.MELD_CARRE_OTHER,
+                 "K.3a: Hokm-Carré-K value = MELD_CARRE_OTHER (100 raw)")
+    end
+
+    -- K.4 — Carré-9 still doesn't score (K.CARRE_RANKS excludes 9).
+    -- Defensive: 9-carré is sometimes attempted by mistake; ensure
+    -- the v0.10.4 fix doesn't accidentally start scoring 9-carrés.
+    freshState()
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    S.ApplyMeld(1, "carre", "", "9", C.EncodeHand({"9H","9C","9D","9S"}))
+    local meldsD = S.s.meldsByTeam.A or {}
+    assertEq(#meldsD, 0, "K.4: Carré-9 still drops (K.CARRE_RANKS excludes 9)")
 end
 
 -- =====================================================================

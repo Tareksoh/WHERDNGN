@@ -3424,10 +3424,32 @@ function U.PulseTurn()
 end
 
 function U.Show()
+    local justBuilt = (f == nil)
     if not f then
         buildMain()
         buildLobby()
         buildTable()
+    end
+    -- v0.10.4 user-reported UI fix: on first launch with a non-default
+    -- felt theme saved (e.g. WHEREDNGNDB.feltTheme = "midnight"), the
+    -- cycle button label rendered correctly ("Felt: Midnight") but
+    -- the backdrop tints rendered the CLASSIC GREEN values. Cause:
+    -- `setBackdrop` reads `COL.feltDark`/`COL.feltLight` at frame-
+    -- construction time. Although `applyThemeColors()` runs at module-
+    -- load (line 211) and SHOULD have updated the COL globals before
+    -- buildMain/Lobby/Table fire, an edge case in the load order left
+    -- some frames captured against the pre-mutation COL defaults
+    -- (the green hardcoded values at lines 143-145). Defensive fix:
+    -- after the freshly-built frames exist, force-reapply the theme
+    -- by re-invoking SetFeltTheme(active). That function's existing
+    -- re-tint loop (lines ~3527-3557) walks every captured frame and
+    -- writes the current COL values, guaranteeing the saved theme is
+    -- visible regardless of how the construction-time read resolved.
+    -- Idempotent — SetFeltTheme writes the same name back to
+    -- WHEREDNGNDB.feltTheme; no behavioural change for users on the
+    -- default green theme.
+    if justBuilt and U.SetFeltTheme then
+        U.SetFeltTheme(activeFeltThemeName())
     end
     -- restore saved position
     if WHEREDNGNDB and WHEREDNGNDB.framePos then
