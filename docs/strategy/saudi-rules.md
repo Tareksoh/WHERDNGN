@@ -182,24 +182,47 @@ Saudi source before extending code.
 165-169 (general partner-winning relief on void). Video #42's
 rule is fully enforced.
 
-**Q3: Four-Aces Sun meld value (200 raw vs 400)?** 🔁 **R5 SUPERSEDED v0.11.6.**
-`K.MELD_CARRE_A_SUN = 400` (the v0.10.0 R5 swap from 200) is
-preserved — the meld's name IS its raw value (per videos #32 + #38).
-But R5's *multiplier rule* was wrong: it assumed `meldRaw × Sun×2 ÷ 10`,
-producing 80 nq game points in Sun and 10 nq in Hokm — a 1:8 ratio.
-The videos consistently say "Hokm: count as 100; Sun: 400" — a 1:4
-ratio. The only consistent reading is **all melds are immune to the
-contract-type multiplier (Sun ×2)**, just like Belote already is.
-Final: 400 raw → 400 ÷ 10 = **40 nq game points** in Sun (no Sun ×2);
-**80 nq under Sun-Bel** (escalation ×2 still applies). Hokm-Carré-A
-= 100 ÷ 10 = 10 nq, matching the named "100" exactly.
+**Q3: Four-Aces Sun meld value (200 raw vs 400)?** ✅ **RESOLVED v0.11.10
+(authoritative rule: 200 raw, full Sun×2 mult applied).** Both
+v0.10.0 R5 (200→400) and v0.11.6 (split-multiplier "melds Sun-immune")
+were superseded by user-stated authoritative rule v0.11.10:
 
-Multiplier rule (post-v0.11.6):
-- **Cards** scale with both contract-mult (Sun ×2) and escalation-mult (Bel/Triple/Four/Gahwa).
-- **Melds** (sequence, carré-other, carré-A) scale ONLY with escalation-mult; they're contract-mult-immune.
-- **Belote (K+Q of trump)** is immune to ALL multipliers (existing rule).
+> sere is 4 points in sun and 2 in hokm
+> 50 is 10 points in sun and 5 in hokm
+> 100 is 20 points in sun and 10 in hokm
+> Carré-A is 40 points in sun and shifts to 10 in hokm as there is
+> no carré-A in hokm.
 
-Implementation: `Rules.lua` R.ScoreRound + `Net.lua` HostResolveTakweesh + HostResolveSWA all split `mult` into `contractMult` (Sun ×2) and `escalationMult` (Bel/Triple/Four/Gahwa) and apply each to the appropriate scoring bucket. Source: user-arbitrated rule clarification + Hokm/Sun ratio cross-check; see `review_v0.10.0/_phase2_xref/reaudit_R5_carre_a_sun.md` for the original (now-superseded) R5 reasoning and `CHANGELOG.md` v0.11.6 for the supersession rationale.
+Decoded as raw values (with /10 final divisor and Sun×2 mult applied):
+- sere = 20 raw → Hokm 20×1/10 = 2 nq, Sun 20×2/10 = 4 nq ✓
+- quarte = 50 raw → Hokm 5 nq, Sun 10 nq ✓
+- quinte / Carré-other = 100 raw → Hokm 10 nq, Sun 20 nq ✓
+- Carré-A = **200 raw** → Sun 200×2/10 = 40 nq ✓
+- Carré-A in Hokm: emits as `K.MELD_CARRE_OTHER` (100 raw) → 10 nq
+  via X5 path
+
+**Multiplier rule (canonical, v0.11.10):**
+- **All melds** (sequence, carré-other, carré-A) scale with the FULL
+  contract multiplier (Sun ×2 + escalation Bel/Triple/Four/Gahwa).
+- **Belote** (K+Q of trump) alone is multiplier-immune (added
+  post-mult; +20 raw → +2 nq always).
+
+Cross-confirmed against video #43 explicit walkthrough at lines
+152-158: "بالنسبه للمشاريع في السن برضو راح تحولها لنقاط تقسم على
+خمسه" — "regarding melds in Sun, you also convert them by dividing
+by 5" — which is mathematically equivalent to "× Sun×2 ÷ 10".
+
+Implementation: `Rules.lua` R.ScoreRound + `Net.lua` HostResolveTakweesh
++ HostResolveSWA all use `(cards + melds) × mult` (single multiplier
+applied to the sum). v0.11.6's split is fully reverted.
+
+Implementation history (for posterity):
+- v0.4.x: 200 raw + Sun×2 (correct, but undocumented as canonical)
+- v0.10.0 R5: 200→400 (wrong; produced 80 nq in Sun)
+- v0.11.6: 400 + melds Sun-immune (wrong; produced 40 nq for Carré-A
+  but broke sere/quarte/quinte to 2/5/10 instead of 4/10/20)
+- v0.11.10: full revert to v0.4.x state (200 raw, full Sun×2 mult).
+  User-stated authoritative rule.
 
 **Q3b: Carré-A in Hokm.** ✅ **RESOLVED v0.10.0 (X5).** Pre-v0.10.0
 `R.DetectMelds` had no `else` branch for the Hokm-A path — the
@@ -221,16 +244,24 @@ HostResolveTakweesh, HostResolveSWA-invalid). v0.10.0 review
 Phase1-I double-confirmed against verbatim source examples:
 65→70, 66→70, 67→70, 64→60, 62→60, 55→60, 51→50, 74→70.
 
-**Q5: Sun ×2 multiplier phrasing.** 🔁 **REVISED v0.11.6.** Code now
-splits the multiplier into contract-side (Sun ×2 / Hokm ×1) and
-escalation-side (Bel ×2, Triple ×3, Four ×4, Gahwa ×4). Cards
-scale with both; melds scale only with escalation-side; Belote is
-immune to both. Video #43's "÷5 in Sun" worked-examples for sere
-(20→4) and quarte (50→10) demonstrated simplified accumulated
-arithmetic that lumps melds into the trick-point Sun-divisor
-flow — but the canonical per-rule treatment (per user arbitration
-+ Hokm/Sun "100 vs 400" 1:4 ratio cross-check) is melds-are-
-contract-mult-immune. See Q3 for the full rationale.
+**Q5: Sun ×2 multiplier phrasing.** ✅ **RESOLVED v0.11.10.** Code applies
+the Sun ×2 (contract mult) and any active escalation (Bel ×2, Triple
+×3, Four ×4, Gahwa ×4) UNIFORMLY to both card-trick points and
+declared melds. The post-mult sum gets `/10` (with "5 rounds UP"
+rounding per video #43). Belote (K+Q of trump) is the lone
+multiplier-immune exception (+20 raw added post-mult).
+
+This matches video #43's "÷5 in Sun" worked-examples directly: the
+speaker walks through sere (20→4 in Sun), quarte (50→10), and
+quinte (100→20) using the /5 divisor — which is mathematically
+equivalent to `× Sun×2 ÷ 10`. The earlier (v0.11.6) interpretation
+that the worked examples were "simplified accumulated arithmetic"
+was incorrect; they are direct per-meld value statements.
+
+History note: v0.11.6 briefly experimented with "melds Sun-immune"
+(only Carré-A would have produced the canonical 40 nq under that
+rule, but it broke sere/quarte/quinte to 2/5/10 nq). The v0.11.10
+revert restores the canonical rule. See Q3 for full math reference.
 
 **Q6: سيكل (sykl) — 9-8-7 sequence?** ✅ **RESOLVED v0.10.0 (review).**
 Per Phase 1 Source I extraction: سيكل is the colloquial name

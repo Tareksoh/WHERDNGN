@@ -92,24 +92,34 @@ K.MELD_SEQ3        = 20
 K.MELD_SEQ4        = 50
 K.MELD_SEQ5        = 100
 K.MELD_CARRE_OTHER = 100   -- T, K, Q, J (any contract type) AND Carré-A in Hokm
-K.MELD_CARRE_A_SUN = 400   -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
-                           -- v0.11.6 R5-supersede (user-arbitrated): all melds
-                           -- (sequence, carré-other, carré-A, belote) are
-                           -- IMMUNE to the contract-type multiplier (Sun ×2).
-                           -- They DO scale with the escalation multiplier (Bel
-                           -- ×2, Triple ×3, Four ×4, Gahwa ×4). Hokm/Sun
-                           -- "100 vs 400" is a 1:4 ratio (10 nq vs 40 nq) —
-                           -- only consistent if Sun's contract ×2 doesn't
-                           -- apply to the meld. Pre-v0.11.6 produced 1:8
-                           -- (10 vs 80). The earlier (v0.10.0) R5 swap
-                           -- 200→400 was correctly motivated (the named
-                           -- value IS the raw value) but the surrounding
-                           -- multiplier rule was wrong. Final: 400 raw is
-                           -- correct; multiplier handling now splits by
-                           -- contract-side vs escalation-side. Math trace:
-                           -- Sun-CarréA  base:    400 / 10 = 40 nq
-                           -- Sun-CarréA  ×Bel:    400 ×2 / 10 = 80 nq
-                           -- Hokm-CarréA = MELD_CARRE_OTHER = 100 raw, 10 nq.
+K.MELD_CARRE_A_SUN = 200   -- "Four Hundred" (الأربع مئة) — four Aces in Sun.
+                           -- v0.11.10 user-arbitrated authoritative rule:
+                           -- ALL melds (sequence, carré-other, carré-A) get
+                           -- the Sun ×2 contract multiplier (and any active
+                           -- escalation: Bel ×2, Triple ×3, Four ×4, Gahwa
+                           -- ×4). ONLY Belote (K+Q of trump) is multiplier-
+                           -- immune. Stored as 200 raw so the Sun ×2 mult
+                           -- in R.ScoreRound brings the post-mult to 400,
+                           -- ÷10 = 40 nq game points — the canonical Saudi
+                           -- value (videos #32 + #38 + #43).
+                           --
+                           -- Math reference per user-stated rule:
+                           --   sere   20 raw → Hokm 2 nq, Sun 4 nq
+                           --   quarte 50 raw → Hokm 5 nq, Sun 10 nq
+                           --   quinte 100 raw → Hokm 10 nq, Sun 20 nq
+                           --   Carré-A 200 raw → Sun 40 nq (Hokm: emits as
+                           --     Carré-other 100 raw → 10 nq via X5 path)
+                           --
+                           -- History of this constant:
+                           --   v0.4.x: 200 (correct)
+                           --   v0.10.0 R5: 200 → 400 (WRONG — produced 80
+                           --     nq in Sun, 2x canonical)
+                           --   v0.11.6: kept 400 + made melds Sun-immune
+                           --     (WRONG differently — produced 40 nq
+                           --     for Carré-A but broke sere/quarte/quinte
+                           --     to 2/5/10 nq instead of canonical 4/10/20)
+                           --   v0.11.10: full revert to 200 + Sun×2 on
+                           --     all melds. User-stated authoritative rule.
 K.MELD_BELOTE      = 20    -- K+Q of trump in same hand, Hokm only
 
 K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped

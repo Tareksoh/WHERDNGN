@@ -3219,20 +3219,11 @@ local function renderBanner()
         banner.title:SetText("|cff66ff88ALLY B3DO|r" .. yaMrw7(oppT))
     end
 
-    -- Per-team breakdown lines: show cards × full-mult and melds ×
-    -- escalation-only (v0.11.6: melds are immune to contract-mult).
-    -- Format: "<Team>: cards <C> ×<fullMult> + melds <M> ×<escMult>"
-    -- When the multiplier is 1 (Hokm baseline, no escalation) we omit
-    -- the trailing "×1" to keep the line short.
-    local function multTag(m) return (m and m > 1) and (" ×" .. m) or "" end
-    local fullMultTag = multTag(r.multiplier or 1)
-    local escMultTag  = multTag(r.escalationMult or 1)
-    banner.bidder:SetText(("%s: cards %d%s + melds %d%s"):format(
-        teamLabel(bidT), r.teamPoints[bidT] or 0, fullMultTag,
-        r.meldPoints[bidT] or 0, escMultTag))
-    banner.defender:SetText(("%s: cards %d%s + melds %d%s"):format(
-        teamLabel(oppT), r.teamPoints[oppT] or 0, fullMultTag,
-        r.meldPoints[oppT] or 0, escMultTag))
+    -- Per-team breakdown lines: cards + melds raw
+    banner.bidder:SetText(("%s: cards %d + melds %d"):format(
+        teamLabel(bidT), r.teamPoints[bidT] or 0, r.meldPoints[bidT] or 0))
+    banner.defender:SetText(("%s: cards %d + melds %d"):format(
+        teamLabel(oppT), r.teamPoints[oppT] or 0, r.meldPoints[oppT] or 0))
 
     -- Modifiers line: contract type + multiplier
     local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN) and "Sun" or "Hokm"
@@ -3243,13 +3234,6 @@ local function renderBanner()
     if S.s.contract and S.s.contract.gahwa then mods[#mods + 1] = "Gahwa (match-win)" end
     if r.multiplier and r.multiplier > 1 then
         mods[#mods + 1] = ("×%d"):format(r.multiplier)
-    end
-    -- v0.11.6 — note that melds get only the escalation portion of
-    -- the multiplier (immune to Sun ×2). Display only when there's a
-    -- gap (i.e., Sun contract with melds in play and escalation < full).
-    if (r.contractMult or 1) > 1
-       and ((r.meldPoints and (r.meldPoints[bidT] or 0) + (r.meldPoints[oppT] or 0)) or 0) > 0 then
-        mods[#mods + 1] = ("melds ×%d (Sun-immune)"):format(r.escalationMult or 1)
     end
     banner.modifiers:SetText("|cffaaaaaa" .. table.concat(mods, "  ·  ") .. "|r")
 

@@ -1,5 +1,105 @@
 # Changelog
 
+## v0.11.10 — canonical scoring rule (R5 + v0.11.6 fully reverted) + Sun-bidding closure
+
+User-stated authoritative rule supersedes both v0.10.0 R5 and v0.11.6.
+After ultra-audit cross-validation against video #43 (lines 152-158
+verbatim Arabic walking through sere 20→4 nq, quarte 50→10 nq in Sun)
+and the user's own concrete statement of canonical values, the
+correct rule is:
+
+> sere is 4 points in sun and 2 in hokm
+> 50 is 10 points in sun and 5 in hokm
+> 100 is 20 points in sun and 10 in hokm
+> Carré-A is 40 points in sun and shifts to 10 in hokm as there is
+> no carré-A in hokm.
+
+Decoded: **all melds get the FULL contract multiplier (Sun ×2 +
+escalation Bel/Triple/Four/Gahwa)**. Belote (K+Q of trump) alone is
+multiplier-immune. The user's reported "should be 66" answer was
+correct after all — but the right path to it is `K.MELD_CARRE_A_SUN
+= 200` raw with full Sun×2 mult, NOT 400 raw with the "Sun-immune"
+hack. v0.11.6 produced 40 nq for Carré-A but broke sere/quarte/quinte
+to 2/5/10 nq instead of canonical 4/10/20. Both v0.10.0 R5 (200→400)
+and v0.11.6 (split-multiplier) introduced regressions; v0.4.x was
+correct all along.
+
+### Reverted (HIGH — scoring correctness)
+
+- **`Constants.lua` `K.MELD_CARRE_A_SUN`: 400 → 200.** Original v0.4.x
+  value. With Sun×2 mult applied (per canonical rule): 200×2/10 = 40 nq.
+- **`Rules.lua` R.ScoreRound**: removed v0.11.6 split (`contractMult` /
+  `escalationMult` no longer exported); restored single `mult` applied
+  uniformly to `(cards + melds)`. Belote post-mult immunity preserved.
+- **`Net.lua` HostResolveTakweesh + HostResolveSWA invalid branch**:
+  same single-mult restore.
+- **`UI.lua` renderBanner**: per-bucket multiplier display reverted to
+  single `×N` row.
+- **`State.lua` ApplyMeld** comment: "200 raw" annotation.
+- **`docs/strategy/saudi-rules.md` Q3 + Q5**: rewritten with canonical
+  rule + math reference + history note for posterity.
+- **`tests/test_rules.lua` Section S**: rewritten to pin the canonical
+  values directly (8 pins covering all melds in both contracts +
+  Sun-Bel escalation + end-to-end R.ScoreRound flow). Replaces v0.11.6
+  pins.
+
+### Fixed (HIGH — Sun bot bidding closure)
+
+The v0.11.9 calibration was insufficient because the CHANGELOG
+prediction misjudged `BID_JITTER` (assumed ±25, actual ±6). At
+urgency=0, the post-v0.11.9 `[QS TH AH 8C KH]` hand had `sun=40`
+vs threshold band 41-53 → **0% fire rate** (predicted 60%). Per
+audit BotU-16:
+
+- **`Bot.lua` `TH_SUN_BASE`: 47 → 40.** Brings the threshold band to
+  34-46 so `sun=40` clears it ~50% of jitter outcomes (the canonical
+  A+T-mardoofa Sun-bid rate per Saudi pro convention). Other hands:
+  - `[8H JC AC TC 7S]` (sun=35) → ~10-15% fire rate
+  - `[AS KH KC JH AD]` (sun=24, 2-Ace-no-mardoofa) → 0% (correctly
+    conservative)
+  - Weak A+T (sun~27) → 0% (correctly conservative)
+
+This closes the user-reported "30 bidding rounds = 0 Sun bids"
+investigation. Combined with v0.11.9's `MARDOOFA_BONUS 10→20` and
+`void-cap 18→8`, A+T-mardoofa hands now reliably bid Sun.
+
+### Tests
+
+- **`tests/test_rules.lua` Section S** (8 new pins): K.MELD_CARRE_A_SUN
+  = 200 + canonical math for sere/quarte/quinte/Carré-A in both
+  contracts + Sun-Bel + empty-meld G/H/I/K compat + end-to-end
+  R.ScoreRound flow.
+- **524 / 524 pass** (up from 518; 6 previous v0.11.6 pins replaced
+  by 8 canonical pins).
+
+### Note on the v0.10.0 → v0.11.10 calibration journey
+
+For posterity, the bidding-calibration constants moved through:
+
+| Constant | v0.9 | v0.10.4 | v0.10.6 | v0.11.9 | **v0.11.10** |
+|---|---|---|---|---|---|
+| `BOT_SUN_MARDOOFA_BONUS` | 5 | 10 | – | 20 | 20 |
+| `TH_SUN_BASE` | 50 | – | 47 | – | **40** |
+| `sunStrength` void-cap | 25 | – | – | 8 | 8 |
+| `K.MELD_CARRE_A_SUN` | 200 | – | – | – | **200 (revert)** |
+
+All cumulative changes shipped now reflect the user-stated
+authoritative rule. Cross-validation against video #43 + #32 + #38
+agrees with this state.
+
+### Re-test instructions
+
+1. Update to v0.11.10 (CurseForge auto-publish ~10 min)
+2. `/reload`
+3. `/baloot bidcalc` to enable trace
+4. Play 10-20 rounds
+5. Expected pattern:
+   - ~50% of A+T-mardoofa Sun-eligible hands bid Sun
+   - Sun-Carré-A scoring shows 40 nq for the meld portion
+   - Sun-Bel scoring shows 80 nq for the meld portion
+   - Hokm-Carré-A (treated as Carré-other) shows 10 nq
+6. Disable trace when satisfied: `/baloot bidcalc`
+
 ## v0.11.9 — bidding calibration (user-arbitrated from bidcalc trace evidence)
 
 User played ~50+ bidding events with the v0.11.8 `bidcalc` trace

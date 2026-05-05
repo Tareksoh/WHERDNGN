@@ -2380,17 +2380,14 @@ function N.HostResolveTakweesh(callerSeat)
     local winnerTeam = foundIllegal and callerTeam or oppTeam
 
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-    -- v0.11.6 user-arbitrated split: cards × contract × escalation;
-    -- melds × escalation only (immune to Sun ×2). See Rules.lua
-    -- R.ScoreRound for the full rationale + cross-check against
-    -- videos #32/#38's Hokm/Sun "100 vs 400" 1:4 ratio.
-    local contractMult = (c.type == K.BID_SUN) and K.MULT_SUN or K.MULT_BASE
-    local escalationMult = K.MULT_BASE
-    if     c.gahwa   then escalationMult = escalationMult * K.MULT_FOUR
-    elseif c.foured  then escalationMult = escalationMult * K.MULT_FOUR
-    elseif c.tripled then escalationMult = escalationMult * K.MULT_TRIPLE
-    elseif c.doubled then escalationMult = escalationMult * K.MULT_BEL end
-    local mult = contractMult * escalationMult
+    -- v0.11.10 revert to canonical: cards + melds × full mult (Sun×2
+    -- + escalation). v0.11.6 split was wrong per user-arbitrated rule.
+    local mult = K.MULT_BASE
+    if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
+    if     c.gahwa   then mult = mult * K.MULT_FOUR
+    elseif c.foured  then mult = mult * K.MULT_FOUR
+    elseif c.tripled then mult = mult * K.MULT_TRIPLE
+    elseif c.doubled then mult = mult * K.MULT_BEL end
 
     local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
@@ -2449,11 +2446,10 @@ function N.HostResolveTakweesh(callerSeat)
         end
     end
 
-    -- v0.11.6 user-arbitrated split: cards × full mult, melds ×
-    -- escalation only (immune to Sun's contract-mult), Belote fully
-    -- immune. Matches R.ScoreRound post-v0.11.6.
-    local rawA = cardA * mult + mpA * escalationMult
-    local rawB = cardB * mult + mpB * escalationMult
+    -- v0.11.10 revert to canonical: cards + melds × full mult.
+    -- Belote alone is multiplier-immune (added post-mult).
+    local rawA = (cardA + mpA) * mult
+    local rawB = (cardB + mpB) * mult
     if belote == "A" then rawA = rawA + K.MELD_BELOTE
     elseif belote == "B" then rawB = rawB + K.MELD_BELOTE end
 
@@ -3190,16 +3186,13 @@ function N.HostResolveSWA(callerSeat, callerHand)
         -- WITH THEM — does NOT transfer to opp. Opp only adds
         -- THEIR OWN melds × mult. Belote independent.
         local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-        -- v0.11.6 user-arbitrated split (matches R.ScoreRound +
-        -- HostResolveTakweesh): cards × full mult, melds ×
-        -- escalation only (immune to Sun's contract-mult).
-        local contractMult = (c.type == K.BID_SUN) and K.MULT_SUN or K.MULT_BASE
-        local escalationMult = K.MULT_BASE
-        if     c.gahwa   then escalationMult = escalationMult * K.MULT_FOUR
-        elseif c.foured  then escalationMult = escalationMult * K.MULT_FOUR
-        elseif c.tripled then escalationMult = escalationMult * K.MULT_TRIPLE
-        elseif c.doubled then escalationMult = escalationMult * K.MULT_BEL end
-        local mult = contractMult * escalationMult
+        -- v0.11.10 revert to canonical: cards + melds × full mult.
+        local mult = K.MULT_BASE
+        if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
+        if     c.gahwa   then mult = mult * K.MULT_FOUR
+        elseif c.foured  then mult = mult * K.MULT_FOUR
+        elseif c.tripled then mult = mult * K.MULT_TRIPLE
+        elseif c.doubled then mult = mult * K.MULT_BEL end
         local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         local cardA = (oppOfCaller == "A") and handTotal or 0
@@ -3242,11 +3235,10 @@ function N.HostResolveSWA(callerSeat, callerHand)
                 end
             end
         end
-        -- v0.11.6 user-arbitrated split: cards × full mult, melds ×
-        -- escalation only (immune to Sun's contract-mult), Belote fully
-        -- immune. Matches R.ScoreRound + HostResolveTakweesh post-v0.11.6.
-        local rawA = cardA * mult + mpA * escalationMult
-        local rawB = cardB * mult + mpB * escalationMult
+        -- v0.11.10 revert to canonical: cards + melds × full mult.
+        -- Belote alone is multiplier-immune (added post-mult).
+        local rawA = (cardA + mpA) * mult
+        local rawB = (cardB + mpB) * mult
         if beloteOwner == "A" then rawA = rawA + K.MELD_BELOTE
         elseif beloteOwner == "B" then rawB = rawB + K.MELD_BELOTE end
         -- v0.5.21 scoring-inconsistency fix: same div10 alignment

@@ -1015,54 +1015,52 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         elseif outcome == "B" then meldPoints.B = meldB end
     end
 
-    -- v0.11.6 user-arbitrated: split the multiplier into contract-side
-    -- (Sun ×2 / Hokm ×1) and escalation-side (Bel ×2, Triple ×3, Four
-    -- ×4, Gahwa ×4) so each can be applied to the correct scoring
-    -- bucket. Saudi rule:
-    --   • Card-trick points: × contract-mult × escalation-mult
-    --     (e.g., Sun 130 × 2 = 260; Hokm-Bel 162 × 2 = 324;
-    --     Sun-Bel 130 × 2 × 2 = 520)
-    --   • Declared melds (seq3/seq4/seq5/carré-other/carré-A): IMMUNE
-    --     to contract-mult (the Sun ×2). DO get escalation-mult
-    --     (Bel/Triple/Four). Belote (K+Q trump) is immune to ALL
-    --     multipliers (existing rule, unchanged).
-    --   • Cross-check #1: video #32/#38 say "Hokm-Carré-A = 100,
-    --     Sun-Carré-A = 400" — the 1:4 ratio between the named
-    --     values only holds if the Sun version is contract-mult-
-    --     immune (10 nq in Hokm vs 40 nq in Sun). Pre-v0.11.6
-    --     produced 1:8 (10 vs 80) — the /5 analogy in v0.10.0 R5
-    --     conflated contract-mult with the universal /10 divisor.
-    --   • Cross-check #2: an empty-meld fixture under any
-    --     contract+escalation combination produces unchanged raw
-    --     (since meldPoints=0 in the new formula reduces to
-    --     `cardX × contractMult × escalationMult` = previous
-    --     `cardX × mult`); test_rules.lua sections G/H/I/K all
-    --     use empty melds and continue to pass.
+    -- v0.11.10 user-arbitrated authoritative rule (CHANGELOG v0.11.10):
+    --   "sere is 4 points in sun and 2 in hokm, 50 is 10 points in
+    --    sun and 5 in hokm, 100 is 20 points in sun and 10 in hokm,
+    --    Carre-A is 40 points in sun and shifts to 10 in hokm as
+    --    there is no carre-A in hokm."
+    --
+    -- Decoded: ALL melds (sequence, carré-other, carré-A) get the
+    -- contract multiplier (Sun ×2) AND any active escalation mult
+    -- (Bel ×2, Triple ×3, Four ×4, Gahwa ×4). Cards and melds are
+    -- treated identically by the multiplier. ONLY Belote (K+Q of
+    -- trump) is multiplier-immune (added post-mult below).
+    --
+    -- Math sanity: K.MELD_CARRE_A_SUN=200 raw × Sun×2 / 10 = 40 nq ✓
+    --              K.MELD_SEQ3=20 raw × Sun×2 / 10 = 4 nq ✓
+    --              K.MELD_SEQ4=50 raw × Sun×2 / 10 = 10 nq ✓
+    --              K.MELD_SEQ5=100 raw × Sun×2 / 10 = 20 nq ✓
+    --              K.MELD_CARRE_OTHER=100 raw × Hokm×1 / 10 = 10 nq ✓
+    --
+    -- v0.11.6 history (now superseded): briefly attempted "melds
+    -- Sun-immune"; produced sere=2 / quarte=5 / quinte=10 / Carré-A=40
+    -- — broke sequence values vs canonical. The video #43 worked
+    -- examples (sere 20→4, quarte 50→10, quinte 100→20) and the
+    -- user's authoritative rule statement are the canonical reference.
+    -- v0.10.0 R5 history (now superseded): bumped K.MELD_CARRE_A_SUN
+    -- 200→400; produced 80 nq for Carré-A (2× canonical). Both
+    -- previous "fixes" were wrong; the original v0.4.x state (200 raw,
+    -- full Sun×2 application) was correct all along.
+    --
     -- v0.10.0 R2 defensive normalization preserved: Sun has NO
     -- Triple/Four/Gahwa rungs; stale flags on Sun collapse to Sun-Bel.
-    local contractMult = (contract.type == K.BID_SUN) and K.MULT_SUN or K.MULT_BASE
-    local escalationMult = K.MULT_BASE
+    local mult = K.MULT_BASE
     if contract.type == K.BID_SUN then
-        if contract.doubled then escalationMult = escalationMult * K.MULT_BEL end
+        mult = mult * K.MULT_SUN
+        if contract.doubled then mult = mult * K.MULT_BEL end
         -- intentionally ignore tripled/foured/gahwa on Sun (R2)
     else
-        if     contract.gahwa   then escalationMult = escalationMult * K.MULT_FOUR
-        elseif contract.foured  then escalationMult = escalationMult * K.MULT_FOUR
-        elseif contract.tripled then escalationMult = escalationMult * K.MULT_TRIPLE
-        elseif contract.doubled then escalationMult = escalationMult * K.MULT_BEL end
+        if     contract.gahwa   then mult = mult * K.MULT_FOUR
+        elseif contract.foured  then mult = mult * K.MULT_FOUR
+        elseif contract.tripled then mult = mult * K.MULT_TRIPLE
+        elseif contract.doubled then mult = mult * K.MULT_BEL end
     end
-    -- Combined multiplier kept as `mult` for backward-compat
-    -- (test_rules.lua section K pins res.multiplier; UI banner
-    -- modifiers row reads it as the displayed multiplier). The
-    -- combined value is what's applied to CARDS; melds use only
-    -- escalationMult below.
-    local mult = contractMult * escalationMult
 
-    -- Cards: full multiplier (contract × escalation).
-    -- Melds: escalation only (contract-immune).
-    -- Belote: post-everything, fully immune.
-    local rawA = cardA * mult + (meldPoints.A or 0) * escalationMult
-    local rawB = cardB * mult + (meldPoints.B or 0) * escalationMult
+    -- Cards and melds: both get full multiplier.
+    -- Belote: post-everything, fully immune (only meld type that's mult-immune).
+    local rawA = (cardA + (meldPoints.A or 0)) * mult
+    local rawB = (cardB + (meldPoints.B or 0)) * mult
 
     -- Belote: independent +20 raw, applied AFTER the multiplier.
     -- Pagat: "Baloot always 2 points unaffected" — Bel/Triple/Four/Sun multipliers
@@ -1111,19 +1109,17 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     end
 
     return {
-        teamPoints     = teamPoints,
-        meldPoints     = meldPoints,
-        lastTrickTeam  = lastTrickTeam,
-        bidderTeam     = bidderTeam,
-        bidderMade     = bidderMade,
-        sweep          = sweepTeam,
-        belote         = belote,
-        multiplier     = mult,            -- combined (contract × escalation)
-        contractMult   = contractMult,    -- v0.11.6: Sun ×2 or Hokm ×1
-        escalationMult = escalationMult,  -- v0.11.6: Bel/Triple/Four/Gahwa
-        gahwaWonGame   = gahwaWonGame,
-        gahwaWinner    = gahwaWinner,
-        raw            = { A = rawA, B = rawB },
-        final          = { A = div10(rawA), B = div10(rawB) },
+        teamPoints    = teamPoints,
+        meldPoints    = meldPoints,
+        lastTrickTeam = lastTrickTeam,
+        bidderTeam    = bidderTeam,
+        bidderMade    = bidderMade,
+        sweep         = sweepTeam,
+        belote        = belote,
+        multiplier    = mult,
+        gahwaWonGame  = gahwaWonGame,
+        gahwaWinner   = gahwaWinner,
+        raw           = { A = rawA, B = rawB },
+        final         = { A = div10(rawA), B = div10(rawB) },
     }
 end

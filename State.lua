@@ -1223,7 +1223,7 @@ function S.ApplyMeld(seat, kind, suit, top, encodedCards)
                 -- video #38 line 61, Carré-A in Hokm = 100 raw
                 -- (same as Carré-T/K/Q).
                 if s.contract and s.contract.type == K.BID_SUN then
-                    value = K.MELD_CARRE_A_SUN     -- 400 raw "الأربع مئة"
+                    value = K.MELD_CARRE_A_SUN     -- 200 raw → 200×Sun×2/10 = 40 nq
                 elseif s.contract and s.contract.type == K.BID_HOKM then
                     value = K.MELD_CARRE_OTHER     -- 100 raw, like T/K/Q
                 end

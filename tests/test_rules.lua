@@ -1597,108 +1597,140 @@ do
 end
 
 -- =====================================================================
--- S. v0.11.6 split-multiplier (R5 supersession)
+-- S. v0.11.10 canonical-rule scoring (R5 + v0.11.6 fully reverted)
 --
--- Saudi rule (user-arbitrated): cards × full mult; melds × escalation
--- only (immune to Sun's contract ×2); Belote × 1 (immune to all).
--- Cross-checks the user's reported scenario: Sun contract, opp has
--- Carré-A meld (400 raw), no escalation. Expected meld contribution =
--- 40 nq (= 400 / 10, no Sun×2). Pre-v0.11.6 produced 80 nq (1:8 ratio
--- against Hokm's 10 nq), contradicting videos #32/#38's "100 vs 400"
--- 1:4 framing.
+-- User-stated authoritative rule:
+--   sere   20 raw → Hokm 2 nq, Sun 4 nq
+--   quarte 50 raw → Hokm 5 nq, Sun 10 nq
+--   quinte 100 raw → Hokm 10 nq, Sun 20 nq
+--   Carré-A 200 raw → Sun 40 nq (Hokm: emits as Carré-other 100 raw → 10 nq)
+--
+-- All melds get full mult (Sun×2 + escalation). Belote alone is immune.
+--
+-- This section pins the canonical values directly via R.ScoreRound
+-- so any future regression of the rule (back to R5's 400, or v0.11.6's
+-- split, or any other variation) breaks loudly.
 -- =====================================================================
-section("S. v0.11.6 split-multiplier (R5 supersession)")
+section("S. v0.11.10 canonical-rule scoring (R5 + v0.11.6 reverted)")
 
--- S.0 — verify the split-multiplier fields are exposed on every
--- ScoreRound result regardless of contract/escalation combination.
+-- S.1 — K.MELD_CARRE_A_SUN = 200 (the canonical raw value).
 do
-    local res = R.ScoreRound(sweptTricks(1), hokm("H", 1), { A = {}, B = {} })
-    assertEq(res.contractMult, K.MULT_BASE, "S.0a: Hokm baseline contractMult = 1")
-    assertEq(res.escalationMult, K.MULT_BASE, "S.0b: no escalation = 1")
-    local res2 = R.ScoreRound(sweptTricks(1), sun(1, { doubled = true }), { A = {}, B = {} })
-    assertEq(res2.contractMult, K.MULT_SUN, "S.0c: Sun contractMult = 2")
-    assertEq(res2.escalationMult, K.MULT_BEL, "S.0d: Sun-Bel escalationMult = 2")
-    assertEq(res2.multiplier, K.MULT_SUN * K.MULT_BEL,
-             "S.0e: combined multiplier preserved (×4 for Sun-Bel)")
+    assertEq(K.MELD_CARRE_A_SUN, 200,
+             "S.1 (v0.11.10): K.MELD_CARRE_A_SUN = 200 raw (was 400 v0.10.0-v0.11.9)")
 end
 
--- S.1 — User-reported scenario reproduced as DIRECT MATH (matches
--- Net.lua HostResolveSWA invalid branch and HostResolveTakweesh).
--- Pre-v0.11.6 (R5): meld × Sun×2 / 10 = 80 nq. Post-v0.11.6: meld /
--- 10 = 40 nq. The user's reported 66/0 (was 106/0) split.
+-- S.2 — User-reported scenario: Sun SWA-fail with opp Carré-A meld.
+-- DIRECT MATH (matches Net.lua HostResolveSWA invalid branch +
+-- HostResolveTakweesh + R.ScoreRound formulas).
 do
-    local handTotal     = K.HAND_TOTAL_SUN              -- 130
-    local contractMult  = K.MULT_SUN                    -- 2
-    local escalationMult = K.MULT_BASE                   -- 1
-    local mult          = contractMult * escalationMult -- 2
-    local cardOpp       = handTotal                      -- penalty handed to opp
-    local meldOpp       = K.MELD_CARRE_A_SUN             -- 400
-    local rawOpp        = cardOpp * mult + meldOpp * escalationMult
-    local finalOpp      = math.floor((rawOpp + 5) / 10)
+    local handTotal = K.HAND_TOTAL_SUN          -- 130
+    local mult      = K.MULT_SUN                -- 2 (no escalation)
+    local cardOpp   = handTotal                 -- penalty handed to opp
+    local meldOpp   = K.MELD_CARRE_A_SUN        -- 200
+    local rawOpp    = (cardOpp + meldOpp) * mult
+    local finalOpp  = math.floor((rawOpp + 5) / 10)
     assertEq(rawOpp, 660,
-             "S.1a: SWA-fail Sun raw = 130×Sun×2 + 400×1 = 660")
+             "S.2a: SWA-fail Sun raw = (130 + 200) × Sun×2 = 660")
     assertEq(finalOpp, 66,
-             "S.1b: SWA-fail Sun final = 66 (was 106 under R5: meld got an extra ×2)")
-
-    -- Hokm/Sun ratio cross-check: same meld in Hokm baseline = 10 nq.
-    local hokmRaw = K.MELD_CARRE_OTHER * K.MULT_BASE   -- 100 raw, no mult
-    assertEq(math.floor((hokmRaw + 5) / 10), 10,
-             "S.1c: Hokm-Carré-A meld = 10 nq (1:4 ratio with Sun's 40 nq)")
+             "S.2b: SWA-fail Sun final = 66 (canonical user-arbitrated rule)")
 end
 
--- S.2 — Sun + Bel: melds DO get the escalation ×2 but NOT contractMult.
--- Carré-A meld 400 × Bel ×2 = 800 raw → 80 nq. Cards × Sun×2 × Bel×2.
--- Same direct-math approach as S.1.
+-- S.3 — Sere/Quarte/Quinte/Carré-other in Sun (canonical 4/10/20/20 nq).
 do
-    local handTotal     = K.HAND_TOTAL_SUN              -- 130
-    local contractMult  = K.MULT_SUN                    -- 2
-    local escalationMult = K.MULT_BEL                    -- 2 (Bel)
-    local mult          = contractMult * escalationMult -- 4
-    local cardOpp       = handTotal
-    local meldOpp       = K.MELD_CARRE_A_SUN             -- 400
-    local rawOpp        = cardOpp * mult + meldOpp * escalationMult
-    -- = 130 × 4 + 400 × 2 = 520 + 800 = 1320
+    -- Sere: 20 raw × Sun×2 / 10 = 4
+    assertEq(math.floor((K.MELD_SEQ3 * K.MULT_SUN + 5) / 10), 4,
+             "S.3a: Sere in Sun = 4 nq")
+    -- Quarte: 50 raw × Sun×2 / 10 = 10
+    assertEq(math.floor((K.MELD_SEQ4 * K.MULT_SUN + 5) / 10), 10,
+             "S.3b: Quarte in Sun = 10 nq")
+    -- Quinte: 100 raw × Sun×2 / 10 = 20
+    assertEq(math.floor((K.MELD_SEQ5 * K.MULT_SUN + 5) / 10), 20,
+             "S.3c: Quinte in Sun = 20 nq")
+    -- Carré-other: 100 raw × Sun×2 / 10 = 20 (same as quinte)
+    assertEq(math.floor((K.MELD_CARRE_OTHER * K.MULT_SUN + 5) / 10), 20,
+             "S.3d: Carré-other in Sun = 20 nq")
+    -- Carré-A: 200 raw × Sun×2 / 10 = 40
+    assertEq(math.floor((K.MELD_CARRE_A_SUN * K.MULT_SUN + 5) / 10), 40,
+             "S.3e: Carré-A in Sun = 40 nq (canonical 'أربع مئة')")
+end
+
+-- S.4 — Same melds in Hokm (canonical 2/5/10/10 nq).
+do
+    assertEq(math.floor((K.MELD_SEQ3 * K.MULT_BASE + 5) / 10), 2,
+             "S.4a: Sere in Hokm = 2 nq")
+    assertEq(math.floor((K.MELD_SEQ4 * K.MULT_BASE + 5) / 10), 5,
+             "S.4b: Quarte in Hokm = 5 nq")
+    assertEq(math.floor((K.MELD_SEQ5 * K.MULT_BASE + 5) / 10), 10,
+             "S.4c: Quinte in Hokm = 10 nq")
+    assertEq(math.floor((K.MELD_CARRE_OTHER * K.MULT_BASE + 5) / 10), 10,
+             "S.4d: Carré-other (incl Hokm-Carré-A via X5) = 10 nq")
+end
+
+-- S.5 — Sun + Bel escalation: full mult ×4 applies to both cards and melds.
+do
+    local mult      = K.MULT_SUN * K.MULT_BEL  -- 4
+    local cardOpp   = K.HAND_TOTAL_SUN          -- 130
+    local meldOpp   = K.MELD_CARRE_A_SUN        -- 200
+    local rawOpp    = (cardOpp + meldOpp) * mult
+    -- = (130 + 200) × 4 = 1320
     assertEq(rawOpp, 1320,
-             "S.2a: Sun-Bel raw = (130 × Sun×Bel) + (400 × Bel only) = 1320")
+             "S.5a: Sun-Bel raw = (130 + 200) × Sun×Bel(×4) = 1320")
     assertEq(math.floor((rawOpp + 5) / 10), 132,
-             "S.2b: Sun-Bel final = 132 (Bel ×2 doubles the meld; Sun ×2 still doesn't)")
+             "S.5b: Sun-Bel final = 132 nq")
 end
 
--- S.3 — Empty-meld fixture under Sun + escalation produces unchanged
--- raw scoring (matches pre-v0.11.6 because meldPoints=0 reduces the
--- formula to cards × full mult). This guards against accidental
--- breakage of test_rules.lua sections G/H/I/K, which all use empty
--- meld fixtures.
+-- S.6 — Empty-meld fixture under Sun + escalation produces unchanged
+-- raw scoring. Sections G/H/I/K all use empty melds — regression guard.
 do
-    -- Use buildTieTricks (Sun-Bel inverted bidder takes scenario from
-    -- section I): bidder raw = 130 × Sun×Bel = 520, no meld.
     local res = R.ScoreRound(buildTieTricks(),
                              sun(1, { doubled = true }), { A = {}, B = {} })
     assertEq(res.raw.A, K.HAND_TOTAL_SUN * K.MULT_SUN * K.MULT_BEL,
-             "S.3a: Sun-Bel empty meld raw unchanged from pre-v0.11.6 (520)")
+             "S.6: Sun-Bel empty meld raw = 130×4 = 520 (G/H/I/K compat)")
 end
 
--- S.4 — Hokm-Bel + 50-meld (quarte): meld DOES scale with Bel ×2.
--- Pre-v0.11.6: 50 × 2 / 10 = 10 nq. Post-v0.11.6 (escalation only):
--- 50 × Bel×2 / 10 = 10 nq. Same answer because Hokm has no
--- contract-mult to strip out. This pin guards against accidentally
--- breaking Hokm escalation scoring.
+-- S.7 — End-to-end via R.ScoreRound: Sun bidder fails, opp has Carré-A.
+-- Validates the meld actually flows through R.ScoreRound's outcome
+-- branches with the correct value.
 do
-    -- Direct math (the relevant invariant for Hokm)
-    local meldRaw = K.MELD_SEQ4 * K.MULT_BEL  -- 50 × 2 = 100
-    assertEq(math.floor((meldRaw + 5) / 10), 10,
-             "S.4: Hokm-Bel quarte meld = 10 nq (escalation applies normally)")
+    -- Build trick fixture where bidder team A fails (B takes 7 of 8 tricks).
+    local tricks = {}
+    local cards = fullDeck()
+    local idx = 1
+    for i = 1, 8 do
+        local plays = {}
+        for s = 1, 4 do
+            plays[#plays + 1] = { seat = s, card = cards[idx] }
+            idx = idx + 1
+        end
+        tricks[#tricks + 1] = {
+            winner = (i == 8) and 1 or 2,   -- A wins last; B wins 7
+            leadSuit = C.Suit(plays[1].card),
+            plays = plays,
+        }
+    end
+    local melds = {
+        A = {},
+        B = { { kind = "carre", value = K.MELD_CARRE_A_SUN, top = "A", len = 4, declaredBy = 2 } },
+    }
+    local res = R.ScoreRound(tricks, sun(1), melds)
+    assertEq(res.bidderTeam, "A", "S.7a: bidderTeam = A")
+    assertFalse(res.bidderMade, "S.7b: A fails the contract")
+    -- B gets handTotal × Sun×2 + Carré-A × Sun×2 = 130×2 + 200×2 = 660
+    -- minus B's actual cards earned (which are 130 since they took 7+last via fail-branch)
+    -- Actually fail branch: cardA = 0, cardB = handTotal = 130
+    -- meldPoints.A = 0 (forfeit by losers in regular fail), meldPoints.B = 200
+    -- raw.B = (130 + 200) × 2 = 660
+    -- But fail branch in R.ScoreRound says "each team keeps their own declared melds"
+    -- so meldPoints.A = meldA = 0, meldPoints.B = meldB = 200.
+    assertEq(res.raw.B, 660, "S.7c: B raw = (130 + 200) × Sun×2 = 660")
+    assertEq(res.final.B, 66, "S.7d: B final = 66 nq (matches user-arbitrated)")
 end
 
--- S.5 — Belote stays immune to ALL multipliers (existing rule
--- preserved). Verify via direct math: 20 raw post-mult / 10 = 2 nq
--- regardless of contract or escalation.
+-- S.8 — Belote stays immune to ALL multipliers (existing rule).
 do
-    -- Even under Sun-Bel ×4, Belote is +20 raw (added after mult).
-    local rawSun = 0 + K.MELD_BELOTE  -- 0 cards, just belote
-    assertEq(rawSun, 20, "S.5a: Belote raw = 20 in any contract")
-    assertEq(math.floor((rawSun + 5) / 10), 2,
-             "S.5b: Belote = 2 nq always (immune to all mults)")
+    -- Belote = 20 raw added post-mult, /10 = 2 nq always.
+    assertEq(math.floor((0 + K.MELD_BELOTE + 5) / 10), 2,
+             "S.8: Belote = 2 nq always (only multiplier-immune meld)")
 end
 
 -- =====================================================================

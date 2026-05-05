@@ -34,19 +34,25 @@ local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 -- bidding mediocre 3-card suits in the second window.
 local TH_HOKM_R1_BASE = 42
 local TH_HOKM_R2_BASE = 36
--- v0.10.6 Lever A (review_v0.10.2 BIDDING_CALIBRATION_v0.10.5.md §8.2):
--- 50 → 47. Secondary calibration step for Sun confidence — paired
--- with v0.10.4's K.BOT_SUN_MARDOOFA_BONUS bump, this moves the
--- "S-B confident A+T mardoofa pair + 2-Ace" hand from ~38% jitter-
--- clear to ~75% jitter-clear. NOT enough to close the S-A "single-
--- mardoofa مجازف" gap (sunStrength=22 vs threshold=47 — gap of 25
--- still too wide for a threshold tweak; would need a sunStrength
--- formula rebalance which is risk-laden and deferred to v0.10.7+
--- if real-play data still shows S-A under-firing). Per 200k-trial
--- Monte Carlo: bumps `sunMinShape AND sun >= TH` rate from 4.03% to
--- 5.39% — small but real. Per-bot Sun bid rate moves 16.76% →
--- 22.11%, a +5.4pp lift on top of v0.10.4's +1pp.
-local TH_SUN_BASE     = 47
+-- v0.10.6 Lever A: 50 → 47 (secondary calibration step for Sun
+-- confidence, paired with v0.10.4 mardoofa bonus bump).
+-- v0.11.9: paired with K.BOT_SUN_MARDOOFA_BONUS 10 → 20 + void-cap
+-- 18 → 8. Predicted ~50% A+T-mardoofa Sun bid rate.
+-- v0.11.10 user-arbitrated bidcalc trace evidence + audit BotU-16:
+-- the v0.11.9 prediction was wrong because BID_JITTER is ±6 (not
+-- ±25 as the v0.11.9 CHANGELOG assumed). At urgency=0:
+--   Hand [QS TH AH 8C KH] sunStrength = 40, threshold band 41-53
+--   → 0% fire rate (predicted 60%).
+-- Drop to 40 to bring the threshold band to 34-46, restoring the
+-- predicted Sun-bid rate on canonical A+T mardoofa hands. Math:
+--   Hand [QS TH AH 8C KH] (sun=40) vs band 34-46 → fires when
+--     jitter ≤ 0 (about 50% of jitter outcomes).
+--   Hand [8H JC AC TC 7S] (sun=35) vs band 34-46 → fires when
+--     jitter ≤ -5 (about 10-15%).
+--   Hand [AS KH KC JH AD] (sun=24, 2-Ace-no-mardoofa) → 0%
+--     (correctly conservative).
+--   Weak A+T (sun~27) → 0% (correctly conservative).
+local TH_SUN_BASE     = 40
 local BID_JITTER      = 6   -- ±6 swing per call
 
 -- Advanced-bots feature flag. Off by default; toggle via
