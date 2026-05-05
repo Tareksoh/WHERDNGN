@@ -1,5 +1,191 @@
 # Changelog
 
+## v0.10.3 — review_v0.10.2 audit closures (CRIT + 8 HIGH + 7 doc + 4 follow-ups)
+
+Multi-track ~95-agent audit cycle (Tracks A through G + synthesis)
+covering 114 reports surfaced one CRIT-class production defect and
+a cluster of HIGH-severity heuristic mis-scopings. Combined with
+in-flight stash work and §9 low-risk follow-ups, this release closes:
+
+- **1 CRIT** (resync dead in production via wire-tag collision)
+- **6 HIGH code fixes** (4 from fork audit + my implicit-AKA closure
+  + SWA pause re-arm refactor)
+- **7 doc fixes** (Mathlooth revert + saudi-rules cleanup + glossary
+  phantom-constant removal)
+- **3 low-risk follow-ups** (dead anti-rule deletion, F-30b secondary
+  trigger, hardcoded UI glyph)
+- **1 UI label cleanup** (last hardcoded Arabic glyph)
+
+All gated by 367 / 367 tests.
+
+### Fixed (CRIT-1 — wire-tag collision; resync dead in production)
+
+- **`Constants.lua:229`**: `K.MSG_OVERCALL_RESOLVE` collided with
+  `K.MSG_RESYNC_REQ` (both `"?"`). Net.lua's dispatch chain hits
+  OVERCALL_RESOLVE first → every `?` tag misrouted →
+  `_OnResyncReq` was permanently unreachable. **Multiplayer rejoin
+  / snapshot recovery has been silently broken since the overcall
+  feature landed in v0.7.0.** Reassigned OVERCALL_RESOLVE to `"!"`.
+- **`tests/test_rules.lua` Section R**: regression pin asserting
+  (a) the specific collision is gone and (b) the broader invariant
+  that every `K.MSG_*` constant has a unique byte value, so future
+  tag additions can't reintroduce a silent dispatcher collision.
+
+#### Cross-version compatibility (mitigated)
+
+The `"?"` → `"!"` reassignment was paired with bidirectional
+backward-compat so v0.10.2 ↔ v0.10.3 lobbies don't soft-lock at
+`PHASE_OVERCALL`:
+
+- **v0.10.3 host → v0.10.2 client**: `N.SendOvercallResolve`
+  dual-emits BOTH the canonical `"!"` tag AND a legacy `"?"`-shaped
+  frame so v0.10.2 clients (which only know `"?"`) still receive
+  the resolve. v0.10.3 clients see both; the second arrival hits
+  the idempotent `_OnOvercallResolve` (state already cleared) so
+  it's a benign no-op.
+- **v0.10.2 host → v0.10.3 client**: the dispatcher's `"?"` branch
+  payload-shape-disambiguates. RESYNC_REQ is 2 fields
+  (`"?;{gameID}"`); OVERCALL_RESOLVE is 4 fields
+  (`"?;{taken};{by};{type}"`). 4-field `"?"` payloads route to
+  `_OnOvercallResolve`; 2-field route to `_OnResyncReq`.
+
+Net result: v0.10.2 ↔ v0.10.3 lobbies work in both directions
+without coordinating upgrades. The dual-emit is eligible to be
+dropped in v0.11.0 once v0.10.2 ages out of the install base.
+
+### Fixed (HIGH — heuristic scoping / variable-shadowing bugs)
+
+- **`Bot.lua:1705` `pickLead`** (B-Bot-* HIGH): pre-v0.10.3 the
+  `isBidderTeam` predicate gated on `contract.type == K.BID_HOKM`,
+  silently returning FALSE for ALL Sun contracts. This bypassed
+  every downstream Sun branch — including Sun sweep-pursuit-early
+  citing `K.AL_KABOOT_SUN = 220` (×2 = 440 effective). The check
+  is purely about team relationship; type-gates already exist at
+  each downstream use site. Removed the type clause.
+- **`Bot.lua:2128` `bidderTeam` undefined** (B-Bot-08, HIGH):
+  the conservativeOpp loop referenced an undefined `bidderTeam`,
+  resolved to `nil` by Lua → `R.TeamOf(s2) ~= nil` always true →
+  team-gate was a no-op (the loop accepted ANY seat with
+  `styleTrumpTempo == -1`, including bidder-team). Defined locally
+  inside the existing `contract.bidder` non-nil guard.
+- **`Bot.lua:2964-2992` Faranka F-16 K-cover scope** (A-Src-29 +
+  D-RT-03 S-1, HIGH): F-16 ("no K of trump → don't Faranka") was
+  firing uniformly across all Hokm Faranka exceptions even though
+  its threat model — opp A-of-trump punishment of the withheld
+  card — is **structurally extinct on Exception #4** (both opps
+  observed-void in trump). Scoped F-16 to skip when `oppsVoidPath`
+  is true. Source-C confirms F-16 is purely a Sun anti-rule from
+  video #06; the v0.10.0 X3 import to all Hokm exceptions was
+  over-tight per A-Src-29.
+- **`BotMaster.lua:830`** (E-Det-01 #7, B-BotMaster-01 F1, HIGH):
+  Saudi-Master tier's outer driver passed 5 args to
+  `R.IsLegalPlay`, omitting the optional 6th `akaCalled`. Real-
+  state legal filtering ignored M4 AKA-receiver relief — the
+  bot's own legal set was AKA-blind, defeating the v0.10.2 M4
+  fix at the canonical case. Added `S.s.akaCalled` as 6th arg.
+  (Inner rollouts intentionally pass nil for sim-blind AKA
+  semantics.)
+- **`Rules.lua` `R.IsLegalPlay` implicit-AKA extension**: companion
+  closure to the BotMaster fix. The v0.10.2 M4 relief honored only
+  the explicit `s.akaCalled` banner; partner's bare-A lead in Hokm
+  non-trump (the IMPLICIT AKA per S6-6 / video #18) didn't fire
+  any banner because `Bot.PickAKA`'s `r=="A"` early-return
+  suppresses it. Without legality recognition, the bot's pickFollow
+  implicit-AKA branch had the same dead-discards-filter shape as
+  the pre-v0.10.2 explicit case. Detect the implicit pattern from
+  the lead card itself: partner-led + non-trump + Ace + Hokm =
+  same relief.
+- **`Net.lua` SWA pause-soft-lock re-arm refactor** (E-Net-01,
+  HIGH): three SWA timer sites (LocalSWA at ~2546, _OnSWAReq at
+  ~2691, bot-fired at ~4059) had pause-handling shapes that all
+  leaked under multi-cycle pause-toggles within one window. The
+  bot-fired site bare-exited on `S.s.paused` with no re-arm at
+  all (single pause = permanent soft-lock). The other two sites
+  had a one-step re-arm whose inner timer also bare-exited on
+  pause (two pauses within one window = soft-lock). All three
+  refactored to named functions that recursively re-arm
+  themselves, mirroring the OVERCALL_TIMEOUT pattern at line
+  ~1195. Each pause cycle now resets to a fresh full
+  `SWA_TIMEOUT_SEC` window from resume.
+
+### Doc (review_v0.10.2 source-cite corrections)
+
+- **`saudi-rules.md`**: Carré-A in Sun melds-table 200 → 400 (the
+  table was self-contradicting v0.10.0 R5's prose); SWA paragraph
+  rewritten — v0.5.17 routes ALL SWA calls through the 5-sec
+  permission window, the pre-v0.5.17 "≤3 instant" branch is gone
+  in code; failed-bid scoring corrected per «مشروعي لي ومشروعك لك»
+  (each team keeps its own declared melds, only trick-points flow
+  to winner — v0.4.3+ encoded this); stale `Rules.lua` line refs
+  refreshed.
+- **`decision-trees.md` + `glossary.md` Mathlooth REVERTED to
+  K-tripled** (A-Src-06 + C-Xref-07): v0.10.0 R7 flipped this from
+  K-tripled to J-tripled citing wrong Sun rank order. Video #17
+  is unambiguous: «اول شيء عندك اكه بعدها عشره بعدها شايب» —
+  Saudi Sun rank is **A > T > K > Q > J > 9 > 8 > 7**. K-tripled
+  (مثلوث الشايب) is canonical; J/Q-tripled are lower-probability
+  variants per the same video. Filename `17_k_tripled` was
+  correct all along. R7's "romanization-error" framing was
+  itself the error.
+- **`glossary.md` phantom-constant cleanup**: removed references
+  to non-existent constants (`K.MSG_HOKM`, `K.PHASE_HOKM`,
+  `K.MULT_HOKM`, `K.MSG_SUN`, `K.PHASE_SUN`, `K.MSG_BEL`).
+  Hokm/Sun share `K.MSG_BID = "B"` with type discriminator;
+  Hokm uses `K.MULT_BASE = 1`; Bel uses `K.MSG_DOUBLE = "X"`.
+
+### Cleanup (low-risk follow-ups per review §9)
+
+- **Deleted dead rule-7 anti-trigger** at `Bot.lua:3005-3024`
+  (A-Src-29 + D-RT-03 S-5): the "opp bidder led trump-Q AND we
+  hold J+8 → cancel Faranka" anti-trigger was both sourceless
+  (F-39 / J+8-vs-Q absent from #04 Hokm corpus) and structurally
+  dead post-v0.10.0 (bidder-team gates on Exceptions #2/#3 and
+  F-16 K-cover veto on Exception #4 made the path unreachable
+  with `farankaTriggered = true` AND opp-bidder-led-Q). Removed.
+- **F-30b secondary trigger** (G-Logic-01 §1): extended Exception
+  #4 (`oppsVoidPath`) to also fire when
+  `S.HighestUnplayedRank(trump) == nil` — the structurally-
+  extinct case where the entire trump pool has been played out.
+  Per-opp `void[trump]` flags are only set on observed
+  fail-to-follow; trump-led consumption can exhaust the pool
+  without ever surfacing a void → no opp can ruff regardless.
+- **`UI.lua:1952` قبلك hardcoded glyph** (E-UI-01-2): replaced
+  raw Arabic with Latin "Qablak" since WoW's bundled fonts
+  (Arial Narrow / Frizz / Skurri) don't render Arabic glyphs.
+  Same pattern as the AKA button at line 2046. Last remaining
+  hardcoded Arabic glyph in v0.10.2's UI label set.
+
+### Tests
+
+- **`tests/test_rules.lua` Section Q.9-Q.11**: implicit-AKA
+  legality relief (partner bare-A lead grants relief; opp bare-A
+  doesn't; bare-K isn't Ace).
+- **`tests/test_rules.lua` Section R**: wire-tag distinctness
+  pin (CRIT-1 specific + invariant for all `K.MSG_*`).
+- **367 / 367 pass** (up from 362 baseline).
+
+### Deferred to v0.10.4 (per review §9)
+
+- `S.s.swaDenied` UI banner read (UI component design needed).
+- Sun-Mathlooth-K pos-4 smother gate (G-Logic-01 §3 — needs
+  Mathlooth-suit hand-shape detection).
+- Reverse Al-Kaboot rewrite (`K.AL_KABOOT_REVERSE = 88` constant +
+  bidder-led-trick-1 gate).
+- Bargiya inner-discriminator axis flip (event-count → hand-shape).
+- ISMCTS akaCalled-respecting sample pool (E-Det-01 #2c).
+- Backported MED-severity fixes (Net.lua M5 / H3 / R2; State.lua M3
+  false-AKA wipe; `S.GetLegalPlays` AKA-blind).
+
+### References
+
+Audit reports under `.swarm_findings/review_v0.10.2/`:
+- `_track_A_sources/A-Src-01..30` (verbatim Arabic re-extracts)
+- `_track_B_code/` (per-function audits)
+- `_track_C_xref/C-Xref-01..07` (cross-references / doc-drift)
+- `_track_D_redteam/D-RT-01..32` (adversarial probes)
+- `_track_E_ux/E-Det-01` (ISMCTS determinism)
+- `REVIEW_v0.10.2.md` (~250-line synthesis)
+
 ## v0.10.2 — review-cycle MEDIUM/LOW closures (M3+M4+M7+M8+L3)
 
 Five items from the v0.10.0 source-of-truth review closed in one

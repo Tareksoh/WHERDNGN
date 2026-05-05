@@ -112,12 +112,35 @@ function R.IsLegalPlay(card, hand, trick, contract, seat, akaCalled)
     -- time; simulators pass nil and get the AKA-blind semantics.
     -- This relief applies BEFORE must-follow / must-trump checks
     -- so a void+trump receiver may discard freely.
+    --
+    -- v0.10.3 M4-extension — implicit-AKA relief (S6-6, video #18).
+    -- Saudi convention: partner leading the bare A of a non-trump
+    -- suit in Hokm IS the implicit AKA call ("ace + lead = I have
+    -- the boss"). No MSG_AKA banner fires (Bot.PickAKA's r=="A"
+    -- early-return at line ~3214). pickFollow detects this at
+    -- Bot.lua:2475-2492 but the discards filter was still empty
+    -- in the canonical void+trump case because legality didn't
+    -- honor the implicit signal — same dead-code shape as the
+    -- pre-v0.10.2 explicit-AKA bug. Detect from the lead card
+    -- itself: partner-led + non-trump + Ace = same relief as
+    -- explicit AKA. Symmetric closure to BotMaster.lua:830 fix.
     local akaRelief = false
     if akaCalled and akaCalled.seat and akaCalled.suit
        and seat and R.Partner(seat) == akaCalled.seat
        and akaCalled.suit == leadSuit
        and contract and contract.type == K.BID_HOKM then
         akaRelief = true
+    end
+    if not akaRelief and seat
+       and contract and contract.type == K.BID_HOKM and contract.trump
+       and leadSuit and leadSuit ~= contract.trump
+       and trick.plays[1] then
+        local lead = trick.plays[1]
+        if lead.seat and R.Partner(seat) == lead.seat
+           and C.Rank(lead.card) == "A"
+           and C.Suit(lead.card) == leadSuit then
+            akaRelief = true
+        end
     end
 
     -- Do we have any card of leadSuit?

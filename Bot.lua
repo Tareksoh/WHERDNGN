@@ -1702,8 +1702,16 @@ end
 
 local function pickLead(legal, contract, seat)
     local myTeam = R.TeamOf(seat)
-    local isBidderTeam = (contract.type == K.BID_HOKM
-                          and myTeam == R.TeamOf(contract.bidder))
+    -- v0.10.3 audit (B-Bot-* HIGH): pre-v0.10.3 this predicate
+    -- gated on `contract.type == K.BID_HOKM`, making isBidderTeam
+    -- always FALSE in Sun. Downstream branches that test
+    -- `isBidderTeam` (sweep-pursuit-early at 1727, defender style
+    -- reads at 1984/2248) silently bypassed all Sun contracts —
+    -- including the explicit Sun-Kaboot pursuit branch citing
+    -- K.AL_KABOOT_SUN=220 (×2=440) at lines 1723-1724. The check
+    -- is purely about team relationship; type-gates are applied
+    -- separately at each downstream use site (e.g. 1764, 2262).
+    local isBidderTeam = (myTeam == R.TeamOf(contract.bidder))
     local isBidder = (seat == contract.bidder)
 
     -- v0.5.1 C-4: last-trick targeting at lead. On trick 8 there's no
@@ -2125,6 +2133,14 @@ local function pickLead(legal, contract, seat)
         -- defender team" gap, MASTER_REPORT.md B-57/B-71.
         if Bot.IsM3lm() and contract.type == K.BID_HOKM
            and contract.trump and contract.bidder then
+            -- v0.10.3 audit (B-Bot-08, HIGH): pre-v0.10.3 the loop body
+            -- referenced an undefined `bidderTeam`, which Lua resolved
+            -- to nil. `R.TeamOf(s2) ~= nil` is always true for valid
+            -- seats, so the team-gate was a no-op — the conservativeOpp
+            -- check accepted ANY seat (including bidder-team) with
+            -- styleTrumpTempo == -1. Define bidderTeam locally; the
+            -- outer `contract.bidder` non-nil gate makes R.TeamOf safe.
+            local bidderTeam = R.TeamOf(contract.bidder)
             local conservativeOpp = false
             for s2 = 1, 4 do
                 if R.TeamOf(s2) ~= bidderTeam
@@ -2940,6 +2956,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- the risk-free Faranka when both opps are void — partner
         -- of the bidder also qualifies. Pre-v0.10.0 the partner
         -- silently fell through to natural play, missing the EV.
+        local oppsVoidPath = false  -- v0.10.3 audit: tracks Exc-#4 trigger
         if not farankaTriggered and onBidderTeam then
             local oppTrumpExhausted = true
             for s2 = 1, 4 do
@@ -2951,7 +2968,29 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
             end
-            if oppTrumpExhausted then farankaTriggered = true end
+            if oppTrumpExhausted then
+                farankaTriggered = true
+                oppsVoidPath = true
+            end
+            -- v0.10.3 F-30b secondary trigger (review_v0.10.2 G-Logic-01 §1).
+            -- The per-opp `void[trump]` flag misses the structurally-
+            -- extinct case where the entire trump pool has been played
+            -- out (S.HighestUnplayedRank(trump) == nil). Per-opp voids
+            -- are only set after we OBSERVE that opp fail-to-follow on
+            -- a trump-led trick; if trump are exhausted via trump-led
+            -- consumption (we played J+9+K+Q etc.), opps may have
+            -- followed every trump-led trick without ever revealing
+            -- a trump void, leaving Bot._memory[opp].void[trump] false
+            -- even though no opp can punish us. HighestUnplayedRank
+            -- consults playedCardsThisRound and is deterministic — a
+            -- canonical "no opp can ruff" check that doesn't depend
+            -- on opp-void observation.
+            if not farankaTriggered and onBidderTeam
+               and S.HighestUnplayedRank
+               and S.HighestUnplayedRank(contract.trump) == nil then
+                farankaTriggered = true
+                oppsVoidPath = true
+            end
         end
 
         -- v0.10.0 X3 anti-rule F-16 (review_v0.10.0/xref_X3_*.md):
@@ -2961,7 +3000,18 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- defensive backbone (any opponent A-of-trump punishes the
         -- preserved card directly). Pre-v0.10.0 the code accepted
         -- T-as-cover when K was absent — F-16 violated.
-        if farankaTriggered then
+        --
+        -- v0.10.3 audit (A-Src-29 + D-RT-03 S-1, HIGH): scope F-16
+        -- to threat-model-live cases. F-16's premise — "opp can
+        -- still punish the withheld trump" — is structurally
+        -- extinct on Exception #4 (`oppsVoidPath`): when both opps
+        -- are observed-void in trump, no opp holds a punishing
+        -- card regardless of whether we hold K. Pre-v0.10.3 this
+        -- gate fired uniformly across exceptions, vetoing
+        -- legitimate F-30b risk-free Farankas on K-less hands.
+        -- Sources: D-RT-03 S-1 Option A (per-exception scoping);
+        -- A-Src-29 confirms F-16 is absent from #04 Hokm corpus.
+        if farankaTriggered and not oppsVoidPath then
             local hasKtrump = false
             for _, c in ipairs(hand) do
                 if C.IsTrump(c, contract) and C.Rank(c) == "K" then
@@ -2971,26 +3021,20 @@ local function pickFollow(legal, hand, trick, contract, seat)
             if not hasKtrump then farankaTriggered = false end
         end
 
-        -- Anti-trigger (rule 7): opp bidder led trump-Q + we hold J+8.
-        if farankaTriggered and trick.leadSuit == contract.trump
-           and trick.plays and trick.plays[1] then
-            local lead = trick.plays[1]
-            if lead.seat == contract.bidder
-               and R.TeamOf(lead.seat) ~= R.TeamOf(seat)
-               and C.Rank(lead.card) == "Q" then
-                local hasJ, has8 = false, false
-                for _, c in ipairs(hand) do
-                    if C.IsTrump(c, contract) then
-                        local r = C.Rank(c)
-                        if r == "J" then hasJ = true
-                        elseif r == "8" then has8 = true end
-                    end
-                end
-                if hasJ and has8 then
-                    farankaTriggered = false
-                end
-            end
-        end
+        -- v0.10.3 deletion (review_v0.10.2 §9 follow-up #3, A-Src-29
+        -- + D-RT-03 S-5): the former rule-7 anti-trigger here ("opp
+        -- bidder led trump-Q AND we hold J+8 → cancel Faranka") was
+        -- removed for two reasons: (a) sourceless — F-39 / J+8-vs-Q
+        -- doesn't appear in the #04 Hokm corpus per A-Src-29; (b)
+        -- structurally dead post-v0.10.0 — the bidder-team gates
+        -- on Exceptions #2/#3 (v0.9.2 #49 + v0.10.0 X3) and the
+        -- F-16 K-cover veto on Exception #4 mean the only path
+        -- where farankaTriggered is true with opp-bidder-led-Q is
+        -- already vetoed upstream. The bidder-team gate forbids
+        -- our team from triggering when the lead was an opp's, so
+        -- the predicate `R.TeamOf(lead.seat) ~= R.TeamOf(seat)`
+        -- under `farankaTriggered=true` was unreachable. Removing
+        -- closes a sourceless dead branch.
 
         if farankaTriggered then
             -- Find a non-winner to play. Prefer non-trump non-winner

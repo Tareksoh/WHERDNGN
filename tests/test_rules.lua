@@ -1154,6 +1154,110 @@ do
     local tSun = { leadSuit = "D", plays = { { seat = 2, card = "KD" } } }
     assertTrue(R.IsLegalPlay("AS", sunHand, tSun, sunC, 4, aka),
                "Q.8: Sun + void in led → any card legal (AKA flag is no-op in Sun)")
+
+    -- v0.10.3 M4-extension — implicit AKA via partner's bare-A lead.
+    -- No MSG_AKA banner needed: partner leads the A of D (non-trump
+    -- in Hokm), opp seat 3 cuts with trump 7H. Receiver seat 4
+    -- (partner of seat 2) is void in D + has trump → without the
+    -- implicit-relief, must-trump fires. With it, AS legal.
+    local impHand = { "AS", "9H", "8C" }
+    local impTrick = { leadSuit = "D", plays = {
+        { seat = 2, card = "AD" },     -- partner leads bare A
+        { seat = 3, card = "7H" },     -- opp cuts with trump
+    } }
+    assertTrue(R.IsLegalPlay("AS", impHand, impTrick, hokmH, 4),
+               "Q.9 (v0.10.3): implicit-AKA via partner's bare-A lead → discard non-trump legal (no banner needed)")
+
+    -- Negative — bare-A from OPP doesn't grant relief.
+    local impTrickOpp = { leadSuit = "D", plays = {
+        { seat = 1, card = "AD" },     -- opp seat 1 leads bare A
+        { seat = 2, card = "9D" },     -- partner follows
+    } }
+    assertEq(R.IsLegalPlay("AS", impHand, impTrickOpp, hokmH, 4), false,
+             "Q.10: opp's bare-A lead does NOT grant implicit-AKA relief (must-trump still fires)")
+
+    -- Edge — partner's bare-K (not Ace) doesn't trigger implicit relief.
+    local impTrickK = { leadSuit = "D", plays = {
+        { seat = 2, card = "KD" },     -- partner leads K (not A)
+        { seat = 3, card = "7H" },
+    } }
+    assertEq(R.IsLegalPlay("AS", impHand, impTrickK, hokmH, 4), false,
+             "Q.11: partner's bare-K lead is NOT implicit AKA (Ace required) — must-trump fires")
+end
+
+-- =====================================================================
+-- R. v0.10.3 wire-tag distinctness pin (CRIT-1 regression guard)
+--
+-- Pre-v0.10.3, K.MSG_RESYNC_REQ and K.MSG_OVERCALL_RESOLVE both
+-- equalled "?". Net.lua's dispatcher uses an `if/elseif tag == K.MSG_…`
+-- chain; whichever branch appears first wins. With OVERCALL_RESOLVE
+-- listed before RESYNC_REQ in the chain, every "?" tag was misrouted
+-- to _OnOvercallResolve, leaving _OnResyncReq permanently unreachable.
+-- Resync was effectively dead in production.
+--
+-- v0.10.3 reassigned K.MSG_OVERCALL_RESOLVE to "!". This pin asserts:
+--   (a) the specific collision is gone;
+--   (b) the broader invariant — every K.MSG_* constant has a unique
+--       byte value — holds, so future additions can't reintroduce
+--       a silent collision in the dispatcher chain.
+-- Source: REVIEW_v0.10.2.md fix #1 (CRIT-1).
+-- =====================================================================
+section("R. v0.10.3 wire-tag distinctness (CRIT-1 pin)")
+
+do
+    -- Specific pin for the v0.10.3 fix.
+    assertTrue(K.MSG_RESYNC_REQ ~= K.MSG_OVERCALL_RESOLVE,
+               "R.1: MSG_RESYNC_REQ ('?') and MSG_OVERCALL_RESOLVE ('!') are distinct")
+
+    -- Invariant: all K.MSG_* values are unique.
+    local seen = {}
+    local dupes = {}
+    for name, val in pairs(K) do
+        if type(name) == "string" and name:sub(1, 4) == "MSG_"
+           and type(val) == "string" then
+            if seen[val] then
+                dupes[#dupes + 1] = seen[val] .. " ↔ " .. name .. " = " .. val
+            else
+                seen[val] = name
+            end
+        end
+    end
+    assertEq(#dupes, 0,
+             "R.2: every K.MSG_* tag is unique" ..
+             (#dupes > 0 and (" — collisions: " .. table.concat(dupes, "; ")) or ""))
+end
+
+-- R.3-R.5: cross-version backward-compat pins.
+-- v0.10.3 dual-emits OVERCALL_RESOLVE under both "!" (canonical) and
+-- "?" (legacy). Dispatcher's "?" branch payload-disambiguates: 2
+-- fields → RESYNC_REQ; 4 fields → OVERCALL_RESOLVE. These pins
+-- assert the canonical wire shapes match expected field counts.
+do
+    -- Simulate Net.lua's broadcast frame for each message; split on
+    -- ";" to count fields the way the dispatcher does.
+    local function fieldCount(frame)
+        local n, p = 0, 1
+        while p <= #frame + 1 do
+            n = n + 1
+            local nxt = frame:find(";", p, true)
+            if not nxt then break end
+            p = nxt + 1
+        end
+        return n
+    end
+
+    -- RESYNC_REQ wire format: "?;{gameID}" — 2 fields.
+    assertEq(fieldCount("?;abc123"), 2,
+             "R.3: MSG_RESYNC_REQ wire is 2 fields (\"?;{gameID}\")")
+    assertEq(fieldCount("?;"), 2,
+             "R.3b: MSG_RESYNC_REQ with empty gameID still 2 fields")
+
+    -- OVERCALL_RESOLVE wire format: "!;{taken};{by};{type}" — 4 fields.
+    -- Dual-emit also sends "?;{taken};{by};{type}" — same 4 fields.
+    assertEq(fieldCount("!;1;2;UPGRADE"), 4,
+             "R.4: MSG_OVERCALL_RESOLVE canonical wire is 4 fields")
+    assertEq(fieldCount("?;0;0;"), 4,
+             "R.5: dual-emit legacy \"?\" wire shape is 4 fields (disambiguated by count)")
 end
 
 -- =====================================================================

@@ -1942,14 +1942,21 @@ local function renderActions()
         end
     elseif S.s.phase == K.PHASE_PREEMPT then
         -- Triple-on-Ace pre-emption (الثالث): earlier seats may claim
-        -- the Sun bid for themselves. "قبلك" = "before you" / "I'll take it".
+        -- the Sun bid for themselves. Saudi name "قبلك" ("before you" /
+        -- "I'll take it") rendered as Latin "Qablak" because WoW's
+        -- bundled fonts (Arial Narrow / Frizz / Skurri) don't include
+        -- Arabic glyphs — Arabic chars in a button label render as
+        -- empty boxes. Same pattern as the AKA button at line 2046.
+        -- v0.10.3 UI fix (review_v0.10.2 E-UI-01-2): pre-v0.10.3 used
+        -- raw Arabic glyph here, the only remaining hardcoded glyph
+        -- in v0.10.2's UI label set.
         if S.s.preemptEligible and S.s.localSeat then
             local eligible = false
             for _, s2 in ipairs(S.s.preemptEligible) do
                 if s2 == S.s.localSeat then eligible = true; break end
             end
             if eligible then
-                addConfirmAction("|cff66ddffقبلك (Pre-empt)|r",
+                addConfirmAction("|cff66ddffQablak (Pre-empt)|r",
                     "|cffff7755Take this Sun for yourself?|r",
                     function() net().LocalPreempt() end)
                 addAction("Pass",

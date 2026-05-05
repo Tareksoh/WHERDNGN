@@ -52,7 +52,7 @@ basics.
 | Carré J | 200 | 100 — `K.MELD_CARRE_OTHER` (Saudi: J carré scores like T/K/Q at any contract, NOT 200; "trump-implicit" wording in earlier docs was incorrect — code is right). |
 | Carré 9 | 150 | **disallowed** — `K.CARRE_RANKS` excludes "9" |
 | Carré A,T,K,Q | 100 | 100 — `K.MELD_CARRE_OTHER` |
-| Carré A in Sun | n/a | **200 (الأربع مئة, "Four Hundred")** — `K.MELD_CARRE_A_SUN` |
+| Carré A in Sun | n/a | **400 (الأربع مئة, "Four Hundred")** — `K.MELD_CARRE_A_SUN` (v0.10.0 R5; see Q3 below) |
 | Belote (K+Q trump) | 20 | 20 — `K.MELD_BELOTE`, **scored independently of multiplier** |
 
 - **No "running announcement" rule** in Saudi; melds simply declared
@@ -93,9 +93,17 @@ your opponent's.
     convention in either case.
 - **SWA (سوا)** — slam-with-ace. The caller asserts they will win
   every remaining trick.
-  - ≤3 cards remaining: instant claim.
-  - 4: caller asks opponents for permission (5-sec auto-approve).
-  - 5+: caller MUST تستاذن (request permission) — mandatory.
+  - **Code (since v0.5.17):** ALL SWA calls — regardless of card
+    count — route through the 5-sec permission window so the
+    caller's hand is visible to all players. The pre-v0.5.17
+    "≤3 instant" branch was removed per user requirement
+    (see `Net.lua:2473-2502`).
+  - **Saudi rule:**
+    - ≤3 cards remaining: convention is instant claim, but the
+      addon still gates on the permission window (UX-only).
+    - 4 cards: caller asks opponents for permission.
+    - 5+ cards: caller MUST تستاذن (request permission) —
+      mandatory per video #35 ("ما تساوي بدون ما تستاذن").
   - Saudi-strict: SWA is **deterministic-or-bust**; sub-100%-certain
     SWA claims are not the convention (per video #35).
   - Opponents can deny via Takweesh OR demand شرح (proof) — failed
@@ -136,15 +144,15 @@ Cross-checked against `R.IsLegalPlay`, `R.ScoreRound`, and
 `Constants.lua`. Status:
 
 **Q1: Belote (K+Q of trump) in Sun?** ✗ **NOT in code.**
-`R.ScoreRound` line 504 gates Belote scoring on
+`R.ScoreRound` line 694 gates Belote scoring on
 `contract.type == K.BID_HOKM`. Single-source from video #41 says
 "ملكي" K+Q meld scores in Sun. Could be regional house variant
 or genuine convention. **Open question** — verify with another
 Saudi source before extending code.
 
 **Q2: Pos-4 partner-winning ruff-relief?** ✓ **Already in code.**
-`R.IsLegalPlay` lines 117-121 (over-trump-partner relief) and
-145-149 (general partner-winning relief on void). Video #42's
+`R.IsLegalPlay` lines 137-141 (over-trump-partner relief) and
+165-169 (general partner-winning relief on void). Video #42's
 rule is fully enforced.
 
 **Q3: Four-Aces Sun meld value (200 raw vs 400)?** ✅ **RESOLVED v0.10.0
@@ -168,7 +176,7 @@ Carré-A in Hokm scores 100 (treated like the other carrés).
 Cascade: missing meld broke bidder-strict-majority threshold,
 `R.CompareMelds` winner-takes-all, AND v0.9.0 M5 belote-
 cancellation (silent +20 over-scoring). Fixed in
-`Rules.lua:240-244` + regression test inverted at
+`Rules.lua:273-287` + regression test inverted at
 `tests/test_rules.lua:365-379`. Source: `review_v0.10.0/
 xref_X5_meld_coverage.md`.
 
@@ -228,8 +236,14 @@ Other Bel constraints (per video #11):
 - **Half-and-half tiebreak:** if bidder team gets exactly 81 of 162,
   bidder **fails** (need strictly more than half). `R.ScoreRound`
   encodes this.
-- **Failed bid (defenders win the round):** opponents capture all
-  trick points; bidder team gets 0.
+- **Failed bid (defenders win the round):** defenders capture the
+  full `handTotal` (×multiplier) as a qaid penalty against the
+  bidder team. Per the Saudi rule «مشروعي لي ومشروعك لك» ("my
+  meld for me, your meld for you"), each team **KEEPS its own
+  declared melds** — only the trick-point side flows to the
+  winner. v0.4.3+ encoded this at `Rules.lua:823-840`; pre-v0.4.3
+  the bidder-team's own melds were silently confiscated when the
+  bid failed (e.g. a quarte=50×2=100 raw was lost to the qaid).
 - **Multiplier scope:** ×2/×3/×4 applies to the trick-point side
   of the score. Belote +20 is multiplier-immune. Gahwa is binary
   (match-win/loss) — multiplier moot.

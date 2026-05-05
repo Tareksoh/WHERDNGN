@@ -824,10 +824,18 @@ function BM.PickPlay(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     if not hand or #hand == 0 then return _restore(nil) end
     -- Build legal-plays list.
+    -- v0.10.3 audit (E-Det-01 #7, B-BotMaster-01 F1, D-RT-18 S1, HIGH):
+    -- the outer driver was passing 5 args to R.IsLegalPlay, omitting
+    -- the optional 6th `akaCalled`. Real-state legal filtering must
+    -- respect Saudi-Master M4 AKA-receiver relief; without it, the
+    -- bot's own legal set incorrectly excluded discards permitted by
+    -- partner's AKA call (must-trump-ruff was enforced where Rules.lua
+    -- M4 explicitly grants relief). Inner rollouts intentionally pass
+    -- nil (sim-blind AKA semantics); the outer driver must NOT.
     local trick = S.s.trick or { leadSuit = nil, plays = {} }
     local legal = {}
     for _, c in ipairs(hand) do
-        local ok = R.IsLegalPlay(c, hand, trick, S.s.contract, seat)
+        local ok = R.IsLegalPlay(c, hand, trick, S.s.contract, seat, S.s.akaCalled)
         if ok then legal[#legal + 1] = c end
     end
     if #legal == 0 then return _restore(nil) end

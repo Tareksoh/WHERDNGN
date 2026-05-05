@@ -226,12 +226,23 @@ K.MSG_OVERCALL_DECISION = "<"  -- a seat has decided in the overcall window.
                               -- "UPGRADE", "TAKE", or "WAIVE"). Host
                               -- validates; broadcasts the same payload
                               -- to all clients for UI parity.
-K.MSG_OVERCALL_RESOLVE  = "?"  -- host announces the overcall window
+K.MSG_OVERCALL_RESOLVE  = "!"  -- host announces the overcall window
                               -- closed and what happened. Payload:
                               -- taken(0|1);by(seat or 0);type
                               -- ("UPGRADE"|"TAKE"|""). When taken=1, a
                               -- subsequent MSG_CONTRACT carries the
                               -- rewritten Sun contract.
+                              --
+                              -- v0.10.3 wire-tag fix (CRIT-1, audit
+                              -- summary): pre-v0.10.3 this constant
+                              -- collided with K.MSG_RESYNC_REQ ("?"),
+                              -- causing every "?" tag to be dispatched
+                              -- to _OnOvercallResolve before reaching
+                              -- _OnResyncReq (the OVERCALL elseif at
+                              -- Net.lua:543 precedes RESYNC at line 620).
+                              -- RESYNC was therefore dead in production.
+                              -- Reassigning OVERCALL_RESOLVE to "!"
+                              -- frees "?" for its older RESYNC_REQ owner.
 
 -- -- Sound effects ----------------------------------------------------
 -- Bundled OGG cues (synthesized to match the kammelna.com baloot feel:

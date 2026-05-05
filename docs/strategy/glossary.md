@@ -17,8 +17,8 @@ docs and code in sync.
 
 | Arabic | Pronunciation | English in code | Constants | Picker / decision site |
 |---|---|---|---|---|
-| حكم | hokm | trump-named contract | `K.BID_HOKM`, `K.MSG_HOKM`, `K.SND_VOICE_HOKM`, `K.PHASE_HOKM`, `K.MULT_HOKM`=1 | `Bot.PickBid` (Bot.lua:725); contract type checked throughout `pickLead` (Bot.lua:953), `pickFollow` (Bot.lua:1457) |
-| صن | sun | no-trump contract | `K.BID_SUN`, `K.MSG_SUN`, `K.SND_VOICE_SUN`, `K.PHASE_SUN`, `K.MULT_SUN`=2 | `Bot.PickBid` (Bot.lua:725); Sun-specific branches in `pickLead`/`pickFollow` |
+| حكم | hokm | trump-named contract | `K.BID_HOKM = "HOKM"`, `K.SND_VOICE_HOKM`, `K.MULT_BASE = 1` (Hokm uses base multiplier). Single bid wire-tag `K.MSG_BID = "B"` carries all bid types via discriminator. | `Bot.PickBid` Hokm branch; contract type checked throughout `pickLead`, `pickFollow` (see C-Xref-05 for current line numbers). |
+| صن | sun | no-trump contract | `K.BID_SUN = "SUN"`, `K.SND_VOICE_SUN`, `K.MULT_SUN = 2`. Single bid wire-tag `K.MSG_BID` shared with Hokm. | `Bot.PickBid` Sun branch; Sun-specific branches in `pickLead`/`pickFollow`. |
 | أشكال | ashkal | 3rd/4th-position bid that hands a SUN to the partner | `K.BID_ASHKAL`, `K.SND_VOICE_ASHKAL`, `K.BOT_ASHKAL_TH`=65 | `Bot.PickBid` Ashkal branch (Bot.lua:725+) |
 | باس | pass | pass | `K.BID_PASS` | `Bot.PickBid` fallback when strength < threshold |
 
@@ -38,7 +38,7 @@ docs; use code identifiers in code.** This table is the bridge.
 
 | Saudi name | Multiplier | Constants | Window | Picker (line) |
 |---|---|---|---|---|
-| بل (Bel) — "double" | ×2 | `K.MSG_BEL`, `K.MULT_BEL`=2, `K.BOT_BEL_TH`=60 | defenders' window after bid | `Bot.PickDouble` (Bot.lua:1787) |
+| بل (Bel) — "double" | ×2 | `K.MSG_DOUBLE = "X"`, `K.MULT_BEL = 2`, `K.BOT_BEL_TH = 60` | defenders' window after bid | `Bot.PickDouble` (see C-Xref-05 for current line) |
 | بل×2 (Bel x2) — "double-the-double" | ×3 | `K.MSG_TRIPLE`, `K.MULT_TRIPLE`=3, `K.BOT_TRIPLE_TH`=90, `K.PHASE_TRIPLE` | bidder team's window after Bel | `Bot.PickTriple` (Bot.lua:1908) |
 | فور (Four) — English loan-word | ×4 | `K.MSG_FOUR`, `K.MULT_FOUR`=4, `K.BOT_FOUR_TH`=110, `K.PHASE_FOUR` | defenders' window after Bel x2 | `Bot.PickFour` (Bot.lua:1938) |
 | قهوة (Gahwa / Coffee) | match-win | `K.MSG_GAHWA`, `K.BOT_GAHWA_TH`=135, `K.PHASE_GAHWA` | bidder team's terminal | `Bot.PickGahwa` (Bot.lua:1982) |
@@ -330,7 +330,7 @@ is significant inter-speaker variation** — flagged below.
 | Arabic | Meaning | Source |
 |---|---|---|
 | مردوفة (mardoofa) | "Doubled" — exactly 2 cards in a suit, especially a top + 1 cover (e.g., A+T, K+Q, J+9). Critical Saudi term. | 02, 25, 26, 31 |
-| مثلوث (mathlooth) | "Tripled" — 3 cards in a suit. The canonical worked case is **مثلوث الولد (J-tripled)** under Sun: J + 2 sidekicks lets J win trick 3 after A and T are spent. Earlier docs called this "K-tripled" / "مثلوث الشايب" — that was a romanization error per v0.10.0 review (R7). | 02, 17 |
+| مثلوث (mathlooth) | "Tripled" — 3 cards in a suit. The canonical worked case under Sun is **مثلوث الشايب (K-tripled)**: K + 2 sidekicks lets K win trick 3 after A and T are spent (Saudi Sun rank A > T > K > Q > J > 9 > 8 > 7). The speaker in #17 also validates J-tripled (مثلوث الولد) and Q-tripled (مثلوث البنت) as lower-probability variants. The v0.10.0 R7 reaudit's flip to "J-tripled (canonical)" was wrong-direction — reverted in v0.10.3 per A-Src-06 + C-Xref-07. | 02, 17 |
 | إكة مردوفة (ikkah mardoofa) | A+T mardoofa: Ace + Ten of same suit | 25 |
 | **الصن المغطى (Sun-Mughataa)** | "Covered Sun" — Sun bid where bidder holds A+T mardoofa as anchor | 25 |
 | **الحكم المغطى (Hokm-Mughataa)** | "Covered Hokm" — Hokm bid with explicit J+مردوفة+A safety pattern | 26 |

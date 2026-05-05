@@ -618,7 +618,25 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnSWAResp(sender, tonumber(fields[2]),
                      fields[3] == "1", tonumber(fields[4]))
     elseif tag == K.MSG_RESYNC_REQ then
-        N._OnResyncReq(sender, fields[2])
+        -- v0.10.3 cross-version compat (review_v0.10.2 §4.2 follow-up):
+        -- v0.10.2 hosts emit OVERCALL_RESOLVE under the legacy "?"
+        -- tag (which collided with RESYNC_REQ pre-v0.10.3). A v0.10.3
+        -- client talking to a v0.10.2 host needs to disambiguate "?"
+        -- by payload shape:
+        --   • RESYNC_REQ payload  : "?;{gameID}"        → 2 fields
+        --   • OVERCALL_RESOLVE    : "?;{taken};{by};{type}" → 4 fields
+        -- Route 4-field "?" frames to _OnOvercallResolve so v0.10.2
+        -- hosts can complete the overcall window with v0.10.3 clients.
+        -- 2-field "?" frames are real resyncs (canonical post-v0.10.3).
+        -- v0.10.3 hosts also dual-emit "?" alongside "!" (see
+        -- N.SendOvercallResolve); the second hit is benign since
+        -- _OnOvercallResolve is idempotent (clears state, exits phase).
+        if #fields >= 4 then
+            N._OnOvercallResolve(sender, fields[2], tonumber(fields[3]),
+                                 fields[4])
+        else
+            N._OnResyncReq(sender, fields[2])
+        end
     elseif tag == K.MSG_RESYNC_RES then
         -- The packed snapshot uses '|' for inner field separation so
         -- top-level ';' doesn't get chewed up. Reassemble fields[3..].
@@ -1065,11 +1083,31 @@ function N.SendOvercallDecision(seat, decision)
 end
 
 function N.SendOvercallResolve(taken, by, otype)
+    -- v0.10.3 cross-version dual-emit (review_v0.10.2 §4.2 follow-up):
+    -- v0.10.3 reassigned K.MSG_OVERCALL_RESOLVE to "!" to free "?"
+    -- for its rightful owner K.MSG_RESYNC_REQ (CRIT-1 fix). v0.10.2
+    -- clients only know "?" for OVERCALL_RESOLVE, so a v0.10.3 host
+    -- talking to v0.10.2 clients would see them ignore "!" and
+    -- soft-lock at PHASE_OVERCALL on `taken=false`. Mitigation: emit
+    -- BOTH the canonical new tag AND a legacy "?"-shaped frame so
+    -- v0.10.2 clients receive the resolve. v0.10.3 clients see both;
+    -- the second arrival hits the idempotent _OnOvercallResolve
+    -- (state already cleared) so it's a benign no-op. The
+    -- payload-shape disambiguator at the dispatcher's "?" branch
+    -- (Net.lua ~line 620) routes 4-field "?" payloads to
+    -- _OnOvercallResolve and 2-field "?" payloads to _OnResyncReq.
+    --
+    -- Eligible to be dropped in v0.11.0 once v0.10.2 clients have
+    -- aged out of the install base (CurseForge auto-updates most
+    -- users within 1-2 weeks of release).
+    local takenStr = taken and "1" or "0"
+    local byNum    = by or 0
+    local typeStr  = otype or ""
     broadcast(("%s;%s;%d;%s"):format(
-        K.MSG_OVERCALL_RESOLVE,
-        taken and "1" or "0",
-        by or 0,
-        otype or ""))
+        K.MSG_OVERCALL_RESOLVE, takenStr, byNum, typeStr))
+    -- Legacy "?" emit for v0.10.2 clients. Payload shape matches
+    -- v0.10.2's _OnOvercallResolve expectations (taken;by;type).
+    broadcast(("?;%s;%d;%s"):format(takenStr, byNum, typeStr))
 end
 
 function N._OnOvercallOpen(sender)
@@ -2543,26 +2581,25 @@ function N.LocalSWA()
                 for _, c in ipairs(S.s.hand or {}) do
                     pinnedHand[#pinnedHand + 1] = c
                 end
-                C_Timer.After(windowSec, function()
+                -- v0.10.3 SWA pause re-arm refactor (review_v0.10.2
+                -- E-Net-01, HIGH). Pre-v0.10.3 this site had a
+                -- ONE-STEP re-arm: if paused on first fire, schedule
+                -- one more timer; that inner timer bare-exited on
+                -- pause too. Multi-cycle pause-toggles within the
+                -- window dropped subsequent re-arms → soft-lock.
+                -- Refactored to a named function that recursively
+                -- re-arms itself, mirroring the OVERCALL pattern
+                -- at line ~1195. Same fix at the bot-fired site
+                -- ~4059 and the _OnSWAReq host wrapper ~2691.
+                local function localSWAResolveFn()
                     if not S.s.isHost then return end
-                    -- 50-agent playtest audit fix: pause-respecting
-                    -- re-arm. Same logic as _OnSWAReq's timer. If
-                    -- paused, defer the auto-approve to the next
-                    -- 5-sec window after resume.
                     if S.s.paused then
                         local req2 = S.s.swaRequest
                         if req2 and req2.caller == mySeat then
                             req2.ts = (GetTime and GetTime()) or req2.ts
                             if C_Timer and C_Timer.After then
-                                C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
-                                    if S.s.isHost and S.s.swaRequest
-                                       and S.s.swaRequest.caller == mySeat
-                                       and S.s.phase == K.PHASE_PLAY
-                                       and not S.s.paused then
-                                        S.s.swaRequest = nil
-                                        N.HostResolveSWA(mySeat, pinnedHand)
-                                    end
-                                end)
+                                C_Timer.After(K.SWA_TIMEOUT_SEC or 5,
+                                              localSWAResolveFn)
                             end
                         end
                         return
@@ -2572,7 +2609,8 @@ function N.LocalSWA()
                     if S.s.phase ~= K.PHASE_PLAY then return end
                     S.s.swaRequest = nil
                     N.HostResolveSWA(mySeat, pinnedHand)
-                end)
+                end
+                C_Timer.After(windowSec, localSWAResolveFn)
             end
         end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -2690,29 +2728,19 @@ function N._OnSWAReq(sender, seat, encodedHand)
         -- becomes a no-op via the caller-match guard.
         if C_Timer and C_Timer.After then
             local windowSec = K.SWA_TIMEOUT_SEC or 5
-            C_Timer.After(windowSec, function()
+            -- v0.10.3 SWA pause re-arm refactor (review_v0.10.2
+            -- E-Net-01, HIGH). See companion fixes at ~2546 and
+            -- ~4059. Recursive re-arm closes the multi-cycle pause-
+            -- toggle leak in the prior one-step version.
+            local function reqSWAResolveFn()
                 if not S.s.isHost then return end
-                -- 50-agent playtest audit fix: respect pause. Without
-                -- this guard, the SWA timer fires during a paused game
-                -- and forcibly auto-approves mid-pause. Re-arm a fresh
-                -- 5-sec window when the game resumes; until then,
-                -- swaRequest stays pending and opponents can still
-                -- press Takweesh once unpaused.
                 if S.s.paused then
                     local req2 = S.s.swaRequest
                     if req2 and req2.caller == seat then
                         req2.ts = (GetTime and GetTime()) or req2.ts
                         if C_Timer and C_Timer.After then
-                            C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
-                                if S.s.isHost and S.s.swaRequest
-                                   and S.s.swaRequest.caller == seat
-                                   and S.s.phase == K.PHASE_PLAY
-                                   and not S.s.paused then
-                                    local h = (encodedHand and C.DecodeHand(encodedHand)) or {}
-                                    S.s.swaRequest = nil
-                                    N.HostResolveSWA(seat, h)
-                                end
-                            end)
+                            C_Timer.After(K.SWA_TIMEOUT_SEC or 5,
+                                          reqSWAResolveFn)
                         end
                     end
                     return
@@ -2726,7 +2754,8 @@ function N._OnSWAReq(sender, seat, encodedHand)
                 local hand = (encodedHand and C.DecodeHand(encodedHand)) or {}
                 S.s.swaRequest = nil
                 N.HostResolveSWA(seat, hand)
-            end)
+            end
+            C_Timer.After(windowSec, reqSWAResolveFn)
         end
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
@@ -4056,15 +4085,40 @@ function N.MaybeRunBot()
                                 N._OnSWAResp("__host__", s2, true, seat)
                             end
                         end
-                        C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
+                        -- v0.10.3 SWA pause re-arm (review_v0.10.2
+                        -- E-Net-01, HIGH). Pre-v0.10.3 the bot-fired
+                        -- SWA timer bare-exited on `S.s.paused` with
+                        -- NO re-arm — one pause inside the 5-sec
+                        -- window soft-locked the SWA banner forever
+                        -- (no second timer ever fires; HostResolveSWA
+                        -- never runs; swaRequest stays non-nil through
+                        -- the rest of the round). Pattern mirrors the
+                        -- OVERCALL_TIMEOUT_SEC fix at line ~1195: a
+                        -- named function re-arms ITSELF when paused,
+                        -- so multi-cycle pause-toggles within one
+                        -- window all resolve eventually. Each re-arm
+                        -- is a fresh full SWA_TIMEOUT_SEC window from
+                        -- resume — humans get a clean shot to deny.
+                        local function botSWAResolveFn()
                             if not S.s.isHost then return end
-                            if S.s.paused then return end
+                            if S.s.paused then
+                                local req2 = S.s.swaRequest
+                                if req2 and req2.caller == seat then
+                                    req2.ts = (GetTime and GetTime()) or req2.ts
+                                    if C_Timer and C_Timer.After then
+                                        C_Timer.After(K.SWA_TIMEOUT_SEC or 5,
+                                                      botSWAResolveFn)
+                                    end
+                                end
+                                return
+                            end
                             local req = S.s.swaRequest
                             if not req or req.caller ~= seat then return end
                             if S.s.phase ~= K.PHASE_PLAY then return end
                             S.s.swaRequest = nil
                             N.HostResolveSWA(seat, hand)
-                        end)
+                        end
+                        C_Timer.After(K.SWA_TIMEOUT_SEC or 5, botSWAResolveFn)
                     else
                         -- C_Timer unavailable: degrade to instant claim
                         -- rather than stall the round (test harness path).
