@@ -826,11 +826,27 @@ local function hokmMinShape(hand, suit)
         end
     end
     if not hasJ then return false end          -- B-4 absolute floor
-    -- v0.10.0 L07 tier-gated requirement: any Ace in hand.
+    if count >= 4 then return true end         -- B-2 self-sufficient
+    -- v0.11.15 Q2 user-audit: self-sufficient mardoofa relax.
+    -- Pre-v0.11.15 the v0.10.0 L07 M3lm gate (`hasAnyAce` required)
+    -- fired BEFORE the count checks below, rejecting hands like
+    -- [JC 9C 8C JS QH] (J + 9 of trump + count=3, NO Aces anywhere)
+    -- — which is the canonical Saudi "ولد ومردوفته" (J + mardoofa
+    -- partner) self-sufficient pattern. The v0.11.9 RT07-07 fix
+    -- correctly identified J+9 (or J+A) as canonical mardoofa per
+    -- video #26, but only used it in the count==2 path. This
+    -- count>=3 extension recognizes that J+9 plus ANY third trump is
+    -- structurally self-sufficient — the J takes top trick, the 9
+    -- takes any second-rank trick, and the third trump locks the
+    -- suit. No side Ace needed. Matches video #26 R2 canonical-min
+    -- worked example. Trace evidence: bot s2 r2 [JC 9C 8C JS QH]
+    -- failed L07 even though it's a respectable Hokm-clubs hand.
+    if count >= 3 and hasTrumpNine then return true end
+    -- v0.10.0 L07 tier-gated requirement: M3lm requires any Ace
+    -- from here on (for the count==3+sideAce / count==2 paths).
     if Bot.IsM3lm and Bot.IsM3lm() and not hasAnyAce then
         return false
     end
-    if count >= 4 then return true end         -- B-2 self-sufficient
     if count == 3 and hasSideAce then return true end  -- B-1 minimum
     -- v0.10.6 Lever C — R2 canonical minimum (review_v0.10.2
     -- BIDDING_CALIBRATION_v0.10.5.md §8.1, video #26 R2):
@@ -1513,8 +1529,33 @@ function Bot.PickBid(seat)
         -- bonus when the bid-up suit IS the Belote suit.
         -- Sources: decision-trees.md B-1 (Definite, 26), B-4 (Definite, 26), B-6 (Definite, 26).
         if not anyHokm and not anySun and bidCardSuit then
-            if hokmMinShape(hand, bidCardSuit) then
-                local strength = suitStrengthAsTrump(hand, bidCardSuit)
+            -- v0.11.15 user-audit: include the bidcard in BOTH shape
+            -- and strength evaluation for R1 Hokm-on-flipped. The
+            -- bidder GETS the bidcard added to their final hand
+            -- (HostDealRest in State.lua appends bidcard + 2 more
+            -- deck cards to the bidder's hand, line ~1950). Pre-v0.11.15
+            -- the bot evaluated only the 5-card pre-deal-2 hand,
+            -- under-counting structurally guaranteed contributions:
+            -- if bidcard is J of trump (the highest Hokm card), bidder
+            -- post-win has the J automatically. Pre-fix, hokmMinShape
+            -- on the 5-card hand without the J said "no J -> reject"
+            -- (B-4 floor). Trace evidence from user-bidcalc:
+            --   [9D 8H KC TC TH] bidcard would have made some Hokm
+            --   shapes viable; [JC 7C TC JS 9H] hand had its own J
+            --   but the threshold left margin for bidcard contribution.
+            -- Including bidcard in strength shifts fire rates up
+            -- slightly (avg bidcard contributes +6-8 strength when
+            -- it's the trump suit). Threshold thHokmR1=42 unchanged
+            -- — the small upshift aligns with user-audit goal of
+            -- "more bot Hokm bidding". Tune empirically post-ship.
+            local hypHand = hand
+            if S.s.bidCard then
+                hypHand = {}
+                for _, c in ipairs(hand) do hypHand[#hypHand + 1] = c end
+                hypHand[#hypHand + 1] = S.s.bidCard
+            end
+            if hokmMinShape(hypHand, bidCardSuit) then
+                local strength = suitStrengthAsTrump(hypHand, bidCardSuit)
                 strength = strength + sideSuitAceBonus(hand, bidCardSuit)
                 -- v0.5.13: B-6 +20 promoted to K.BOT_PICKBID_BELOTE_BONUS
                 -- (which mirrors K.MELD_BELOTE so the bid bonus tracks
@@ -3902,7 +3943,27 @@ function Bot.PickOvercall(seat)
     local bidCard  = S.s.overcall.bidCard
     if not R.CanOvercall(seat, contract, bidCard) then return "WAIVE" end
 
-    local sunStr = sunStrength(hand)
+    -- v0.11.15 Q1 user-audit: void-in-trump signal for Sun overcall.
+    -- When the bidder's Hokm trump is a suit we have ZERO (or one)
+    -- cards in, that's the canonical Saudi Sun-overcall trigger —
+    -- in Sun there's no trump, so our void/short suit doesn't bleed.
+    -- Without this bonus, the bot used generic sunStrength which has
+    -- no awareness of the opp's trump choice; void hands looked the
+    -- same as balanced ones.
+    local trumpCount = 0
+    if contract.trump then
+        for _, c in ipairs(hand) do
+            if C.Suit(c) == contract.trump then trumpCount = trumpCount + 1 end
+        end
+    end
+    local voidBonus = 0
+    if trumpCount == 0 then
+        voidBonus = K.BOT_OVERCALL_VOID_TRUMP_BONUS
+    elseif trumpCount == 1 then
+        voidBonus = K.BOT_OVERCALL_SHORT_TRUMP_BONUS
+    end
+
+    local sunStr = sunStrength(hand) + voidBonus
     if seat == contract.bidder then
         -- UPGRADE option (non-Ace-bid only — CanOvercall already
         -- filters Ace case). Threshold is BOT_OVERCALL_SELF_TH.

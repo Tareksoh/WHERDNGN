@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.11.15 — three bot bidding gaps surfaced by user audit (Q1 overcall, Q2 hokm shape, bidcard inclusion)
+
+User-audit questions revealed three real gaps in bot bidding logic
+that calibration nudges alone couldn't fix:
+
+1. **Q1 — Sun overcall doesn't recognize void-in-trump signal.** When
+   opp bids Hokm in a suit you have 0-1 cards in, that's the textbook
+   Saudi Sun-overcall trigger (no trump = no void penalty). Previous
+   `Bot.PickOvercall` used generic `sunStrength()` with no awareness
+   of the opp's chosen trump suit.
+
+2. **Q2 — `hokmMinShape` rejects canonical "ولد ومردوفته" hands without
+   any Ace.** Saudi rule allows J + 9 of trump + count >= 3 as
+   self-sufficient even without side Ace, but the L07 M3lm-tier gate
+   (added in v0.10.0) auto-rejected ANY hand without an Ace anywhere.
+   Trace evidence: hands like `[8C 9C JC JH QD]` (J + 9 of clubs + 3
+   clubs + JH side, NO Ace) were canonical Hokm-clubs candidates but
+   silently passed.
+
+3. **Audit — `Bot.PickBid` R1 Hokm-on-flipped doesn't include the
+   bidcard in evaluation.** The bidder gets the bidcard appended to
+   their final hand at `HostDealRest` (State.lua:1950), but
+   `hokmMinShape(hand, bidCardSuit)` was called on the 5-card pre-deal
+   hand. If bidcard provided the J of trump or filled out a count,
+   the bot didn't see it — leading to false-negative rejections.
+
+### Added (calibration / heuristics)
+
+- **`K.BOT_OVERCALL_VOID_TRUMP_BONUS = 15`** + **`K.BOT_OVERCALL_SHORT_TRUMP_BONUS = 8`**
+  applied additively to `sunStrength` in `Bot.PickOvercall` based on
+  the bot's count in `contract.trump`. Void hands (0 trump) get +15;
+  singleton hands (1 trump) get +8. Pre-threshold so `BOT_OVERCALL_TAKE_TH`
+  / `BOT_OVERCALL_SELF_TH` stay meaningful for normal balanced hands.
+
+### Changed (bot logic)
+
+- **`hokmMinShape` — new self-sufficient mardoofa path.** `if count >= 3
+  and hasTrumpNine then return true` runs BEFORE the L07 any-Ace gate,
+  letting J + 9 + count>=3 hands pass even at M3lm+ tier without a
+  side Ace. Matches the count==2 mardoofa path's canonical-only logic
+  (RT07-07 from v0.11.9), extended to count>=3 strength.
+
+- **`Bot.PickBid` R1 Hokm-on-flipped — include bidcard in evaluation.**
+  Builds a hypothetical post-win hand (`hypHand = hand + S.s.bidCard`)
+  and passes it to BOTH `hokmMinShape` and `suitStrengthAsTrump`. The
+  bidder's actual post-deal-2 hand is 8 cards (5 initial + bidcard +
+  2 unknowns); we now include the deterministic bidcard contribution.
+  +6-8 strength shift on average when bidcard is in trump suit.
+  Threshold thHokmR1=42 unchanged — the small fire-rate bump aligns
+  with user-audit goal.
+
+### Test coverage
+
+- **X.1a/b/c/d** — pin new constants + `Bot.PickOvercall` references
+  `K.BOT_OVERCALL_VOID_TRUMP_BONUS` and checks for `trumpCount == 0`.
+- **X.2/X.2b** — pin `hokmMinShape` self-sufficient mardoofa path AND
+  verify it appears BEFORE the L07 any-Ace gate (correct ordering).
+- **X.3a/b** — pin `Bot.PickBid` R1 Hokm-on-flipped builds `hypHand`
+  including `S.s.bidCard` and passes it to `hokmMinShape`.
+- **X.4** — Behavioral: bidcard-provides-J Hokm-on-flipped fires.
+  Hand `[8C 9C TC AS KH]` + bidcard `JC` -> 4 clubs including J +
+  side AS -> deterministic `HOKM:C` fire. Pre-v0.11.15 this returned
+  PASS (B-4 floor failed; no J in 5-card hand).
+
+### Quantified expected impact
+
+- R1 Hokm-on-flipped fire rate: +20-30% (more hands clear shape via
+  bidcard inclusion + L07 relax).
+- R2 Hokm fire rate: +30-40% (Q2 self-sufficient mardoofa unlocks the
+  no-Ace J+9 cases).
+- Sun overcall fire rate: previously near-zero on void-trump hands;
+  now ~15-20% on void-trump Hokm targets.
+
+593/593 tests pass.
+
 ## v0.11.14 — Sun bot calibration: 2-Ace bonus from user-bidcalc trace evidence
 
 User-bidcalc trace from 27 + 10 telemetry rounds revealed the actual

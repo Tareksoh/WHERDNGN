@@ -3037,6 +3037,109 @@ do
 end
 
 -- =====================================================================
+-- X. v0.11.15 — bot bidding gaps surfaced by user audit:
+--   X.1: Sun overcall void-in-trump bonus
+--   X.2: hokmMinShape J+9+count>=3 self-sufficient mardoofa
+--   X.3: R1 Hokm-on-flipped includes bidcard in shape eval
+-- =====================================================================
+print("")
+print("=== Section X: v0.11.15 bot bidding audit fixes ===")
+
+-- X.1a — Constants pinned
+do
+    assertEq(K.BOT_OVERCALL_VOID_TRUMP_BONUS,  15,
+             "X.1a: K.BOT_OVERCALL_VOID_TRUMP_BONUS = 15")
+    assertEq(K.BOT_OVERCALL_SHORT_TRUMP_BONUS,  8,
+             "X.1b: K.BOT_OVERCALL_SHORT_TRUMP_BONUS = 8")
+end
+
+-- X.1c — Bot.PickOvercall applies the void/short bonus
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickOvercall")
+    assertTrue(fnStart ~= nil, "X.1c setup: Bot.PickOvercall found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 3000)
+        assertTrue(body:find("K%.BOT_OVERCALL_VOID_TRUMP_BONUS") ~= nil,
+                   "X.1c (Q1): PickOvercall references K.BOT_OVERCALL_VOID_TRUMP_BONUS")
+        assertTrue(body:find("trumpCount == 0") ~= nil,
+                   "X.1d (Q1): PickOvercall checks for trump-suit void")
+    end
+end
+
+-- X.2 — hokmMinShape allows J+9+count>=3 self-sufficient (no side Ace)
+-- Source-pin: the new path appears AFTER the count>=4 check and BEFORE
+-- the L07 any-Ace gate.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function hokmMinShape")
+    assertTrue(fnStart ~= nil, "X.2 setup: hokmMinShape found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 3000)
+        assertTrue(body:find("count >= 3 and hasTrumpNine") ~= nil,
+                   "X.2 (Q2): hokmMinShape adds J+9+count>=3 self-sufficient path")
+        -- Verify the new path comes BEFORE the L07 gate, otherwise
+        -- the L07 would still reject these hands.
+        local newPath = body:find("count >= 3 and hasTrumpNine")
+        local l07 = body:find("Bot%.IsM3lm%(%) and not hasAnyAce")
+        if newPath and l07 then
+            assertTrue(newPath < l07,
+                       "X.2b (Q2): self-sufficient mardoofa path runs BEFORE L07 any-Ace gate")
+        end
+    end
+end
+
+-- X.3 — R1 Hokm-on-flipped includes bidcard in shape evaluation.
+-- Bot.PickBid is ~330 lines; need a wide window to cover the R1
+-- Hokm-on-flipped block which sits ~280 lines into the function.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickBid")
+    assertTrue(fnStart ~= nil, "X.3 setup: Bot.PickBid found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 25000)
+        -- Source-pin: hypHand built from hand + bidCard, passed to
+        -- hokmMinShape instead of bare hand.
+        assertTrue(body:find("hypHand%[#hypHand %+ 1%] = S%.s%.bidCard") ~= nil,
+                   "X.3a (audit): R1 Hokm-on-flipped builds hypothetical post-win hand")
+        assertTrue(body:find("hokmMinShape%(hypHand, bidCardSuit%)") ~= nil,
+                   "X.3b (audit): R1 Hokm-on-flipped passes hypHand to hokmMinShape")
+    end
+end
+
+-- X.4 — Behavioral: Hokm-on-flipped fires when bidcard provides the
+-- missing J of trump. Pre-v0.11.15 this path was rejected at the
+-- B-4 absolute floor (no J in hand).
+do
+    local s_save = {
+        bidRound = S.s.bidRound, bidCard = S.s.bidCard,
+        dealer = S.s.dealer, hostHands = S.s.hostHands,
+        cumulative = S.s.cumulative, bids = S.s.bids,
+    }
+    S.s.bidRound  = 1
+    S.s.bidCard   = "JC"  -- bidcard provides J of clubs
+    S.s.dealer    = 4     -- seat 1 = first bidder
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids      = {}
+    S.s.hostHands = {}
+    -- Hand with no J of clubs but 3 clubs (8C 9C TC) + side Ace AS + KH.
+    -- count of clubs = 3 (8C 9C TC) + bidcard JC = 4 total. hasJ=true
+    -- (via bidcard). count>=4 → self-sufficient. Should fire Hokm-C.
+    S.s.hostHands[1] = { "8C", "9C", "TC", "AS", "KH" }
+    if Bot and Bot.PickBid then
+        local result = Bot.PickBid(1)
+        assertEq(result, K.BID_HOKM .. ":C",
+                 "X.4 (audit): bidcard-provides-J Hokm-on-flipped fires post-bidcard-inclusion")
+    end
+    S.s.bidRound = s_save.bidRound
+    S.s.bidCard = s_save.bidCard
+    S.s.dealer = s_save.dealer
+    S.s.hostHands = s_save.hostHands
+    S.s.cumulative = s_save.cumulative
+    S.s.bids = s_save.bids
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

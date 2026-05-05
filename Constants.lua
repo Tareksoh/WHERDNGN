@@ -461,3 +461,17 @@ K.BOT_OVERCALL_TAKE_TH = 80   -- non-bidder take-as-Sun threshold
 -- close to OVERCALL_TAKE_TH so cross-trump-Hokm takes are roughly as
 -- demanding as a Sun take.
 K.BOT_OVERCALL_TAKE_HOKM_TH = 80
+
+-- v0.11.15 user-audit Q1: void-in-trump bonus for Sun overcall.
+-- Saudi canonical signal: when the opp bid Hokm in a suit where
+-- you have ZERO (or one) cards, that's a strong Sun overcall
+-- trigger — in no-trump, your void/short suit doesn't matter
+-- because there IS no trump. Pre-v0.11.15 the bot used raw
+-- sunStrength() with no contextual awareness of the opp's
+-- trump suit; hands like [AH AS QD JD 7C] against Hokm-Spades
+-- (1 spade only) didn't get any signal that this was a textbook
+-- Sun overcall opportunity. Bonuses applied additively to the
+-- pre-threshold score so the existing TAKE_TH / SELF_TH stay
+-- meaningful for normal (non-void) overcall decisions.
+K.BOT_OVERCALL_VOID_TRUMP_BONUS  = 15  -- 0 cards in opp's trump suit
+K.BOT_OVERCALL_SHORT_TRUMP_BONUS =  8  -- 1 card in opp's trump suit
