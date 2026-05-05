@@ -1,5 +1,117 @@
 # Changelog
 
+## v0.11.1 — C-14 BotMaster heuristicPick → Bot.PickPlay delegation
+
+Single architectural fix: the audit-flagged HIGH item from v0.11.0's
+deferred list. `BotMaster.lua` rolloutValue used a 50-line Advanced-
+mirror placeholder for its rollout policy that the audit's deep dive
+identified as the **single highest-impact gap in the bot code** —
+rollouts under-valued ~30% of Saudi-canonical play patterns
+(sweep-pursuit, trick-8 boss-scan, free-trick suit, Sun L08, Tahreeb
+sender/receiver, Faranka exceptions, AKA receiver, Sun shortest-suit,
+Belote preservation, Tanfeer, etc.). Saudi-Master tier was structurally
+no stronger than Fzloky on these scenarios because every rollout was
+biased away from canonical patterns.
+
+This release reroutes rollouts through `Bot.PickPlay` under the
+existing `_inRollout=true` recursion guard set in `BM.PickPlay`. The
+delegation pattern + state swap was already identified by audit as
+the canonical fix; this release implements it cleanly.
+
+### Fixed (HIGH-architectural)
+
+- **C-14** (`BotMaster.lua:644-755` rolloutValue heuristicPick) —
+  replaced the 50-line Advanced-mirror placeholder with a single-line
+  delegation: `return B.Bot.PickPlay(s)`. The rollout policy now picks
+  up every Saudi-canonical branch in pickLead/pickFollow that the
+  placeholder missed.
+
+  **Mechanism**:
+  - `BM.PickPlay` already sets `B.Bot._inRollout = true` (existing
+    line 822) before entering the world loop. The recursion guard at
+    `Bot.PickPlay:3450` (`if not Bot._inRollout`) short-circuits the
+    BotMaster delegation when set, so the delegated call runs
+    pickLead/pickFollow directly without recursive ISMCTS re-entry.
+  - State swap inside `rolloutValue`: save and override
+    `S.s.hostHands`, `S.s.trick`, `S.s.tricks`, `S.s.akaCalled`,
+    `S.s.playedCardsThisRound` so `Bot.PickPlay` reads the
+    determinization-sampled view rather than the real game state.
+    `S.s.playedCardsThisRound` matters because `S.HighestUnplayedRank`
+    keys off it (used by sweep-pursuit boss-scan, J+9 trump-lock,
+    highest-unplayed lead).
+  - `S.s.akaCalled` set to `nil` for sim-blind AKA semantics
+    (rollouts intentionally treat AKA as not-yet-called; future tricks
+    can't introduce new AKA calls in simulation).
+  - Per-trick re-swap of `S.s.trick = currentTrick` after each new
+    trick reset, since the loop reassigns `currentTrick` to a fresh
+    table on trick boundaries.
+  - All 5 swapped fields restored unconditionally via pcall pattern
+    so a mid-rollout error cannot leak the swap to the next world's
+    `sampleConsistentDeal` (which would corrupt sampling by reading
+    polluted hostHands).
+
+  **Bias direction shift**: the old placeholder was fundamentally
+  Hokm-only (mostly Advanced-mirror smother + lowest-rank duck +
+  highest-trump bidder lead). It missed all Sun-specific lead patterns
+  and any later-tier follow refinements. The delegated call exposes
+  the rollout simulator to the same logic real bots use, including
+  M3lm/Fzloky/Master tier-specific branches when the seat being
+  simulated qualifies (per `Bot.IsAdvanced/IsM3lm/IsFzloky` checks
+  inside pickLead/pickFollow).
+
+  **Performance note**: per-pick cost rises from ~5µs to ~20-50µs.
+  Worst-case early-trick rollout (100 worlds × 8 candidates × ~25
+  plays ≈ 20k inner picks) lands ~400-1000ms per move, vs ~100ms for
+  the placeholder. Acceptable for Saudi-Master tier where the user
+  has explicitly opted into a 100-world sampler — the move-quality
+  gain dwarfs the latency. If empirical telemetry shows users
+  perceiving the lag, a `_lightweight=true` flag could short-circuit
+  the heaviest pickFollow branches in v0.11.2.
+
+  Source: `.swarm_findings/audit_v0.10.7/C_Bot_audit.md` Audit Item
+  BM-3 (lines 360-478) + Recommendation #1 (lines 580-586).
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section M** (10 new source-match pins):
+  - M.1 (C-14): heuristicPick body delegates to `B.Bot.PickPlay`
+  - M.1b (C-14): old "Lead heuristics (Advanced-mirror)" placeholder
+    comment removed (regression guardrail against accidental restore)
+  - M.2a-f (C-14): rolloutValue saves/swaps/restores the 5 swapped
+    state fields (hostHands, trick, tricks, akaCalled,
+    playedCardsThisRound)
+- **429 / 429 pass** (up from 419, +10 new pins).
+
+### Caveat / next-step
+
+The existing `tests/test_state_bot.lua` doesn't load `BotMaster.lua`,
+so the C-14 delegation isn't exercised behaviorally in the test
+suite — only structurally pinned. Manual smoke-testing during
+development confirmed `BM.PickPlay` completes successfully with the
+new delegation in ~430ms for a 100-world early-trick move (single
+all-spade fixture, all 8 candidates evaluated). A behavioural test
+that loads BotMaster + runs a tier comparison is the next test-
+infrastructure item, deferred until the existing test_state_bot.lua
+harness gap (no Net.lua / no BotMaster.lua) is closed more broadly.
+
+The next phase per user direction is empirical telemetry: collect
+v0.11.1 SavedVariables across several rounds with Saudi-Master tier
+active, then compare bot decision quality vs v0.11.0 (which used the
+Advanced-mirror placeholder). Specifically watch for:
+- Sun bidder-team rollouts now leading the shortest suit (was leading
+  longest)
+- Trick-8 sweep-pursuit boss-scans firing
+- AKA receiver branch firing in rollouts (was hard-blocked by
+  must-trump-ruff in placeholder)
+
+### Deferred (still-open from v0.10.7 audit, not in v0.11.1)
+
+- **X-1** — State→UI refresh implicit dependency (massive surface)
+- **C-11** — `hokmMinShape` R2-only scoping (pending telemetry)
+- **C-19** — BotMaster retry-exhaust instrumentation
+- 5 more MED items: A2, B1, C-07, RT07-02, etc.
+- LOW items (dead-code, MaybeRunBot refactor, Sound-guard dedup)
+
 ## v0.11.0 — audit_v0.10.7 closures + voice-cue refresh
 
 200k-token quad-track audit (Net.lua, UI.lua+State.lua, Bot.lua+

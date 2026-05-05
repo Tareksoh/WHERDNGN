@@ -2088,6 +2088,80 @@ do
 end
 
 -- =====================================================================
+-- M. v0.11.1 audit closures (C-14 BotMaster heuristicPick delegation)
+--
+-- C-14 (HIGH from .swarm_findings/audit_v0.10.7/C_Bot_audit.md): the
+-- previous heuristicPick was an Advanced-mirror placeholder substantially
+-- below Bot.PickPlay's coverage — missing sweep-pursuit, trick-8 boss-
+-- scan, free-trick suit, Sun L08, Tahreeb sender/receiver, Faranka
+-- exceptions, AKA receiver, Sun shortest-suit, etc. Audit measured this
+-- as the single highest-impact gap in the bot code. v0.11.1 reroutes
+-- heuristicPick through Bot.PickPlay under the existing _inRollout=true
+-- guard, with state swap-restore so Bot.PickPlay sees the determinization-
+-- sampled view (hands, trick, tricks, playedCardsThisRound).
+-- =====================================================================
+section("M. v0.11.1 audit closures (C-14 BotMaster delegation)")
+
+-- M.1: heuristicPick now delegates to Bot.PickPlay (no Advanced-mirror
+-- placeholder). The delegation line is the single body of heuristicPick
+-- after v0.11.1.
+do
+    local bm_path = WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"
+    local f = io.open(bm_path)
+    assertTrue(f ~= nil, "M.1 setup: BotMaster.lua readable")
+    if f then
+        local bmSrc = f:read("*a")
+        f:close()
+        -- Locate the heuristicPick function.
+        local fnStart = bmSrc:find("local function heuristicPick", 1, true)
+        assertTrue(fnStart ~= nil,
+                   "M.1 setup: heuristicPick function found in BotMaster.lua")
+        if fnStart then
+            -- Body is short post-v0.11.1; scan ~500 chars after the def.
+            local fnBody = bmSrc:sub(fnStart, fnStart + 600)
+            assertTrue(fnBody:find("B.Bot.PickPlay", 1, true) ~= nil,
+                       "M.1 (C-14): heuristicPick delegates to B.Bot.PickPlay")
+            -- Negative pin: the old "Lead heuristics (Advanced-mirror)"
+            -- comment was the marker for the placeholder. Confirm it's
+            -- gone — if it reappears, someone restored the placeholder.
+            assertEq(bmSrc:find("Lead heuristics %(Advanced%-mirror%)") and "found" or nil,
+                     nil,
+                     "M.1b (C-14): old Advanced-mirror placeholder removed from heuristicPick")
+        end
+    end
+end
+
+-- M.2: rolloutValue swaps S.s.hostHands / S.s.trick / S.s.tricks /
+-- S.s.akaCalled / S.s.playedCardsThisRound for the rollout, and restores
+-- them unconditionally afterwards. Without this swap the delegated
+-- Bot.PickPlay would read REAL game state instead of the rollout's
+-- determinization view, and a leak across worlds would corrupt the
+-- next sampleConsistentDeal.
+do
+    local bm_path = WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"
+    local f = io.open(bm_path)
+    if f then
+        local bmSrc = f:read("*a")
+        f:close()
+        -- Save lines.
+        assertTrue(bmSrc:find("local prevHostHands = S.s.hostHands", 1, true) ~= nil,
+                   "M.2a (C-14): rolloutValue saves prev S.s.hostHands")
+        assertTrue(bmSrc:find("local prevPlayed = S.s.playedCardsThisRound", 1, true) ~= nil,
+                   "M.2b (C-14): rolloutValue saves prev S.s.playedCardsThisRound")
+        -- Swap.
+        assertTrue(bmSrc:find("S.s.hostHands = hands", 1, true) ~= nil,
+                   "M.2c (C-14): rolloutValue swaps S.s.hostHands to rollout-local")
+        assertTrue(bmSrc:find("S.s.akaCalled = nil", 1, true) ~= nil,
+                   "M.2d (C-14): rolloutValue nils S.s.akaCalled (sim-blind AKA)")
+        -- Restore.
+        assertTrue(bmSrc:find("S.s.hostHands = prevHostHands", 1, true) ~= nil,
+                   "M.2e (C-14): rolloutValue restores S.s.hostHands after rollout")
+        assertTrue(bmSrc:find("S.s.playedCardsThisRound = prevPlayed", 1, true) ~= nil,
+                   "M.2f (C-14): rolloutValue restores S.s.playedCardsThisRound after rollout")
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

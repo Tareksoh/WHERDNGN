@@ -641,156 +641,121 @@ local function rolloutValue(seat, card, world, contract)
     if #currentTrick.plays == 0 then currentTrick.leadSuit = C.Suit(card) end
     currentTrick.plays[#currentTrick.plays + 1] = { seat = seat, card = card }
 
-    -- Helper: pick a card using pro-level heuristics (Advanced-mirror).
-    local function heuristicPick(s, trick)
-        local hand = hands[s]
-        local legal = {}
-        for _, c in ipairs(hand) do
-            if R.IsLegalPlay(c, hand, trick, contract, s) then
-                legal[#legal + 1] = c
-            end
-        end
-        if #legal == 0 then return nil end
-        if #legal == 1 then return legal[1] end
+    -- v0.11.1 C-14: Build a rollout-local playedCardsThisRound from the
+    -- real-state played cards plus the candidate card we just simulated.
+    -- This is the table consulted by S.HighestUnplayedRank, which several
+    -- Bot.PickPlay branches read (sweep-pursuit boss-scan, J+9 trump-lock,
+    -- highest-unplayed lead). Without this swap, those branches would
+    -- fire against the REAL game's unplayed-set instead of the rollout's
+    -- determinization-sampled state.
+    local rolloutPlayed = {}
+    for _, t in ipairs(S.s.tricks or {}) do
+        for _, p in ipairs(t.plays or {}) do rolloutPlayed[p.card] = true end
+    end
+    if S.s.trick and S.s.trick.plays then
+        for _, p in ipairs(S.s.trick.plays) do rolloutPlayed[p.card] = true end
+    end
+    rolloutPlayed[card] = true
 
-        local function lowestRank(cards)
-            local b, br = cards[1], math.huge
-            for _, c in ipairs(cards) do
-                local r = C.TrickRank(c, contract)
-                if r < br then b, br = c, r end
-            end
-            return b
-        end
-        local function highestRank(cards)
-            local b, br = cards[1], -1
-            for _, c in ipairs(cards) do
-                local r = C.TrickRank(c, contract)
-                if r > br then b, br = c, r end
-            end
-            return b
-        end
+    -- v0.11.1 C-14 (HIGH from C_Bot_audit.md): heuristicPick now delegates
+    -- to the full Bot.PickPlay path under the existing _inRollout=true
+    -- guard set in BM.PickPlay. The previous Advanced-mirror placeholder
+    -- (50 lines of pos/winner heuristics) substantially below Bot.PickPlay's
+    -- coverage — missing sweep-pursuit, trick-8 boss-scan, free-trick
+    -- suit, Sun L08, Tahreeb sender/receiver, Faranka exceptions, AKA
+    -- receiver, Sun shortest-suit, Belote preservation, Tanfeer, etc.
+    -- Audit measured this as the single highest-impact gap in the bot
+    -- code: rollouts under-valued ~30% of Saudi-canonical play patterns.
+    --
+    -- Mechanism: BM.PickPlay sets B.Bot._inRollout = true (line 822) before
+    -- entering the world loop. When this delegated heuristicPick calls
+    -- Bot.PickPlay, that function's own delegation gate (Bot.lua:3450
+    -- "if not Bot._inRollout") short-circuits the BotMaster re-entry,
+    -- so we run pickLead/pickFollow directly without recursive ISMCTS.
+    --
+    -- State swap: Bot.PickPlay reads S.s.hostHands[seat], S.s.trick,
+    -- S.s.tricks, S.s.akaCalled, S.s.playedCardsThisRound. We swap these
+    -- to point at rollout-local views (hands, currentTrick, simTricks,
+    -- nil for sim-blind AKA, rolloutPlayed) so the delegated picker sees
+    -- the determinization-sampled state. Restored unconditionally below
+    -- via pcall pattern so a mid-rollout error cannot leak the swap to
+    -- subsequent worlds (which would corrupt the next sampleConsistentDeal
+    -- call by reading polluted hostHands).
+    local prevHostHands = S.s.hostHands
+    local prevTrick = S.s.trick
+    local prevTricks = S.s.tricks
+    local prevAkaCalled = S.s.akaCalled
+    local prevPlayed = S.s.playedCardsThisRound
 
-        local pos = #trick.plays + 1
-        if pos > 1 then
-            local curWinner = R.CurrentTrickWinner(trick, contract)
-            local partnerWinning = curWinner and R.Partner(s) == curWinner
-            if partnerWinning then
-                -- Smother logic (from Bot.lua).
-                if trick.leadSuit and (contract.type ~= K.BID_HOKM or trick.leadSuit ~= contract.trump) then
-                    for _, c in ipairs(legal) do
-                        local r = C.Rank(c)
-                        if C.Suit(c) == trick.leadSuit and (r == "A" or r == "T") then
-                            return c
-                        end
-                    end
-                end
-                return lowestRank(legal)
-            end
+    S.s.hostHands = hands
+    S.s.trick = currentTrick
+    S.s.tricks = simTricks
+    S.s.akaCalled = nil   -- sim-blind: rollouts treat AKA as not-yet-called
+    S.s.playedCardsThisRound = rolloutPlayed
 
-            local winners = {}
-            for _, c in ipairs(legal) do
-                local tp = { leadSuit = trick.leadSuit, plays = {} }
-                for _, p in ipairs(trick.plays) do tp.plays[#tp.plays + 1] = p end
-                tp.plays[#tp.plays + 1] = { seat = s, card = c }
-                if R.CurrentTrickWinner(tp, contract) == s then
-                    winners[#winners + 1] = c
-                end
-            end
-
-            if #winners > 0 then
-                if pos == 2 then
-                    -- Ducking logic: second hand low if not unbeatable.
-                    local unbeatable = false
-                    if contract.type == K.BID_SUN then
-                        for _, c in ipairs(winners) do
-                            if C.Rank(c) == "A" and C.Suit(c) == trick.leadSuit then
-                                unbeatable = true; break
-                            end
-                        end
-                    end
-                    if unbeatable then return highestRank(winners) end
-                    local nonWinners = {}
-                    for _, c in ipairs(legal) do
-                        local win = false
-                        for _, w in ipairs(winners) do if w == c then win = true; break end end
-                        if not win then nonWinners[#nonWinners + 1] = c end
-                    end
-                    if #nonWinners > 0 then return lowestRank(nonWinners) end
-                elseif pos == 3 then
-                    -- Third hand high (commit).
-                    return highestRank(winners)
-                end
-                return lowestRank(winners)
-            end
-            return lowestRank(legal)
-        end
-
-        -- Lead heuristics (Advanced-mirror).
-        --
-        -- Audit C-5 fix: bidder-lead branch must select the highest TRUMP,
-        -- not the highest legal card. `highestRank(legal)` returns whatever
-        -- card has the highest TrickRank — and a non-trump Ace can outrank
-        -- a depleted trump in the cross-scale comparison. The downstream
-        -- `if C.IsTrump(t, contract)` check then fails silently and the
-        -- rollout falls through to the side-suit branch, returning a
-        -- random low side-suit card instead of pulling trump.
-        local bidderTeam = R.TeamOf(contract.bidder)
-        if contract.type == K.BID_HOKM and R.TeamOf(s) == bidderTeam then
-            local trumpCards = {}
-            for _, c in ipairs(legal) do
-                if C.IsTrump(c, contract) then
-                    trumpCards[#trumpCards + 1] = c
-                end
-            end
-            if #trumpCards > 0 then
-                return highestRank(trumpCards)
-            end
-        end
-        local nonTrumps = {}
-        for _, c in ipairs(legal) do
-            if not C.IsTrump(c, contract) then nonTrumps[#nonTrumps + 1] = c end
-        end
-        if #nonTrumps > 0 then return lowestRank(nonTrumps) end
-        return lowestRank(legal)
+    local function heuristicPick(s, _trick)
+        -- _trick param kept for callsite compatibility but unused: the
+        -- swap above means S.s.trick == currentTrick at all delegation
+        -- points (we re-swap S.s.trick after each trick reset below).
+        return B.Bot and B.Bot.PickPlay and B.Bot.PickPlay(s) or nil
     end
 
-    -- Play out the rest of the hand.
-    while #simTricks < 8 do
-        if #currentTrick.plays == 4 then
-            local winner = R.CurrentTrickWinner(currentTrick, contract)
-            if not winner then break end
-            currentTrick.winner = winner
-            simTricks[#simTricks + 1] = currentTrick
-            if #simTricks == 8 then break end
-            currentTrick = { leadSuit = nil, plays = {} }
-            local nextSeat = winner
-            local pick = heuristicPick(nextSeat, currentTrick)
-            if not pick then break end
-            removeCard(hands[nextSeat], pick)
-            currentTrick.leadSuit = C.Suit(pick)
-            currentTrick.plays[1] = { seat = nextSeat, card = pick }
-        else
-            local prev = currentTrick.plays[#currentTrick.plays]
-            local nextSeat = (prev.seat % 4) + 1
-            local pick = heuristicPick(nextSeat, currentTrick)
-            if not pick then break end
-            removeCard(hands[nextSeat], pick)
-            currentTrick.plays[#currentTrick.plays + 1] = { seat = nextSeat, card = pick }
+    -- Play out the rest of the hand. Wrapped in pcall so a mid-rollout
+    -- error (sampler edge case, malformed legal-set, etc.) doesn't leak
+    -- the state swap to subsequent worlds in the outer BM.PickPlay loop.
+    local result
+    local ok = pcall(function()
+        while #simTricks < 8 do
+            if #currentTrick.plays == 4 then
+                local winner = R.CurrentTrickWinner(currentTrick, contract)
+                if not winner then break end
+                currentTrick.winner = winner
+                simTricks[#simTricks + 1] = currentTrick
+                if #simTricks == 8 then break end
+                currentTrick = { leadSuit = nil, plays = {} }
+                S.s.trick = currentTrick   -- re-swap to the new trick
+                local nextSeat = winner
+                local pick = heuristicPick(nextSeat, currentTrick)
+                if not pick then break end
+                removeCard(hands[nextSeat], pick)
+                rolloutPlayed[pick] = true
+                currentTrick.leadSuit = C.Suit(pick)
+                currentTrick.plays[1] = { seat = nextSeat, card = pick }
+            else
+                local prev = currentTrick.plays[#currentTrick.plays]
+                local nextSeat = (prev.seat % 4) + 1
+                local pick = heuristicPick(nextSeat, currentTrick)
+                if not pick then break end
+                removeCard(hands[nextSeat], pick)
+                rolloutPlayed[pick] = true
+                currentTrick.plays[#currentTrick.plays + 1] = { seat = nextSeat, card = pick }
+            end
         end
-    end
 
-    -- Accurate round scoring including melds and make/fail cliffs.
-    local meldsByTeam = { A = {}, B = {} }
-    for s = 1, 4 do
-        local team = R.TeamOf(s)
-        local m = R.DetectMelds(initialHands[s], contract)
-        for _, meld in ipairs(m) do
-            meld.declaredBy = s
-            table.insert(meldsByTeam[team], meld)
+        -- Accurate round scoring including melds and make/fail cliffs.
+        -- R.ScoreRound + R.DetectMelds are pure (no S.s reads), so it's
+        -- safe to compute under the swapped state.
+        local meldsByTeam = { A = {}, B = {} }
+        for s = 1, 4 do
+            local team = R.TeamOf(s)
+            local m = R.DetectMelds(initialHands[s], contract)
+            for _, meld in ipairs(m) do
+                meld.declaredBy = s
+                table.insert(meldsByTeam[team], meld)
+            end
         end
-    end
+        result = R.ScoreRound(simTricks, contract, meldsByTeam)
+    end)
 
-    local result = R.ScoreRound(simTricks, contract, meldsByTeam)
+    -- ALWAYS restore state, even on rollout error.
+    S.s.hostHands = prevHostHands
+    S.s.trick = prevTrick
+    S.s.tricks = prevTricks
+    S.s.akaCalled = prevAkaCalled
+    S.s.playedCardsThisRound = prevPlayed
+
+    if not ok or not result then return 0 end
+
     -- 26th-audit fix (Codex Saudi Master critical #1 variant):
     -- return TEAM DIFF (us - them) rather than just our raw points.
     -- This puts both candidate-A "we make by 5" (+162) and candidate-
