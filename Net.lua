@@ -3705,7 +3705,7 @@ end
 N.CancelLocalWarn = cancelLocalWarn
 
 local function fireLocalWarn()
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_TURN_PING) end
+    B.Sound.Try(K.SND_TURN_PING)
     if B.UI and B.UI.PulseTurn then B.UI.PulseTurn() end
 end
 

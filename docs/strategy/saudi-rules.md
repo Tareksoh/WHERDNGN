@@ -335,3 +335,63 @@ Other Bel constraints (per video #11):
 
 If a strategy note in this folder cites a rule, **link to the line
 in `Rules.lua` that enforces it**. Keeps the docs honest.
+
+---
+
+## Bot calibration journey (v0.10.0 → v0.11.10)
+
+This section is a calibration changelog for bot bidding/scoring tuning.
+The rules above don't change; what's documented here is how the bot's
+*decision* logic was tuned over 12 release cycles to match real-game
+Saudi-pro patterns.
+
+### Live diagnostic toggle
+
+Use `/baloot bidcalc` (added v0.11.8) to enable a per-call trace of
+`Bot.PickBid`'s Sun-vs-Hokm decisions. Output goes to chat with
+`[bid sN rR]` prefix showing hand, sun strength, all thresholds, and
+which decision branch fired (or was skipped). Off-by-default; zero
+overhead in production. Toggle off when done: `/baloot bidcalc` again.
+
+### Calibration constants — current values
+
+| Constant | Current | Where |
+|---|---|---|
+| `K.BOT_TH_HOKM_R1_BASE` | 42 | Constants.lua, Bot.PickBid R1 Hokm |
+| `K.BOT_TH_HOKM_R2_BASE` | 36 | R2 Hokm threshold |
+| `K.BOT_TH_SUN_BASE` | 40 | R1+R2 Sun threshold |
+| `K.BOT_BID_JITTER` | 6 | ±6 swing per call |
+| `K.BOT_SUN_VOID_PENALTY_CAP` | 8 | sunStrength void/short-suit penalty cap |
+| `K.BOT_SUN_MARDOOFA_BONUS` | 20 | per A+T mardoofa pair |
+| `K.BOT_SUN_3ACE_BONUS` | 15 | extra +bonus for 3+ Aces |
+| `K.MELD_CARRE_A_SUN` | 200 raw | Carré-A in Sun (canonical) |
+
+### Tuning history
+
+| Constant | v0.4 | v0.10.4 | v0.10.6 | v0.11.9 | v0.11.10 |
+|---|---|---|---|---|---|
+| `BOT_SUN_MARDOOFA_BONUS` | 5 | 10 | – | 20 | – |
+| `TH_SUN_BASE` | 50 | – | 47 | – | **40** |
+| `sunStrength` void-cap | 25 | – | – | 8 | – |
+| `K.MELD_CARRE_A_SUN` | 200 | 400(R5) | – | – | **200(revert)** |
+| `hokmMinShape` count==2 | strict | – | LOOSER (Lever C) | TIGHTER (req 9 or A) | – |
+
+The v0.10.0 R5 + v0.11.6 split-multiplier experiments both introduced
+regressions; v0.11.10 reverted to the canonical v0.4.x state. See Q3
+above and CHANGELOG v0.11.10 for full rationale.
+
+### Diagnostic process
+
+Per the v0.11.8/v0.11.9/v0.11.10 cycle: the user reported a
+"bots not bidding Sun" pattern, captured a chat log via the
+`/baloot bidcalc` toggle, and the trace data revealed:
+
+1. Hands legitimately failing `sunMinShape` (correct — most hands
+   structurally don't qualify for Sun)
+2. Hands passing `sunMinShape` but failing the strength threshold
+   by 20-30 points (calibration gap)
+
+The bidcalc trace exposes both the structural-eligibility check
+and the strength threshold gate, so future calibration questions
+can be answered against real-game data without instrumenting on
+the fly.

@@ -2551,7 +2551,7 @@ local function animateLand(slot, fromPos)
     local pt, rel, relPt, ox, oy = unpack(slot._origPoint)
 
     -- Swish on the slide. Lands as a card_play slap from S.ApplyPlay.
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CARD_SWISH) end
+    B.Sound.Try(K.SND_CARD_SWISH)
 
     local steps = 8
     local stepDur = (K.CARD_ANIM_SEC or 0.22) / steps

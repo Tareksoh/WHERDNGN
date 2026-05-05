@@ -79,7 +79,7 @@ local VERBOSE = (TEST_VERBOSE == true)
 -- -- Module shims (provide no-op B.Sound, B.Log, B.UI before files load)
 
 WHEREDNGN = WHEREDNGN or {}
-WHEREDNGN.Sound = { Cue = function() end, ArmCue = function() end }
+WHEREDNGN.Sound = { Cue = function() end, Try = function() end, ArmCue = function() end }
 WHEREDNGN.Log   = {
     Debug = function() end, Info = function() end, Warn = function() end,
     Error = function() end, Clear = function() end, Dump = function() end,

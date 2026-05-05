@@ -21,8 +21,9 @@ import sys
 
 
 HARNESSES = [
-    ("rules",     "test_rules.lua",     "Rules.lua / Cards.lua / Constants.lua"),
-    ("state_bot", "test_state_bot.lua", "State.lua / Bot.lua"),
+    ("rules",      "test_rules.lua",      "Rules.lua / Cards.lua / Constants.lua"),
+    ("state_bot",  "test_state_bot.lua",  "State.lua / Bot.lua"),
+    ("botmaster",  "test_botmaster.lua",  "BotMaster.lua (C-14 + Bot1-01/02 behavioral)"),
 ]
 
 

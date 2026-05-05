@@ -28,6 +28,13 @@ actual bot logic.** Each rule maps to a specific picker function
      v0.5.8 → v0.5.14). See glossary.md for the current snapshot
      and the grep recipe to re-anchor. -->
 
+> **Live diagnostic** (v0.11.8+): `/baloot bidcalc` toggles per-call
+> trace of every Bot.PickBid decision — hand state, all jittered
+> thresholds, which branch fired or was skipped. Useful for
+> calibrating against real-game patterns. See
+> `saudi-rules.md` "Bot calibration journey" appendix for the
+> tuning history. Toggle off when done: `/baloot bidcalc` again.
+
 
 ### Hokm bidding triggers
 

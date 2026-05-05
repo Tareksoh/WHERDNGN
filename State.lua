@@ -910,7 +910,7 @@ function S.ApplyTurn(seat, kind)
     end
     -- Audio: ping when our turn arrives (transition into our seat).
     if seat == s.localSeat and prevTurn ~= seat then
-        if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_TURN_PING) end
+        B.Sound.Try(K.SND_TURN_PING)
         -- Schedule the AFK pre-warn (T-10s) for our turn.
         if B.Net and B.Net.StartLocalWarn then
             B.Net.StartLocalWarn(kind)
@@ -1109,7 +1109,7 @@ function S.ApplyContract(bidder, btype, trump)
     if oppA then s.belPending = { 2, 4 } else s.belPending = { 1, 3 } end
     log("contract bidder=%d type=%s trump=%s", bidder, btype, tostring(trump))
     -- Audio: contract finalized.
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CONTRACT) end
+    B.Sound.Try(K.SND_CONTRACT)
     -- AFK pre-warn for the bel decision (defender at NextSeat(bidder)).
     if B.Net and B.Net.StartLocalWarn then B.Net.StartLocalWarn("bel") end
 end
@@ -1149,7 +1149,7 @@ function S.ApplyTriple(seat, open)
     s.contract.tripleOpen = (open ~= false)
     s.turn = nil
     s.turnKind = nil
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_TRIPLE) end
+    B.Sound.Try(K.SND_VOICE_TRIPLE)
     if not s.contract.tripleOpen then
         s.phase = K.PHASE_PLAY
     else
@@ -1167,7 +1167,7 @@ function S.ApplyFour(seat, open)
     s.contract.fourOpen = (open ~= false)
     s.turn = nil
     s.turnKind = nil
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_FOUR) end
+    B.Sound.Try(K.SND_VOICE_FOUR)
     if not s.contract.fourOpen then
         s.phase = K.PHASE_PLAY
     else
@@ -1188,7 +1188,7 @@ function S.ApplyGahwa(seat)
     -- No further escalation; HostFinishDeal proceeds to PLAY.
     s.turn = nil
     s.turnKind = nil
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_GAHWA) end
+    B.Sound.Try(K.SND_VOICE_GAHWA)
 end
 
 function S.ApplyMeld(seat, kind, suit, top, encodedCards)
@@ -1344,7 +1344,7 @@ function S.ApplyPlay(seat, card, isReplay)
 
     -- Audio: card-rustle on every play. Fires on every client because
     -- ApplyPlay runs on every client when host broadcasts MSG_PLAY.
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_CARD_PLAY) end
+    B.Sound.Try(K.SND_CARD_PLAY)
 
     -- v0.10.7 user-requested cue — TRUMP CUT.
     -- Fires when this play is the FIRST trump played in a non-trump-
@@ -1674,7 +1674,7 @@ function S.ApplyAKA(seat, suit)
     s.akaCalled = { seat = seat, suit = suit }
     -- Voice cue fires on every client. The Sound.Cue path is shared
     -- with the existing escalation cues so timing/ducking matches.
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_AKA) end
+    B.Sound.Try(K.SND_VOICE_AKA)
 end
 
 -- Meld verdict ("A"/"B"/"tie") is fully recomputable from
@@ -2190,7 +2190,7 @@ function S.ApplyPreempt(seat)
     s.contract = nil
     s.preemptEligible = nil
     s.phase = K.PHASE_DEAL2BID
-    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_VOICE_SUN) end
+    B.Sound.Try(K.SND_VOICE_SUN)
 end
 
 function S.ApplyPreemptPass(seat)

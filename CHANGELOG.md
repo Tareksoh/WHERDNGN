@@ -1,5 +1,104 @@
 # Changelog
 
+## v0.11.12 — test-harness extension + Sound.Try migration + doc updates
+
+Continues the v0.11.9 ultra-audit queue. The previous batch (v0.11.11)
+closed wire-validation symmetry items + the SU-Ultra-01 reachability
+fix. This batch adds behavioral test coverage for the BotMaster path
+(highest-leverage architectural code), migrates the Sound.Cue guard
+pattern to the v0.11.11 helper, and documents the calibration journey.
+
+### Added (test infrastructure — XU-01 phase 1)
+
+- **`tests/test_botmaster.lua`** — new behavioral harness loading
+  State + Bot + BotMaster under stub globals. Exercises `BM.PickPlay`
+  and `rolloutValue` end-to-end. Closes the test-harness gap that
+  allowed v0.11.2 SU-Ultra-01 ("SWA per-team breakdown shipped dead")
+  and v0.10.6 RT07-01 ("redeal recovery shipped dead") to pass
+  source-string-match pins. **Source-string pins on BotMaster.lua
+  remained useful as structural guardrails but couldn't catch the
+  "code matches text but is unreachable" bug class** — those need
+  behavioral exercise, which this harness provides.
+
+  19 new behavioral pins covering:
+  - **Section A**: BotMaster surface + IsActive flag-gating
+  - **Section B**: C-14 + Bot1-01 state-swap correctness — verifies
+    all 6 swapped fields (hostHands, trick, tricks, akaCalled,
+    playedCardsThisRound, _memory) are restored after BM.PickPlay,
+    and that `_inRollout` doesn't leak
+  - **Section C**: heuristicPick delegates to Bot.PickPlay (counts
+    >100 invocations during a single BM.PickPlay rollout)
+  - **Section D**: Bot1-02 `_inRollout` flag-leak guard — injects an
+    R.IsLegalPlay error and verifies the flag still clears
+  - **Section E**: v0.11.10 canonical scoring rule end-to-end —
+    Sun-Carré-A meld contributes exactly 400 raw / 40 nq through
+    R.ScoreRound (the user-arbitrated "should be 66" rule)
+
+  **Phase 2** (Net.lua harness with WoW API stubs: C_ChatInfo,
+  C_Timer, GetTime, CHAT_MSG_ADDON event injection) is the next
+  test-infrastructure investment; deferred to its own release
+  because it requires a substantial stub kit. Phase 1 covers
+  the highest-value architectural code (C-14 + Bot1-01/02 all live
+  in BotMaster.lua) which is enough for the majority of the
+  source-string pin debt.
+
+### Changed (refactor — XR-15 site migration)
+
+- **11 sites migrated** from `if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_X) end`
+  to `B.Sound.Try(K.SND_X)`:
+  - `State.lua` (9 sites)
+  - `Net.lua` (1 site)
+  - `UI.lua` (1 site)
+
+  v0.11.11 introduced `B.Sound.Try` as a thin nil-safe wrapper
+  but didn't migrate existing sites. v0.11.12 completes the
+  migration. Test stub `WHEREDNGN.Sound = { ..., Try = function() end, ... }`
+  in `test_state_bot.lua` and `test_botmaster.lua` ensures the
+  harness picks up the new helper.
+
+  The 13 → 11 site count reflects two pre-existing patterns that
+  use compound gates (e.g., `if not isReplay and B.Sound and B.Sound.Cue then ...`)
+  which can't be simply replaced with `Try` — those keep the
+  guard form but with consistent gate ordering.
+
+### Updated (XU-12 / XU-14 — doc drift closures)
+
+- **`docs/strategy/saudi-rules.md`** — added "Bot calibration
+  journey (v0.10.0 → v0.11.10)" appendix:
+  - Live diagnostic: `/baloot bidcalc` reference
+  - Calibration constants table (current values + Constants.lua
+    locations)
+  - Tuning history table (v0.4 → v0.10.4 → v0.10.6 → v0.11.9 →
+    v0.11.10) covering all bidding constants that moved
+  - Diagnostic process narrative referencing the v0.11.8/.9/.10
+    cycle as the canonical example of "user reports → bidcalc
+    trace → calibration adjustment"
+
+- **`docs/strategy/decision-trees.md`** Section 1 — added a callout
+  for `/baloot bidcalc` near the bidding-rule tables so future
+  contributors find the diagnostic toggle without grep'ing
+  CHANGELOG.
+
+### Skipped (intentional defers)
+
+- **NetU-10** — feature-decision (implement Takweesh recovery vs.
+  remove forward-compat hook for `s.contract.forced`). Both options
+  have merit; needs explicit user direction.
+- **XR-16 MaybeRunBot 638-line refactor** — too risky without test
+  harness phase 2 covering the dispatch path. Better deferred until
+  XU-01 phase 2 lands.
+- **XU-01 phase 2 (Net.lua harness)** — substantial stub kit work;
+  separate release. Phase 1 in v0.11.12 covers BotMaster which is
+  the higher-leverage half.
+- **XU-15 (30+ inline `S.s.* =` writes architectural debt)** — slow-
+  burn refactor; many sites; better as ongoing improvement than a
+  single batch.
+
+### Tests
+
+- **`tests/test_botmaster.lua`** Sections A-E (19 new pins)
+- **569 / 569 pass** (up from 550, +19 new behavioral pins)
+
 ## v0.11.11 — audit-queue batch (NetU-01..09 + SU-Ultra-01..03 + XU-07/09/10)
 
 Sweeps the remaining items from the v0.11.9 ultra audit: 1 HIGH (OPEN-1
