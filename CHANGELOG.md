@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.10.1 — M1 closure: Qaid offender melds now forfeited (user arbitration)
+
+The v0.10.0 review surfaced an unresolved rule-reading ambiguity (M1):
+on a Qaid penalty, does the offender's team **keep** their own
+declared melds (per "مشروعي لي ومشروعك لك" / PDF K-08) or **forfeit**
+them (per Source H H-36.12 + PDF 02 K-04 "the buyer's meld is
+forfeited")? User arbitration resolved this in favor of the
+forfeit reading.
+
+### Fixed (M1 — Qaid offender forfeits melds)
+
+- **`Net.lua` `HostResolveTakweesh` (line ~2196-2225)**: when a Qaid
+  penalty is resolved, the OFFENDER team (opposite of `winnerTeam`)
+  now zeros their own declared melds. The non-offender team (the
+  winner of the penalty) keeps their own melds × multiplier as
+  before. Belote independent regardless of side.
+- **`Net.lua` `HostResolveSWA` invalid-claim branch (line ~2924-2940)**:
+  invalid SWA is a Qaid context — the SWA caller's team (the
+  offender) zeros their own melds. Opp adds their own melds × mult.
+- **Scope deliberately narrow**: the same change is NOT applied to
+  `R.ScoreRound`'s regular contract-fail branch, because that path
+  fires on plain bidder-failed-to-make (no illegal play). PDF K-04's
+  "buyer's meld forfeited" wording is specifically about Qaid
+  context, so regular fail keeps the existing "each team keeps own
+  melds" semantics.
+
+### Doc
+
+- The pre-v0.10.1 14th-audit fix comment ("each team keeps their own
+  melds during a Qaid") cited PDF K-08; it's preserved as a
+  historical reference inside the new comment, then explained why
+  v0.10.1 reverses for Qaid contexts. Future readers can see both
+  the prior reasoning and the M1 arbitration outcome.
+
+### Tests
+
+- 340/340 still pass. Note: per `xref_X1_*.md` G1, there are no
+  unit tests covering `N.HostResolveTakweesh` directly, so this
+  behavior change is regression-bare. Adding Net.lua test harness
+  coverage is a separate (larger) effort flagged in the Phase 2B
+  cross-reference report.
+
+### Concrete impact
+
+- ~10-20 game points per round difference on Qaid-triggering rounds
+  vs the pre-v0.10.1 behavior (loser's pre-existing melds no longer
+  count toward their own score).
+
 ## v0.10.0 — Source-of-truth review: 9 silent bugs closed + doc-drift sweep
 
 A 24-agent triangulation across 38 video transcripts, 8 PDFs, and the

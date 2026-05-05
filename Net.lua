@@ -2193,15 +2193,29 @@ function N.HostResolveTakweesh(callerSeat)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
     local cardA = (winnerTeam == "A") and handTotal or 0
     local cardB = (winnerTeam == "B") and handTotal or 0
-    -- Saudi Qayd rule (per "نظام التسجيل في البلوت"): "مشروعي لي
-    -- ومشروعك لك" — both teams KEEP their OWN declared melds during
-    -- a Qaid penalty. The penalty itself (handTotal × mult) goes to
-    -- the winner; melds are NOT transferred or nullified.
-    -- 14th-audit fix (Codex+Gemini scoring audit): previously the
-    -- LOSER's meld was zeroed out, contradicting the rule's "your
-    -- meld is yours regardless of the qaid outcome."
-    local mpA = meldA
-    local mpB = meldB
+    -- Saudi Qaid rule (offender melds forfeited):
+    --
+    -- v0.10.0 review M1 — user-arbitrated reading (option A):
+    --   * Source H H-36.12: offender's melds are "zeroed/forfeited"
+    --   * PDF 02 K-04 (نظام التسجيل في البلوت): "the buyer's meld is
+    --     forfeited (kept by neither side, just lost)"
+    --   * PDF K-08's "stays with owner" wording was reread under the
+    --     v0.10.0 audit as ambiguous — possibly "stays in the pile but
+    --     doesn't count" rather than "owner scores it." User picked
+    --     the explicit-forfeit reading per H + K-04.
+    --
+    -- Per the user's M1 arbitration, the offender's team forfeits its
+    -- own declared melds when found illegal (Qaid). The non-offender
+    -- team (winner) keeps theirs and adds them × mult. Belote
+    -- independent regardless of side (rb3haa).
+    --
+    -- Pre-v0.10.1 the 14th-audit fix kept BOTH teams' melds (citing
+    -- K-08); v0.10.1 reverses that for the Qaid context only —
+    -- regular contract-fail in R.ScoreRound is a separate (non-Qaid)
+    -- scenario and continues to keep both teams' own melds.
+    local offenderTeam = (winnerTeam == "A") and "B" or "A"
+    local mpA = (offenderTeam == "A") and 0 or meldA
+    local mpB = (offenderTeam == "B") and 0 or meldB
 
     -- Belote (Hokm only, played cards only — Saudi rule rb3haa).
     -- Cancelled when the K+Q holder also declared a ≥100 meld (per
@@ -2923,11 +2937,19 @@ function N.HostResolveSWA(callerSeat, callerHand)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         local cardA = (oppOfCaller == "A") and handTotal or 0
         local cardB = (oppOfCaller == "B") and handTotal or 0
-        -- Saudi Qayd rule: BOTH teams keep their OWN declared melds.
-        -- The penalty (handTotal × mult) goes to the winner; melds
-        -- are NOT transferred or nullified. 14th-audit fix.
-        local mpA = meldA
-        local mpB = meldB
+        -- Saudi Qaid rule (offender melds forfeited).
+        --
+        -- v0.10.1 M1 fix (user-arbitrated): an invalid-SWA call is a
+        -- Qaid context — the caller (offender) forfeits their team's
+        -- own declared melds. Per Source H H-36.12 + PDF 02 K-04
+        -- ("the buyer's meld is forfeited"), offender's melds are
+        -- not just transferred elsewhere — they are zeroed for the
+        -- round. The penalty (handTotal × mult) flows to the
+        -- non-offender team; that team also keeps THEIR own melds.
+        -- Belote independent. Pre-v0.10.1 the 14th-audit fix kept
+        -- both teams' melds; v0.10.1 reverses for the Qaid context.
+        local mpA = (callerTeam == "A") and 0 or meldA
+        local mpB = (callerTeam == "B") and 0 or meldB
         -- Belote scan (played cards only — Saudi rule rb3haa).
         -- Cancelled when the K+Q holder also declared a ≥100 meld.
         local beloteOwner
