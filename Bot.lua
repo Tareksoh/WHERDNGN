@@ -1788,6 +1788,15 @@ local function pickLead(legal, contract, seat)
         -- v0.5.14 Section 9 N-3 receiver: opp positive signals → avoid.
         -- Opp's "want"/"bargiya" indicates they want their partner to
         -- lead that suit; we deny them tempo by not leading it.
+        --
+        -- v0.9.3 #58 fix (audit_v0.9.0/58_tahreeb_desync.md): also
+        -- include `bargiya_hint` (single-A event, ambiguous between
+        -- invite and defensive shed). Pre-v0.9.3 the silent drop of
+        -- bargiya_hint here meant a Saudi-tier opp's legitimate
+        -- single-event Bargiya invite went undefended — partner-of-opp
+        -- could lead-back without our deny-tempo response. Even though
+        -- bargiya_hint is lower-confidence than full bargiya, marking
+        -- it as avoid is the correct conservative defense.
         for s = 1, 4 do
             if R.TeamOf(s) ~= R.TeamOf(seat) and Bot.IsBotSeat(s) then
                 local oStyle = Bot._partnerStyle[s]
@@ -1796,7 +1805,8 @@ local function pickLead(legal, contract, seat)
                     for _, su in ipairs({ "S", "H", "D", "C" }) do
                         if su ~= contract.trump then
                             local cls = tahreebClassify(osignals[su])
-                            if cls == "bargiya" or cls == "want" then
+                            if cls == "bargiya" or cls == "want"
+                               or cls == "bargiya_hint" then
                                 tahreebAvoidSet[su] = true
                             end
                         end
@@ -3135,6 +3145,40 @@ function Bot.PickAKA(seat, leadCard)
         local partner = R.Partner(seat)
         local pmem = Bot._memory and Bot._memory[partner]
         if pmem and pmem.void and pmem.void[trump] then
+            return nil
+        end
+    end
+
+    -- v0.9.3 AKA precondition (g) (audit_v0.9.0/19_section6_now.md
+    -- §2 + decision-trees.md Section 6 row "preconditions" subitem g).
+    -- Round-stage / scoreUrgency: AKA is most valuable mid-round
+    -- when voids have surfaced. In LATE-round tricks (trickNum >= 6)
+    -- the signal carries marginal additional information — most
+    -- voids are already known, partner can read the trick state
+    -- directly, and broadcasting a banner just leaks our top-card
+    -- holding to opponents for low return. Suppress when:
+    --   • trickNum >= 6 (late round, ≤2 tricks remain) AND
+    --   • cumulative differential is large (we're not in a
+    --     clutch-trick scenario where the AKA's coordination
+    --     genuinely matters) → use scoreUrgency==0 as a proxy for
+    --     "not desperate, not near-clinch"
+    -- The first condition is sufficient on its own per the doc;
+    -- the second tightens it so we still send AKA late-round when
+    -- the round is decisive.
+    if trickNum >= 6 then
+        -- Allow the late-round AKA when score-state is meaningful
+        -- (close race, opp near-win, we near-clinch). Suppress when
+        -- it's just a normal late-round info reveal.
+        if S.s.cumulative then
+            local myTeam = R.TeamOf(seat)
+            local meCum = S.s.cumulative[myTeam] or 0
+            local oppCum = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
+            local target = S.s.target or 152
+            local clutch = (oppCum >= target - 25)  -- opp near-win
+                           or (meCum >= target - 25)  -- we near-clinch
+                           or (math.abs(oppCum - meCum) <= 20)  -- close race
+            if not clutch then return nil end
+        else
             return nil
         end
     end

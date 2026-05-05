@@ -1,5 +1,78 @@
 # Changelog
 
+## v0.9.3 — Audit-sweep loop: 4 more v0.9.0 ultra-audit items closed
+
+Continuation of the 60-report v0.9.0 ultra-audit. Four items closed
+this iteration: doc drift on Section 10 (HIGH per audit #22),
+bargiya_hint pass-through gap in N-3 (#58), short-window
+StartLocalWarn no-op (#56), and AKA precondition (g) round-stage
+suppression (#19 + decision-trees.md).
+
+### Fixed
+
+- **Section 10 doc drift (HIGH per audit #22)**. `decision-trees.md`
+  Section 10 still tagged exceptions #2, #3, #4 + the J+8 anti-rule
+  as `(not yet wired)` even though they shipped in v0.8.4 / v0.8.5 /
+  v0.9.2. v0.9.0's doc-refresh updated Section 9 + Section 11 rule 3
+  + Section 11 rule 4 markers but missed Section 10 entirely. Now:
+  - Default no-Faranka row reframed as "wired by absence" (winners-
+    branch covers it; no Faranka path exists unless an exception
+    fires).
+  - Exception #1 marked partially wired (v0.5.19 trick-3 sweep
+    pursuit; cross-wire to pickFollow Faranka still deferred).
+  - Exception #2 marked wired v0.8.4 + bidder-team gate v0.9.2.
+  - Exception #3 marked wired v0.8.5 (with `S.HighestUnplayedRank`
+    trump-rank fix).
+  - Exception #4 marked wired v0.8.4.
+  - J+8 anti-Faranka rebuttal marked wired v0.8.4.
+
+- **#58 N-3 receiver: bargiya_hint silent drop**
+  (`audit_v0.9.0/58_tahreeb_desync.md`). The N-3 opp-avoid pass at
+  `Bot.lua:1799` only marked `cls == "bargiya" or cls == "want"` as
+  avoid-suit. The v0.9.0-introduced `bargiya_hint` (single-A event,
+  ambiguous between invite and defensive shed) was silently dropped
+  — meaning a Saudi-tier opp's legitimate single-event Bargiya
+  invite went undefended (we wouldn't deny tempo). Now also avoids
+  on `bargiya_hint`. Conservative defense: lower-confidence hint
+  still warrants suit-avoidance.
+
+- **#56 StartLocalWarn warnAt-clamp** (`audit_v0.9.0/56_afk_new_phases.md`
+  Q5). Pre-warn computed `warnAt = TURN_TIMEOUT_SEC - 10 = 50s` for
+  ALL kinds, including the 5-second OVERCALL window — `warnAt > timeout`
+  meant the warn never fired. Now: per-kind timeout selection
+  (`overcall` uses `OVERCALL_TIMEOUT_SEC=5`), with proportional
+  warnAt: 10s before for long windows (≥20s), 1s before for short
+  windows. The OVERCALL human gets a 1s pre-warn cue.
+
+### Added
+
+- **AKA precondition (g) — round-stage / scoreUrgency suppression**
+  (`audit_v0.9.0/19_section6_now.md` §2 + decision-trees.md
+  Section 6 row "preconditions"). When `trickNum >= 6` (late round,
+  ≤2 tricks remain), AKA's marginal information value is low —
+  most voids are known, partner can read trick state directly,
+  and the banner just leaks our top-card holding. Now suppress
+  late-round AKA UNLESS the round is clutch (opp near-win, we
+  near-clinch, or close-race within 20 cum points). Pre-v0.9.3
+  only the coarse `trickNum <= 1` skip existed.
+
+### Tests
+
+- 333/333 regression tests pass (no fixture additions; behavior
+  changes are observation-driven and gracefully degrade in absence
+  of triggering conditions).
+
+### Audit response cumulative (v0.8.6 → v0.9.0 → v0.9.1 → v0.9.2 → v0.9.3)
+
+| Severity | Closed |
+|---|---|
+| v0.7.1 HIGH    | 4/4 |
+| v0.7.1 MEDIUM  | 5/5 |
+| v0.7.1 LOW     | 4/6 |
+| v0.7.1 Doc drift | **5/5** (Section 10 closed v0.9.3) |
+| v0.7.1 Missing | **7/11** (AKA precond g closed v0.9.3) |
+| v0.9.0 ultra-audit | 11+ closed (HIGH-impact subset) |
+
 ## v0.9.2 — Audit-sweep loop: 7 v0.9.0 ultra-audit findings closed
 
 Continuation of the v0.9.0 ultra-audit response. The 60-report

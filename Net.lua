@@ -3287,8 +3287,28 @@ end
 function N.StartLocalWarn(kind)
     cancelLocalWarn()
     if S.s.paused then return end
-    local timeout = K.TURN_TIMEOUT_SEC or 60
-    local warnAt = timeout - 10
+    -- v0.9.3 #56 fix (audit_v0.9.0/56_afk_new_phases.md): per-kind
+    -- timeout selection. Pre-v0.9.3 the warn used unconditional
+    -- TURN_TIMEOUT_SEC=60 → warnAt=50, fine for bid/play turns but
+    -- a no-op for the 5-second OVERCALL window (warnAt > timeout).
+    -- Now: short-window kinds use their own timeout, and the warn
+    -- triggers proportionally early. For OVERCALL (5s) we surface
+    -- the warn at 4s (1s before resolve) so a human about to be
+    -- timed-out gets an audible/visual cue.
+    local timeout
+    if kind == "overcall" then
+        timeout = K.OVERCALL_TIMEOUT_SEC or 5
+    else
+        timeout = K.TURN_TIMEOUT_SEC or 60
+    end
+    -- warnAt: 10s before timeout for long windows; 1s before for
+    -- short windows. Clamp negative offsets.
+    local warnAt
+    if timeout >= 20 then
+        warnAt = timeout - 10
+    else
+        warnAt = math.max(1, timeout - 1)
+    end
     if warnAt < 1 then return end
 
     local mine = false
