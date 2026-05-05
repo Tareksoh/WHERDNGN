@@ -2705,7 +2705,23 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 table.sort(sorted, function(a, b)
                     return C.TrickRank(a, contract) < C.TrickRank(b, contract)
                 end)
-                return sorted[2]   -- second-lowest = re-entry signal
+                -- v0.9.5 wouldWin gate (audit_v0.9.0/18_section4_now.md
+                -- §2): rule 1B's "second-lowest" can be a card that
+                -- BEATS partner's lead — stealing the trick instead
+                -- of letting partner take it. Example: partner leads
+                -- JH, we hold {7H, KH}. sorted[2] = KH beats JH and
+                -- steals partner's trick. Defend: only return the
+                -- second-lowest if it does NOT win the trick (i.e.,
+                -- partner would still be the trick winner after our
+                -- play). If second-lowest would steal, fall through
+                -- to lowestByRank — partner keeps the trick we're
+                -- preserving the re-entry signal indirectly via the
+                -- absolute-lowest play (the "biggest mistake" rule's
+                -- mitigation is moot if our lowest IS the absolute
+                -- lowest of a 2-card holding anyway).
+                if not wouldWin(sorted[2], trick, contract, seat) then
+                    return sorted[2]   -- second-lowest = re-entry signal
+                end
             end
         end
 

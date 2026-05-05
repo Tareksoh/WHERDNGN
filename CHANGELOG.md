@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.9.5 — Section 4 rule 1B wouldWin gate + saudi-rules.md doc fixes
+
+Audit-sweep loop iter on the saturated queue. Three items closed.
+
+### Fixed (Bot.lua — Section 4 rule 1B trick-stealing misfire)
+
+`pickFollow` rule 1B (Sun + partner-winning + we-can't-beat → second-
+lowest as re-entry signal) was missing a `wouldWin` precondition.
+The `sorted[2]` second-lowest pick could BEAT partner's lead and
+steal the trick, contradicting the rule's intent. Concrete misfire:
+partner leads JH, our hand `{7H, KH}`, smother gate fails (only 1
+point card), rule 1B fires, sorted[2]=KH, KH beats JH, **we steal
+partner's trick.**
+
+Fix: gate `return sorted[2]` on `not wouldWin(sorted[2], trick,
+contract, seat)`. If the second-lowest would steal, fall through
+to `lowestByRank` (partner keeps the trick — the absolute-lowest
+play also implicitly preserves re-entry in 2-card holdings since
+there's only one alternative).
+
+Source: `audit_v0.9.0/18_section4_now.md` §2.
+
+### Fixed (saudi-rules.md doc drift D5)
+
+Two stale sections updated:
+
+- **Q4 score-rounding text** (line 156). Was tagged "⚠ Possible
+  mismatch" pointing at `(x + 4) / 10` (rounds DOWN). Now reflects
+  v0.5.6 fix `(x + 5) / 10` (rounds UP per video #43, "حساب النقاط
+  في البلوت للمبتدئين"). Audit `audit_v0.9.0/26_rules_scoring.md`
+  §6 verified the code is correct; only the doc was stale.
+
+- **Qaid forfeit text** (line 119). Was "offending team's melds
+  forfeited (zeroed) but NOT transferred to caller". Code's actual
+  semantic (per 14th-audit Codex/Gemini interpretation) is "each
+  team keeps own melds" — neither zeroed nor transferred. Updated
+  doc to match. Audit `audit_v0.9.0/28_rules_aka_swa_takweesh.md`
+  §4 confirms code-correctness.
+
+### Tests
+
+- 333/333 regression tests pass. Rule 1B wouldWin gate is observation-
+  driven; existing E.6 fixture passes (the 9H second-lowest does NOT
+  beat AH lead, so the new gate doesn't fire there).
+
+### Audit response cumulative (v0.8.6 -> v0.9.5)
+
+| Severity | Closed |
+|---|---|
+| HIGH    | 4/4 |
+| MEDIUM  | 5/5 |
+| LOW     | 4/6 (L2, L3 cosmetic remain) |
+| Doc drift | **5/5 + saudi-rules Q4/Qaid** (D5 closed v0.9.5) |
+| Missing | 7/11 |
+| v0.9.0 ultra-audit | **13+** items closed |
+
 ## v0.9.4 — Calibration tooling: telemetry analyzer + workflow doc
 
 Audit cycle saturated; pivoting to empirical calibration. v0.8.3 added

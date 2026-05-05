@@ -116,7 +116,7 @@ docs conflated them under "Takweesh"; that conflation was wrong.
 | Penalty | Phase | Trigger | Outcome |
 |---|---|---|---|
 | **Kasho (كاشو)** | **Pre-bid** | Procedural error during deal (mis-cut, dropped card, mis-deal) | **Redeal**, no points awarded |
-| **Qaid (قيد)** | **Post-bid** | Illegal play during round (failed must-follow, failed must-ruff, undeclared meld, observed cheat, **verbal slip about held cards** (تَوْضِيح لَعِب)) | Non-offending team scores **26 raw (Sun) / 16 raw (Hokm)** + their **own** melds; offending team's melds **forfeited (zeroed) but NOT transferred** to caller; ×multiplier applies on Bel/Bel-x2 |
+| **Qaid (قيد)** | **Post-bid** | Illegal play during round (failed must-follow, failed must-ruff, undeclared meld, observed cheat, **verbal slip about held cards** (تَوْضِيح لَعِب)) | Non-offending team scores **26 raw (Sun) / 16 raw (Hokm)** + their **own** melds; offending team **keeps** their own melds (per "مشروعي لي ولك مشروعك" — corrected v0.4.3+ per Codex/Gemini 14th-audit); ×multiplier applies on Bel/Bel-x2. Audit `audit_v0.9.0/28_rules_aka_swa_takweesh.md` §4 verified. |
 
 **Takweesh (تكويش)** is the *verb form* of calling Kasho. Calling
 "Takweesh" during pre-bid invokes Kasho mechanics. Post-bid illegal
@@ -153,12 +153,13 @@ line 672 applies `K.MULT_SUN = 2` to the round multiplier; line
 678 multiplies meld points. So 200 raw × 2 Sun = 400 effective —
 exactly what video #38 says. **No change needed.**
 
-**Q4: Score-rounding ("5 rounds down")?** ⚠ **Possible mismatch.**
-`R.ScoreRound` line 698: `div10(x) = math.floor((x + 4) / 10)` —
-this rounds 65 → 6 (DOWN to 60). Video #43 extraction said
-65 → 70 (UP). The in-code comment cites "5 rounds down" as the
-rule. Verify the video extraction (it may have mis-quoted) or the
-Saudi convention's actual rounding direction.
+**Q4: Score-rounding ("5 rounds UP" per video #43).** ✅ **RESOLVED v0.5.6.**
+`R.ScoreRound` div10 is now `math.floor((x + 5) / 10)` —
+rounds 65 → 70 (UP), 64 → 60. Per video #43 ("حساب النقاط
+في البلوت للمبتدئين"). Earlier `(x + 4) / 10` formulation was
+wrong; v0.5.6 fixed all div10 sites to align (R.ScoreRound,
+HostResolveTakweesh, HostResolveSWA-invalid). Audit
+`audit_v0.9.0/26_rules_scoring.md` §6 verified.
 
 **Q5: Sun ×2 multiplier phrasing.** Code applies the ×2 in the
 multiplier path (line 672), then `div10` at the end. Magnitude
