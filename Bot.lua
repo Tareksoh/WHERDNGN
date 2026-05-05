@@ -3929,6 +3929,14 @@ function Bot.PickSWA(seat)
     if not S.s.contract then return false end
     local hand = S.s.hostHands and S.s.hostHands[seat]
     if not hand or #hand == 0 or #hand > 4 then return false end
+    -- v0.11.7 user feedback: don't bother SWA-claiming with only 1
+    -- card left — the bot is about to play that card as the final
+    -- trick anyway. An SWA banner + permission flow + claim-verified
+    -- announcement for a single forced play is just UI noise. Just
+    -- play. (Real-game flow: the bot's MaybeRunBot dispatch will
+    -- play the card on the next turn after this PickSWA returns
+    -- false; nothing else needs to change.)
+    if #hand <= 1 then return false end
 
     -- Reconstruct trick state for the validator.
     local trickPlays = (S.s.trick and S.s.trick.plays) or {}

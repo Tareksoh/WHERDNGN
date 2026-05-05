@@ -3056,14 +3056,41 @@ local function renderBanner()
         setOutcome(roundWinner)
 
         banner:Show()
+        -- v0.11.7 user feedback: render the caller's hand as a glyph
+        -- string in the title so the cards stay visible after the
+        -- 5-second pending window closes. Pre-v0.11.7 the cards were
+        -- only visible during the pending banner; once the result
+        -- resolved (PHASE_SCORE renderBanner SWA branch), the cards
+        -- vanished — opaque for teammate-bot SWAs which the player
+        -- previously saw as "verified" with no card display. Visible
+        -- to ALL viewers regardless of caller team (per user spec:
+        -- "you should be able to see the cards regardless").
+        local function renderCardGlyphs(enc)
+            if not enc or #enc < 2 then return "" end
+            local parts = {}
+            for i = 1, #enc, 2 do
+                local card = enc:sub(i, i + 1)
+                if card and #card == 2 then
+                    local rankG = (C and C.RankGlyph) and C.RankGlyph(C.Rank(card)) or C.Rank(card)
+                    local suit  = C.Suit(card)
+                    local sGlyph = (K.SUIT_GLYPH and K.SUIT_GLYPH[suit]) or suit
+                    -- Color red suits red, black suits white.
+                    local col = (suit == "H" or suit == "D") and "|cffff5555" or "|cffeeeeee"
+                    parts[#parts + 1] = ("%s%s%s|r"):format(col, rankG, sGlyph)
+                end
+            end
+            return (#parts > 0) and ("  ·  " .. table.concat(parts, " ")) or ""
+        end
+        local cardSuffix = renderCardGlyphs(sw.encodedHand)
+
         if sw.valid then
             banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)
             banner.title:SetText(
-                ("|cffffd055SWA!|r %s claimed — |cff66ff88verified|r"):format(cName))
+                ("|cffffd055SWA!|r %s claimed — |cff66ff88verified|r%s"):format(cName, cardSuffix))
         else
             banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
             banner.title:SetText(
-                ("|cffff5544SWA failed|r — %s claimed wrongly"):format(cName))
+                ("|cffff5544SWA failed|r — %s claimed wrongly%s"):format(cName, cardSuffix))
         end
 
         -- Show the regular per-team breakdown (mirrors the host's

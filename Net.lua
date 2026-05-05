@@ -216,22 +216,26 @@ function N.SendSWA(seat, encodedHand)
     broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, encodedHand or ""))
 end
 
-function N.SendSWAOut(caller, valid, addA, addB, totA, totB, sweep, bidderMade)
+function N.SendSWAOut(caller, valid, addA, addB, totA, totB, sweep, bidderMade, encodedHand)
     -- 4th-audit X4 fix: append sweep + bidderMade flags so receivers
     -- can fire the BALOOT fanfare on SWA-resolved sweeps / failed
     -- contracts (host's direct ApplyRoundEnd call already covers
     -- the host side; this closes the gap for remote clients).
     -- Three-state encoding ("" | "0" | "1") matches MSG_ROUND.
-    -- Append-only so pre-v0.3.0 clients reading the old 7-field
-    -- form work unchanged.
+    -- v0.11.7 user feedback: append the caller's encoded hand as
+    -- field 10 so the post-resolution banner can show the cards
+    -- (especially for teammate-bot SWAs which the player previously
+    -- only saw as "verified" with no visible hand). Append-only so
+    -- pre-v0.11.7 clients reading the old 9-field form work
+    -- unchanged.
     local sweepStr = (sweep == "A" or sweep == "B") and sweep or ""
     local madeStr
     if bidderMade == true       then madeStr = "1"
     elseif bidderMade == false  then madeStr = "0"
     else                              madeStr = "" end
-    broadcast(("%s;%d;%s;%d;%d;%d;%d;%s;%s"):format(
+    broadcast(("%s;%d;%s;%d;%d;%d;%d;%s;%s;%s"):format(
         K.MSG_SWA_OUT, caller, valid and "1" or "0",
-        addA, addB, totA, totB, sweepStr, madeStr))
+        addA, addB, totA, totB, sweepStr, madeStr, encodedHand or ""))
 end
 
 function N.SendSWAReq(seat, encodedHand)
@@ -636,11 +640,15 @@ function N.HandleMessage(prefix, message, channel, sender)
         if     swMadeRaw == "1" then swMade = true
         elseif swMadeRaw == "0" then swMade = false
         else                         swMade = nil end
+        -- v0.11.7: fields[10] is the optional caller's encoded hand
+        -- so the post-resolution banner can show the cards. Optional;
+        -- pre-v0.11.7 senders omit it and receivers fall through to
+        -- nil-encodedHand (banner shows no cards as before).
         N._OnSWAOut(sender, tonumber(fields[2]),
                     fields[3] == "1",
                     tonumber(fields[4]), tonumber(fields[5]),
                     tonumber(fields[6]), tonumber(fields[7]),
-                    swSweep, swMade)
+                    swSweep, swMade, fields[10])
     elseif tag == K.MSG_SWA_REQ then
         N._OnSWAReq(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_SWA_RESP then
@@ -3073,7 +3081,7 @@ function N._OnSWA(sender, seat, encodedHand)
     end
 end
 
-function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB, sweep, bidderMade)
+function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB, sweep, bidderMade, encodedHand)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
@@ -3084,11 +3092,16 @@ function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB, sweep, bidde
     -- S.s.seats[99] (nil) → label fallback "?". Same wire-validation
     -- shape as NetA-07 above.
     if caller < 1 or caller > 4 then return end
+    -- v0.11.7 user feedback: encoded hand is field 10 (optional, for
+    -- pre-v0.11.7 wire compat). Cap at 16 chars (max 8 cards × 2)
+    -- mirroring the v0.11.5 XR-06 cap on MSG_SWA_REQ / MSG_SWA.
+    if encodedHand and #encodedHand > 16 then encodedHand = nil end
     -- Mirror the takweesh-result struct so the score banner can
     -- render the SWA outcome with its own copy.
     S.s.swaResult = {
         caller = caller, valid = valid,
         sweep = sweep, contractMade = bidderMade,
+        encodedHand = encodedHand,   -- v0.11.7
     }
     S.s.lastRoundResult = nil
     S.s.trick = nil
@@ -3301,10 +3314,26 @@ function N.HostResolveSWA(callerSeat, callerHand)
     local totA = (S.s.cumulative.A or 0) + addA
     local totB = (S.s.cumulative.B or 0) + addB
 
+    -- v0.11.7 user feedback: stash the caller's encoded hand into
+    -- swaResult so the post-resolution banner (renderBanner SWA
+    -- branch in PHASE_SCORE) can show the same card row that
+    -- renderSWABanner showed during the pending window. Pre-v0.11.7
+    -- the cards were only visible during the 5-second pending phase;
+    -- once the result resolved ("SWA verified" banner), the cards
+    -- vanished — particularly opaque for teammate-bot SWAs where the
+    -- player saw "SWA from Bot 3 verified" with no card display.
+    local callerEncodedHand
+    do
+        local pinHand = callerHand or (S.s.hostHands and S.s.hostHands[callerSeat]) or {}
+        callerEncodedHand = (C and C.EncodeHand) and C.EncodeHand(pinHand) or nil
+    end
+
     S.s.swaResult = {
-        caller = callerSeat, valid = valid,
+        caller       = callerSeat,
+        valid        = valid,
         contractMade = contractMade,
-        sweep = sweepTeam,
+        sweep        = sweepTeam,
+        encodedHand  = callerEncodedHand,   -- v0.11.7
     }
     S.s.lastRoundResult = nil
     S.s.trick = nil
@@ -3313,7 +3342,7 @@ function N.HostResolveSWA(callerSeat, callerHand)
     -- clients (MSG_SWA_OUT now carries the flags too).
     S.ApplyRoundEnd(addA, addB, totA, totB, sweepTeam, contractMade)
     N.SendSWAOut(callerSeat, valid, addA, addB, totA, totB,
-                 sweepTeam, contractMade)
+                 sweepTeam, contractMade, callerEncodedHand)
 
     -- v0.10.5 MED-2: shared R.GameEndWinner with SWA-context adapter.
     -- Round-winner team is the caller (valid SWA) or the opp (invalid

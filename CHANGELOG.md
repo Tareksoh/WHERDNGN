@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.11.7 — SWA UX fixes (user-reported): bot-1-card short-circuit + result-banner cards
+
+Two user-reported SWA UX bugs:
+1. Bot calling SWA with 1 card left is silly UX — the bot is about
+   to play that card anyway as the final trick. Just play.
+2. The post-resolution score banner ("SWA from Bot X verified") had
+   no card display, even when the caller was the player's teammate.
+   The pending banner showed cards during the 5-second window, but
+   they vanished when the round resolved.
+
+### Fixed (UX)
+
+- **`Bot.lua:3926` Bot.PickSWA** — short-circuit on `#hand <= 1`.
+  Pre-v0.11.7 the gate was `#hand == 0 or #hand > 4` (allowing 1).
+  With 1 card left the bot's MaybeRunBot dispatch will play that
+  card as the next trick anyway; SWA banner + permission flow +
+  claim-verified announcement for a single forced play is just
+  noise. Now the bot just plays.
+
+- **`Net.lua:3304` HostResolveSWA** — stash caller's `encodedHand`
+  into `S.s.swaResult`. Pre-v0.11.7 the swaResult had only `caller`,
+  `valid`, `contractMade`, `sweep` — the cards weren't carried into
+  PHASE_SCORE. The post-resolution banner therefore had no card
+  data, particularly opaque for teammate-bot SWAs ("SWA from Bot 3
+  verified" with nothing to verify visually).
+
+- **`Net.lua` SendSWAOut wire format** — extended to field 10
+  (encodedHand). Backward-compatible with pre-v0.11.7 receivers
+  (they ignore the extra field; nil-encodedHand falls through to
+  the no-cards branch). Receiver `_OnSWAOut` consumes field 10
+  with the same 16-char cap as v0.11.5 XR-06 (8 cards × 2 chars).
+  Dispatcher passes `fields[10]` through.
+
+- **`UI.lua` renderBanner SWA branch** — appends rank+suit-glyph
+  card row to the banner title when `swaResult.encodedHand` is
+  populated. Red-suit cards render in red, black-suit cards in
+  white. Visible to ALL viewers regardless of caller team (per
+  user spec: "you should be able to see the cards regardless").
+  Format: `SWA! Bot 3 claimed — verified  ·  J♠ A♠ T♠ K♠`.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section Q** (7 new pins):
+  - Q.1: Bot.PickSWA #hand<=1 short-circuit
+  - Q.2a-b: HostResolveSWA encodedHand computation + stash
+  - Q.3a-d: SendSWAOut signature + _OnSWAOut signature + dispatcher
+    fields[10] + 16-char cap
+- **502 / 502 pass** (up from 493, +9 new pins).
+
+### User-reported still open (telemetry / calibration)
+
+- **Bots not bidding Sun** — user reports 30 rounds with 0 Sun bids
+  even after v0.10.4 + v0.10.6 calibration adjustments
+  (MARDOOFA_BONUS 5→10, TH_SUN_BASE 50→47). Filed for next
+  calibration cycle. Need data on which seats/hands the user
+  thinks should have bid Sun but didn't.
+
 ## v0.11.6 — split-multiplier scoring: contract-mult vs escalation-mult (R5 supersession)
 
 **User-arbitrated scoring rule fix.** A reported scoring bug ("Sun

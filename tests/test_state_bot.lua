@@ -2493,6 +2493,64 @@ do
 end
 
 -- =====================================================================
+-- Q. v0.11.7 SWA UX fixes (user-reported)
+--
+-- Q.1: Bot.PickSWA refuses #hand <= 1 (just play instead).
+-- Q.2: HostResolveSWA stashes caller's encodedHand into swaResult so
+--      the post-resolution banner can show cards (UI fix).
+-- Q.3: SendSWAOut wire format extended to field 10 (encodedHand) for
+--      remote receivers; receivers also stash into swaResult.
+-- =====================================================================
+section("Q. v0.11.7 SWA UX fixes")
+
+-- Q.1 (Bot.PickSWA #hand<=1 short-circuit).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickSWA")
+    assertTrue(fnStart ~= nil, "Q.1 setup: Bot.PickSWA function found")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 1500)
+        assertTrue(body:find("if #hand <= 1 then return false end") ~= nil,
+                   "Q.1 (v0.11.7): Bot.PickSWA short-circuits with #hand<=1 (just play)")
+    end
+end
+
+-- Q.2 (HostResolveSWA stashes encodedHand on swaResult).
+-- HostResolveSWA is ~250 lines; need a wide slice to catch the
+-- encodedHand stash near the end of the function.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%.HostResolveSWA")
+    assertTrue(fnStart ~= nil, "Q.2 setup: HostResolveSWA function found")
+    if fnStart then
+        -- Function spans roughly 9000 chars; scan the next 12k for the
+        -- v0.11.7 encodedHand stash + computation.
+        local body = netSrc:sub(fnStart, fnStart + 12000)
+        assertTrue(body:find("encodedHand%s*=%s*callerEncodedHand") ~= nil,
+                   "Q.2a (v0.11.7): HostResolveSWA stashes encodedHand on swaResult")
+        assertTrue(body:find("local callerEncodedHand") ~= nil,
+                   "Q.2b (v0.11.7): HostResolveSWA computes callerEncodedHand from callerHand/hostHands")
+    end
+end
+
+-- Q.3 (Wire format: SendSWAOut + _OnSWAOut + dispatcher all carry field 10).
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- SendSWAOut signature includes encodedHand parameter.
+    assertTrue(netSrc:find("function N%.SendSWAOut%(caller, valid, addA, addB, totA, totB, sweep, bidderMade, encodedHand%)") ~= nil,
+               "Q.3a (v0.11.7): N.SendSWAOut accepts 9th encodedHand arg")
+    -- _OnSWAOut signature also includes encodedHand.
+    assertTrue(netSrc:find("function N%._OnSWAOut%(sender, caller, valid, addA, addB, totA, totB, sweep, bidderMade, encodedHand%)") ~= nil,
+               "Q.3b (v0.11.7): N._OnSWAOut accepts 10th encodedHand arg")
+    -- Dispatcher passes fields[10] through.
+    assertTrue(netSrc:find("swSweep, swMade, fields%[10%]") ~= nil,
+               "Q.3c (v0.11.7): MSG_SWA_OUT dispatcher passes fields[10] to _OnSWAOut")
+    -- Receiver caps at 16 chars (mirrors XR-06 cap on MSG_SWA_REQ).
+    assertTrue(netSrc:find("if encodedHand and #encodedHand > 16 then encodedHand = nil end") ~= nil,
+               "Q.3d (v0.11.7): _OnSWAOut caps encodedHand at 16 chars (mirrors XR-06)")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
