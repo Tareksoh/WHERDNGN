@@ -2333,6 +2333,166 @@ do
 end
 
 -- =====================================================================
+-- P. v0.11.5 batch — defensive MED + LOW closures from comprehensive audit
+--
+-- SU-01: S.ApplyContract clears s.overcall when advancing phase.
+-- NetA-06: _OnDealPhase redeal nextDealer range check.
+-- NetA-07/XR-04: _OnTakweeshOut/_OnSWAOut caller seat range check.
+-- XR-05: _OnPause payload domain check.
+-- XR-06: _OnSWAReq/_OnSWA encodedHand length cap.
+-- XR-08: escalation _On* seat range checks.
+-- NetA-09: _HostExecuteRedeal nextDealer range check.
+-- Bot1-05/C-01: Bot.lua duplicate T-cardinality block removed.
+-- XR-14: K.MSG_KICK dead constant removed.
+-- =====================================================================
+section("P. v0.11.5 audit closures (defensive MED + LOW batch)")
+
+-- P.1 (SU-01): S.ApplyContract clears s.overcall when advancing phase.
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    local fnStart = stateSrc:find("function S%.ApplyContract")
+    assertTrue(fnStart ~= nil, "P.1 setup: S.ApplyContract function found")
+    if fnStart then
+        local body = stateSrc:sub(fnStart, fnStart + 3000)
+        assertTrue(body:find("s%.overcall = nil") ~= nil,
+                   "P.1 (SU-01): S.ApplyContract clears s.overcall on phase advance")
+    end
+end
+
+-- P.2 (NetA-06): _OnDealPhase redeal nextDealer range check.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- The redeal branch ends with the new range guard.
+    assertTrue(netSrc:find('elseif phase == "redeal" then') ~= nil,
+               "P.2 setup: _OnDealPhase redeal branch found")
+    -- Locate the redeal branch and check for the range guard.
+    local branchStart = netSrc:find('elseif phase == "redeal" then')
+    if branchStart then
+        local body = netSrc:sub(branchStart, branchStart + 1000)
+        assertTrue(body:find("nextDealer < 1 or nextDealer > 4") ~= nil,
+                   "P.2 (NetA-06): _OnDealPhase rejects nextDealer outside 1-4")
+    end
+end
+
+-- P.3 (NetA-07 / XR-04): _OnTakweeshOut and _OnSWAOut validate caller.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- _OnTakweeshOut: callerSeat range check + illegalSeat range check.
+    local fnT = netSrc:find("function N%._OnTakweeshOut")
+    assertTrue(fnT ~= nil, "P.3 setup: _OnTakweeshOut found")
+    if fnT then
+        local body = netSrc:sub(fnT, fnT + 2000)
+        assertTrue(body:find("callerSeat < 1 or callerSeat > 4") ~= nil,
+                   "P.3a (NetA-07): _OnTakweeshOut rejects callerSeat outside 1-4")
+        assertTrue(body:find("illegalSeat < 0 or illegalSeat > 4") ~= nil,
+                   "P.3b (NetA-07): _OnTakweeshOut rejects illegalSeat outside 0-4 sentinel range")
+    end
+    -- _OnSWAOut: caller range check.
+    local fnS = netSrc:find("function N%._OnSWAOut")
+    assertTrue(fnS ~= nil, "P.3 setup: _OnSWAOut found")
+    if fnS then
+        local body = netSrc:sub(fnS, fnS + 1500)
+        assertTrue(body:find("caller < 1 or caller > 4") ~= nil,
+                   "P.3c (XR-04): _OnSWAOut rejects caller outside 1-4")
+    end
+end
+
+-- P.4 (XR-05): _OnPause payload domain check.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnPause")
+    assertTrue(fnStart ~= nil, "P.4 setup: _OnPause found")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 800)
+        assertTrue(body:find('payload ~= "1" and payload ~= "0"') ~= nil,
+                   "P.4 (XR-05): _OnPause rejects payloads outside {0, 1}")
+    end
+end
+
+-- P.5 (XR-06): _OnSWAReq and _OnSWA cap encodedHand length to 16 chars.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- _OnSWAReq cap.
+    local fnReq = netSrc:find("function N%._OnSWAReq")
+    if fnReq then
+        local body = netSrc:sub(fnReq, fnReq + 1500)
+        assertTrue(body:find("encodedHand and #encodedHand > 16") ~= nil,
+                   "P.5a (XR-06): _OnSWAReq rejects encodedHand longer than 16 chars")
+    end
+    -- _OnSWA cap.
+    local fnSWA = netSrc:find("function N%._OnSWA%s*%(")
+    if fnSWA then
+        local body = netSrc:sub(fnSWA, fnSWA + 1500)
+        assertTrue(body:find("encodedHand and #encodedHand > 16") ~= nil,
+                   "P.5b (XR-06): _OnSWA rejects encodedHand longer than 16 chars")
+    end
+end
+
+-- P.6 (XR-08): escalation handlers _OnDouble/_OnTriple/_OnFour/_OnGahwa
+-- have seat range checks.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    for _, fnName in ipairs({"_OnDouble", "_OnTriple", "_OnFour", "_OnGahwa"}) do
+        local fnStart = netSrc:find("function N%." .. fnName)
+        assertTrue(fnStart ~= nil,
+                   "P.6 setup: N." .. fnName .. " found")
+        if fnStart then
+            local body = netSrc:sub(fnStart, fnStart + 700)
+            assertTrue(body:find("seat < 1 or seat > 4") ~= nil,
+                       ("P.6 (XR-08): N.%s rejects seat outside 1-4"):format(fnName))
+        end
+    end
+end
+
+-- P.7 (NetA-09): _HostExecuteRedeal validates nextDealer range.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._HostExecuteRedeal")
+    assertTrue(fnStart ~= nil, "P.7 setup: _HostExecuteRedeal found")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 1500)
+        assertTrue(body:find("nextDealer < 1 or nextDealer > 4") ~= nil,
+                   "P.7 (NetA-09): _HostExecuteRedeal rejects nextDealer outside 1-4")
+    end
+end
+
+-- P.8 (Bot1-05 / C-01): Bot.lua duplicate T-cardinality block removed.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Pre-v0.11.5: TWO byte-identical blocks of:
+    --   if ok and bidCardRank == "T" then
+    --       local tCount = 0 ... if tCount > 1 then ok = false end
+    -- v0.11.5: only ONE remains. Count occurrences of the canonical
+    -- pattern used inside the duplicated block.
+    local pattern = 'if ok and bidCardRank == "T" then'
+    local count = 0
+    local pos = 1
+    while true do
+        local found = botSrc:find(pattern, pos, true)
+        if not found then break end
+        count = count + 1
+        pos = found + 1
+    end
+    -- The same line still appears in 1) the singleton-T cardinality
+    -- gate (kept) AND 2) the same-suit-A check (`if ok and bidCardRank
+    -- == "T" and bidCardSuit then`). The duplicate t-count block (with
+    -- the same `if ok and bidCardRank == "T" then` opener but no
+    -- `bidCardSuit` clause) is removed. So the EXACT pattern now
+    -- appears once — the kept singleton-T gate.
+    assertEq(count, 1,
+             "P.8 (Bot1-05): Bot.lua dead duplicate T-cardinality block removed (canonical line appears exactly once)")
+end
+
+-- P.9 (XR-14): K.MSG_KICK dead constant removed.
+do
+    local kSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Constants.lua"):read("*a")
+    -- Pre-v0.11.5: `K.MSG_KICK = "K"` was defined but never referenced.
+    -- v0.11.5 removed the assignment.
+    assertEq(kSrc:find('K%.MSG_KICK%s*=') and "found" or nil, nil,
+             "P.9 (XR-14): K.MSG_KICK dead constant removed from Constants.lua")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

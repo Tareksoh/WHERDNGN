@@ -1,5 +1,118 @@
 # Changelog
 
+## v0.11.5 — defensive batch: SU-01 + 7 LOW closures + dead-code cleanup
+
+Closes the remaining defensive findings from v0.11.3 comprehensive
+audit that survived v0.11.4. All low-risk one-liners or targeted
+removals. Two false-positive findings (SU-03, SU-06) verified
+non-issues during implementation (audit was incorrect on both).
+
+### Fixed (MED — defensive)
+
+- **SU-01** (`State.lua` `S.ApplyContract`) — clear `s.overcall` when
+  advancing phase past PHASE_OVERCALL. Pre-v0.11.5, under client wire
+  reorder where MSG_CONTRACT arrived before MSG_OVERCALL_RESOLVE,
+  this function advanced phase to PHASE_DOUBLE but left `s.overcall`
+  non-nil. The follow-up `_OnOvercallResolve` then bailed on the
+  v0.11.0 A5 phase guard, so `s.overcall` was never cleared. It
+  survived through the round and into SaveSession (the field is NOT
+  in `TRANSIENT_FIELDS`). Defensive single-line clear; the overcall
+  window is logically closed once a contract has been (re-)applied.
+
+### Fixed (LOW — wire-validation hardening)
+
+Each guards against a buggy/forked host emitting malformed broadcast
+frames that would silently corrupt receiver state. Same shape as
+the v0.11.3 RT07-05 / v0.11.4 wire-validation cluster.
+
+- **NetA-06** (`Net.lua:843` `_OnDealPhase` redeal branch) — validate
+  `nextDealer ∈ [1,4]`. Pre-v0.11.5 a buggy/forked host emitting
+  `MSG_DEAL_PHASE;redeal;<garbage>` passed nil or out-of-range into
+  `S.ApplyRedealAnnouncement`; the redeal banner displayed the wrong
+  (or no) dealer name.
+- **NetA-07 / XR-04** (`Net.lua:2279` `_OnTakweeshOut` and
+  `Net.lua:3057` `_OnSWAOut`) — validate caller ∈ [1,4] and (Takweesh
+  only) `illegalSeat ∈ [0,4]` (0 = "no offender" sentinel from the
+  wire format). Pre-v0.11.5 garbage callers wrote into
+  `S.s.takweeshResult.caller` / `S.s.swaResult.caller`; downstream
+  `S.s.seats[99]` lookups returned nil and label fallback dropped to
+  `"?"`.
+- **XR-05** (`Net.lua:2677` `_OnPause`) — enforce payload ∈ {"0","1"}.
+  Pre-v0.11.5 any non-"1" payload (nil, "true", garbage) silently
+  mapped to false (resume). Bogus payloads now drop at the wire.
+- **XR-06** (`Net.lua:2872` `_OnSWAReq` + `Net.lua:3040` `_OnSWA`) —
+  cap `encodedHand` to 16 chars (max 8 cards × 2 chars/card).
+  Pre-v0.11.5 the encoded hand was stashed unbounded into
+  `S.s.swaRequest`, which is NOT in `TRANSIENT_FIELDS` so persists
+  to SavedVariables. WoW addon-channel max payload caps ~252 bytes
+  per chunk so the actual attack surface was small, but explicit
+  cap closes the future-channel-format-change risk.
+- **XR-08** (`Net.lua` `_OnDouble` / `_OnTriple` / `_OnFour` /
+  `_OnGahwa`) — seat range checks added. Downstream `eligibleSeat`
+  comparison would have rejected out-of-range seats by mismatch but
+  explicit range gating is uniform with the rest of the wire layer.
+- **NetA-09** (`Net.lua:1864` `_HostExecuteRedeal`) — validate
+  `nextDealer ∈ [1,4]` after the existing nil-check. Pre-v0.11.5 a
+  corrupted SavedVariables with `s.redealing.nextDealer = 99` passed
+  the nil-check and corrupted `s.dealer` + downstream rotation math
+  (99 % 4 + 1 = 4, so first-bidder math limps along but the
+  dealer-rotation invariant breaks from this round forward).
+
+### Removed (LOW — dead code)
+
+- **Bot1-05 / C-01** (`Bot.lua:1391-1397`) — deleted the byte-identical
+  duplicate of the singleton-T cardinality gate. The canonical block
+  at lines ~1361-1367 is preserved; this site is now a one-line
+  no-op marker. The duplicate had been flagged in the v0.10.7 audit
+  and survived through several cycles.
+- **XR-14** (`Constants.lua:183`) — removed `K.MSG_KICK = "K"`. Zero
+  references across the codebase; the kick-a-seat UX was never
+  implemented. Tag `"K"` is now free for future reuse.
+
+### Investigated, not real bugs (audit false-positives)
+
+- **SU-03** — `s.takweeshResult` was reported as missing from
+  `TRANSIENT_FIELDS`; verified during implementation that line
+  `State.lua:228` already has `takweeshResult = true,`. The audit
+  agent was reading from a different (or imagined) version. No
+  action.
+- **SU-06** — round-end cue cluster (HOKM_LOST/KABOOT/etc.) was
+  reported as needing an `isReplay` guard like RT07-03. Investigation
+  showed `_OnResyncRes` calls `S.ApplyResyncSnapshot` which writes
+  `s.cumulative` directly from the snapshot fields — MSG_ROUND is
+  NOT replayed during resync. The audit's claimed "MSG_ROUND replay
+  flood" scenario doesn't actually happen. No action.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section P** (25 new source-match pins):
+  - P.1 (SU-01): S.ApplyContract clears s.overcall
+  - P.2 (NetA-06): _OnDealPhase nextDealer range
+  - P.3a-c (NetA-07/XR-04): Takweesh + SWA caller ranges
+  - P.4 (XR-05): _OnPause payload domain
+  - P.5a-b (XR-06): SWA encodedHand 16-char cap
+  - P.6 (XR-08): four escalation handlers seat range
+  - P.7 (NetA-09): _HostExecuteRedeal nextDealer range
+  - P.8 (Bot1-05): T-cardinality canonical block appears exactly once
+  - P.9 (XR-14): K.MSG_KICK definition removed
+- **479 / 479 pass** (up from 454, +25 new pins).
+
+### Still open (defer to v0.12.x)
+
+- **OPEN-1** — Sun overcall bottom contract banner not updating.
+  Both Net.lua and State+UI audit agents confirm no code-level bug
+  from inspection. Pending user repro details.
+- **XR-01** — Test-harness blind spot. `tests/run.py` doesn't load
+  Net.lua / BotMaster.lua / WHEREDNGN.lua → all v0.11.x pins are
+  source-string matches. Bigger lift; needs WoW API stubs.
+- **Bot1-03** — ISMCTS performance budget guard. Defer until user
+  reports lag.
+- **RT07-07 / Bot1-04** — `hokmMinShape` weak mardoofa (J+7 passes).
+  Calibration; pending v0.11.1+ telemetry.
+- **XR-15** — Sound.Cue guard helper consolidation (~26 LOC reduction).
+  Pure refactor; no behavioral change. Defer.
+- **XR-16** — `MaybeRunBot` 638-line refactor candidate. Bigger lift.
+
 ## v0.11.4 — comprehensive-audit batch: C-14 completion + Saudi-Master robustness + wire-validation cluster
 
 Closes the highest-value items from the v0.11.3 comprehensive audit

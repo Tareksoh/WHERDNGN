@@ -180,7 +180,9 @@ end
 K.MSG_HOST     = "H"   -- host announces lobby; payload: gameID
 K.MSG_JOIN     = "J"   -- player asks to join; payload: gameID
 K.MSG_LOBBY    = "L"   -- host broadcasts seat list
-K.MSG_KICK     = "K"   -- host kicks a seat
+-- v0.11.5 XR-14: kick-a-seat constant removed (was tag "K"). Never
+-- wired — zero references across the codebase. The "kick a seat" UX
+-- was never implemented. Tag "K" is now free for future reuse.
 K.MSG_START    = "S"   -- host starts deal
 K.MSG_DEAL     = "D"   -- host signals deal phase (cards arrive privately)
 K.MSG_HAND     = "h"   -- private whisper: your 5 / 8 cards

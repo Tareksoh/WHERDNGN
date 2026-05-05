@@ -851,6 +851,12 @@ function N._OnDealPhase(sender, phase, extra)
         -- and the deal is rotating. The trailing field is the next
         -- dealer's seat number; mirror it to a state flag the UI reads.
         local nextDealer = tonumber(extra)
+        -- v0.11.5 NetA-06 fix: validate nextDealer ∈ [1,4]. Pre-v0.11.5
+        -- a buggy/forked host emitting MSG_DEAL_PHASE;redeal;<garbage>
+        -- passed nil or out-of-range into ApplyRedealAnnouncement; the
+        -- redeal banner displayed wrong/no dealer name. Cosmetic but
+        -- mirrors the broader wire-validation hardening.
+        if not nextDealer or nextDealer < 1 or nextDealer > 4 then return end
         S.ApplyRedealAnnouncement(nextDealer)
     end
 end
@@ -926,6 +932,11 @@ end
 function N._OnDouble(sender, seat, openField)
     if fromSelf(sender) then return end
     if not seat then return end
+    -- v0.11.5 XR-08 fix: seat range check (defense-in-depth). The
+    -- downstream eligibleSeat comparison would already reject out-of-
+    -- range seats by mismatch, but explicit range gating mirrors the
+    -- _OnContract / _OnTurn / _OnTrick pattern.
+    if seat < 1 or seat > 4 then return end
     -- Idempotence: ignore if no contract or already doubled.
     if not S.s.contract or S.s.contract.doubled then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
@@ -981,6 +992,7 @@ end
 function N._OnTriple(sender, seat, openField)
     if fromSelf(sender) then return end
     if not seat then return end
+    if seat < 1 or seat > 4 then return end                  -- v0.11.5 XR-08
     if not S.s.contract or S.s.contract.tripled then return end
     if S.s.phase ~= K.PHASE_TRIPLE then return end
     -- Triple is the BIDDER's response to Bel.
@@ -997,6 +1009,7 @@ end
 function N._OnFour(sender, seat, openField)
     if fromSelf(sender) then return end
     if not seat then return end
+    if seat < 1 or seat > 4 then return end                  -- v0.11.5 XR-08
     if not S.s.contract or S.s.contract.foured then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
     -- Four is the DEFENDER's response to Triple.
@@ -1014,6 +1027,7 @@ end
 function N._OnGahwa(sender, seat)
     if fromSelf(sender) then return end
     if not seat then return end
+    if seat < 1 or seat > 4 then return end                  -- v0.11.5 XR-08
     if not S.s.contract or S.s.contract.gahwa then return end
     if S.s.phase ~= K.PHASE_GAHWA then return end
     -- Gahwa is the BIDDER's terminal (match-win) escalation.
@@ -1861,6 +1875,12 @@ function N._HostExecuteRedeal(nextDealer)
     -- (recovery paths from session restore).
     nextDealer = nextDealer or (S.s.redealing and S.s.redealing.nextDealer)
     if not nextDealer then return end
+    -- v0.11.5 NetA-09 fix: range check nextDealer. Pre-v0.11.5 a
+    -- corrupted SavedVariables with s.redealing.nextDealer = 99 passed
+    -- the nil-check and corrupted s.dealer + downstream rotation math.
+    -- (99 % 4) + 1 = 4, so first-bidder math limps along but the
+    -- dealer-rotation invariant is broken from this round forward.
+    if nextDealer < 1 or nextDealer > 4 then return end
 
     S.s.dealer = nextDealer
     if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
@@ -2260,6 +2280,15 @@ function N._OnTakweeshOut(sender, callerSeat, caught, illegalSeat, card, reason)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.5 NetA-07 / XR-04 fix: validate callerSeat ∈ [1,4] and
+    -- illegalSeat ∈ [0,4] (0 = "no offender" sentinel from line 2456
+    -- wire format). Pre-v0.11.5 a buggy/forked host emitting
+    -- MSG_TAKWEESH_OUT with garbage callerSeat=99 wrote
+    -- S.s.takweeshResult.caller = 99; the UI banner read S.s.seats[99]
+    -- (nil) and label fallback dropped to "?". Wire-validation
+    -- defense-in-depth.
+    if not callerSeat or callerSeat < 1 or callerSeat > 4 then return end
+    if illegalSeat and (illegalSeat < 0 or illegalSeat > 4) then return end
     -- Display only — score change rides through the parallel SendRound.
     local cName = S.s.seats[callerSeat] and (S.s.seats[callerSeat].name:match("^([^%-]+)") or S.s.seats[callerSeat].name) or "?"
     if caught then
@@ -2649,6 +2678,13 @@ function N._OnPause(sender, payload)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.5 XR-05 fix: enforce payload domain. Pre-v0.11.5 any
+    -- non-"1" payload (nil, "0", "true", garbage) silently mapped to
+    -- false (resume). Practically harmless because both states are
+    -- valid game states, but bogus payloads should be rejected at
+    -- the wire rather than silently coerced. Treat anything that's
+    -- not exactly "1" or "0" as an unknown command and drop it.
+    if payload ~= "1" and payload ~= "0" then return end
     local paused = (payload == "1")
     if S.s.paused == paused then return end
     S.ApplyPause(paused)
@@ -2836,6 +2872,14 @@ end
 function N._OnSWAReq(sender, seat, encodedHand)
     if fromSelf(sender) then return end
     if not seat or seat < 1 or seat > 4 then return end
+    -- v0.11.5 XR-06 fix: cap encodedHand to 16 chars (max 8 cards × 2
+    -- chars/card). Pre-v0.11.5 the encoded hand was stashed unbounded
+    -- into S.s.swaRequest, which is NOT in TRANSIENT_FIELDS and so
+    -- persists to SavedVariables. The actual attack surface is small
+    -- (WoW addon-channel max payload caps ~252 bytes per chunk) but
+    -- explicit cap means a future channel-format change can't re-open
+    -- this for unbounded growth.
+    if encodedHand and #encodedHand > 16 then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
     if not authorizeSeat(seat, sender) then return end
     if WHEREDNGNDB and WHEREDNGNDB.allowSWA == false then return end
@@ -2996,6 +3040,10 @@ end
 function N._OnSWA(sender, seat, encodedHand)
     if fromSelf(sender) then return end
     if not seat or seat < 1 or seat > 4 then return end
+    -- v0.11.5 XR-06 fix: cap encodedHand to 16 chars (mirrors the same
+    -- guard added to _OnSWAReq above; instant-claim path needs the same
+    -- bound).
+    if encodedHand and #encodedHand > 16 then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
     -- Authority: only the seat itself can call SWA on their behalf.
     if not authorizeSeat(seat, sender) then return end
@@ -3029,6 +3077,12 @@ function N._OnSWAOut(sender, caller, valid, addA, addB, totA, totB, sweep, bidde
     if not fromHost(sender) then return end
     if S.s.isHost then return end
     if not caller then return end
+    -- v0.11.5 NetA-07 / XR-04 fix: validate caller ∈ [1,4]. Pre-v0.11.5
+    -- a buggy/forked host emitting MSG_SWA_OUT with garbage caller=99
+    -- wrote S.s.swaResult.caller = 99; the SWA banner read
+    -- S.s.seats[99] (nil) → label fallback "?". Same wire-validation
+    -- shape as NetA-07 above.
+    if caller < 1 or caller > 4 then return end
     -- Mirror the takweesh-result struct so the score banner can
     -- render the SWA outcome with its own copy.
     S.s.swaResult = {

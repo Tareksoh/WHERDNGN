@@ -1379,22 +1379,13 @@ function Bot.PickBid(seat)
                 end
             end
 
-            -- v0.9.2 #60 fix (audit_v0.9.0/60_a2_singleton_t.md):
-            -- A-2 allow-list specifies "singleton-T" (one T total in
-            -- hand). Pre-v0.9.2 only the same-suit-A check (A-4) was
-            -- enforced, so a bot holding 2+ Ts (each in a different
-            -- suit, neither paired with same-suit A) could still
-            -- Ashkal at bid-up T — contradicting the doc's allow-
-            -- list semantics. Add an explicit cardinality gate:
-            -- accept T only when it is the lone T in our hand.
+            -- v0.9.2 #60 reference: see the T-cardinality gate above
+            -- (lines ~1361-1367). v0.11.5 Bot1-05/C-01 removed the
+            -- byte-identical duplicate of that block that previously
+            -- lived here; the single canonical block above enforces
+            -- "singleton-T only" via the same `tCount > 1 → ok=false`
+            -- check, so this site is now a no-op marker.
             -- Sources: decision-trees.md A-2 (Common, video 31).
-            if ok and bidCardRank == "T" then
-                local tCount = 0
-                for _, c in ipairs(hand) do
-                    if C.Rank(c) == "T" then tCount = tCount + 1 end
-                end
-                if tCount > 1 then ok = false end
-            end
 
             -- v0.5.8 patch A-5 (decision-trees.md): 3+ Aces in hand
             -- → bid direct Sun, not Ashkal. With that much firepower

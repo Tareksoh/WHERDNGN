@@ -1078,6 +1078,17 @@ function S.ApplyContract(bidder, btype, trump)
         fourOpen   = false,  -- defenders chose to allow bidder's Gahwa
     }
     s.phase = K.PHASE_DOUBLE
+    -- v0.11.5 SU-01 fix: clear s.overcall when advancing past PHASE_OVERCALL.
+    -- Pre-v0.11.5, under client wire reorder where MSG_CONTRACT arrived
+    -- before MSG_OVERCALL_RESOLVE, this function advanced the phase to
+    -- PHASE_DOUBLE but left s.overcall non-nil. The follow-up
+    -- _OnOvercallResolve then bailed on the v0.11.0 A5 phase guard
+    -- (Net.lua:1242, "if S.s.phase ~= K.PHASE_OVERCALL then return end"),
+    -- so s.overcall was never cleared. It survived through the round
+    -- and into SaveSession (s.overcall is NOT in TRANSIENT_FIELDS).
+    -- Defensive single-line fix; the overcall window is logically
+    -- closed once a contract has been (re-)applied.
+    s.overcall = nil
     -- Bidding is over. Clear turn/turnKind so the UI turn-glow doesn't
     -- linger on the last bidder and so the dispatcher can't read stale
     -- turn state during the escalation windows.
