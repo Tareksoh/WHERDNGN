@@ -215,6 +215,30 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                         B.Net._HostStepPlay()
                     end)
                 end
+                -- v0.10.6 user-reported bug fix: re-arm an in-flight
+                -- redeal that was stuck across a /reload. If the user
+                -- paused during the 3s redeal banner and then
+                -- /reloaded, the timer is gone and `s.redealing` is
+                -- still set with no recovery path. Schedule a fresh
+                -- 3s window so the banner lands again, then deal.
+                -- Skip if the user is still paused — LocalPause's
+                -- resume path will pick it up. Same shape as the
+                -- _HostStepPlay re-fire above.
+                if s.redealing and B.Net and B.Net._HostExecuteRedeal
+                   and (s.phase == K.PHASE_DEAL2BID or s.phase == K.PHASE_DEAL1)
+                   and not s.paused then
+                    local nextDealer = s.redealing.nextDealer
+                    if nextDealer then
+                        B._redealGen = (B._redealGen or 0) + 1
+                        local thisGen = B._redealGen
+                        C_Timer.After(3.0, function()
+                            if thisGen ~= B._redealGen then return end
+                            if not B.State.s.isHost then return end
+                            if B.State.s.paused then return end
+                            B.Net._HostExecuteRedeal(nextDealer)
+                        end)
+                    end
+                end
             end
             -- Re-audit fix V13: also re-arm the LOCAL T-10s pre-warn
             -- (audio ping + UI pulse) on every client. StartLocalWarn

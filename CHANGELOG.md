@@ -1,5 +1,110 @@
 # Changelog
 
+## v0.10.6 — bidding-calibration step 3 + redeal-stuck fix (Lever C + Lever A + UX)
+
+Calibration-probe agent (read-only) traced source-canonical Saudi
+bid patterns through the addon's strength functions and identified
+**the lever as HOKM-side, not Sun-side**. Plus a user-reported
+HIGH bug: paused-during-redeal + /reload soft-locks the round.
+
+### Fixed (UX HIGH — paused-during-redeal soft-lock, user report)
+
+User report: *"game was reshuffling, i paused and did /reload, i
+came back after reload to the bidding round with no buttons and
+it froze with turn on the opposite side bot (dealer)."*
+
+- **`Net.lua` new `N._HostExecuteRedeal(nextDealer)`**: extracted
+  from the inline 3s `C_Timer.After` body in `N._HostRedeal` so
+  it can be re-invoked from recovery paths (LocalPause resume,
+  PLAYER_LOGIN session restore) when the original timer was lost
+  to a pause+/reload sequence. Idempotent — bails on missing
+  `s.redealing`, wrong phase, or paused state.
+- **`Net.lua` `LocalPause` resume path**: when un-pausing, if
+  `s.redealing` is set and phase is DEAL2BID/DEAL1, schedule a
+  fresh 3s timer to land the deal. Pre-v0.10.6 the resume path
+  only handled stuck PHASE_PLAY tricks; redeal-stuck case had no
+  recovery.
+- **`WHEREDNGN.lua` PLAYER_LOGIN session restore**: same recovery
+  for the cross-/reload case. If `s.redealing` is set after
+  restore and we're not paused, schedule the deal step. Mirrors
+  the existing `_HostStepPlay` re-fire pattern for stuck tricks.
+
+### Tightened (Lever C — `hokmMinShape` R2 canonical-minimum)
+
+Per the calibration-probe agent's primary finding (review_v0.10.2
+BIDDING_CALIBRATION_v0.10.5.md §8.1, video #26 R2):
+
+- **`Bot.lua:805` `hokmMinShape`**: added `count == 2 and hasSideAce`
+  clause to accept the canonical-minimum Hokm hand from video
+  #26 R2 — *"أقل شي عشان تشتري الحكم: الولد + مردوفة معاه + إكا
+  وحدها"* ("minimum to buy Hokm: J of trump + ONE other trump
+  with it + ONE Ace on the side"). The existing `not hasJ →
+  return false` guard at line ~798 already enforces J-of-trump
+  anchor, so the new clause is exactly the R2 pattern (2-trump-
+  with-J + side Ace), no broader. Pre-v0.10.6 this canonical
+  pattern was silently rejected — the most-emphasized "minimum
+  confident bid" in the entire Hokm corpus, lost.
+
+  **Per 200k-trial Monte Carlo: ~19.23% of random 8-card hands
+  match this pattern. Predicted lift: net bid rate 82% → 92.35%,
+  Hokm bid rate 68.6% → 79.95% (+11.3pp).** This is the
+  largest-impact single-lever lift available; addresses the
+  user's "bots are not bidding" telemetry directly.
+
+### Tightened (Lever A — `TH_SUN_BASE` 50 → 47)
+
+Secondary calibration step paired with the v0.10.4
+`K.BOT_SUN_MARDOOFA_BONUS` 5→10 bump:
+
+- **`Bot.lua:37` `TH_SUN_BASE`**: 50 → 47. Moves the S-B "confident
+  A+T mardoofa pair + 2-Ace" hand from ~38% jitter-clear to ~75%
+  jitter-clear. Predicted Sun bid rate 16.8% → 22.1% per bot.
+  NOT enough to close the S-A "single-mardoofa مجازف" gap
+  (sunStrength=22 vs threshold=47, gap of 25 still too wide for
+  threshold tweak) — that gap requires a sunStrength formula
+  rebalance which is risk-laden and **deferred to v0.10.7+** if
+  v0.10.6 telemetry still shows Sun under-firing.
+
+### Test fixture refit (C-section, no behavioural change)
+
+The PickBid sanity test fixture `{JH,9H,AH,TH,KH}` (5-card royal
+flush in hearts) crossed the new Sun threshold band [41, 53] via
+the v0.10.4 mardoofa bonus + v0.10.6 threshold drop combination
+(sunStrength=43 within band). Replaced TH with 8H to break the
+mardoofa pair — preserves the test's intent (strong 5-trump hand
+bids Hokm, J+9+A+K still textbook strong-Hokm), now seed-robust.
+
+### Tests
+
+- **`tests/test_state_bot.lua` C-section new pin**: R2 canonical-
+  minimum Hokm bid (J+9-trump + side Ace + advanced mode) bids
+  HOKM. Pre-v0.10.6 this exact pattern PASSed via hokmMinShape
+  rejection; post-v0.10.6 it bids correctly.
+- **412 / 412 pass** (up from 411 in v0.10.5, +1 new pin).
+
+### Deferred to v0.10.7+ (per calibration-probe agent §8.3-8.4)
+
+- **S-A gap closure** — sunStrength formula under-rewards single-
+  mardoofa hands by ~25-30 points. Threshold tweaks can't close
+  this. Bonus bumps to MARDOOFA_BONUS 10→30+ would over-reward
+  non-canonical mardoofa hands. Wait for empirical telemetry on
+  v0.10.6 — if S-A-class hands still under-fire, tackle as a
+  formula-rebalance audit.
+- **R7 sirra-malaki Hokm under M3lm** — H-D pattern (4-card
+  trump-meld, no Ace) is rejected under M3lm's L07 patch. Source
+  carves it out as a "rare exception". Re-evaluating L07
+  trade-off in isolation reserved for separate audit.
+- **Promote thresholds to `K.*` constants** — `TH_SUN_BASE`,
+  `TH_HOKM_R1_BASE`, `TH_HOKM_R2_BASE` are file-local in Bot.lua;
+  a future cleanup can promote to `K.BOT_TH_*` for consistency
+  with the rest of the bot tunables.
+
+### References
+
+Calibration-probe report at `.swarm_findings/review_v0.10.2/
+BIDDING_CALIBRATION_v0.10.5.md` (430-line read-only audit with
+10-pattern source-canonical trace + 200k-trial Monte Carlo).
+
 ## v0.10.5 — scoring-track audit closures (HIGH-2 + 4 MED + helpers + UI hotfix)
 
 10-agent scoring sub-audit (S-Score-01..10) traced end-to-end

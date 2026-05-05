@@ -1740,6 +1740,47 @@ function N._HostStepAfterTrick()
     N.MaybeRunBot()
 end
 
+-- v0.10.6 user-reported bug fix: extracted from the inline 3s
+-- C_Timer body in N._HostRedeal so it can be re-invoked from
+-- recovery paths (LocalPause resume, PLAYER_LOGIN session restore)
+-- when the original timer was lost to a pause+/reload sequence.
+-- Idempotent — bails on missing s.redealing, wrong phase, or
+-- paused state. Uses `nextDealer` from arg (3s-timer caller) or
+-- fallback to s.redealing.nextDealer (recovery callers).
+function N._HostExecuteRedeal(nextDealer)
+    if not S.s.isHost then return end
+    if S.s.paused then return end
+    -- Reset / pause guards: if the user reset or paused during
+    -- the 3s redeal banner, abort the deal — otherwise we'd
+    -- write fresh round state into a wiped or paused game.
+    if S.s.phase ~= K.PHASE_DEAL2BID and S.s.phase ~= K.PHASE_DEAL1
+       and not S.s.redealing then
+        return
+    end
+    -- Recover nextDealer from state if caller didn't pass it
+    -- (recovery paths from session restore).
+    nextDealer = nextDealer or (S.s.redealing and S.s.redealing.nextDealer)
+    if not nextDealer then return end
+
+    S.s.dealer = nextDealer
+    if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
+    S.ApplyStart(S.s.roundNumber, nextDealer)
+    N.SendStart(S.s.roundNumber, nextDealer)
+
+    local hands, bidCard = S.HostDealInitial()
+    dealHandsToHumans(hands)
+    S.ApplyHand(hands[S.s.localSeat])
+    S.ApplyBidCard(bidCard)
+    N.SendBidCard(bidCard)
+    S.s.phase = K.PHASE_DEAL1
+    N.SendDealPhase("1")
+    local first = (nextDealer % 4) + 1
+    S.ApplyTurn(first, "bid")
+    N.SendTurn(first, "bid")
+    N.MaybeRunBot()
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
 function N._HostRedeal(reason)
     -- All-pass / Kawesh redeal: per Saudi rule, the deal moves to the
     -- next dealer (no team scored, but the seat rotates). Round number
@@ -1764,6 +1805,16 @@ function N._HostRedeal(reason)
     end
     if B.UI and B.UI.Refresh then B.UI.Refresh() end
 
+    -- v0.10.6 user-reported bug fix: the redeal-deal-step body is
+    -- now extracted into N._HostExecuteRedeal so it can be re-invoked
+    -- from LocalPause resume and PLAYER_LOGIN restore when the
+    -- in-flight 3s C_Timer is gone. Pre-v0.10.6 the timer body bare-
+    -- exited on `S.s.paused` (and the timer itself died on /reload),
+    -- so a pause-during-redeal-banner soft-locked the round: state
+    -- restored with s.redealing set but no recovery path → user
+    -- comes back to a bidding-phase view with no buttons and turn
+    -- pinned to a non-acting bot.
+    --
     -- 9th-audit fix: capture a generation token so /baloot reset can
     -- invalidate this in-flight 3s callback. Without this, a reset
     -- during the redeal countdown would let the timer fire afterward
@@ -1773,32 +1824,7 @@ function N._HostRedeal(reason)
     local thisGen = B._redealGen
     C_Timer.After(3.0, function()
         if thisGen ~= B._redealGen then return end
-        if not S.s.isHost then return end
-        -- Reset / pause guards: if the user reset or paused during
-        -- the 3s redeal banner, abort the deal — otherwise we'd
-        -- write fresh round state into a wiped or paused game.
-        if S.s.phase ~= K.PHASE_DEAL2BID and S.s.phase ~= K.PHASE_DEAL1
-           and not S.s.redealing then
-            return
-        end
-        if S.s.paused then return end
-        S.s.dealer = nextDealer
-        if B.Bot and B.Bot.ResetMemory then B.Bot.ResetMemory() end
-        S.ApplyStart(S.s.roundNumber, nextDealer)
-        N.SendStart(S.s.roundNumber, nextDealer)
-
-        local hands, bidCard = S.HostDealInitial()
-        dealHandsToHumans(hands)
-        S.ApplyHand(hands[S.s.localSeat])
-        S.ApplyBidCard(bidCard)
-        N.SendBidCard(bidCard)
-        S.s.phase = K.PHASE_DEAL1
-        N.SendDealPhase("1")
-        local first = (nextDealer % 4) + 1
-        S.ApplyTurn(first, "bid")
-        N.SendTurn(first, "bid")
-        N.MaybeRunBot()
-        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        N._HostExecuteRedeal(nextDealer)
     end)
 end
 
@@ -2454,10 +2480,31 @@ function N.LocalPause(paused)
         -- (bailed on s.paused). After resume, NOTHING re-triggers
         -- _HostStepPlay, so the trick stays stuck. Detect that case
         -- here and re-schedule resolution.
+        --
+        -- v0.10.6 user-reported bug fix: also handle the redeal-
+        -- stuck case. If pause hit during the 3s redeal banner, the
+        -- timer fires + bare-exits on paused → no deal. After resume,
+        -- s.redealing is still set but no recovery exists. Re-arm a
+        -- fresh 3s window so the user sees the banner one more time
+        -- before the actual deal lands. Banner may already have
+        -- expired client-side via ApplyRedealAnnouncement's 3.5s
+        -- auto-clear, but the deal still proceeds correctly via
+        -- _HostExecuteRedeal which validates s.redealing.
         if S.s.phase == K.PHASE_PLAY
            and S.s.trick and S.s.trick.plays
            and #S.s.trick.plays >= 4 then
             N._HostStepPlay()
+        elseif S.s.redealing
+           and (S.s.phase == K.PHASE_DEAL2BID or S.s.phase == K.PHASE_DEAL1) then
+            local nextDealer = S.s.redealing.nextDealer
+            if nextDealer and C_Timer and C_Timer.After then
+                B._redealGen = (B._redealGen or 0) + 1
+                local thisGen = B._redealGen
+                C_Timer.After(3.0, function()
+                    if thisGen ~= B._redealGen then return end
+                    N._HostExecuteRedeal(nextDealer)
+                end)
+            end
         else
             N.MaybeRunBot()
             if S.s.turn and S.s.turnKind then

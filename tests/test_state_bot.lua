@@ -542,8 +542,17 @@ do
     S.s.bidCard = "9H"  -- bid card matters less than hand strength
     S.s.dealer = 4
     S.s.bids = {}
+    -- v0.10.6 fixture refit: dropped TH from the original
+    -- {JH,9H,AH,TH,KH} fixture to break the AH+TH mardoofa pair.
+    -- v0.10.4's K.BOT_SUN_MARDOOFA_BONUS 10 + v0.10.6's TH_SUN_BASE
+    -- 47 left the original fixture's sunStrength=43 within the
+    -- thSun-jitter band [41, 53], so Sun fired in ~15% of seed
+    -- outcomes. Replacing TH with 8H removes the mardoofa, drops
+    -- sunStrength to ~23 (well below jitter floor), and keeps the
+    -- test's intent — strong 5-trump hand should bid Hokm — fully
+    -- intact (J+9+A+K is still a textbook strong Hokm hand).
     S.s.hostHands = {
-        [1] = { "JH","9H","AH","TH","KH" },  -- 5 of a single suit, all top trumps if Hokm-H
+        [1] = { "JH","9H","AH","8H","KH" },  -- 5 of a single suit, top trumps J+9+A+K (no T → no mardoofa)
         [2] = { "7S","8S","9S","TS","JS" },
         [3] = { "7C","8C","9C","TC","JC" },
         [4] = { "7D","8D","9D","TD","JD" },
@@ -572,6 +581,50 @@ do
     local bid = Bot.PickBid(1)
     assertEq(bid, K.BID_PASS,
              ("PickBid: weak 7/8-only hand passes (got %s)"):format(tostring(bid)))
+end
+
+-- v0.10.6 Lever C — R2 canonical-minimum Hokm bid: J of trump +
+-- ONE other trump (mardoofa) + ONE Ace on the side. Per video
+-- #26 R2 ("أقل شي عشان تشتري الحكم: الولد + مردوفة معاه + إكا
+-- وحدها"), this is the most-emphasized "minimum confident bid" in
+-- the Hokm corpus. Pre-v0.10.6 the `count >= 3` lower-bound at
+-- hokmMinShape silently rejected the entire pattern (~19.23% of
+-- random hands per Monte Carlo). Source: review_v0.10.2
+-- BIDDING_CALIBRATION_v0.10.5.md §4.2 H-B + §8.1.
+--
+-- Test fixture uses J+9 of trump (synergy +10 basic / +18 advanced)
+-- + ONE side Ace + advanced bots so the Hokm strength clears the
+-- jitter ceiling reliably. With JH+9H = 34 + synergy 10 = 44 (basic)
+-- or 60 (advanced w/sideSuitAceBonus +8 + synergy +18 = 50). The
+-- weaker 8H-as-cover variant (cover-only, no synergy) has strength
+-- 22 — falls below thHokmR1 jitter floor [36, 48] even post-Lever-C.
+-- The R2 canonical pattern's STRENGTH varies; this pin verifies
+-- the predicate-acceptance path on a hand where strength permits.
+do
+    WHEREDNGNDB.advancedBots = true     -- enable J+9 synergy +18 + sideSuitAceBonus
+    freshState()
+    S.s.isHost = true
+    S.s.bidRound = 1
+    S.s.bidCard = "9H"   -- bid card is hearts; bot considers Hokm-on-flipped
+    S.s.dealer = 4
+    S.s.bids = {}
+    -- Seat 1 hand: J+9 of hearts (mardoofa with synergy) + side Ace +
+    -- filler. count(H)=2, hasJ[H]=true, hasSideAce=true (AS) →
+    -- R2 canonical minimum predicate matches.
+    S.s.hostHands = {
+        [1] = { "JH","9H","AS","8D","7C","7D","8C","8S" },  -- 2 H (J+9), AS side
+        [2] = { "AH","TH","KH","QH","TS","JS","KS","QS" },
+        [3] = { "AC","TC","KC","QC","JC","AD","TD","KD" },
+        [4] = { "QD","JD","9D","9C","7H","7S","9S","8H" },
+    }
+    S.s.contract = nil
+    local bid = Bot.PickBid(1)
+    -- Pre-v0.10.6: bid would be PASS-MINSHAPE (hokmMinShape rejects count==2).
+    -- Post-v0.10.6: bid should be HOKM:H (R2 canonical minimum + sufficient strength).
+    assertTrue(bid and bid:sub(1,#K.BID_HOKM) == K.BID_HOKM,
+               ("v0.10.6 Lever C R2 canonical-min: J+9-trump+sideAce bids Hokm (got %s)")
+                 :format(tostring(bid)))
+    WHEREDNGNDB.advancedBots = nil
 end
 
 -- =====================================================================

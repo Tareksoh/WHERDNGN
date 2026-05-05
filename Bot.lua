@@ -34,7 +34,19 @@ local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 -- bidding mediocre 3-card suits in the second window.
 local TH_HOKM_R1_BASE = 42
 local TH_HOKM_R2_BASE = 36
-local TH_SUN_BASE     = 50
+-- v0.10.6 Lever A (review_v0.10.2 BIDDING_CALIBRATION_v0.10.5.md §8.2):
+-- 50 → 47. Secondary calibration step for Sun confidence — paired
+-- with v0.10.4's K.BOT_SUN_MARDOOFA_BONUS bump, this moves the
+-- "S-B confident A+T mardoofa pair + 2-Ace" hand from ~38% jitter-
+-- clear to ~75% jitter-clear. NOT enough to close the S-A "single-
+-- mardoofa مجازف" gap (sunStrength=22 vs threshold=47 — gap of 25
+-- still too wide for a threshold tweak; would need a sunStrength
+-- formula rebalance which is risk-laden and deferred to v0.10.7+
+-- if real-play data still shows S-A under-firing). Per 200k-trial
+-- Monte Carlo: bumps `sunMinShape AND sun >= TH` rate from 4.03% to
+-- 5.39% — small but real. Per-bot Sun bid rate moves 16.76% →
+-- 22.11%, a +5.4pp lift on top of v0.10.4's +1pp.
+local TH_SUN_BASE     = 47
 local BID_JITTER      = 6   -- ±6 swing per call
 
 -- Advanced-bots feature flag. Off by default; toggle via
@@ -802,6 +814,19 @@ local function hokmMinShape(hand, suit)
     end
     if count >= 4 then return true end         -- B-2 self-sufficient
     if count == 3 and hasSideAce then return true end  -- B-1 minimum
+    -- v0.10.6 Lever C — R2 canonical minimum (review_v0.10.2
+    -- BIDDING_CALIBRATION_v0.10.5.md §8.1, video #26 R2):
+    -- "أقل شي عشان تشتري الحكم: الولد + مردوفة معاه + إكا واحدة"
+    -- — "minimum to buy Hokm: J of trump + ONE other trump (mardoofa
+    -- with the J) + ONE Ace on the side." The single most-emphasized
+    -- "minimum confident bid" in the Hokm corpus, currently rejected
+    -- by the prior `count >= 3` lower-bound. The not-hasJ gate above
+    -- already enforces the J-of-trump anchor, so this clause exactly
+    -- matches the R2 pattern (2-trump-with-J + side Ace) — no broader.
+    -- Per 200k-trial Monte Carlo: ~19.23% of random 8-card hands match
+    -- this pattern but were silently rejected pre-v0.10.6, structurally
+    -- under-bidding by ~10pp net bid rate.
+    if count == 2 and hasSideAce then return true end  -- R2 canonical min
     return false
 end
 
