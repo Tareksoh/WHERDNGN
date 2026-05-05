@@ -54,6 +54,20 @@ local function intervalFor(soundId)
     return SFX_INTERVAL
 end
 
+-- v0.11.11 XR-15 / XU-10: thin nil-safe wrapper for callers. The
+-- canonical pattern across State.lua / Net.lua / UI.lua had been
+--    if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_X) end
+-- — present at ~30+ call sites. Both guards are redundant in
+-- practice (Sound.lua loads before consumers per .toc order, and
+-- M.Cue itself nil-guards soundId at line 58 below). The helper
+-- below collapses the pattern to `B.Sound.Try(K.SND_X)` for new
+-- call sites; existing sites can be migrated incrementally without
+-- behavior change.
+function M.Try(soundId)
+    if not soundId then return end
+    M.Cue(soundId)
+end
+
 function M.Cue(soundId)
     if not soundId or not enabled() then return end
     local now = GetTime and GetTime() or 0

@@ -253,6 +253,15 @@ local TRANSIENT_FIELDS = {
     lastRoundResult = true,
     lastRoundDelta  = true,
     lastTrick       = true,
+    -- v0.11.11 XU-09: s.overcall (per-round overcall window state)
+    -- now transient. Pre-v0.11.11 a /reload during PHASE_OVERCALL
+    -- restored the struct with stale `startedAt` wall-clock — the
+    -- renderOvercallBanner showed a 0-or-negative timer with no host-
+    -- side enforcement (the original 5-second timer was gone). Now
+    -- /reload during the overcall window cleanly drops it; the
+    -- overcall auto-WAIVEs (acceptable: overcall is a defender-side
+    -- protection that's only meaningful if the network is alive).
+    overcall = true,
     -- NOTE: preemptEligible and pendingPreemptContract are NOT
     -- transient. The HOST needs them to survive a /reload mid-
     -- PHASE_PREEMPT — without persistence the host can't continue

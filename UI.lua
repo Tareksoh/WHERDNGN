@@ -3065,18 +3065,29 @@ local function renderBanner()
         -- previously saw as "verified" with no card display. Visible
         -- to ALL viewers regardless of caller team (per user spec:
         -- "you should be able to see the cards regardless").
+        -- v0.11.11 SU-Ultra-03 fix: whitelist-validate rank+suit before
+        -- rendering glyph. Pre-v0.11.11 any 2-char pair (e.g. "XY")
+        -- passed through; downstream RankGlyph/SUIT_GLYPH fallbacks
+        -- emitted visually-nonsense rows. Now invalid cards are
+        -- silently skipped — display only canonical rank+suit.
+        local VALID_RANKS = { A = true, T = true, K = true, Q = true,
+                              J = true, ["9"] = true, ["8"] = true, ["7"] = true }
+        local VALID_SUITS = { S = true, H = true, D = true, C = true }
         local function renderCardGlyphs(enc)
             if not enc or #enc < 2 then return "" end
             local parts = {}
             for i = 1, #enc, 2 do
                 local card = enc:sub(i, i + 1)
                 if card and #card == 2 then
-                    local rankG = (C and C.RankGlyph) and C.RankGlyph(C.Rank(card)) or C.Rank(card)
-                    local suit  = C.Suit(card)
-                    local sGlyph = (K.SUIT_GLYPH and K.SUIT_GLYPH[suit]) or suit
-                    -- Color red suits red, black suits white.
-                    local col = (suit == "H" or suit == "D") and "|cffff5555" or "|cffeeeeee"
-                    parts[#parts + 1] = ("%s%s%s|r"):format(col, rankG, sGlyph)
+                    local rank = C.Rank(card)
+                    local suit = C.Suit(card)
+                    if VALID_RANKS[rank] and VALID_SUITS[suit] then
+                        local rankG = (C and C.RankGlyph) and C.RankGlyph(rank) or rank
+                        local sGlyph = (K.SUIT_GLYPH and K.SUIT_GLYPH[suit]) or suit
+                        -- Color red suits red, black suits white.
+                        local col = (suit == "H" or suit == "D") and "|cffff5555" or "|cffeeeeee"
+                        parts[#parts + 1] = ("%s%s%s|r"):format(col, rankG, sGlyph)
+                    end
                 end
             end
             return (#parts > 0) and ("  ·  " .. table.concat(parts, " ")) or ""
@@ -3093,16 +3104,19 @@ local function renderBanner()
                 ("|cffff5544SWA failed|r — %s claimed wrongly%s"):format(cName, cardSuffix))
         end
 
-        -- Show the regular per-team breakdown (mirrors the host's
-        -- full breakdown path below) when lastRoundResult is available.
-        -- Non-host fallback: show the SWA explanation in the bidder line.
-        if r and r.bidderTeam and r.teamPoints and r.meldPoints then
-            local bidT = r.bidderTeam
+        -- Show the regular per-team breakdown. v0.11.11 SU-Ultra-01
+        -- fix: read sw.breakdown (populated by HostResolveSWA) since
+        -- S.s.lastRoundResult is nilled before renderBanner runs.
+        -- Non-host receivers (no breakdown) fall through to the
+        -- single-line degraded view as before.
+        local bd = sw.breakdown
+        if bd and bd.bidderTeam and bd.teamPoints and bd.meldPoints then
+            local bidT = bd.bidderTeam
             local oppT = (bidT == "A") and "B" or "A"
             banner.bidder:SetText(("%s: cards %d + melds %d"):format(
-                teamLabel(bidT), r.teamPoints[bidT] or 0, r.meldPoints[bidT] or 0))
+                teamLabel(bidT), bd.teamPoints[bidT] or 0, bd.meldPoints[bidT] or 0))
             banner.defender:SetText(("%s: cards %d + melds %d"):format(
-                teamLabel(oppT), r.teamPoints[oppT] or 0, r.meldPoints[oppT] or 0))
+                teamLabel(oppT), bd.teamPoints[oppT] or 0, bd.meldPoints[oppT] or 0))
             local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN)
                 and "Sun" or "Hokm"
             local mods = { typeStr }
@@ -3110,18 +3124,17 @@ local function renderBanner()
             if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
             if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
             if S.s.contract and S.s.contract.gahwa  then mods[#mods + 1] = "Gahwa (match-win)" end
-            if r.multiplier and r.multiplier > 1 then
-                mods[#mods + 1] = ("×%d"):format(r.multiplier)
+            if bd.multiplier and bd.multiplier > 1 then
+                mods[#mods + 1] = ("×%d"):format(bd.multiplier)
             end
             banner.modifiers:SetText("|cffaaaaaa" .. table.concat(mods, "  ·  ") .. "|r")
-            if r.belote then
+            if bd.belote then
                 banner.belote:SetText(("Belote (K+Q ♥): %s +20 raw"):format(
-                    teamLabel(r.belote)))
+                    teamLabel(bd.belote)))
             end
         else
-            -- Degraded (non-host or pre-host-result) view: keep the
-            -- SWA explanation visible in the bidder slot rather than
-            -- showing a blank breakdown.
+            -- Degraded (non-host receiver — no breakdown broadcast):
+            -- keep the SWA explanation visible in the bidder slot.
             banner.bidder:SetText(sw.valid
                 and "Claim verified — all remaining tricks awarded."
                 or  "Penalty applied (full hand to opponents).")

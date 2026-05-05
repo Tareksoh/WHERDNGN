@@ -1,5 +1,121 @@
 # Changelog
 
+## v0.11.11 — audit-queue batch (NetU-01..09 + SU-Ultra-01..03 + XU-07/09/10)
+
+Sweeps the remaining items from the v0.11.9 ultra audit: 1 HIGH (OPEN-1
+chat-throttle mitigation) + multiple MED wire-validation symmetry items
++ the v0.11.2 SWA banner unreachable-code fix + magic-number promotion
+to K.* + Sound.Try helper introduction.
+
+### Fixed (HIGH)
+
+- **NetU-01 / OPEN-1 mitigation** (`Net.lua:1369` `_HostResolveOvercall`)
+  — added defensive 250ms re-broadcast of `MSG_CONTRACT` after a
+  successful overcall resolution. Mitigates the leading remaining
+  hypothesis for the user-reported "Sun overcall bottom contract
+  banner not updating" bug (open since v0.11.2): WoW's
+  `CHAT_MSG_ADDON` chat-throttle (~4-6 msg/sec/sender) can drop the
+  single MSG_CONTRACT broadcast in the dense overcall sequence (open
+  + 4×decision + resolve dual-emit + contract + dealphase + turn +
+  whispers). The retry costs nothing in the happy path
+  (S.ApplyContract's idempotence guard at line 1059 makes re-receipt
+  a no-op) and recovers from a single throttle drop.
+
+### Fixed (MED — SWA banner reachability)
+
+- **SU-Ultra-01 / SU-Ultra-02** (`Net.lua:3401` `HostResolveSWA` +
+  `UI.lua:3043` `renderBanner` SWA branch) — fixed the v0.11.2 SWA
+  per-team breakdown which had been STRUCTURALLY DEAD CODE since v0.11.2.
+  HostResolveSWA sets `S.s.lastRoundResult = nil` BEFORE renderBanner
+  runs, so the conditional `if r and r.bidderTeam ...` always fell
+  through to the degraded "Claim verified — all remaining tricks
+  awarded." line. Same failure mode as v0.10.6 redeal recovery
+  (RT07-01) — code that compiles, source-matches, and tests pass but
+  is unreachable. Fixed by stashing the breakdown directly on
+  `S.s.swaResult.breakdown` (host-side); UI.lua now reads from there.
+  Non-host receivers see the existing degraded view (wire-format
+  extension would push past the 252-byte chunk limit; deferred).
+
+### Fixed (MED — wire-validation symmetry, 8 items)
+
+Same defense-in-depth shape as v0.11.3 RT07-05 / v0.11.5 cluster:
+
+- **NetU-02** (`Net.lua:1496` `_OnMeld`) — kind enum check
+  (`{seq3, seq4, seq5, carre}`). Pre-v0.11.11 garbage kind silently
+  wrote nil-value meld, risking nil-arithmetic in score sum.
+- **NetU-03** (`Net.lua:3388` `_OnAKA`) — suit enum check
+  (`{S, H, D, C}`). Garbage suits silently passed to ApplyAKA + UI.
+- **NetU-04** (`Net.lua:1652` `_OnRound`) — bounds check on
+  addA/addB ≤ 200, totA/totB ≤ 1000. Pre-v0.11.11 nil was rejected
+  but bogus huge values could falsely trigger game-end via
+  R.GameEndWinner.
+- **NetU-05** (`Net.lua:882` `_OnBidCard`) — `#card == 2` check.
+  Mirrors XR-11's `_OnPlay`. Allows empty string sentinel.
+- **NetU-06** (`Net.lua:786` `_OnLobby`) — per-name 64-char cap.
+  Mirrors XR-06's encodedHand cap. Defends against multi-MB name
+  injection via SaveSession persistence.
+- **NetU-07** (`Net.lua:1069` `_OnPreempt`) — seat ∈ [1,4]. Mirrors
+  XR-08's escalation-handler cluster.
+- **NetU-08** (`Net.lua:3030` `_OnSWAResp`) — responder + caller
+  ∈ [1,4]. Pre-v0.11.11 garbage seats wrote `req.responses[99]`
+  which lingered in SavedVariables.
+- **NetU-09** (`Net.lua:885` `_OnHand`) — encodedCards ≤ 16 chars.
+  Mirrors XR-06.
+
+### Fixed (MED — UI hardening)
+
+- **SU-Ultra-03** (`UI.lua:3068` renderCardGlyphs) — whitelist rank
+  and suit before glyph render. Pre-v0.11.11 any 2-char pair
+  (e.g. "XY") passed through, producing visually-nonsense rows.
+  Now invalid cards are silently skipped.
+
+### Fixed (defense-in-depth)
+
+- **XU-09** (`State.lua:264` TRANSIENT_FIELDS) — added `s.overcall`.
+  Pre-v0.11.11 a /reload during PHASE_OVERCALL restored the struct
+  with stale wall-clock; renderOvercallBanner showed 0-or-negative
+  timer with no host-side enforcement (the original 5-second timer
+  was gone). Now /reload during the overcall window cleanly drops
+  it. v0.11.5 SU-01 patched the in-session leak; this closes the
+  cross-/reload path.
+
+### Added (refactor + tunability)
+
+- **XU-07** (`Constants.lua` + `Bot.lua`) — promoted 5 bidding
+  thresholds from Bot.lua locals to K.* constants for tunability:
+  `K.BOT_TH_HOKM_R1_BASE` (42), `K.BOT_TH_HOKM_R2_BASE` (36),
+  `K.BOT_TH_SUN_BASE` (40), `K.BOT_BID_JITTER` (6),
+  `K.BOT_SUN_VOID_PENALTY_CAP` (8). Bot.lua locals retained as
+  aliases sourced from K.* for backward-compat with existing call
+  sites. Calibration trail documented in Constants.lua comment.
+
+- **XR-15 / XU-10** (`Sound.lua`) — added `B.Sound.Try(soundId)`
+  thin nil-safe wrapper. Helper enables incremental migration of
+  the 13 `if B.Sound and B.Sound.Cue then B.Sound.Cue(K.SND_X) end`
+  call sites; existing sites unchanged in v0.11.11 (each requires
+  gate-preservation review). Future cleanup release can migrate.
+
+### Tests
+
+- **`tests/test_state_bot.lua` Section U** (26 new pins covering
+  every NetU-01..09, XU-09, SU-Ultra-01..03, XU-07, XR-15)
+- T.2 pin updated for the K.BOT_SUN_VOID_PENALTY_CAP promotion
+- **550 / 550 pass** (up from 524, +26 new pins; 1 pin updated)
+
+### Still open / deferred to v0.11.12+
+
+- **XR-15 site migration**: helper is in place; converting the 13
+  existing call sites is a pure-refactor follow-up.
+- **XU-01/02 test-harness extension**: phase 1 (`test_botmaster.lua`)
+  + phase 2 (Net.lua under WoW API stubs). Substantial work; ~96%
+  of v0.11.x pins still source-string-match.
+- **XR-16 MaybeRunBot 638-line refactor** (high risk; better after
+  test-harness extension).
+- **NetU-10 dead `s.contract.forced`** (decide whether to implement
+  Takweesh recovery or remove dead reads).
+- **XU-12 / XU-14 doc drift** (saudi-rules.md / decision-trees.md
+  bidding calibration journey not documented in user-facing docs).
+
 ## v0.11.10 — canonical scoring rule (R5 + v0.11.6 fully reverted) + Sun-bidding closure
 
 User-stated authoritative rule supersedes both v0.10.0 R5 and v0.11.6.

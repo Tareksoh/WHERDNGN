@@ -2612,17 +2612,21 @@ do
              "T.1 (v0.11.9): mardoofa bonus = 20 (was 10 in v0.10.4)")
 end
 
--- T.2 — sunStrength Advanced penalty cap = 8.
+-- T.2 — sunStrength Advanced penalty cap = 8 (via K.BOT_SUN_VOID_PENALTY_CAP).
 do
+    -- v0.11.11: cap was inlined as `8` in v0.11.9; promoted to
+    -- K.BOT_SUN_VOID_PENALTY_CAP in v0.11.11 (XU-07). Verify both
+    -- the constant value AND the call-site form.
+    assertEq(K.BOT_SUN_VOID_PENALTY_CAP, 8,
+             "T.2 (v0.11.11): K.BOT_SUN_VOID_PENALTY_CAP = 8")
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local fnStart = botSrc:find("local function sunStrength")
-    assertTrue(fnStart ~= nil, "T.2 setup: sunStrength found")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 3000)
-        assertTrue(body:find("math%.min%(penalty, 8%)") ~= nil,
-                   "T.2 (v0.11.9): sunStrength void-penalty cap reduced 18 → 8")
+        assertTrue(body:find("math%.min%(penalty, K%.BOT_SUN_VOID_PENALTY_CAP%)") ~= nil,
+                   "T.2b (v0.11.11): sunStrength uses K.BOT_SUN_VOID_PENALTY_CAP")
         assertTrue(body:find("math%.min%(penalty, 18%)") == nil,
-                   "T.2b (v0.11.9): old 18-cap removed (no leftover branch)")
+                   "T.2c (v0.11.11): old 18-cap removed")
     end
 end
 
@@ -2680,6 +2684,173 @@ do
         assertEq(bid, K.BID_PASS,
                  "T.4 (v0.11.9 RT07-07): J+8 weak-mardoofa with side-Ace no longer triggers Hokm bid")
     end
+end
+
+-- =====================================================================
+-- U. v0.11.11 audit-queue batch (NetU-01..09 + SU-Ultra-01..03 + XU-07/09)
+-- =====================================================================
+section("U. v0.11.11 audit-queue batch")
+
+-- U.1 (NetU-01): _HostResolveOvercall has 250ms re-broadcast for OPEN-1.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._HostResolveOvercall")
+    assertTrue(fnStart ~= nil, "U.1 setup: _HostResolveOvercall found")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find("C_Timer%.After%(0%.25") ~= nil,
+                   "U.1 (NetU-01): OPEN-1 250ms re-broadcast scheduled in _HostResolveOvercall")
+        assertTrue(body:find("if S%.s%.contract then") ~= nil,
+                   "U.1b (NetU-01): re-broadcast nil-guards on s.contract")
+    end
+end
+
+-- U.2 (NetU-02): _OnMeld validates kind enum.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find('kind ~= "seq3" and kind ~= "seq4" and kind ~= "seq5" and kind ~= "carre"') ~= nil,
+               "U.2 (NetU-02): _OnMeld rejects kind outside {seq3,seq4,seq5,carre}")
+end
+
+-- U.3 (NetU-03): _OnAKA validates suit enum.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnAKA")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 800)
+        assertTrue(body:find('suit ~= "S" and suit ~= "H"') ~= nil,
+                   "U.3 (NetU-03): _OnAKA rejects suit outside {S,H,D,C}")
+    end
+end
+
+-- U.4 (NetU-04): _OnRound bounds-checks score fields.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnRound")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 1500)
+        assertTrue(body:find("addA < 0 or addB < 0") ~= nil,
+                   "U.4 (NetU-04): _OnRound rejects negative score fields")
+        assertTrue(body:find("totA > 1000 or totB > 1000") ~= nil,
+                   "U.4b (NetU-04): _OnRound rejects implausibly large totals")
+    end
+end
+
+-- U.5 (NetU-05): _OnBidCard validates card format.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnBidCard")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 800)
+        assertTrue(body:find('card and card ~= "" and #card ~= 2') ~= nil,
+                   "U.5 (NetU-05): _OnBidCard rejects malformed cards")
+    end
+end
+
+-- U.6 (NetU-06): _OnLobby caps name length.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnLobby")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 3000)
+        assertTrue(body:find("n:sub%(1, 64%)") ~= nil,
+                   "U.6 (NetU-06): _OnLobby caps each name at 64 chars")
+    end
+end
+
+-- U.7 (NetU-07): _OnPreempt validates seat range.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnPreempt%s*%(")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 400)
+        assertTrue(body:find("seat < 1 or seat > 4") ~= nil,
+                   "U.7 (NetU-07): _OnPreempt rejects seat outside 1-4")
+    end
+end
+
+-- U.8 (NetU-08): _OnSWAResp validates responder + caller range.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnSWAResp")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 1200)
+        assertTrue(body:find("responder < 1 or responder > 4") ~= nil,
+                   "U.8a (NetU-08): _OnSWAResp rejects responder outside 1-4")
+        assertTrue(body:find("caller < 1 or caller > 4") ~= nil,
+                   "U.8b (NetU-08): _OnSWAResp rejects caller outside 1-4")
+    end
+end
+
+-- U.9 (NetU-09): _OnHand caps encodedCards length.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%._OnHand")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 1000)
+        assertTrue(body:find("encodedCards and #encodedCards > 16") ~= nil,
+                   "U.9 (NetU-09): _OnHand rejects encodedCards longer than 16 chars")
+    end
+end
+
+-- U.10 (XU-09): s.overcall is in TRANSIENT_FIELDS.
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    local tfStart = stateSrc:find("local TRANSIENT_FIELDS = {")
+    assertTrue(tfStart ~= nil, "U.10 setup: TRANSIENT_FIELDS table found")
+    if tfStart then
+        local search = stateSrc:sub(tfStart)
+        local braceEnd = search:find("\n}\n", 1, true)
+        local body = search:sub(1, braceEnd or #search)
+        assertTrue(body:find("overcall%s*=%s*true%s*,") ~= nil,
+                   "U.10 (XU-09): s.overcall added to TRANSIENT_FIELDS")
+    end
+end
+
+-- U.11 (SU-Ultra-01): HostResolveSWA stashes breakdown on swaResult.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    local fnStart = netSrc:find("function N%.HostResolveSWA")
+    if fnStart then
+        local body = netSrc:sub(fnStart, fnStart + 12000)
+        assertTrue(body:find("breakdown%s*=%s*breakdown") ~= nil,
+                   "U.11a (SU-Ultra-01): HostResolveSWA stashes breakdown on swaResult")
+        assertTrue(body:find("local breakdown") ~= nil,
+                   "U.11b (SU-Ultra-01): breakdown computed for both valid and invalid SWA branches")
+    end
+end
+
+-- U.12 (SU-Ultra-01): UI.lua renderBanner SWA branch consumes sw.breakdown.
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    -- Must reference sw.breakdown (the new field) for the per-team rows.
+    assertTrue(uiSrc:find("local bd = sw%.breakdown") ~= nil,
+               "U.12 (SU-Ultra-01): UI.lua reads sw.breakdown in renderBanner SWA branch")
+end
+
+-- U.13 (SU-Ultra-03): renderCardGlyphs has rank+suit whitelist.
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    assertTrue(uiSrc:find("VALID_RANKS%s*=") ~= nil,
+               "U.13a (SU-Ultra-03): renderCardGlyphs whitelists ranks")
+    assertTrue(uiSrc:find("VALID_SUITS%s*=") ~= nil,
+               "U.13b (SU-Ultra-03): renderCardGlyphs whitelists suits")
+end
+
+-- U.14 (XU-07): magic-number promotion to K.* — five constants.
+do
+    assertEq(K.BOT_TH_HOKM_R1_BASE, 42,    "U.14a: K.BOT_TH_HOKM_R1_BASE = 42")
+    assertEq(K.BOT_TH_HOKM_R2_BASE, 36,    "U.14b: K.BOT_TH_HOKM_R2_BASE = 36")
+    assertEq(K.BOT_TH_SUN_BASE,     40,    "U.14c: K.BOT_TH_SUN_BASE = 40")
+    assertEq(K.BOT_BID_JITTER,      6,     "U.14d: K.BOT_BID_JITTER = 6")
+    assertEq(K.BOT_SUN_VOID_PENALTY_CAP, 8, "U.14e: K.BOT_SUN_VOID_PENALTY_CAP = 8")
+end
+
+-- U.15 (XR-15/XU-10): Sound.Try helper introduced in Sound.lua.
+do
+    local soundSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Sound.lua"):read("*a")
+    assertTrue(soundSrc:find("function M%.Try%(soundId%)") ~= nil,
+               "U.15 (XR-15): Sound.Try helper added (incremental migration)")
 end
 
 -- =====================================================================

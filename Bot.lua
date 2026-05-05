@@ -32,8 +32,12 @@ local K, C, R, S = B.K, B.Cards, B.Rules, B.State
 -- cards). Raised again to a sensible middle: bot needs J+kicker, or
 -- 9+Ace, or A+T+K with length. Round-2 stricter so bots stop
 -- bidding mediocre 3-card suits in the second window.
-local TH_HOKM_R1_BASE = 42
-local TH_HOKM_R2_BASE = 36
+-- v0.11.11 XU-07: thresholds promoted to K.* (Constants.lua); these
+-- locals are now aliases for backward-compat with the existing call
+-- sites. Single source of truth: K.BOT_TH_HOKM_R1_BASE / K.BOT_TH_HOKM_R2_BASE
+-- / K.BOT_TH_SUN_BASE / K.BOT_BID_JITTER / K.BOT_SUN_VOID_PENALTY_CAP.
+local TH_HOKM_R1_BASE = K.BOT_TH_HOKM_R1_BASE
+local TH_HOKM_R2_BASE = K.BOT_TH_HOKM_R2_BASE
 -- v0.10.6 Lever A: 50 → 47 (secondary calibration step for Sun
 -- confidence, paired with v0.10.4 mardoofa bonus bump).
 -- v0.11.9: paired with K.BOT_SUN_MARDOOFA_BONUS 10 → 20 + void-cap
@@ -52,8 +56,8 @@ local TH_HOKM_R2_BASE = 36
 --   Hand [AS KH KC JH AD] (sun=24, 2-Ace-no-mardoofa) → 0%
 --     (correctly conservative).
 --   Weak A+T (sun~27) → 0% (correctly conservative).
-local TH_SUN_BASE     = 40
-local BID_JITTER      = 6   -- ±6 swing per call
+local TH_SUN_BASE     = K.BOT_TH_SUN_BASE
+local BID_JITTER      = K.BOT_BID_JITTER
 
 -- Advanced-bots feature flag. Off by default; toggle via
 -- /baloot advanced or the lobby checkbox. When ON, the bots layer
@@ -963,7 +967,8 @@ local function sunStrength(hand)
         for _, su in ipairs({ "S", "H", "D", "C" }) do
             if count[su] < 2 or not honors[su] then penalty = penalty + 10 end
         end
-        -- v0.11.9 user-arbitrated (bidcalc trace): cap reduced from 18 → 8.
+        -- v0.11.9 user-arbitrated (bidcalc trace): cap reduced 18 → 8.
+        -- v0.11.11: promoted to K.BOT_SUN_VOID_PENALTY_CAP for tunability.
         -- The void/short-suit penalty is HOKM-think mistakenly applied
         -- to Sun. In Hokm, voids = ruff vulnerabilities (opponents trump
         -- from your void). In Sun there's no trump, so voids are
@@ -976,7 +981,7 @@ local function sunStrength(hand)
         -- suits void/honorless = -8 still) without erasing strong
         -- single-suit concentrations. v0.10.0 history: pre-Gemini
         -- 25 → softened 18 → v0.11.9 8.
-        s = s - math.min(penalty, 8)
+        s = s - math.min(penalty, K.BOT_SUN_VOID_PENALTY_CAP)
     end
     return s
 end

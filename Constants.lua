@@ -399,6 +399,20 @@ K.BOT_BIDDING_SUN_OVER_HOKM_MARGIN  = 5   -- B-5 (round 2 Sun must beat best Hok
 K.BOT_ASHKAL_DIRECT_SUN_PIVOT       = 85  -- A-6 (sun >= this → skip Ashkal, prefer direct Sun)
 K.BOT_PICKBID_BELOTE_BONUS          = K.MELD_BELOTE  -- B-6 (mirrors meld scoring;
                                                     --  +20 raw multiplier-immune)
+-- v0.11.11 XU-07: promoted bidding thresholds from Bot.lua locals.
+-- Calibration trail for these constants:
+--   K.BOT_TH_HOKM_R1_BASE: 36 (v0.5) → 42 (v0.5.5)
+--   K.BOT_TH_HOKM_R2_BASE: 32 (v0.5) → 36 (v0.5.5)
+--   K.BOT_TH_SUN_BASE:     50 (v0.4) → 47 (v0.10.6) → 40 (v0.11.10)
+--   K.BOT_BID_JITTER:      ±6 (since v0.5)
+--   K.BOT_SUN_VOID_PENALTY_CAP: 25 (v0.4) → 18 (Gemini softening) → 8 (v0.11.9)
+-- See `Bot.lua:35-50` (legacy locals retained as aliases for the
+-- existing call sites; values now sourced from K.*).
+K.BOT_TH_HOKM_R1_BASE       = 42
+K.BOT_TH_HOKM_R2_BASE       = 36
+K.BOT_TH_SUN_BASE           = 40
+K.BOT_BID_JITTER            = 6
+K.BOT_SUN_VOID_PENALTY_CAP  = 8
 
 -- v0.5.13: Sun Bel-100 cumulative gate constant (E-1 / R.CanBel).
 -- Pulled from inline `mine < 100` literal in Rules.lua so it's

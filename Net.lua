@@ -818,6 +818,19 @@ function N._OnLobby(sender, gameID, names, botMask, hostVersion)
     if hostVersion and hostVersion ~= "" then
         S.s.peerVersions[skey] = hostVersion
     end
+    -- v0.11.11 NetU-06 fix: cap each name at 64 chars before persisting.
+    -- Pre-v0.11.11 a buggy/forked host could send arbitrarily long
+    -- names, persisted into s.seats[i].name and SaveSession-stored.
+    -- WoW addon-channel max payload caps ~252 bytes per chunk so the
+    -- exploit ceiling is small, but explicit cap closes the future-
+    -- channel-format-change risk. Mirrors XR-06's encodedHand cap.
+    if names then
+        for i, n in ipairs(names) do
+            if type(n) == "string" and #n > 64 then
+                names[i] = n:sub(1, 64)
+            end
+        end
+    end
     S.ApplyLobby(gameID, names, botMask)
 end
 
@@ -876,6 +889,11 @@ function N._OnHand(sender, encodedCards, forRound)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.11 NetU-09 fix: cap encodedCards to 16 chars (max 8 cards
+    -- × 2 chars). Pre-v0.11.11 unbounded; a buggy host could send 1KB+
+    -- encodedHand which persists in s.hand until next ApplyHand.
+    -- Mirrors XR-06 SWA cap.
+    if encodedCards and #encodedCards > 16 then return end
     S.ApplyHand(C.DecodeHand(encodedCards), forRound)
 end
 
@@ -883,6 +901,12 @@ function N._OnBidCard(sender, card)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
+    -- v0.11.11 NetU-05 fix: validate card format. Pre-v0.11.11 a
+    -- malformed bid card was passed through to S.ApplyBidCard;
+    -- downstream UI :sub(1,1)/:sub(2,2) produced bogus rank/suit.
+    -- Allow empty string (no-bidcard sentinel from SendBidCard);
+    -- otherwise must be 2 chars (rank+suit). Mirrors XR-11's _OnPlay.
+    if card and card ~= "" and #card ~= 2 then return end
     S.ApplyBidCard(card)
 end
 
@@ -1050,6 +1074,7 @@ end
 function N._OnPreempt(sender, seat)
     if fromSelf(sender) then return end
     if not seat then return end
+    if seat < 1 or seat > 4 then return end          -- v0.11.11 NetU-07
     if S.s.phase ~= K.PHASE_PREEMPT then return end
     if not S.s.preemptEligible then return end
     local eligible = false
@@ -1373,6 +1398,26 @@ function N._HostResolveOvercall()
         -- authoritative state.)
         N.SendContract(S.s.contract.bidder, S.s.contract.type,
                        S.s.contract.trump or "")
+        -- v0.11.11 NetU-01 (OPEN-1 mitigation): defensive 250ms re-broadcast
+        -- of MSG_CONTRACT to recover from WoW chat-throttle drops. The
+        -- overcall sequence is dense (open + 4×decision + resolve dual-
+        -- emit + contract + dealphase + turn + whispers) and can flirt
+        -- with the ~4-6 msg/sec/sender CHAT_MSG_ADDON throttle. If the
+        -- single MSG_CONTRACT broadcast is dropped, clients keep
+        -- s.contract.type == HOKM while host advances to SUN — this is
+        -- the leading remaining hypothesis for the user-reported
+        -- "Sun overcall bottom contract banner not updating" bug
+        -- (OPEN-1 since v0.11.2). The retry costs nothing in the happy
+        -- path (idempotent on the receiver via S.ApplyContract's match
+        -- check at line 1059) and recovers from a single throttle drop.
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0.25, function()
+                if S.s.contract then
+                    N.SendContract(S.s.contract.bidder, S.s.contract.type,
+                                   S.s.contract.trump or "")
+                end
+            end)
+        end
     end
     -- Continue post-bid flow (mirrors the post-MSG_CONTRACT logic in
     -- _HostStepBid). If the contract is now Sun, re-check Sun-Bel-skip.
@@ -1476,6 +1521,16 @@ end
 function N._OnMeld(sender, seat, kind, suit, top, encodedCards, replayFlag)
     if fromSelf(sender) then return end
     if not seat or not kind then return end
+    -- v0.11.11 NetU-02 fix: enum-validate kind. Pre-v0.11.11 a buggy/
+    -- forked host emitting MSG_MELD;<seat>;garbageKind;... reached
+    -- S.ApplyMeld which only handles seq3/seq4/seq5/carre — unknown
+    -- kinds yielded value=nil written into s.meldsByTeam, leading to
+    -- nil-arithmetic risk in score sum and garbage in meld-strip UI.
+    -- Same defense-in-depth shape as v0.11.3 RT07-05 / v0.11.5 cluster.
+    if kind ~= "seq3" and kind ~= "seq4" and kind ~= "seq5" and kind ~= "carre" then
+        return
+    end
+    if seat < 1 or seat > 4 then return end
     -- Audit fix: replay-frame bypass. Resync whispers a marker "1" in
     -- the trailing field; with fromHost(sender) verified we trust the
     -- frame and skip the per-seat authorizeSeat (which would reject
@@ -1660,6 +1715,15 @@ function N._OnRound(sender, addA, addB, totA, totB, sweep, bidderMade)
     -- corrupting the score panel until the next valid MSG_ROUND.
     -- Mirrors RT07-05 wire-validation shape.
     if not addA or not addB or not totA or not totB then return end
+    -- v0.11.11 NetU-04 fix: bound-check on score fields. Pre-v0.11.11
+    -- a buggy host emitting MSG_ROUND with garbage numerics
+    -- (negative, or 9999999) passed the nil-check but corrupted
+    -- s.cumulative downstream — could falsely trigger game-end via
+    -- R.GameEndWinner(totA, totB, target) where target=152. Reasonable
+    -- bound: 0 <= addX <= 200 (per-round delta), 0 <= totX <= 1000
+    -- (cumulative; max realistic = ~3 game targets).
+    if addA < 0 or addB < 0 or addA > 200 or addB > 200 then return end
+    if totA < 0 or totB < 0 or totA > 1000 or totB > 1000 then return end
     S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
 end
 
@@ -2975,9 +3039,15 @@ function N._OnSWAResp(sender, responder, accept, caller)
         if fromSelf(sender) then return end
         if not authorizeSeat(responder, sender) then return end
     end
+    -- v0.11.11 NetU-08 fix: range-check responder + caller. Pre-v0.11.11
+    -- garbage seat numbers wrote req.responses[99] which lingered in
+    -- SavedVariables (swaRequest is not in TRANSIENT_FIELDS — host
+    -- needs it across /reload).
+    if not responder or responder < 1 or responder > 4 then return end
+    if not caller or caller < 1 or caller > 4 then return end
     local req = S.s.swaRequest
     if not req or req.caller ~= caller then return end
-    if not responder or R.TeamOf(responder) == R.TeamOf(caller) then return end
+    if R.TeamOf(responder) == R.TeamOf(caller) then return end
     req.responses = req.responses or {}
     if req.responses[responder] ~= nil then return end
     req.responses[responder] = accept
@@ -3320,12 +3390,45 @@ function N.HostResolveSWA(callerSeat, callerHand)
         callerEncodedHand = (C and C.EncodeHand) and C.EncodeHand(pinHand) or nil
     end
 
+    -- v0.11.11 SU-Ultra-01 fix: stash per-team breakdown so the
+    -- renderBanner SWA branch can show the same row format the
+    -- regular round-end banner does. Pre-v0.11.11 my v0.11.2 fix
+    -- claimed to display "<Team>: cards X + melds Y" rows but the
+    -- conditional read S.s.lastRoundResult — which this same code
+    -- path nils at line 3401 BEFORE renderBanner runs. The
+    -- per-team rows have therefore been UNREACHABLE since v0.11.2;
+    -- users have only seen the degraded "Claim verified — all
+    -- remaining tricks awarded." line. Now we stash the breakdown
+    -- on swaResult itself (host-side) so renderBanner can display
+    -- it directly. Non-host receivers don't get the breakdown
+    -- (would require wire-format extension; deferred — host is the
+    -- dominant SWA-observer).
+    local breakdown
+    if valid and result then
+        breakdown = {
+            bidderTeam = result.bidderTeam,
+            teamPoints = result.teamPoints,
+            meldPoints = result.meldPoints,
+            multiplier = result.multiplier,
+            belote     = result.belote,
+        }
+    elseif not valid then
+        breakdown = {
+            bidderTeam = R.TeamOf(c.bidder),
+            teamPoints = { A = cardA, B = cardB },
+            meldPoints = { A = mpA, B = mpB },
+            multiplier = mult,
+            belote     = beloteOwner,
+        }
+    end
+
     S.s.swaResult = {
         caller       = callerSeat,
         valid        = valid,
         contractMade = contractMade,
         sweep        = sweepTeam,
         encodedHand  = callerEncodedHand,   -- v0.11.7
+        breakdown    = breakdown,           -- v0.11.11 SU-Ultra-01
     }
     S.s.lastRoundResult = nil
     S.s.trick = nil
@@ -3359,6 +3462,11 @@ function N._OnAKA(sender, seat, suit, replayFlag)
     if fromSelf(sender) then return end
     if not seat or seat < 1 or seat > 4 then return end
     if not suit or suit == "" then return end
+    -- v0.11.11 NetU-03 fix: enum-validate suit ∈ {S,H,D,C}. Garbage
+    -- suits silently pass through to S.ApplyAKA + UI banner, where
+    -- K.SUIT_GLYPH lookup yields "?" glyph. Defense-in-depth + UI
+    -- consistency.
+    if suit ~= "S" and suit ~= "H" and suit ~= "D" and suit ~= "C" then return end
     -- Audit fix: replay bypass — host whispers AKA replay during
     -- resync; sender is host, not the seat owner.
     local isReplay = (replayFlag == "1") and fromHost(sender)
