@@ -3070,9 +3070,12 @@ local function renderBanner()
         -- passed through; downstream RankGlyph/SUIT_GLYPH fallbacks
         -- emitted visually-nonsense rows. Now invalid cards are
         -- silently skipped — display only canonical rank+suit.
-        local VALID_RANKS = { A = true, T = true, K = true, Q = true,
-                              J = true, ["9"] = true, ["8"] = true, ["7"] = true }
-        local VALID_SUITS = { S = true, H = true, D = true, C = true }
+        -- v0.11.14 SU2-08 cleanup: reuse K.RANK_INDEX / K.SUIT_INDEX
+        -- as the whitelist source-of-truth instead of maintaining
+        -- duplicate VALID_RANKS / VALID_SUITS tables here. Truthiness
+        -- check works because the index tables map valid ranks/suits
+        -- to non-zero integers (1-8 for ranks, 1-4 for suits) and
+        -- omit invalid keys.
         local function renderCardGlyphs(enc)
             if not enc or #enc < 2 then return "" end
             local parts = {}
@@ -3081,7 +3084,7 @@ local function renderBanner()
                 if card and #card == 2 then
                     local rank = C.Rank(card)
                     local suit = C.Suit(card)
-                    if VALID_RANKS[rank] and VALID_SUITS[suit] then
+                    if K.RANK_INDEX[rank] and K.SUIT_INDEX[suit] then
                         local rankG = (C and C.RankGlyph) and C.RankGlyph(rank) or rank
                         local sGlyph = (K.SUIT_GLYPH and K.SUIT_GLYPH[suit]) or suit
                         -- Color red suits red, black suits white.

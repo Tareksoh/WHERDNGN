@@ -1290,7 +1290,13 @@ function Bot.PickBid(seat)
     -- Sources: decision-trees.md S-3 (Definite, video 25), S-8
     -- (Common, video 25); Wave-2 audit calibration analysis.
     local sun = sunStrength(hand)
-    if aceCount >= 3 then sun = sun + K.BOT_SUN_3ACE_BONUS end
+    if aceCount >= 3 then sun = sun + K.BOT_SUN_3ACE_BONUS
+    -- v0.11.14 user-bidcalc trace: 2-Ace hands without mardoofa or AKQ
+    -- triple were consistently rejected (sun=17-21 vs thSun=38-46).
+    -- Per Saudi rule S-1, 2 Aces IS the canonical Sun shape — these
+    -- hands SHOULD bid. Adding the bonus brings score into the jitter
+    -- fire-band. elseif gates against double-applying with 3-Ace.
+    elseif aceCount == 2 then sun = sun + K.BOT_SUN_2ACE_BONUS end
     sun = sun + math.min(mardoofaCount, K.BOT_SUN_MARDOOFA_PAIR_CAP)
               * K.BOT_SUN_MARDOOFA_BONUS
 

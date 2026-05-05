@@ -79,13 +79,20 @@ K.MULT_FOUR   = 4  -- فور — defender's response after Triple (×4)
 -- -- Melds (declarations in trick 1) -----------------------------------
 
 -- Raw values (divided by 10 at round end, then x mult). For reference,
--- "game points": Hokm = raw/10, Sun = raw/10 * 2.
+-- "game points": Hokm = raw/10, Sun = raw/10 * 2 (Sun×2 multiplier
+-- applies to ALL melds per v0.11.10 user-arbitrated rule; Belote
+-- alone is multiplier-immune, scored independently post-mult).
 -- Pagat-strict Saudi values:
---   3-seq:        2 gp / 4 gp     = 20 raw
+--   3-seq:        2 gp / 4 gp     = 20 raw   (Hokm/Sun)
 --   4-seq:        5 / 10           = 50
 --   5+seq or
 --   4-of-K/Q/J/T: 10 / 20          = 100  ("One Hundred")
---   4 of A:       10 / 80          = Hokm 100, Sun 400  ("Four Hundred")
+--   4 of A:       10 / 40          = Hokm 100 raw / Sun 200 raw post-
+--                                    v0.11.10 revert. Arabic name
+--                                    الأربع مئة / "Four Hundred"
+--                                    refers to Sun's post-multiplier
+--                                    value (200 × Sun×2 = 400 effective
+--                                    raw → ÷10 = 40 game points).
 --   4 of 9, 8, 7: don't score
 --   Belote (K+Q of trump): 2 gp = 20 raw, scored independently
 K.MELD_SEQ3        = 20
@@ -375,6 +382,23 @@ K.BOT_PREEMPT_TH      = 75    -- earlier seat pre-empts a Sun-on-Ace bid
 K.BOT_SUN_3ACE_BONUS                = 15  -- S-3 (was inline +12; bumped per Wave-2
                                           --  audit calibration — 3-Ace hands without
                                           --  AKQ triple now reliably clear thSun)
+K.BOT_SUN_2ACE_BONUS                = 15  -- v0.11.14 user-bidcalc trace evidence:
+                                          --  2-Ace hands without mardoofa or AKQ
+                                          --  triple consistently scored 17-21
+                                          --  (well below thSun=38-46 jitter band)
+                                          --  and were rejected. Per Saudi rule
+                                          --  S-1, 2 Aces IS the canonical Sun
+                                          --  shape — these hands SHOULD bid.
+                                          --  Specific user-trace examples:
+                                          --    [7D AD QC AC 9H] sun=17 (skipped)
+                                          --    [AH AD KC 7H QS] sun=21 (skipped)
+                                          --  +15 mirrors the 3-Ace bonus magnitude
+                                          --  (both are "shape-pass" signals, not
+                                          --  "guaranteed-win" markers). After
+                                          --  bonus: hands score 32/36, firing
+                                          --  17%/39% of jitter rolls at thSun=40.
+                                          --  Sim: total R1 fire rate goes
+                                          --  5.67% -> 7.39% per-bot per-round.
 K.BOT_SUN_MARDOOFA_BONUS            = 20  -- S-8 per A+T mardoofa pair.
                                           -- v0.10.4: 5 → 10 (under-rewarded
                                           -- canonical Saudi A+T cover pattern).

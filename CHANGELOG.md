@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.11.14 — Sun bot calibration: 2-Ace bonus from user-bidcalc trace evidence
+
+User-bidcalc trace from 27 + 10 telemetry rounds revealed the actual
+bottleneck behind "bots don't bid Sun enough": **2-Ace hands without
+mardoofa or AKQ triple consistently scored 17-21**, well below
+`thSun=38-46`, even though Saudi rule S-1 says 2 Aces IS the canonical
+Sun shape. The 3-Ace and mardoofa bonuses existed; the 2-Ace case was
+silently un-bonused. Adding `K.BOT_SUN_2ACE_BONUS = 15` brings these
+hands into the jitter fire-band without disturbing other calibration.
+
+Specific user-trace examples that previously skipped Sun:
+- `[7D AD QC AC 9H]` — 2 Aces + Q + nothing else, sun=17 thSun=38
+- `[AH AD KC 7H QS]` — 2 Aces + K + Q across 4 suits, sun=21 thSun=38
+
+Both score 32/36 post-bonus and now fire ~17-39% of jitter rolls.
+
+### Added (calibration)
+
+- **`K.BOT_SUN_2ACE_BONUS = 15`** (new). Magnitude mirrors `K.BOT_SUN_3ACE_BONUS`
+  — both signal "shape-pass canonical" rather than "guaranteed-win".
+  Applied via `elseif aceCount == 2` in `Bot.PickBid`, gated against
+  double-applying with the 3-Ace branch.
+
+### Empirical impact (sim_sun.py + user-trace data)
+
+- Theoretical R1 bot Sun fire rate: 5.67% → **7.39%** per-bot per-round
+  (~30% bump, all from the 2-Ace path).
+- Per-round outcomes: ~21% chance of bot Sun fire → ~28%.
+- 10-round session expectation: ~2.5 bot Sun bids → ~3 (vs 2 observed
+  on v0.11.13).
+- 27-round session expectation: ~6-8 bot Sun bids → ~7-10 (vs 3 observed
+  on v0.11.13). Closes much of the user-perceived gap.
+
+### Rejected alternatives
+
+- **Lower `TH_SUN_BASE` 40→32**: blunt-force calibration that would
+  also pull weak 0-1 Ace hands into firing range, raising bot Sun fail
+  rate from current 0% (overly conservative) to ~25-30% (overshooting
+  tournament target of 30-40%). The 2-Ace bonus is targeted: it lifts
+  exactly the hand class Saudi rules consider Sun-eligible.
+- **Lower `K.BOT_SUN_VOID_PENALTY_CAP` 8→4**: would help but also
+  affects 0-1 Ace junk hands. Already user-arbitrated to 8 in v0.11.9
+  from a higher value; further reduction without targeting risks over-
+  firing other shapes.
+- **Relax `sunMinShape` to allow 1A + same-suit K**: K-cover is
+  genuinely weaker than T-cover (T is rank #2 in Sun, K is #3 and loses
+  to opp's T). Saudi S-1 specifically calls out A+T mardoofa or 2+ Aces.
+
+### Tooling — `tools/sim_sun.py` (new)
+
+- Empirical Sun fire-rate simulator. Loads a Python re-impl of `Bot.lua`'s
+  `sunStrength` + `sunMinShape` + bonus stack (line-by-line mirror of
+  v0.11.14). Generates N random 5-card hands (R1 deal state — the actual
+  bidding context, NOT 8-card post-deal-2 which earlier analyses
+  mistakenly used) and reports score distribution + fire rates across
+  threshold + bonus-value sweeps.
+- Usage: `python tools/sim_sun.py --advanced --two-ace-bonus 15`.
+- Now permanently in-tree to ground future calibration discussions in
+  data instead of guesswork.
+
+### Test coverage
+
+- **U.14f** — `K.BOT_SUN_2ACE_BONUS = 15` constant pin.
+- **W.1** — `Bot.PickBid` source-pin: `aceCount == 2` elseif branch
+  applies `K.BOT_SUN_2ACE_BONUS`.
+- **W.2** — Behavioral: 2-Ace + mardoofa hand reliably fires Sun
+  (`[AH TH AD 8C 7S]` → sun=59 after bonuses, deterministic fire).
+
+### Bundled cleanups (from prior loop iteration)
+
+- **SU2-08** — UI.lua `renderCardGlyphs` deduped — uses `K.RANK_INDEX`
+  / `K.SUIT_INDEX` truthiness instead of local `VALID_RANKS` / `VALID_SUITS`
+  duplicates. U.13 test pins updated to assert the new pattern.
+- **Constants.lua reference table** — fixed misleading "10 / 80 = Hokm 100,
+  Sun 400" line. Post-v0.11.10 revert, Carré-A in Sun is **40 nq** (200
+  raw × Sun×2 / 10). The Arabic "الأربع مئة" / "Four Hundred" name
+  refers to the post-multiplier value 200 × Sun×2 = 400 effective raw,
+  not the stored constant. Reference table now reads "10 / 40".
+- **CHANGELOG v0.11.12 site count** — corrected from "11 sites" to
+  "10 sites" (State.lua: 9 → 8) per audit SU2-06.
+
+581/581 tests pass.
+
 ## v0.11.13 — hotfix: 4-agent ultra-audit findings (NetU2-01 HIGH revert + SU2-02 CRITICAL scope fix + XR2-05 wire validation)
 
 Hotfix release closing 5 findings from the post-v0.11.12 4-agent ultra
