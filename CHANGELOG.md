@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.9.4 — Calibration tooling: telemetry analyzer + workflow doc
+
+Audit cycle saturated; pivoting to empirical calibration. v0.8.3 added
+the per-round telemetry pipeline; this release adds the analyzer that
+reads it and the doc that explains the workflow.
+
+### Added
+
+- **`tools/calibrate.py`**: zero-dependency Python analyzer for
+  `WHEREDNGNDB.history` rows. Reads SavedVariables/WHEREDNGN.lua,
+  parses the history table (hand-written Lua-table parser; only
+  stdlib), and prints a calibration report covering:
+  - Contract-type mix (Hokm vs Sun fraction)
+  - Bid-round breakdown (R1 / R2 / forced)
+  - Bidder make / fail rate
+  - Bel / Triple / Four / Gahwa fire rates against current
+    `K.*_TH` thresholds with healthy-range annotations
+  - Per-bidder seat performance + cumulative-delta sum
+  - Sweep frequency
+  - Calibration-signal flags (fail-rate, Bel-rate, etc.) with
+    target ranges from Saudi-tournament empirical data
+- Modes: `--json OUT` to dump parsed rows; `--paste` to read from
+  stdin.
+
+- **`docs/CALIBRATION.md`**: workflow doc covering how to dump
+  telemetry from in-game, where SavedVariables lives on Windows,
+  what the analyzer produces, what each metric means in healthy
+  ranges, and privacy notes (local-only, no network egress, no
+  hand contents in rows).
+
+### Why now
+
+The bot has ~20 tunable thresholds calibrated from videos +
+symmetric-distribution unit tests, but never against
+human-asymmetric real-game outcomes. This is the missing input.
+~100 rounds of real telemetry should be enough to refit
+`BOT_BEL_TH`, `TH_HOKM_R1_BASE`, `BOT_OVERCALL_*_TH`, and the
+escalation-chain ladders.
+
+### Tests
+
+- 333/333 regression tests pass (no production-code change in
+  this release; all additions are under `tools/` + `docs/`).
+- Analyzer tested on a synthetic 3-row dataset to verify parser
+  + report path work end-to-end.
+
 ## v0.9.3 — Audit-sweep loop: 4 more v0.9.0 ultra-audit items closed
 
 Continuation of the 60-report v0.9.0 ultra-audit. Four items closed
