@@ -80,7 +80,13 @@ local CARD_STYLES = {
         cardBackEdge = { 0.50, 0.50, 0.55, 1.00 },   -- silver edge
     },
     burgundy = {
-        name         = "Burgundy",         -- SVGCards Accessible/Horizontal
+        name         = "4 Colors",         -- v1.0.6: user-renamed from
+                                            -- "Burgundy" display label.
+                                            -- Internal key + texSubdir
+                                            -- preserved so existing
+                                            -- WHEREDNGNDB.cardStyle =
+                                            -- "burgundy" entries keep
+                                            -- working without migration.
         texSubdir    = "burgundy\\",       -- cards/burgundy/<card>.tga
         cardBack     = { 0.42, 0.10, 0.16, 1.00 },
         cardBackEdge = { 0.20, 0.04, 0.08, 1.00 },
@@ -92,7 +98,17 @@ local CARD_STYLES = {
         cardBackEdge = { 0.30, 0.06, 0.06, 1.00 },
     },
     royal_noir = {
-        name         = "Royal Noir",       -- gold-on-charcoal SVG deck
+        name         = "Ba8ala SET",       -- v1.0.6: replaced Royal Noir
+                                            -- assets with xCards (BSD-2)
+                                            -- via tools/convert_xcards_
+                                            -- to_baqala.py. Internal key
+                                            -- + texSubdir kept so existing
+                                            -- WHEREDNGNDB.cardStyle =
+                                            -- "royal_noir" entries keep
+                                            -- working. back.tga preserved
+                                            -- from the original Royal
+                                            -- Noir deck (charcoal/gold
+                                            -- aesthetic still good).
         texSubdir    = "royal_noir\\",     -- cards/royal_noir/<card>.tga
         cardBack     = { 0.10, 0.09, 0.12, 1.00 },   -- charcoal back body
         cardBackEdge = { 0.55, 0.43, 0.18, 1.00 },   -- warm gold edge
@@ -867,7 +883,7 @@ local function buildLobby()
             .. "the game (trump aggression, Bel frequency), uses "
             .. "match-point urgency for finer score-position calls, "
             .. "and ramps escalations faster when partner has already "
-            .. "Beled / Tripled.")
+            .. "Doubled / Tripled.")
     lobbyPanel.fzlokyCheck = makeBotDifficultyCheck(
         "Fzloky", 64, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.fzlokyBots end,
@@ -2307,29 +2323,12 @@ local function cardCountForSeat(seat)
     return math.max(0, total - played)
 end
 
-local function meldsDescForSeat(seat)
-    -- Trick-1 announcement format: type + length + top rank + value.
-    -- The SUIT is deliberately omitted — Saudi convention announces
-    -- "Tartib of 3, top King" without naming the suit, since suits
-    -- don't matter for meld comparison. The actual cards (and thus
-    -- suit) are revealed only in trick 2 during the owner's turn.
-    local team = R.TeamOf(seat)
-    local list = S.s.meldsByTeam[team] or {}
-    local mine = {}
-    for _, m in ipairs(list) do
-        if m.declaredBy == seat then
-            local s
-            if m.kind == "carre" then
-                s = ("Carré %s"):format(C.RankGlyph(m.top))
-            else
-                s = ("Seq%d %s"):format(m.len or 3, C.RankGlyph(m.top))
-            end
-            mine[#mine + 1] = s .. (" (%d)"):format(m.value or 0)
-        end
-    end
-    if #mine == 0 then return "" end
-    return table.concat(mine, ", ")
-end
+-- v1.0.6 (B#3+#4 cleanup): `meldsDescForSeat` removed. Since v1.0.5
+-- the trick-1 meld text label is permanently hidden (`meldTextVisible()`
+-- always returns false). The function generated the text-label
+-- description ("Carré K (100)" etc.) which had no consumer post-v1.0.5.
+-- Sound cue (S.ApplyMeld in State.lua) handles the trick-1 announcement;
+-- trick-2 card strip (meldCardsForSeat below) handles the proof reveal.
 
 -- Show only the seat's BEST meld (highest .value). Pre-v1.0.1 this
 -- function concatenated cards from EVERY meld the seat declared, then
@@ -2386,16 +2385,11 @@ local function meldStripVisibleFor(seat)
     return now < S.s.meldHoldUntil[seat]
 end
 
--- v1.0.5 user-requested: meld text label HIDDEN at all times. The
--- sound cue (S.ApplyMeld in State.lua) handles the trick-1
--- announcement; the trick-2 card reveal handles the proof-display.
--- A persistent on-screen badge under the player name during trick 1
--- was redundant with the sound cue and visually noisy.
--- Pre-v1.0.5 this returned true during DEAL3/PLAY when no tricks
--- had completed (#s.tricks == 0). Now always false.
-local function meldTextVisible()
-    return false
-end
+-- v1.0.5 hid the trick-1 meld text label (Saudi convention is verbal-
+-- only declaration, no on-screen badge). v1.0.6 removed the now-dead
+-- `meldTextVisible()` helper and the `meldsDescForSeat()` builder it
+-- gated, since neither has any consumer. The meldText widget is kept
+-- only for layout anchoring — `:SetText("")` calls are at renderSeats.
 
 -- 28th-audit / player feedback: render a player's bid for the seat
 -- badges during the bidding phases. "HOKM:S" → "حكم ♠" with the
@@ -2468,22 +2462,18 @@ local function renderSeats()
                 if i <= cnt then b.backs[i]:Show() else b.backs[i]:Hide() end
             end
             b.countText:SetText(("|c"..COL.txtSoft.."%d|r"):format(cnt))
-            -- Meld display follows two independent windows:
-            --   • text label: visible during trick 1 only (announcement)
-            --   • card strip: visible only during the seat's 5-second
-            --     hold in trick 2 (S.s.meldHoldUntil[seat])
-            -- They never overlap.
+            -- v1.0.6 (B#3 cleanup): single-window meld display.
+            -- Trick 1 = sound cue only (S.ApplyMeld in State.lua);
+            -- Trick 2 = card strip during the seat's 5-second hold.
+            -- The trick-1 text label was retired in v1.0.5; the
+            -- meldText widget is now reused only as an empty-string
+            -- carrier (kept for layout — frame is anchored to it).
             if meldStripVisibleFor(seat) then
                 setMeldStripCards(b.meldStrip, meldCardsForSeat(seat), 1.0)
-                b.meldText:SetText("")
             else
                 if b.meldStrip then b.meldStrip:Hide() end
-                if meldTextVisible() then
-                    b.meldText:SetText(meldsDescForSeat(seat))
-                else
-                    b.meldText:SetText("")
-                end
             end
+            b.meldText:SetText("")
             b.dealerText:SetText(seat == S.s.dealer and "D" or "")
             -- 28th-audit: bid label below the name. Shows "HOKM ♠"
             -- when a player calls Hokm in round 2, so over-bidders
@@ -2544,19 +2534,15 @@ local function renderSeats()
     local nm = rawName and shortName(rawName) or "you"
     local prefix = me == S.s.dealer and "D " or ""
     lb.nameText:SetText(prefix .. "|c" .. COL.txtGold .. nm .. "|r")
-    -- Same two-window split for the local player. Strip during the
-    -- 5-sec trick-2 reveal; text label during trick 1 announcement.
+    -- v1.0.6 (B#3 cleanup): single-window meld display for local
+    -- player too. Trick 1 = sound cue only; Trick 2 = card strip.
+    -- meldText is empty-string carrier post-v1.0.5.
     if meldStripVisibleFor(me) then
         setMeldStripCards(lb.meldStrip, meldCardsForSeat(me), 1.0)
-        lb.meldText:SetText("")
     else
         if lb.meldStrip then lb.meldStrip:Hide() end
-        if meldTextVisible() then
-            lb.meldText:SetText(meldsDescForSeat(me))
-        else
-            lb.meldText:SetText("")
-        end
     end
+    lb.meldText:SetText("")
     if S.s.turn == me then
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
         if lb.turnGlow then lb.turnGlow:Show() end

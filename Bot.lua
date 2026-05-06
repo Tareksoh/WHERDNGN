@@ -3481,19 +3481,22 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- Gate: ≥2 point cards spare, OR late round, OR pos 4.
             -- v0.5.18 keeps the same gate logic but applies to the
             -- expanded candidate set.
-            -- v1.0.4 (agent #2): multiplier-aware tightening. Under
-            -- a Bel-doubled (×2), Triple-tripled (×3), or Foured
-            -- (×4) contract, a single mis-played 10-face-value swing
-            -- is worth 20-40 effective. Speculative donates (≥2
-            -- point cards spare OR late-round) are too risky when
-            -- the multiplier amplifies regret. Tighten the gate to
-            -- ONLY lastSeat (free dump — trick is already going to
-            -- partner's pile) when the contract has any escalation.
-            local multiplierActive = (contract.foured or contract.tripled
-                                      or contract.doubled) and true or false
+            -- v1.0.4 (agent #2): multiplier-aware tightening.
+            -- v1.0.6 (N2): tiered gate — pre-fix treated all
+            -- escalation rungs identically as `lastSeat-only`. But
+            -- ×2 (Bel) is the COMMONEST escalation in tournament
+            -- play; suppressing speculative donates on every Bel'd
+            -- round throws away a tested heuristic. ×3/×4 are where
+            -- regret math diverges (40-effective swing). Now:
+            --   foured / tripled : lastSeat only (strictest)
+            --   doubled (×2)     : lastSeat OR completed >= 4
+            --   none             : original (≥2 spare OR completed
+            --                      >= 3 OR lastSeat)
             local gateOk
-            if multiplierActive then
+            if contract.foured or contract.tripled then
                 gateOk = lastSeat  -- only the safest donate fires
+            elseif contract.doubled then
+                gateOk = (lastSeat or completed >= 4)
             else
                 gateOk = (#pointCards >= 2 or completed >= 3 or lastSeat)
             end
@@ -4038,10 +4041,42 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 local pivotalSwing = (myCum >= target - 25)
                                      or (oppCum >= target - 15)
                 if pivotalSwing then
-                    -- Win this trick at maximum reliability — over-
-                    -- trump-resistant card. Skip the pos-aware ducks
-                    -- which would save cards we may never get to use.
-                    return highestByRank(winners, contract)
+                    -- v1.0.6 (N1): partner-meld-pin guard. Cluster 1's
+                    -- meldKnownHeld helper tracks cards partner has
+                    -- declared via melds (still in their hand). If
+                    -- partner has a HIGHER-rank card in led suit via
+                    -- a declared meld, taking the trick with our
+                    -- card now strands partner's meld run — partner
+                    -- would have caught it cleanly. Suppress the
+                    -- swing override and let partner's known boss
+                    -- take the trick naturally.
+                    local skipForPartnerMeld = false
+                    if trick.leadSuit and meldKnownHeld then
+                        local partner = R.Partner(seat)
+                        local known = meldKnownHeld(partner)
+                        for kc in pairs(known) do
+                            if C.Suit(kc) == trick.leadSuit then
+                                -- Find our highest card we'd win with;
+                                -- compare to partner's meld card.
+                                for _, c in ipairs(winners) do
+                                    if C.Suit(c) == trick.leadSuit
+                                       and C.TrickRank(kc, contract)
+                                          > C.TrickRank(c, contract) then
+                                        skipForPartnerMeld = true
+                                        break
+                                    end
+                                end
+                            end
+                            if skipForPartnerMeld then break end
+                        end
+                    end
+                    if not skipForPartnerMeld then
+                        -- Win this trick at maximum reliability —
+                        -- over-trump-resistant card. Skip the pos-
+                        -- aware ducks which would save cards we may
+                        -- never get to use.
+                        return highestByRank(winners, contract)
+                    end
                 end
             end
         end
@@ -4158,8 +4193,25 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- the literal `target = ...` line was in source. Now
             -- compute these locally inside pickFollow.
             local m5_myTeam = R.TeamOf(seat)
+            local m5_oppTeam = (m5_myTeam == "A") and "B" or "A"
             local m5_isBidderTeam = (contract.bidder
                 and m5_myTeam == R.TeamOf(contract.bidder)) or false
+            -- v1.0.6 (N3): M5 meld-aware target. Both mirrors below
+            -- compute `gap = target - raw` to detect make-or-break.
+            -- Pre-fix used the bare 81/65 constants — but R.ScoreRound
+            -- adds melds to team totals. If opp declared a 100-pt
+            -- carré, bidder's REAL make-threshold is 81+100=181 (M5
+            -- fires highestByRank on a doomed contract). If WE
+            -- declared a 50-pt seq4, real make is 81-50=31 (M5's
+            -- 0<gap<=30 band misfires on real raw 30<x<50). Adjust
+            -- target by net meld delta. R.SumMeldValue already
+            -- handles the canonical meld-team scoring.
+            local m5_meldA = (R.SumMeldValue and S.s.meldsByTeam
+                              and R.SumMeldValue(S.s.meldsByTeam.A)) or 0
+            local m5_meldB = (R.SumMeldValue and S.s.meldsByTeam
+                              and R.SumMeldValue(S.s.meldsByTeam.B)) or 0
+            local m5_myMeld  = (m5_myTeam == "A") and m5_meldA or m5_meldB
+            local m5_oppMeld = (m5_oppTeam == "A") and m5_meldA or m5_meldB
             if m5_isBidderTeam and S.s.tricks then
                 local raw = 0
                 for _, t in ipairs(S.s.tricks) do
@@ -4169,7 +4221,14 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         end
                     end
                 end
-                local target = (contract.type == K.BID_SUN) and 65 or 81
+                local baseTarget = (contract.type == K.BID_SUN) and 65 or 81
+                -- v1.0.6 (N3): meld-aware target. We need
+                -- (myMeld + ourTrickRaw) > (oppMeld + oppTrickRaw),
+                -- which simplifies (after summing all 130/162 raw on
+                -- the trick side) to ourTrickRaw > baseTarget +
+                -- oppMeld - myMeld. So adjusted target is
+                -- baseTarget + oppMeld - myMeld.
+                local target = baseTarget + m5_oppMeld - m5_myMeld
                 -- Make-or-break: 0 < (target - raw) <= ~30 (current
                 -- trick can swing make-fail boundary). Favor trick-rank
                 -- over face-value to lock the last trick.
@@ -4180,12 +4239,18 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
             -- v1.0.4 (agent #7): M5 defender mirror. Defender team's
             -- primary goal #2 (decision-trees.md Section 7) is to FORCE
-            -- BIDDER FAIL. Bidder fails on tied half-and-half: Hokm
-            -- target=81 raw, Sun target=65 raw post-mult. Defender
-            -- needs strictly MORE than half (target+1). When defender
-            -- raw is in the make-or-break band on trick 8, the swing
-            -- is winning-this-trick > face-value. Same highestByRank
-            -- preference as the bidder-team mirror; just symmetric.
+            -- BIDDER FAIL.
+            -- v1.0.6 (N6): off-by-one fix. Saudi rule per CLAUDE.md
+            -- and Rules.lua: bidder fails on tied half-and-half.
+            -- Defender at exactly 81 raw (Hokm) or 65 raw (Sun)
+            -- ALREADY forces bidder fail (bidder ties → bidder
+            -- fails). Pre-v1.0.6 the code used target+1 thinking
+            -- defender needed strict-majority +1; that was wrong
+            -- by Saudi rule (defender wins on tie too). Drop the
+            -- `+1` so the band aligns with the bidder mirror.
+            -- Plus N3 meld-aware target: defender's effective target
+            -- is baseTarget - oppMeld + myMeld (defender NEEDS that
+            -- much raw to overcome opp-meld + base-target threshold).
             if not m5_isBidderTeam and contract.bidder and S.s.tricks then
                 local raw = 0
                 for _, t in ipairs(S.s.tricks) do
@@ -4195,10 +4260,12 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         end
                     end
                 end
-                -- Defender forces bidder fail at strict-majority.
-                -- Defender total of (target + 1) raw = bidder fails.
-                -- E.g. Hokm: defender at 82 raw → bidder ≤ 80 raw.
-                local defenderTarget = ((contract.type == K.BID_SUN) and 65 or 81) + 1
+                local baseTarget = (contract.type == K.BID_SUN) and 65 or 81
+                -- defender needs raw >= baseTarget + oppMeld - myMeld
+                -- (mirror of bidder formula; we're the "defender" team
+                -- so opp is the bidder team — meld accounting flips
+                -- accordingly via m5_oppMeld and m5_myMeld).
+                local defenderTarget = baseTarget + m5_oppMeld - m5_myMeld
                 local gap = defenderTarget - raw
                 if gap > 0 and gap <= 30 then
                     return highestByRank(winners, contract)
@@ -4753,16 +4820,20 @@ end
 local function escalationStrength(seat, hand, contract)
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
-        -- v1.0.3 (ESC-1): sunStrength applies a void-penalty intended
-        -- for Sun (where short suits can't be ruffed because there's
-        -- no trump). In Hokm, voids = RUFF CAPACITY (positive) — the
-        -- bidder ruffs opp-led suit-X with their trump on the first
-        -- X-led trick. Reversing the penalty here makes the strength
-        -- score honest for the Hokm context. Cap is the same
-        -- K.BOT_SUN_VOID_PENALTY_CAP=8 max applied inside sunStrength;
-        -- recompute the penalty mass to invert it cleanly. Bot.IsAdvanced
-        -- gate matches the gate inside sunStrength so we only invert
-        -- when the penalty was actually applied.
+        -- v1.0.3 (ESC-1): sunStrength applies a Sun-only void-penalty
+        -- (capped K.BOT_SUN_VOID_PENALTY_CAP=8) intended for Sun
+        -- where short suits can't be ruffed (no trump). In Hokm,
+        -- voids = ruff capacity. The block below NEUTRALIZES the
+        -- Sun-only penalty (adds back the same magnitude that
+        -- sunStrength subtracted) so the EV-1 voidBonus immediately
+        -- below — `voidCount * 5 + sideAces * 8` — is the SOLE
+        -- Hokm void/Ace contribution. Net effect for Hokm: voids
+        -- earn +5 each (positive, ruff-capacity); side-Aces beyond
+        -- the first earn +8 each. Without this neutralization, the
+        -- Sun penalty would partially cancel the EV-1 bonus.
+        --
+        -- v1.0.6 (B#1) comment fix: clarified "neutralization" vs
+        -- the prior misleading "inversion" claim. Behavior unchanged.
         if Bot.IsAdvanced() then
             local count = { S = 0, H = 0, D = 0, C = 0 }
             local honors = { S = false, H = false, D = false, C = false }
@@ -4781,7 +4852,7 @@ local function escalationStrength(seat, hand, contract)
                 end
             end
             local applied = math.min(penalty, K.BOT_SUN_VOID_PENALTY_CAP)
-            strength = strength + applied  -- invert the Sun-only penalty
+            strength = strength + applied  -- neutralize Sun-only penalty
         end
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
         -- v0.11.17 EV-1 (audit): mirror PickDouble's defender bonuses

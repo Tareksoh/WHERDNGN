@@ -1,5 +1,122 @@
 # Changelog
 
+## v1.0.6 — Dual ultra-audit findings + deck refresh
+
+Closes the dual-agent audit run from the v1.0.5 cycle (one bot-
+behavior agent finding 9 NEW gaps; one code-effect agent finding 8
+issues including a real off-by-one bug). Plus user-requested deck
+changes. 746/746 tests pass.
+
+### CRITICAL — actual logic bug (real-game impact)
+
+- **N6: M5 defender mirror off-by-one (Bot.lua:M5 trick-8 block).**
+  Pre-fix code used `defenderTarget = base + 1`, but Saudi rule
+  per CLAUDE.md and Rules.lua: bidder fails on tied half-and-half.
+  Defender at exactly 81 raw (Hokm) or 65 raw (Sun) ALREADY forces
+  bidder fail. The `+1` was wrong by 1 raw — fired the swing 1 raw
+  too late. Mostly benign (just spurious fires) but inconsistent
+  with the bidder mirror. Now both mirrors use `baseTarget` directly.
+
+- **N3: M5 mirrors ignore meld bonuses in target.** Both bidder and
+  defender mirrors used bare 81/65 constants — but `R.ScoreRound`
+  adds melds to team totals. Opp declared 100-pt carré → bidder's
+  REAL make-threshold is 181 (M5 fired highestByRank on a doomed
+  contract). Now: `target = baseTarget + oppMeld - myMeld`.
+
+### HIGH severity — gap-closing fixes
+
+- **N1: Urgency-aware swing × meld-pin guard (Bot.lua:pickFollow).**
+  v1.0.4 #1 (urgency swing) fired before pos-aware ducks under
+  match-point pressure but didn't consult Cluster 1 meld awareness.
+  Worst-case: bot grabs trick with K when partner's already-
+  declared meld holds A — strands partner's run. Now: before swing
+  fires, check `meldKnownHeld(partner)` for higher-rank cards in
+  led suit; suppress swing if found.
+
+- **N2: Multiplier-aware tightening tiered (Bot.lua:smother).** Pre-
+  fix v1.0.4 #2 treated all escalation rungs identically as
+  `lastSeat-only`. But ×2 (Bel, the COMMONEST) shouldn't suppress
+  speculative donates as aggressively as ×3/×4. Now tiered:
+  `foured/tripled → lastSeat only`, `doubled → lastSeat OR
+  completed >= 4`, base unchanged otherwise.
+
+- **N5: ISMCTS rollouts mute `S.s.cumulative` (BotMaster.lua).**
+  v1.0.4 #1's urgency-aware swing reads `S.s.cumulative` directly.
+  C-14 closure swapped hostHands/trick/_memory but NOT cumulative
+  → all rollout worlds homogenize under match-point pressure,
+  killing variance/discrimination. Now cumulative is saved/nil'd
+  during rollouts and restored on cleanup.
+
+### MEDIUM — code quality / cleanup
+
+- **B#1 ESC-1 comment correction (Bot.lua:escalationStrength).**
+  Comment claimed "inverts the Sun-only void penalty"; actual code
+  is "neutralization" (cancels Sun penalty so EV-1 voidBonus passes
+  through clean). Behavior is correct (voids count positive in Hokm
+  via EV-1's +5/void). Comment now accurately describes the
+  neutralize+EV-1-bonus pattern. No math change.
+
+- **B#3+#4 Dead-code removal (UI.lua).** v1.0.5 made
+  `meldTextVisible()` always return false; `meldsDescForSeat()`
+  builder + `if meldTextVisible() then ...` arms became
+  unreachable. Removed both functions and collapsed the dead arms.
+  ~22 lines of unreachable code gone.
+
+- **B#6 State.lua R.TeamOf (S.ApplyRoundEnd:trickWinners).**
+  Inline `(winSeat == 1 or winSeat == 3) and "A" or "B"` replaced
+  with `R.TeamOf(winSeat)`. The team-mapping rule lives in one
+  place (Rules.lua:25-28); duplication risked silent telemetry
+  desync if the rule ever changed.
+
+### LOW — UX / display
+
+- **B#7 Tooltip rename (UI.lua:M3lm tooltip).** "Beled / Tripled"
+  → "Doubled / Tripled" to match v1.0.2's "Bel" → "Double x2"
+  rename. v1.0.2 missed this user-visible string.
+
+### User-requested deck changes
+
+- **"Burgundy" → "4 Colors" display rename (UI.lua).** Internal
+  key `burgundy` and `texSubdir` preserved so existing
+  `WHEREDNGNDB.cardStyle = "burgundy"` entries keep working
+  without migration. Display name only.
+
+- **"Royal Noir" → "Ba8ala SET" + new card art (UI.lua + 32 TGA
+  files in `cards/royal_noir/`).** Replaced Royal Noir card art
+  with [xCards](https://github.com/Xadeck/xCards) (BSD-2 license)
+  via `tools/convert_xcards_to_baqala.py`. Saudi-relevant 32
+  cards (7-A × 4 suits) at @2x source density Lanczos-downscaled
+  to 128×192 32bpp BGRA TGA. Internal key `royal_noir` and
+  `texSubdir` preserved (option A migration: existing settings
+  keep working). `back.tga` preserved from the original Royal
+  Noir charcoal/gold aesthetic.
+
+### Tests
+
+- 9 new source-pin assertions in Section AJ covering AJ.1 (N6 + N3
+  off-by-one fix), AJ.2 (N3 meld-aware), AJ.3 (N1 partner-meld
+  guard), AJ.4 (N5 ISMCTS swap), AJ.5 (N2 tiered gate), AJ.6 (B#6
+  R.TeamOf), AJ.7 (B#3+#4 dead code), AJ.8 (B#7 tooltip), AJ.9
+  (deck renames).
+- 746/746 tests pass (was 727/727 at end of v1.0.5).
+
+### Deferred / not-fixed-this-release
+
+- **N7 Sun-bidder-drought disambiguation** — refinement; defer.
+- **N8 Defender observation asymmetry** — new feature (defender-
+  side tells), not a bug fix.
+- **N9 `meldKnownHeld` + bidcard composition** — refactor
+  opportunity; defer.
+- **B#5 CHANGELOG line-number drift** — small drift (~17 lines on
+  v1.0.4 entries). Cosmetic for git-spelunkers; future debugger
+  habit is to grep on function name not line number.
+- **B#8 Historical CHANGELOG `K.SND_MELD_DECLARE` ref** — point-
+  in-time accurate; leave.
+- **N4/B#2 BEHAVIORAL coverage for AI section** — partial. AJ
+  section has additional source-pins; behavioral tests with
+  state-setup harnesses deferred to a focused test-debt cycle
+  (alongside Cluster 7 from v1.0.4).
+
 ## v1.0.5 — Hide trick-1 meld text label (user UX request)
 
 User-requested behavior change: the small text label under each

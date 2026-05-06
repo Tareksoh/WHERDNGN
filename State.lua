@@ -1951,7 +1951,12 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
             for ti, t in ipairs(s.tricks) do
                 local winSeat = t.winner
                 if winSeat then
-                    local team = (winSeat == 1 or winSeat == 3) and "A" or "B"
+                    -- v1.0.6 (B#6): use R.TeamOf instead of inline
+                    -- `(winSeat == 1 or winSeat == 3) and "A" or "B"`.
+                    -- The team-mapping rule lives in R.TeamOf
+                    -- (Rules.lua:25-28); duplicating it inline risked
+                    -- silent telemetry desync if the rule ever changed.
+                    local team = R.TeamOf(winSeat)
                     perTrick[ti] = team
                     if team == "A" then tricksA = tricksA + 1
                     else tricksB = tricksB + 1 end

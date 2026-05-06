@@ -833,6 +833,17 @@ local function rolloutValue(seat, card, world, contract)
     local prevAkaCalled = S.s.akaCalled
     local prevPlayed = S.s.playedCardsThisRound
     local prevMemory = B.Bot and B.Bot._memory or nil
+    -- v1.0.6 (N5): mute S.s.cumulative during rollouts. v1.0.4 #1
+    -- (urgency-aware swing in pickFollow) reads S.s.cumulative
+    -- directly. Without this swap, every rollout world inherits the
+    -- REAL match-point cumulative — collapsing variance: under
+    -- pivotal pressure, all worlds homogenize to highestByRank tail
+    -- play regardless of which candidate card is being evaluated.
+    -- Setting to nil short-circuits the urgency block (which has a
+    -- `if S.s.cumulative then` guard) and rollouts revert to
+    -- variance-rich position-aware play. Restored below.
+    local prevCumulative = S.s.cumulative
+    S.s.cumulative = nil
 
     S.s.hostHands = hands
     S.s.trick = currentTrick
@@ -919,6 +930,7 @@ local function rolloutValue(seat, card, world, contract)
     S.s.tricks = prevTricks
     S.s.akaCalled = prevAkaCalled
     S.s.playedCardsThisRound = prevPlayed
+    S.s.cumulative = prevCumulative  -- v1.0.6 (N5)
     if B.Bot then B.Bot._memory = prevMemory end
 
     if not ok or not result then return 0 end

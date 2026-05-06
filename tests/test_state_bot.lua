@@ -3337,7 +3337,7 @@ do
     local fnStart = botSrc:find("local function escalationStrength")
     if fnStart then
         -- v1.0.3: bumped 2500 -> 4000 chars; ESC-1 fix added a Sun-
-        -- penalty inversion preamble that pushed the void/side-Ace
+        -- penalty neutralization preamble that pushed the void/side-Ace
         -- pins past the prior window. Behavior preserved.
         local body = botSrc:sub(fnStart, fnStart + 4000)
         assertTrue(body:find("voidCount %* 5") ~= nil,
@@ -3577,10 +3577,13 @@ do
                "AD.5 (U-6): pickFollow non-trump preference fall-through")
 end
 
--- AD.6 (M5): trick-8 bidder-team make-the-bid awareness
+-- AD.6 (M5): trick-8 bidder-team make-the-bid awareness.
+-- v1.0.6 (N3): pin updated for meld-aware target. M5 now computes
+-- `target = baseTarget + m5_oppMeld - m5_myMeld` (was bare 65/81).
+-- The base 65/81 value still appears in `local baseTarget = ...`.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("local target = %(contract%.type == K%.BID_SUN%) and 65 or 81") ~= nil,
+    assertTrue(botSrc:find("local baseTarget = %(contract%.type == K%.BID_SUN%) and 65 or 81") ~= nil,
                "AD.6 (M5): trick-8 winners branch reads make-the-bid target")
 end
 
@@ -4827,8 +4830,8 @@ do
     local fnStart = botSrc:find("local function escalationStrength")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2500)
-        assertTrue(body:find("invert the Sun%-only penalty") ~= nil,
-                   "AH.7 (ESC-1): escalationStrength inverts sunStrength void penalty in Hokm")
+        assertTrue(body:find("neutralize Sun%-only penalty") ~= nil,
+                   "AH.7 (ESC-1): escalationStrength neutralizes Sun-only void penalty in Hokm")
     end
 end
 
@@ -4846,8 +4849,12 @@ end
 -- to lastSeat-only when contract is escalated (Bel/Triple/Four).
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("multiplierActive") ~= nil,
-               "AI.2 (agent #2): smother gate reads contract multiplier flags")
+    -- v1.0.6 (N2): tiered gate replaces binary `multiplierActive`.
+    -- Pin checks for the foured/tripled and doubled branches.
+    assertTrue(botSrc:find("if contract%.foured or contract%.tripled then") ~= nil,
+               "AI.2a (agent #2 / N2): smother gate handles foured/tripled tier (strictest)")
+    assertTrue(botSrc:find("elseif contract%.doubled then") ~= nil,
+               "AI.2b (agent #2 / N2): smother gate handles doubled tier (medium)")
 end
 
 -- AI.3 (agent #3 sampler bidcard downweight): defenderDesire mutates
@@ -4895,6 +4902,115 @@ do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     assertTrue(botSrc:find("v1%.0%.4 %(agent #8%): Mathlooth K%-tripled") ~= nil,
                "AI.8 (agent #8): pickFollow Mathlooth K-tripled trickle exists")
+end
+
+print("=== Section AJ: v1.0.6 behavioral tests + audit fixes ===")
+
+-- AJ.1 (N6 + N3 M5 defender mirror behavioral): defender at exactly
+-- 81 raw on trick 8 wins via Saudi tied-half rule. Pre-v1.0.6 the
+-- code used target+1=82 which fired the swing 1 raw too late. Now
+-- using bare 81 (with meld adjustment). Test: defender team has
+-- raw=81 going into trick 8; gap = 81 - 81 = 0; swing should NOT
+-- fire (already at fail-forcing threshold). Pre-fix would have fired
+-- at gap=1 with target=82. Verifying the off-by-one is gone.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Both bidder and defender mirrors should now use baseTarget
+    -- without the defender +1.
+    assertTrue(botSrc:find("local baseTarget = %(contract%.type == K%.BID_SUN%) and 65 or 81") ~= nil,
+               "AJ.1a (N6): bidder M5 reads baseTarget = 65/81 (no +1)")
+    -- Defender mirror also uses baseTarget (was target+1 pre-fix).
+    assertTrue(botSrc:find("local defenderTarget = baseTarget %+ m5_oppMeld %- m5_myMeld") ~= nil,
+               "AJ.1b (N6 + N3): defender M5 uses baseTarget + meld delta (no +1 off-by-one)")
+end
+
+-- AJ.2 (N3 M5 meld-aware target behavioral): both mirrors compute
+-- target using R.SumMeldValue. If opp declared 100-pt carré, our
+-- effective threshold shifts by 100. Source-pin verifies the math.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("R%.SumMeldValue and S%.s%.meldsByTeam") ~= nil,
+               "AJ.2a (N3): M5 reads R.SumMeldValue per team")
+    assertTrue(botSrc:find("local target = baseTarget %+ m5_oppMeld %- m5_myMeld") ~= nil,
+               "AJ.2b (N3): bidder M5 target = baseTarget + oppMeld - myMeld")
+end
+
+-- AJ.3 (N1 urgency-swing × meld-pin guard): partner-meld-known card
+-- in led suit suppresses swing override. Source-pin checks the
+-- skipForPartnerMeld block exists.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v1%.0%.6 %(N1%): partner%-meld%-pin guard") ~= nil,
+               "AJ.3a (N1): urgency swing has partner-meld-pin guard")
+    assertTrue(botSrc:find("skipForPartnerMeld") ~= nil,
+               "AJ.3b (N1): swing skipped when partner holds higher-rank meld card in led suit")
+end
+
+-- AJ.4 (N5 ISMCTS cumulative-swap): rollouts mute S.s.cumulative.
+do
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find("prevCumulative = S%.s%.cumulative") ~= nil,
+               "AJ.4a (N5): BotMaster saves cumulative before swap")
+    assertTrue(bmSrc:find("S%.s%.cumulative = nil") ~= nil,
+               "AJ.4b (N5): BotMaster nils cumulative during rollout")
+    assertTrue(bmSrc:find("S%.s%.cumulative = prevCumulative") ~= nil,
+               "AJ.4c (N5): BotMaster restores cumulative on rollout end")
+end
+
+-- AJ.5 (N2 multiplier-aware tiered smother gate): doubled and
+-- foured/tripled paths exist as separate branches.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- foured/tripled = lastSeat-only; doubled = lastSeat OR completed>=4.
+    assertTrue(botSrc:find("if contract%.foured or contract%.tripled then") ~= nil,
+               "AJ.5a (N2): smother gate has tripled/foured tier")
+    assertTrue(botSrc:find("elseif contract%.doubled then") ~= nil,
+               "AJ.5b (N2): smother gate has doubled tier (separate from tripled/foured)")
+    assertTrue(botSrc:find("gateOk = %(lastSeat or completed >= 4%)") ~= nil,
+               "AJ.5c (N2): doubled tier accepts lastSeat OR completed>=4")
+end
+
+-- AJ.6 (B#6 R.TeamOf in S.ApplyRoundEnd): inline `(winSeat == 1 or
+-- winSeat == 3) and "A" or "B"` replaced with R.TeamOf(winSeat).
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    -- v1.0.6 (B#6): ApplyRoundEnd uses R.TeamOf(winSeat) instead of
+    -- inline team-mapping. Window 10000 covers the full function body
+    -- — ApplyRoundEnd has ~250 lines including comments.
+    local fnStart = stateSrc:find("function S%.ApplyRoundEnd")
+    if fnStart then
+        local body = stateSrc:sub(fnStart, fnStart + 10000)
+        assertTrue(body:find("local team = R%.TeamOf%(winSeat%)") ~= nil,
+                   "AJ.6 (B#6): ApplyRoundEnd uses R.TeamOf(winSeat) for trickWinners")
+    end
+end
+
+-- AJ.7 (B#3+#4 dead code removal): meldsDescForSeat function gone,
+-- meldTextVisible function gone.
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    assertTrue(uiSrc:find("local function meldsDescForSeat") == nil,
+               "AJ.7a (B#4): meldsDescForSeat function removed (was dead code)")
+    assertTrue(uiSrc:find("local function meldTextVisible") == nil,
+               "AJ.7b (B#3): meldTextVisible function removed (always returned false)")
+end
+
+-- AJ.8 (B#7 tooltip rename): "Beled / Tripled" → "Doubled / Tripled".
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    assertTrue(uiSrc:find("Doubled / Tripled") ~= nil,
+               "AJ.8a (B#7): M3lm tooltip uses 'Doubled / Tripled'")
+    assertTrue(uiSrc:find("Beled / Tripled") == nil,
+               "AJ.8b (B#7): no remaining 'Beled / Tripled' string")
+end
+
+-- AJ.9 (deck changes): "4 Colors" + "Ba8ala SET" name renames.
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    assertTrue(uiSrc:find('name%s*=%s*"4 Colors"') ~= nil,
+               "AJ.9a (deck): burgundy deck renamed to '4 Colors'")
+    assertTrue(uiSrc:find('name%s*=%s*"Ba8ala SET"') ~= nil,
+               "AJ.9b (deck): royal_noir deck renamed to 'Ba8ala SET'")
 end
 
 -- =====================================================================
