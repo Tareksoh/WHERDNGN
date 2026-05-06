@@ -774,7 +774,7 @@ def _report_sweep_progression(rows: list[dict[str, Any]]) -> None:
                   f"A-rate {fmt_pct_ci(n_a, total_i)}")
     print()
 
-    # Bidder-team trick-1-win → final-make rate (early-lead conversion).
+    # Bidder-team trick-1-win -> final-make rate (early-lead conversion).
     early_lead_makes = 0
     early_lead_total = 0
     early_loss_makes = 0
@@ -792,11 +792,11 @@ def _report_sweep_progression(rows: list[dict[str, Any]]) -> None:
             early_loss_total += 1
             if made == 1: early_loss_makes += 1
     if early_lead_total:
-        print(f"  bidder team won trick 1 → make rate "
+        print(f"  bidder team won trick 1 -> make rate "
               f"{fmt_pct_ci(early_lead_makes, early_lead_total)} "
               f"({early_lead_makes}/{early_lead_total})")
     if early_loss_total:
-        print(f"  bidder team lost trick 1 → make rate "
+        print(f"  bidder team lost trick 1 -> make rate "
               f"{fmt_pct_ci(early_loss_makes, early_loss_total)} "
               f"({early_loss_makes}/{early_loss_total})")
     print()
