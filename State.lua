@@ -1877,14 +1877,56 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
         end
         local bidder = s.contract.bidder
         local bidderIsBot = (bidder and seatIsBot[bidder] == 1) and 1 or 0
+        -- v1.0.0 telemetry enrichment (Cluster 6 schema v=3): three new
+        -- fields for richer offline calibration. All are graceful: old
+        -- (v=2) rows continue to parse; the analyzer's field-presence
+        -- check skips missing fields. See tools/SCHEMA_PROPOSAL.md for
+        -- the full discussion.
+        --
+        --  • bidderTier — string ("Basic"/"Advanced"/"M3lm"/"Fzloky"/
+        --    "SaudiMaster"/"human"). Snapshot at round-end (active flag
+        --    at the moment ApplyRoundEnd fires). Mid-session tier flips
+        --    are rare; for those edge cases the analyzer's per-row tier
+        --    might be wrong but the post-flip rounds are correct, which
+        --    is the more useful direction for forward calibration.
+        --  • trickWinners — string of 1-8 chars "ABBA..." indicating
+        --    per-trick winner team. Source: s.tricks[ti].winner is a
+        --    SEAT (1-4); team is derived from R.TeamOf. Compact (8-byte
+        --    string vs 8-element table).
+        --  • tricksA, tricksB — derived counts. Trivial to compute from
+        --    trickWinners but logged separately so the analyzer can
+        --    histogram without re-parsing the string.
+        local bidderTier = "human"
+        if bidderIsBot == 1 and WHEREDNGNDB then
+            if WHEREDNGNDB.saudiMasterBots then bidderTier = "SaudiMaster"
+            elseif WHEREDNGNDB.fzlokyBots   then bidderTier = "Fzloky"
+            elseif WHEREDNGNDB.m3lmBots     then bidderTier = "M3lm"
+            elseif WHEREDNGNDB.advancedBots then bidderTier = "Advanced"
+            else bidderTier = "Basic"
+            end
+        end
+        local tricksA, tricksB = 0, 0
+        local perTrick = {}
+        if s.tricks then
+            for ti, t in ipairs(s.tricks) do
+                local winSeat = t.winner
+                if winSeat then
+                    local team = (winSeat == 1 or winSeat == 3) and "A" or "B"
+                    perTrick[ti] = team
+                    if team == "A" then tricksA = tricksA + 1
+                    else tricksB = tricksB + 1 end
+                end
+            end
+        end
         local row = {
-            v            = 2,                            -- schema version
+            v            = 3,                            -- schema version
             roundNumber  = s.roundNumber or 0,
             ts           = (GetTime and GetTime()) or 0,
             type         = s.contract.type,
             trump        = s.contract.trump,
             bidder       = bidder,
             bidderIsBot  = bidderIsBot,
+            bidderTier   = bidderTier,                   -- v=3 (Cluster 6)
             seat1Bot     = seatIsBot[1],
             seat2Bot     = seatIsBot[2],
             seat3Bot     = seatIsBot[3],
@@ -1901,6 +1943,9 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
             totA         = totA or 0,
             totB         = totB or 0,
             sweep        = sweep or "",
+            tricksA      = tricksA,                      -- v=3 (Cluster 6)
+            tricksB      = tricksB,                      -- v=3 (Cluster 6)
+            trickWinners = table.concat(perTrick),       -- v=3 (Cluster 6)
             bidderMade   = (bidderMade == true) and 1
                            or (bidderMade == false) and 0 or -1,
             target       = s.target or 152,

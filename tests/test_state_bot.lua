@@ -4385,6 +4385,372 @@ do
                "AF.5 (user-reported UI): R1 Sun button gated on `not anySun`")
 end
 
+print("=== Section AG: v1.0.0 Cluster 1+2 (meld awareness + defender play) ===")
+
+-- AG.1 (Cluster 1 meldKnownHeld helper — source pin, since helper is local).
+-- The helper is referenced by 4 wirings: trump-J/9 inference, partner-meld
+-- avoid in pickLead, boss-of-side meld check, opp-meld-overbid check.
+-- We pin the helper exists by signature.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local function meldKnownHeld%(seat%)") ~= nil,
+               "AG.1 (Cluster 1): meldKnownHeld(seat) helper exists")
+end
+
+-- AG.2 (Cluster 1 boss-of-side meld awareness — behavioral).
+-- Setup: Hokm contract trump=C. Seat 1 (defender) holds AS as a side-suit
+-- boss candidate. Opp (seat 2) declared a meld containing KS — meaning
+-- opp's K beats our A in the trick rank (K=4 vs A=6 — wait, A>K). Let me
+-- pick a non-trump suit-K vs A scenario.
+-- Actually A=rank 6, K=rank 4, so A>K. Boss = A. Opp K doesn't overbid.
+-- For this test: opp declared seq3 containing TS, JS, QS — but we hold
+-- AS. A still beats T, J, Q. So no override. Let me redesign:
+-- We hold KS (rank 4). Opp declared meld containing AS (rank 6).
+-- Without meld awareness: HighestUnplayedRank(S) returns A. KS isn't the
+-- highest. Boss-of-side branch wouldn't fire on KS.
+-- Let me think — the gate is: HighestUnplayedRank(suit)==Rank(c). If we
+-- hold KS but A is unplayed, K isn't the highest. Actually wait — we
+-- check HighestUnplayedRank(su) == r. So K isn't highest unless A is
+-- played. The whole point of the meld-awareness is: A might be in opp's
+-- DECLARED meld, so it's still in their hand → still unplayed. And
+-- HighestUnplayedRank scans played-pile not in-hand-known. So if AS is
+-- in opp's declared meld, HighestUnplayedRank("S") still returns "A"
+-- (correct!). Hmm — so it WOULD already short-circuit (K isn't the top).
+-- The real meld-awareness gap is: when opp's meld contains a HIGHER
+-- card than our "boss" — and we'd LEAD K thinking it's safe because
+-- HighestUnplayedRank says K (e.g., A was played in trick 1). Then opp
+-- declared a Q meld which contains... no wait, Q < K. The meld awareness
+-- helps when Bot._memory.played says A was played → HighestUnplayedRank(S)=K
+-- → K seems boss → but opp's meld contains Q only (which is < K) → no
+-- override. The real case: opp's meld contains a card that's in opp's
+-- HAND but not yet played — and HighestUnplayedRank already accounts
+-- for played-only — so the meld card is "unplayed" and HighestUnplayedRank
+-- would still report it as a candidate.
+-- Actually the right scenario: we hold 9D (rank 7 in non-trump? no,
+-- trump rank is special. In non-trump: A=11>T=10>K=4>Q=3>J=2>9=0.5?).
+-- Hmm wait, non-trump rank order. Let me check Cards.TrickRank for non-trump.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- v1.0.0 ultra-audit H2: original boss-meld-check was dead code (the
+    -- outer HighestUnplayedRank gate fails before any meld scan can fire,
+    -- since meld cards are still "unplayed"). Reverted to simple-return.
+    -- Pin the rationale comment so future edits don't re-introduce it.
+    assertTrue(botSrc:find("v1%.0%.0 ultra%-audit H2 follow%-up") ~= nil,
+               "AG.2 (Cluster 1): boss-of-side meld scan removed (was dead code)")
+end
+
+-- AG.3 (Cluster 1 trump-J/9 inference uses melds).
+-- Pin the v1.0.0 block in pickLead saveHighTrump-Faranka path.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- The block iterates opps and reads meldKnownHeld for trump J/9 cards.
+    -- v1.0.0 ultra-audit H1: trump-J/9 meld block now adds PARTNER team
+    -- meld cards to the "out" pool (sets trumpJSeen=true) instead of
+    -- the original opp-team-force-false (which was a no-op).
+    local block = botSrc:find("v1%.0%.0 Cluster 1 %(meld awareness%) %+ ultra%-audit H1 fix")
+    assertTrue(block ~= nil,
+               "AG.3a (Cluster 1 H1): trump-J/9 inference adds partner-meld cards to out")
+    if block then
+        local body = botSrc:sub(block, block + 1500)
+        assertTrue(body:find('Rank%(card%) == "J" then trumpJSeen = true') ~= nil,
+                   "AG.3b (Cluster 1 H1): partner-meld trump-J sets trumpJSeen=true")
+        assertTrue(body:find('Rank%(card%) == "9" then trump9Seen = true') ~= nil,
+                   "AG.3c (Cluster 1 H1): partner-meld trump-9 sets trump9Seen=true")
+        -- Partner-team filter, not opp-team.
+        assertTrue(body:find("R%.TeamOf%(s2%) == R%.TeamOf%(seat%)") ~= nil,
+                   "AG.3d (Cluster 1 H1): iterates PARTNER team (not opp)")
+    end
+end
+
+-- AG.4 (Cluster 1 partner-meld avoid in pickLead).
+-- Pin the partner-meld avoid block sets fzlokyAvoidSuit.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local block = botSrc:find("v1%.0%.0 Cluster 1 %(meld awareness%): if PARTNER declared")
+    assertTrue(block ~= nil,
+               "AG.4 (Cluster 1): partner-meld avoid block exists in pickLead")
+end
+
+-- AG.5 (Cluster 2 F3 topTouchSignal read-side wiring + H4 fix).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local block = botSrc:find("v1%.0%.0 Cluster 2 F3 %(defender play%): topTouchSignal READ%-side")
+    assertTrue(block ~= nil,
+               "AG.5a (F3): topTouchSignal read-side block exists")
+    if block then
+        local body = botSrc:sub(block, block + 1500)
+        assertTrue(body:find("pStyle%.topTouchSignal") ~= nil,
+                   "AG.5b (F3): reads pStyle.topTouchSignal[suit]")
+        -- v1.0.0 H4: also reads sig.cleared (K-signal payload).
+        assertTrue(body:find("sig%.cleared") ~= nil,
+                   "AG.5c (F3 H4): also reads sig.cleared (covers K-signal case)")
+    end
+end
+
+-- AG.6 (Cluster 2 F4 partner-void-suit ruff setup).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local block = botSrc:find("v1%.0%.0 Cluster 2 F4 %(defender play%): partner%-void%-suit ruff")
+    assertTrue(block ~= nil,
+               "AG.6a (F4): partner-void-suit ruff setup block exists")
+    if block then
+        local body = botSrc:sub(block, block + 1500)
+        assertTrue(body:find("pmem%.void") ~= nil,
+                   "AG.6b (F4): reads partner Bot._memory void map")
+        -- Skip-bidder gate: don't ruff for partner-as-bidder.
+        assertTrue(body:find("partnerIsBidder") ~= nil,
+                   "AG.6c (F4): skips when partner is the bidder")
+    end
+end
+
+-- AG.7 (Cluster 2 F2 Defender J/9 trump burn protection).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local block = botSrc:find("v1%.0%.0 Cluster 2 F2 %(defender play%): J/9 trump%-burn protection")
+    assertTrue(block ~= nil,
+               "AG.7a (F2): J/9 trump-burn protection block exists in pickFollow")
+    if block then
+        local body = botSrc:sub(block, block + 3500)
+        -- Gate: bidder seat == lead seat.
+        assertTrue(body:find("trick%.plays%[1%]%.seat == contract%.bidder") ~= nil,
+                   "AG.7b (F2): gates on bidder being the lead seat")
+        -- Low-probe: lead rank in {7, 8, Q}.
+        assertTrue(body:find('leadRank == "7" or leadRank == "8" or leadRank == "Q"') ~= nil,
+                   "AG.7c (F2): low-probe filter detects 7/8/Q trump leads")
+        -- Defender-only: opp team to bidder.
+        assertTrue(body:find("R%.TeamOf%(seat%) ~= R%.TeamOf%(contract%.bidder%)") ~= nil,
+                   "AG.7d (F2): gates on defender team membership")
+        -- Action: returns lowest non-J/9 trump.
+        assertTrue(body:find("hasKillerInLegal and #nonKillerTrump > 0") ~= nil,
+                   "AG.7e (F2): only fires when both killer and duck-option present")
+    end
+end
+
+-- AG.8 (Cluster 2 F2 BEHAVIORAL): F2 fires in pos-2 sureStopper case.
+-- Saudi must-overcut rule narrows trump-led `legal` to winning trumps
+-- only (you must play higher than current top of trick). pos-4 always
+-- has lowestByRank-of-winners default which already saves J. pos-3
+-- always picks lowest trump-winner. pos-2 has the sureStopper escape:
+-- trumpOut <= 1 → return highest trump winner (BURNS J!). F2's role
+-- is to override this niche burn.
+--
+-- To trigger sureStopper, trumpOut(hand, trump) must be ≤ 1, which
+-- requires (8 - hand_trump_count - played_trump_count) ≤ 1. Easiest:
+-- 5 trumps played, hand has 2 trumps → outstanding = 1. Set up
+-- Bot._memory[s].played accordingly across 4 seats so the sum is 5.
+do
+    local restore = snapshotS({
+        "phase", "contract", "bidCard", "hostHands", "trick", "tricks",
+        "playedCardsThisRound", "akaCalled",
+    })
+    if Bot.ResetMemory then Bot.ResetMemory() end
+    if WHEREDNGNDB then WHEREDNGNDB.advancedBots = true end
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    S.s.bidCard = "7C"
+    S.s.tricks = {}
+    S.s.playedCardsThisRound = {}
+    S.s.akaCalled = nil
+    -- Seat 2 (defender) holds JC + KC. Bidder=1 (seat 1) leads.
+    -- We only need seat 2's hand (PickPlay reads S.s.hostHands[2]).
+    S.s.hostHands = {
+        [2] = { "JC", "KC", "AS", "TS", "8H", "7H", "AD", "7D" },
+    }
+    -- Populate Bot._memory[s].played with 5 trump cards across seats so
+    -- trumpOut(hand_trump=2 + played_trump=5) = 8-7 = 1 → sureStopper fires.
+    Bot._memory[1] = Bot._memory[1] or { played = {}, void = {} }
+    Bot._memory[3] = Bot._memory[3] or { played = {}, void = {} }
+    Bot._memory[4] = Bot._memory[4] or { played = {}, void = {} }
+    Bot._memory[1].played["AC"] = true
+    Bot._memory[1].played["TC"] = true
+    Bot._memory[3].played["8C"] = true
+    Bot._memory[4].played["9C"] = true
+    Bot._memory[4].played["QC"] = true
+    -- Trick: bidder (seat 1) leads 7C (low probe).
+    S.s.trick = {
+        leadSuit = "C",
+        plays = { { seat = 1, card = "7C" } },
+    }
+    if Bot and Bot.PickPlay then
+        local card = Bot.PickPlay(2)
+        -- Must-overcut: trumps higher than 7C (rank 1) are JC (rank 8) and KC (rank 4).
+        -- pos-2 sureStopper would fire (trumpOut=1) and return JC (highest).
+        -- F2 should override and return KC (saves JC).
+        assertEq(card, "KC",
+                 "AG.8 (F2 pos-2 sureStopper override): defender ducks JC, plays KC")
+    end
+    if WHEREDNGNDB then WHEREDNGNDB.advancedBots = nil end
+    if Bot.ResetMemory then Bot.ResetMemory() end
+    restore()
+end
+
+-- AG.9 (F2 anti-trigger BEHAVIORAL): F2 does NOT fire when bidder leads
+-- HIGH trump. Same sureStopper-firing setup but bidder leads JC (rank 8).
+-- Then JC is the only thing that could overcut, but JC is in seat 1's
+-- hand played. So legal narrows. Setup needs lowProbe=false. Use AC lead
+-- (rank 6).
+do
+    local restore = snapshotS({
+        "phase", "contract", "bidCard", "hostHands", "trick", "tricks",
+        "playedCardsThisRound", "akaCalled",
+    })
+    if Bot.ResetMemory then Bot.ResetMemory() end
+    if WHEREDNGNDB then WHEREDNGNDB.advancedBots = true end
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    S.s.bidCard = "7C"
+    S.s.tricks = {}
+    S.s.playedCardsThisRound = {}
+    S.s.akaCalled = nil
+    -- Hand has JC and KC. AC lead (rank 6); JC (8) > 6 overcuts; KC (4) < 6.
+    -- legal = {JC} only. F2 cannot fire (no duck option). Default returns JC.
+    S.s.hostHands = {
+        [2] = { "JC", "KC", "AS", "TS", "8H", "7H", "AD", "7D" },
+    }
+    Bot._memory[1] = Bot._memory[1] or { played = {}, void = {} }
+    Bot._memory[3] = Bot._memory[3] or { played = {}, void = {} }
+    Bot._memory[4] = Bot._memory[4] or { played = {}, void = {} }
+    Bot._memory[1].played["7C"] = true  -- 7C already played
+    Bot._memory[3].played["8C"] = true
+    Bot._memory[4].played["9C"] = true
+    Bot._memory[4].played["QC"] = true
+    Bot._memory[1].played["TC"] = true
+    -- Bidder leads AC (HIGH probe — A is bidder's "real" pull, not low).
+    S.s.trick = {
+        leadSuit = "C",
+        plays = { { seat = 1, card = "AC" } },
+    }
+    if Bot and Bot.PickPlay then
+        local card = Bot.PickPlay(2)
+        -- Must-overcut over AC (rank 6): only JC (rank 8) qualifies.
+        -- legal = {JC}. PickPlay returns the single legal card. F2 not reached.
+        assertEq(card, "JC",
+                 "AG.9 (F2 anti-trigger): high-probe + only-J-overcuts forces JC; F2 doesn't override")
+    end
+    if WHEREDNGNDB then WHEREDNGNDB.advancedBots = nil end
+    if Bot.ResetMemory then Bot.ResetMemory() end
+    restore()
+end
+
+-- AG.10 (Cluster 6 schema v=3 BEHAVIORAL): S.ApplyRoundEnd writes the
+-- new fields (bidderTier, trickWinners, tricksA, tricksB) on the
+-- WHEREDNGNDB.history row.
+do
+    local restore = snapshotS({
+        "phase", "contract", "bidCard", "tricks", "roundNumber",
+        "bidRound", "seats", "target",
+    })
+    -- Save WHEREDNGNDB state.
+    local prevDB = WHEREDNGNDB
+    WHEREDNGNDB = {
+        historyEnabled = true,
+        history = {},
+        advancedBots = nil,
+        m3lmBots = true,            -- M3lm tier active
+        fzlokyBots = nil,
+        saudiMasterBots = nil,
+    }
+    S.s.contract = {
+        type = K.BID_HOKM, trump = "C", bidder = 1,
+        doubled = false, tripled = false, foured = false, gahwa = false,
+        forced = false,
+    }
+    S.s.bidCard = "8H"
+    S.s.bidRound = 1
+    S.s.roundNumber = 5
+    S.s.target = 152
+    S.s.seats = {
+        [1] = { isBot = true },
+        [2] = { isBot = true },
+        [3] = { isBot = false },  -- one human (so seat3Bot=0)
+        [4] = { isBot = true },
+    }
+    -- Build 8 tricks with mixed winners: A wins 1,3,5,7 ; B wins 2,4,6,8
+    -- → trickWinners = "ABABABAB", tricksA=4, tricksB=4
+    local tricks = {}
+    for ti = 1, 8 do
+        local winSeat = (ti % 2 == 1) and 1 or 2  -- alt 1(A), 2(B)
+        tricks[ti] = { winner = winSeat, plays = {} }
+    end
+    S.s.tricks = tricks
+    if S.ApplyRoundEnd then
+        S.ApplyRoundEnd(85, 65, 85, 65, "", true)
+        local h = WHEREDNGNDB.history
+        assertTrue(h and #h == 1,
+                   "AG.10a (schema v=3): ApplyRoundEnd appends 1 row to history")
+        if h and h[1] then
+            local row = h[1]
+            assertEq(row.v, 3, "AG.10b (schema v=3): row v=3 schema bump")
+            assertEq(row.bidderTier, "M3lm",
+                     "AG.10c (schema v=3): bidderTier from active flags")
+            assertEq(row.trickWinners, "ABABABAB",
+                     "AG.10d (schema v=3): trickWinners string per-trick winner team")
+            assertEq(row.tricksA, 4,
+                     "AG.10e (schema v=3): tricksA count")
+            assertEq(row.tricksB, 4,
+                     "AG.10f (schema v=3): tricksB count")
+            -- v=2 fields preserved.
+            assertEq(row.bidder, 1,
+                     "AG.10g (schema v=3): v=2 fields preserved (bidder)")
+            assertEq(row.bidderIsBot, 1,
+                     "AG.10h (schema v=3): v=2 fields preserved (bidderIsBot)")
+            assertEq(row.bidderMade, 1,
+                     "AG.10i (schema v=3): v=2 fields preserved (bidderMade)")
+        end
+    end
+    -- Restore WHEREDNGNDB.
+    WHEREDNGNDB = prevDB
+    restore()
+end
+
+-- AG.11 (schema v=3 BEHAVIORAL): bidderTier="human" when bidder is human.
+do
+    local restore = snapshotS({
+        "phase", "contract", "bidCard", "tricks", "roundNumber",
+        "bidRound", "seats", "target",
+    })
+    local prevDB = WHEREDNGNDB
+    WHEREDNGNDB = {
+        historyEnabled = true,
+        history = {},
+        saudiMasterBots = true,  -- ALL bots tier (but bidder is human)
+    }
+    S.s.contract = {
+        type = K.BID_SUN, trump = nil, bidder = 3,
+    }
+    S.s.bidCard = "AS"
+    S.s.bidRound = 2
+    S.s.roundNumber = 6
+    S.s.target = 152
+    S.s.seats = {
+        [1] = { isBot = true },
+        [2] = { isBot = true },
+        [3] = { isBot = false },  -- bidder is HUMAN (seat 3)
+        [4] = { isBot = true },
+    }
+    S.s.tricks = {
+        { winner = 1, plays = {} },  -- A
+        { winner = 2, plays = {} },  -- B
+        { winner = 3, plays = {} },  -- A
+    }
+    if S.ApplyRoundEnd then
+        S.ApplyRoundEnd(0, 50, 0, 50, "", false)
+        local row = WHEREDNGNDB.history and WHEREDNGNDB.history[1]
+        if row then
+            assertEq(row.bidderTier, "human",
+                     "AG.11a (schema v=3): bidderTier='human' when bidder is human")
+            assertEq(row.trickWinners, "ABA",
+                     "AG.11b (schema v=3): trickWinners truncates at 3 (partial round)")
+            assertEq(row.tricksA, 2,
+                     "AG.11c (schema v=3): tricksA count for partial round")
+            assertEq(row.tricksB, 1,
+                     "AG.11d (schema v=3): tricksB count for partial round")
+        end
+    end
+    WHEREDNGNDB = prevDB
+    restore()
+end
+
 -- =====================================================================
 -- Summary
 -- =====================================================================

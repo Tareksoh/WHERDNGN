@@ -709,15 +709,14 @@ def _report_r0_breakdown(rows: list[dict[str, Any]]) -> None:
 
 
 def _report_sweep_progression(rows: list[dict[str, Any]]) -> None:
-    """Sweep / Al-Kaboot pursuit tracking (REQUIRES SCHEMA EXTENSION).
+    """Sweep / Al-Kaboot pursuit tracking.
 
-    Currently the row only reports the FINAL sweep outcome (`sweep="A"` /
-    `"B"` / `""`). To know whether the bidder team was on track at trick 3
-    we need a per-trick winner array. See SCHEMA_PROPOSAL.md.
-
-    For now we report only the final-outcome stats and flag the gap.
+    v1.0.0 (schema v=3): consumes the per-row `trickWinners` field
+    (e.g. "ABBABBAB") plus `tricksA` / `tricksB` counts written by
+    `S.ApplyRoundEnd`. Pre-v=3 rows omit these fields; the report
+    falls back to final-outcome stats only for those rows.
     """
-    print("--- sweep progression (final outcome only -- see SCHEMA_PROPOSAL.md) ---")
+    print("--- sweep progression ---")
     total = len(rows)
     a_sweep = sum(1 for r in rows if r.get("sweep") == "A")
     b_sweep = sum(1 for r in rows if r.get("sweep") == "B")
@@ -744,8 +743,62 @@ def _report_sweep_progression(rows: list[dict[str, Any]]) -> None:
         print(f"  of {swept_total} sweep rounds: bidder swept {bid_team_sweep}, "
               f"got swept {bid_team_swept_against}  (Al-Kaboot signal)")
     print()
-    print("  (Per-trick progression requires `tricksWonByTeam` field in the")
-    print("   row schema -- see SCHEMA_PROPOSAL.md item #3.)")
+
+    # v=3 per-trick progression. Each row's trickWinners is a string
+    # like "ABBABBAB" (length 1-8). Only count v=3 rows that have the
+    # field set (older v=2 rows would have it absent).
+    v3_rows = [r for r in rows if r.get("trickWinners")]
+    if not v3_rows:
+        print("  (per-trick progression requires schema v=3; play more rounds")
+        print("   on a v1.0.0+ install to populate trickWinners field)")
+        print()
+        return
+
+    print(f"--- per-trick progression (v=3 rows: {len(v3_rows)}/{total}) ---")
+    # For each trick index 1-8, count team A wins vs team B wins.
+    by_trick_a = [0] * 9   # 1-indexed
+    by_trick_b = [0] * 9
+    for r in v3_rows:
+        tw = r.get("trickWinners", "")
+        for i, ch in enumerate(tw, start=1):
+            if i > 8: break
+            if ch == "A": by_trick_a[i] += 1
+            elif ch == "B": by_trick_b[i] += 1
+    print("  trick-by-trick team-A win rate:")
+    for i in range(1, 9):
+        n_a = by_trick_a[i]
+        n_b = by_trick_b[i]
+        total_i = n_a + n_b
+        if total_i:
+            print(f"    trick {i}: A={n_a:3d}/B={n_b:3d}  "
+                  f"A-rate {fmt_pct_ci(n_a, total_i)}")
+    print()
+
+    # Bidder-team trick-1-win → final-make rate (early-lead conversion).
+    early_lead_makes = 0
+    early_lead_total = 0
+    early_loss_makes = 0
+    early_loss_total = 0
+    for r in v3_rows:
+        b = r.get("bidder")
+        tw = r.get("trickWinners", "")
+        made = r.get("bidderMade", -1)
+        if not b or not tw or made == -1: continue
+        bid_team = "A" if b in (1, 3) else "B"
+        if tw[0] == bid_team:
+            early_lead_total += 1
+            if made == 1: early_lead_makes += 1
+        else:
+            early_loss_total += 1
+            if made == 1: early_loss_makes += 1
+    if early_lead_total:
+        print(f"  bidder team won trick 1 → make rate "
+              f"{fmt_pct_ci(early_lead_makes, early_lead_total)} "
+              f"({early_lead_makes}/{early_lead_total})")
+    if early_loss_total:
+        print(f"  bidder team lost trick 1 → make rate "
+              f"{fmt_pct_ci(early_loss_makes, early_loss_total)} "
+              f"({early_loss_makes}/{early_loss_total})")
     print()
 
 

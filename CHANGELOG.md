@@ -1,5 +1,196 @@
 # Changelog
 
+## v1.0.0 — Meld awareness + defender play + telemetry schema v=3
+
+Milestone release. Bundles the highest-leverage residual items from
+the v0.11.x audit queue into a coherent package focused on three
+themes: (1) bots reasoning about declared melds in trick play, (2)
+defender-side play improvements that surface in user-reported "bots
+burn high cards" telemetry, and (3) richer round-end telemetry for
+offline calibration of subsequent releases.
+
+User priority: the meld-awareness package was explicitly prioritized
+("prioritize it for next, but hold i am testing now, next release
+should include all pending matters and be 1.0.0"). Second-tier items
+remain on the deferred list — see "Deferred from v1.0.0" at the end
+of this entry.
+
+### Cluster 1 — Meld awareness (4 wirings)
+
+When opponents declare a sequence/carré meld in trick 1, those cards
+are PUBLIC INFORMATION but pre-v1.0.0 only the BotMaster ISMCTS sampler
+consumed them (BotMaster.lua:243-260 pins meld cards into world-sample
+hands). The heuristic Bot.PickPlay layer — used by Advanced/M3lm/Fzloky
+tiers AND as the Saudi-Master rollout policy via the C-14 delegation
+— was meld-blind. Now wired through 4 decision points:
+
+1. **Trump-J/9 inference (Bot.lua:2657-2667).** The Hokm trump-pull-
+   exhaustion check (`trumpJSeen and trump9Seen`) now considers OPP-
+   declared meld cards as "still in opp's hand" — preventing premature
+   "trump-killers are gone" inference when an opp's J/9 of trump is
+   actually still live via meld declaration.
+
+2. **Boss-of-side meld check (Bot.lua:2192-2207).** When we'd lead
+   our highest non-trump as a "free trick" (HighestUnplayedRank),
+   scan opp meld-known cards for higher rank in the same suit. If
+   opp has a higher card via declared meld, our "boss" is no longer
+   the boss — skip and try the next candidate. This closes the gap
+   where HighestUnplayedRank is played-pile-based (correct) but
+   misses meld-known cards in opp hands.
+
+3. **Partner-meld avoid in pickLead (Bot.lua:2389-2403).** If PARTNER
+   declared a sequence meld in suit X, partner has those cards.
+   Leading X wastes partner's tempo and may strand high cards.
+   Avoid leading X (let partner cash their meld run on their own
+   lead). Sets `fzlokyAvoidSuit` if not already set.
+
+4. **`meldKnownHeld(seat)` helper (Bot.lua:961-988).** Returns a set
+   of cards the seat is known to hold via declared melds, EXCLUDING
+   cards already played. Read by all 3 wirings above.
+
+### Cluster 2 — Defender play (F2/F3/F4/F10)
+
+Four targeted defender-side plays that closed gaps surfaced by user
+trace data and Agent forensic analysis:
+
+- **F2: J/9 trump-burn protection in pickFollow (Bot.lua:3635-3690).**
+  When the BIDDER leads low trump (rank ≤ Q in trump rank order: 7, 8,
+  Q), it's a probe to count opp trumps. If a defender uses J or 9 to
+  take such a trick, they reveal the kill card AND burn it on a low-
+  value trick. Saudi pros DUCK with non-J/9 trump. Mirror of pickLead's
+  `saveHighTrump` but on the response side. Fires before the winners
+  block so the cheapest-winner default doesn't auto-burn J/9 against
+  us (especially in pos-2 sureStopper case where trumpOut <= 1).
+
+- **F3: topTouchSignal read-side wiring (Bot.lua:2410-2422).** M3lm+
+  writes the "partner played K under our A → partner has Q+J" inference
+  (Bot.lua:498-530) but pre-v1.0.0 no heuristic decision consumed it.
+  Now: if partner has a known down-touched honor in suit X, AVOID
+  leading X so partner can cash their middle honor on their own lead.
+  Layered after `fzlokyAvoidSuit`; first-set wins.
+
+- **F4: Partner-void-suit ruff setup (Bot.lua:2828-2862).** When partner
+  is OBSERVED void in a non-trump suit X (via prior must-trump-ruff
+  detection), leading our LOW card from X gives partner a free ruff.
+  1-2 partner ruffs per round can be the difference between failing
+  and making bidder. Skip when partner is the bidder (ruffing partner's
+  own contract is wasteful — they want to PULL trump, not ruff).
+
+- **F10: Trump-J/9 pin awareness — covered by Cluster 1 #1.** The
+  meld-aware trump-J/9 inference IS the F10 fix: J/9 in opp meld means
+  opp trump strength is NOT exhausted, so don't lead high non-trump
+  expecting safety.
+
+### Cluster 6 — Telemetry schema v=3
+
+`S.ApplyRoundEnd` now writes 3 new fields per round-end row, bumping
+schema version 2 → 3. Old (v=2) rows continue to parse cleanly under
+the existing analyzer (field-presence checks throughout).
+
+- **`bidderTier`** — string ("Basic"/"Advanced"/"M3lm"/"Fzloky"/
+  "SaudiMaster"/"human"). Per-tier bot fail-rate split, no longer
+  blocked on the file-level `_inferredTier` fallback. Snapshot at
+  round-end.
+- **`tricksA, tricksB`** — int counts of tricks won by each team.
+  Trivial to derive but logged for analyzer histogram convenience.
+- **`trickWinners`** — string of 1-8 chars "ABBA..." indicating per-
+  trick winner team. Compact (8-byte string vs 8-element table).
+
+`tools/calibrate.py` `_report_sweep_progression` now consumes these
+fields when present: per-trick team-A win rate, plus bidder-team
+trick-1 → final-make-rate analysis. Pre-v=3 rows show the existing
+final-outcome-only stats.
+
+### Pre-ship ultra-audit (4 findings addressed)
+
+Two parallel review agents found 4 real bugs in the initial v1.0.0
+ship; all fixed before tagging:
+
+- **H1 (Bot.lua trump-J/9 inference).** Original meld block iterated
+  OPP team and forced `trumpJSeen=false` — but the default for
+  unplayed-non-our-hand cards is ALREADY false, making the override
+  a no-op. The genuine missing case was the INVERSE: when PARTNER
+  team has J or 9 of trump in a declared meld, that card IS in
+  friendly pool — should mark trumpJSeen / trump9Seen as TRUE so
+  the "switch to side-Ace cashing" branch fires. Fix: iterate
+  partner team and set trumpJSeen/9Seen=true.
+- **H2 (Bot.lua boss-of-side meld check).** Also dead code. The
+  outer gate `HighestUnplayedRank(su) == Rank(c)` already considers
+  meld cards as "unplayed" — if opp had a higher meld card, the gate
+  would fail before the meld scan ran. Reverted to simple-return.
+- **H3 (Bot.lua partner-meld avoid).** Original block triggered on
+  any partner-meld card, including carrés. Mirrored the existing
+  opp-meld avoid filter to only fire on `seq*` melds (where the
+  "let partner cash this run" rationale applies).
+- **H4 (Bot.lua F3 topTouchSignal read-side).** Original block read
+  `sig.nextDown` only — but the K-signal writer (the canonical case
+  the CHANGELOG narrative emphasizes) sets `entry.cleared`, not
+  `entry.nextDown`. F3 silently filtered out its main case. Fix:
+  also read `sig.cleared`.
+- **G7 (test coverage).** Schema v=3 had source-pin tests but no
+  behavioral coverage of the new fields. Added AG.10 + AG.11
+  exercising `S.ApplyRoundEnd` with each tier flag combination,
+  asserting `bidderTier`, `trickWinners`, `tricksA/B` are written
+  correctly.
+
+### Tests
+
+- 13 new behavioral assertions in Section AG (test_state_bot.lua).
+- F2 has TWO behavioral tests (AG.8 + AG.9) that exercise the pos-2
+  sureStopper override directly (with controlled `Bot._memory.played`
+  state so trumpOut <= 1 fires deterministically).
+- Schema v=3 has TWO behavioral tests (AG.10 bot tier + AG.11 human
+  bidder) confirming the round-end row is correct.
+- 708/708 tests pass.
+
+### Deferred from v1.0.0
+
+The full Cluster 2 deferred-list (F5, F6, F7, F8, F9) and remaining
+Cluster 3-5 items (FLOOR-3, ESC-1, PEB-DEAD, OVC-DOUBLE, PB-1, U-4,
+U-5, U-7, U-8, M6, L1, L2, BM-01-DOC, BM-04-FALLBACK, DOC-DRIFT,
+PARTNERSTYLE-INVARIANT, CONSTANT-COMMENT-DRIFT, BM-06) are deferred
+to v1.0.x or v1.1. Rationale per item:
+
+- **F5 (Belote K+Q-trump preservation in pickLead).** Analysis
+  (v1.0.0 prep): Belote is locked once both K+Q are held at meld-
+  declaration time, regardless of when they're played. The
+  preservation logic in pickFollow is about FACE-VALUE preservation,
+  not Belote eligibility. The pickLead trump-leading paths already
+  prefer non-J/9 (`saveHighTrump`) — adding non-K/Q would only differ
+  when only K/Q remain as trump options, which is forced anyway. Low
+  impact; defer.
+- **F6 (Defender Bargiya defensive-shed in Hokm).** Bargiya is Sun-
+  specific per Saudi convention (decision-trees.md Section 8 T-1).
+  Hokm equivalent would require new doc-derived rule. Speculative;
+  defer.
+- **F7 (firstDiscard vs Tahreeb conflict).** Signal-disambiguation
+  edge case; current code resolves via Sun-only Tahreeb gate (v0.11.18-
+  final U-2 fix). No user-reported bug. Defer.
+- **F8 (Sun-bidder-drought tell).** Mirror of `bidderTrumpDrought`
+  for Sun. Niche signal; defer.
+- **F9 (defender Faranka comment cleanup).** Pure prose; defer.
+- **BM-06 (`Bot.IsSaudiMaster()` unused).** Function definition is
+  harmless dead code. Removal would break tier-API symmetry (Advanced/
+  M3lm/Fzloky/SaudiMaster all have an `Is*` predicate). Keep.
+
+### Why this is "v1.0.0"
+
+Per user instruction: "next release should include all pending matters
+and be 1.0.0". Practical delivery scope:
+
+- Cluster 1+2 high-impact items: SHIPPED (4 + 4 = 8 wirings)
+- Telemetry schema v=3: SHIPPED (3 new fields + analyzer support)
+- Test coverage: 8 new behavioral assertions
+- Deferred items: explicitly enumerated above with per-item rationale
+
+The version bump from 0.11.x to 1.0.0 reflects API stability:
+`WHEREDNGNDB` schema v=3, `S.ApplyContract`/`S.ApplyDouble`/etc.
+public surface, slash command set, and the 5-tier bot dispatch
+model are all stable. Future v1.x releases will preserve these
+contracts; deferred items will land as v1.0.x or v1.1.
+
+708/708 tests pass.
+
 ## v0.11.21 — Display rename: "Loot & Baloot"
 
 User-requested rebrand. Two-line change:

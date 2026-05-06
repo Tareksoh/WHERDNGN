@@ -958,6 +958,36 @@ local function aceCountAndMardoofa(hand)
     return aceCount, mardoofaCount
 end
 
+-- v1.0.0 Cluster 1 (meld awareness): cards we KNOW seat holds via
+-- declared melds. Melds are public information (declared in trick 1);
+-- subsequent trick play should factor known-card distributions. The
+-- BotMaster ISMCTS sampler already pins meld cards for world-sample
+-- generation (BotMaster.lua:243-260); this helper extends the same
+-- knowledge to the heuristic Bot.PickPlay layer (used by Advanced/
+-- M3lm/Fzloky tiers AND as the Saudi-Master rollout policy per C-14).
+--
+-- Returns a set: { ["AS"]=true, ["KH"]=true, ... } of cards we know
+-- `seat` holds, EXCLUDING cards already played (those are no longer
+-- in hand; consult Bot._memory[seat].played for that).
+local function meldKnownHeld(seat)
+    local out = {}
+    if not S.s or not S.s.meldsByTeam then return out end
+    -- A meld is declared by ONE seat (declaredBy). The meld team
+    -- bracket holds it. Iterate both teams and pick declarers matching.
+    local mem = Bot._memory and Bot._memory[seat]
+    local played = (mem and mem.played) or {}
+    for _, team in ipairs({ "A", "B" }) do
+        for _, m in ipairs(S.s.meldsByTeam[team] or {}) do
+            if m.declaredBy == seat and m.cards then
+                for _, c in ipairs(m.cards) do
+                    if not played[c] then out[c] = true end
+                end
+            end
+        end
+    end
+    return out
+end
+
 -- v0.11.17 audit B3: known-cards-held-by-bidder helper. After
 -- HostDealRest the bidder owns the bidcard; this is PUBLIC knowledge
 -- (the bidcard was face-up during bidding). Defender bots that don't
@@ -2143,6 +2173,14 @@ local function pickLead(legal, contract, seat)
     -- HIGHEST UNPLAYED in its non-trump suit, leading that card is
     -- a guaranteed trick. Reuses State.HighestUnplayedRank, which is
     -- maintained by ApplyPlay across all clients.
+    -- v1.0.0 ultra-audit H2 follow-up: the original v1.0.0 boss-meld
+    -- check was dead code. `S.HighestUnplayedRank` consults
+    -- `playedCardsThisRound` only (State.lua:1640-1651) — meld cards are
+    -- "unplayed" so any meld card higher than `c` already prevents
+    -- HighestUnplayedRank == Rank(c) at the outer gate. The redundant
+    -- meld-overbid scan never had a reachable input. Reverted to the
+    -- pre-v1.0.0 simple-return form. The genuine meld-aware leverage
+    -- lives in the trump-J/9 inference block below.
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM
        and S.HighestUnplayedRank then
         for _, c in ipairs(legal) do
@@ -2324,6 +2362,60 @@ local function pickLead(legal, contract, seat)
                     fzlokyPrefSuit = sig.suit
                 elseif r == "7" or r == "8" then
                     fzlokyAvoidSuit = sig.suit
+                end
+            end
+        end
+    end
+
+    -- v1.0.0 Cluster 1 (meld awareness): if PARTNER declared a sequence
+    -- meld in suit X, partner has those cards — leading X wastes
+    -- partner's tempo and may strand high cards. Avoid leading X
+    -- (let partner cash their meld run). Sets fzlokyAvoidSuit if
+    -- not already set.
+    -- v1.0.0 ultra-audit H3 follow-up: filter to SEQUENCE melds only.
+    -- The original v1.0.0 ship looped over all partner-meld cards
+    -- including carrés, but a carré is "4 of a same RANK across
+    -- suits" — the suit of any one carré card carries no "let
+    -- partner cash this run" signal. Mirror the existing opp-meld
+    -- avoid filter at line ~2434 (`m.kind:sub(1,3) == "seq"`).
+    if Bot.IsAdvanced() and S.s.meldsByTeam then
+        local partner = R.Partner(seat)
+        local partnerTeam = R.TeamOf(partner)
+        local meldsList = S.s.meldsByTeam[partnerTeam] or {}
+        for _, m in ipairs(meldsList) do
+            if m.declaredBy == partner and m.kind
+               and m.kind:sub(1, 3) == "seq" and m.suit
+               and m.suit ~= (contract.trump or "")
+               and not fzlokyAvoidSuit then
+                fzlokyAvoidSuit = m.suit
+                break
+            end
+        end
+    end
+
+    -- v1.0.0 Cluster 2 F3 (defender play): topTouchSignal READ-side.
+    -- M3lm+ writes the "partner played K under our A → partner has Q+J"
+    -- inference (Bot.lua:498-530) but no heuristic decision consumed
+    -- it pre-v1.0.0. Now: if partner has a known down-touched honor
+    -- in suit X (T-signal → has K, Q-signal → has J, K-signal → has
+    -- Q+J), AVOID leading X so partner can cash their middle honor
+    -- on their own lead. Layered after fzlokyAvoidSuit; first-set wins.
+    --
+    -- v1.0.0 ultra-audit H4 follow-up: also read `sig.cleared` (the
+    -- K-signal payload — see writer rule 2 at line ~521). Original
+    -- v1.0.0 ship only read `sig.nextDown`, which silently filtered
+    -- out the K-signal case the CHANGELOG narrative emphasizes.
+    if Bot.IsM3lm() and Bot._partnerStyle and not fzlokyAvoidSuit then
+        local partner = R.Partner(seat)
+        local pStyle = Bot._partnerStyle[partner]
+        if pStyle and pStyle.topTouchSignal then
+            for _, suit in ipairs({ "S", "H", "D", "C" }) do
+                local sig = pStyle.topTouchSignal[suit]
+                local hasSignal = sig and not sig.broke
+                                  and (sig.nextDown or sig.cleared)
+                if hasSignal and suit ~= (contract.trump or "") then
+                    fzlokyAvoidSuit = suit
+                    break
                 end
             end
         end
@@ -2559,6 +2651,29 @@ local function pickLead(legal, contract, seat)
                     trump9Seen = false
                 end
             end
+            -- v1.0.0 Cluster 1 (meld awareness) + ultra-audit H1 fix:
+            -- factor declared meld cards. The original v1.0.0 ship had
+            -- this block iterate OPP team and force trumpJSeen=false —
+            -- but the default for unplayed-non-our-hand cards is ALREADY
+            -- false (only `played` and `legal` populate `out`), so the
+            -- override was a no-op. The genuinely missing case is the
+            -- INVERSE: PARTNER team has J or 9 of trump in a declared
+            -- meld → that card IS friendly-pool (NOT in opp pool) → mark
+            -- as `out` so trumpJSeen / trump9Seen flips to true. Pre-
+            -- v1.0.0 this was missed: even though we knew partner held
+            -- the killer, the inference treated it as "could be in opp
+            -- hand" and didn't switch to side-Ace cashing.
+            for s2 = 1, 4 do
+                if R.TeamOf(s2) == R.TeamOf(seat) and s2 ~= seat then
+                    local known = meldKnownHeld(s2)
+                    for card in pairs(known) do
+                        if C.Suit(card) == contract.trump then
+                            if C.Rank(card) == "J" then trumpJSeen = true
+                            elseif C.Rank(card) == "9" then trump9Seen = true end
+                        end
+                    end
+                end
+            end
             if trumpJSeen and trump9Seen then
                 -- Both gone from pool. Cash a side-suit Ace if we
                 -- have one; otherwise fall through to highestTrump.
@@ -2718,6 +2833,40 @@ local function pickLead(legal, contract, seat)
                and anyOpponentVoidIn(seat, su)
                and not opponentsVoidInAll(seat, su) then
                 return c
+            end
+        end
+    end
+
+    -- v1.0.0 Cluster 2 F4 (defender play): partner-void-suit ruff
+    -- setup. When partner is OBSERVED void in a non-trump suit X,
+    -- leading our LOW card from X gives partner a free ruff (they
+    -- can't follow → trump). 1-2 partner ruffs per round can be
+    -- the difference between failing or making bidder. Helper:
+    -- partner-void check from Bot._memory.void.
+    -- Skip if we hold the boss (covered by single-opp-void branch
+    -- above) or if partner is the bidder (partner ruffing partner's
+    -- own contract is wasteful — they want to PULL trump, not ruff).
+    if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+       and Bot._memory then
+        local partner = R.Partner(seat)
+        local pmem = Bot._memory[partner]
+        local partnerIsBidder = (contract.bidder == partner)
+        if pmem and pmem.void and not partnerIsBidder then
+            for _, c in ipairs(nonTrumps) do
+                local su = C.Suit(c)
+                if su ~= contract.trump and pmem.void[su] then
+                    -- Lead our LOWEST card in the partner-void suit
+                    -- to preserve our higher cards; partner ruffs.
+                    local lows = {}
+                    for _, c2 in ipairs(nonTrumps) do
+                        if C.Suit(c2) == su then
+                            lows[#lows + 1] = c2
+                        end
+                    end
+                    if #lows > 0 then
+                        return lowestByRank(lows, contract)
+                    end
+                end
             end
         end
     end
@@ -3486,6 +3635,68 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 return lowestByRank(pool, contract)
             end
             -- All legal are winners; fall through to natural play.
+        end
+    end
+
+    -- v1.0.0 Cluster 2 F2 (defender play): J/9 trump-burn protection
+    -- on bidder's low-trump probe. The bidder leads low trump (7/8/Q
+    -- in trump rank order) to count opp trumps and exhaust covers
+    -- BEFORE deploying their A or T of trump. If a defender uses
+    -- J or 9 to take such a trick, they reveal their kill card AND
+    -- burn it on a low-value trick. Saudi pros DUCK with non-J/9
+    -- trump (or non-winner trump) to keep J/9 hidden and reserved
+    -- for a meaningful trump-pull (where J kills bidder's A, etc.).
+    --
+    -- Mirror of pickLead's saveHighTrump (line ~2733) but on the
+    -- response side. Fires before the winners/Faranka path so the
+    -- "play cheapest winner" default doesn't burn J/9 against us.
+    --
+    -- Gate:
+    --   * Hokm contract; trump-led trick.
+    --   * Lead seat = contract.bidder (this is bidder's probe).
+    --   * Lead-card rank ∈ {7, 8, Q} (low trump in Saudi rank order:
+    --     J=8 > 9=7 > A=6 > T=5 > K=4 > Q=3 > 8=2 > 7=1).
+    --     A/J/9/K/T are bidder's "real" pulls — when bidder leads
+    --     those, defender SHOULD use J/9 to take if possible.
+    --   * Defender team (R.TeamOf(seat) ~= R.TeamOf(bidder)).
+    --   * legal contains J or 9 of trump (i.e., we're being asked
+    --     to either use it as a winner OR keep it; the burn-risk
+    --     case is when J/9 is among winners).
+    --   * legal also contains non-J/9 trump (we have a duck option;
+    --     legality preserved by trump-only filter).
+    --
+    -- Action: return the lowest non-J/9 trump in legal. This may
+    -- be a winning card (e.g., K vs Q lead) — that's fine, we still
+    -- take the trick without burning the killer. Or a non-winner
+    -- — opp wins the low trick, our killer survives.
+    if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+       and contract.trump and trick.leadSuit == contract.trump
+       and trick.plays and trick.plays[1]
+       and trick.plays[1].seat == contract.bidder
+       and R.TeamOf(seat) ~= R.TeamOf(contract.bidder) then
+        local leadCard = trick.plays[1].card
+        local leadRank = C.Rank(leadCard)
+        local lowProbe = (leadRank == "7" or leadRank == "8" or leadRank == "Q")
+        if lowProbe then
+            local hasKillerInLegal = false
+            local nonKillerTrump = {}
+            for _, c in ipairs(legal) do
+                if C.IsTrump(c, contract) then
+                    local r = C.Rank(c)
+                    if r == "J" or r == "9" then
+                        hasKillerInLegal = true
+                    else
+                        nonKillerTrump[#nonKillerTrump + 1] = c
+                    end
+                end
+            end
+            -- Only fire if we have a killer to protect AND a duck
+            -- option. If legal is all-killers (J+9 only), fall
+            -- through — the natural pos-N logic picks the lower
+            -- killer (preserves the higher one).
+            if hasKillerInLegal and #nonKillerTrump > 0 then
+                return lowestByRank(nonKillerTrump, contract)
+            end
         end
     end
 
