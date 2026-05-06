@@ -1,0 +1,392 @@
+--- a/Bot.lua
++++ b/Bot.lua
+@@ -1806,6 +1806,66 @@ function Bot.PickTakweesh(seat)
+     if math.random() < rate then return found end
+     return nil
+ end
++
++-- ---------------------------------------------------------------------
++-- C-2: SWA initiation
++-- ---------------------------------------------------------------------
++-- Bot.PickSWA(seat) → true when the bot holds an unbeatable position
++-- and should claim all remaining tricks via SWA (سوا) immediately.
++--
++-- RATIONALE (110 words):
++-- Bots never called SWA. In Saudi play, SWA wins are common when a
++-- player holds unbeatable cards in the last 3-4 tricks. Without this,
++-- bots silently play out guaranteed-win positions trick-by-trick,
++-- wasting time and looking distinctly non-human. The fix gates on
++-- Bot.IsAdvanced() (Advanced-tier bot minimum), phase PHASE_PLAY,
++-- hand-size ≤ 4 (Saudi convention), and delegates the actual
++-- correctness check to R.IsValidSWA — the existing full-minimax
++-- validator. A fast early-exit skips IsValidSWA entirely when the
++-- hand has more than 4 cards, keeping the per-turn overhead negligible.
++-- Saudi rule: ≤ 3 cards = instant claim; 4 cards = 5-sec permission
++-- window. That split is handled by the existing Net.lua SWA dispatch;
++-- PickSWA just returns true/false.
++--
++-- TEST COVERAGE: see tests/test_pickswa.lua (added below).
++
++function Bot.PickSWA(seat)
++    -- Gate 1: Advanced-or-higher tier only.
++    if not Bot.IsAdvanced() then return false end
++    -- Gate 2: play phase only.
++    if S.s.phase ~= K.PHASE_PLAY then return false end
++    -- Gate 3: use the host's authoritative hand record.
++    local hand = S.s.hostHands and S.s.hostHands[seat]
++    if not hand or #hand == 0 then return false end
++    -- Gate 4: Saudi convention — SWA only viable with ≤ 4 cards left.
++    if #hand > 4 then return false end
++    -- Gate 5: contract must exist for IsValidSWA.
++    local contract = S.s.contract
++    if not contract then return false end
++    -- Reconstruct the trickState snapshot (mirrors HostResolveSWA).
++    local trickPlays = (S.s.trick and S.s.trick.plays) or {}
++    local trickState = {
++        leadSuit = S.s.trick and S.s.trick.leadSuit,
++        leader   = (#trickPlays > 0) and trickPlays[1].seat
++                   or S.s.turn or seat,
++        plays    = trickPlays,
++    }
++    -- Snapshot all four hands for the minimax (same shape as
++    -- HostResolveSWA so the validator sees the real remaining deck).
++    local hands = {}
++    for s2 = 1, 4 do
++        hands[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
++    end
++    -- Delegate correctness entirely to the minimax validator.
++    -- No extra heuristic: if R.IsValidSWA says yes, it IS unbeatable.
++    return R.IsValidSWA(seat, hands, contract, trickState) == true
++end
+
+--- a/Net.lua
++++ b/Net.lua
+@@ -3518,6 +3518,25 @@ function N.MaybeRunBot()
+                 if S.s.swaRequest and S.s.swaRequest.caller then return end
+                 -- Takweesh check before the play. A bot scans for an
+                 -- opponent illegal play and rolls per-trick probability.
+                 -- If it decides to call, the round resolves immediately
+                 -- and we never schedule the play.
+                 if B.Bot.PickTakweesh and B.Bot.PickTakweesh(seat) then
+                     broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
+                     N.HostResolveTakweesh(seat)
+                     return
+                 end
++                -- C-2: SWA check before picking a card. If the bot holds
++                -- an unbeatable position, claim all remaining tricks now
++                -- rather than playing them out individually.
++                -- Uses the same direct-claim path as N.LocalSWA (≤ 3 cards
++                -- instant; 4 cards enters the 5-sec permission window via
++                -- _OnSWAReq's auto-accept + timer path). The bot IS the
++                -- host, so HostResolveSWA runs in-process after the wire.
++                if B.Bot.PickSWA and B.Bot.PickSWA(seat) then
++                    local hand = S.s.hostHands and S.s.hostHands[seat] or {}
++                    local enc  = C.EncodeHand(hand)
++                    local handCount = #hand
++                    local needPerm = (WHEREDNGNDB == nil)
++                              or (WHEREDNGNDB.swaRequiresPermission ~= false)
++                    if needPerm and handCount >= 4 then
++                        -- Permission-required path: set up the swaRequest
++                        -- struct so the 5-sec auto-approve timer fires.
++                        -- Bot opponents auto-accept via the existing
++                        -- _OnSWAReq bot-auto-accept block in Net.lua.
++                        S.s.swaRequest = {
++                            caller      = seat,
++                            handCount   = handCount,
++                            responses   = {},
++                            encodedHand = enc,
++                            ts          = (GetTime and GetTime()) or 0,
++                            windowSec   = K.SWA_TIMEOUT_SEC or 5,
++                        }
++                        broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, enc))
++                        -- Auto-accept from any opponent bot seats.
++                        local callerTeam = R.TeamOf(seat)
++                        for s2 = 1, 4 do
++                            local info = S.s.seats[s2]
++                            if info and info.isBot
++                               and R.TeamOf(s2) ~= callerTeam then
++                                N._OnSWAResp("__host__", s2, true, seat)
++                            end
++                        end
++                        -- Arm the 5-sec auto-approve timer (same as
++                        -- _OnSWAReq does for human callers).
++                        if C_Timer and C_Timer.After then
++                            local pinnedSeat = seat
++                            local pinnedHand = {}
++                            for _, c in ipairs(hand) do
++                                pinnedHand[#pinnedHand + 1] = c
++                            end
++                            C_Timer.After(K.SWA_TIMEOUT_SEC or 5, function()
++                                if not S.s.isHost then return end
++                                if S.s.paused then return end
++                                local req = S.s.swaRequest
++                                if not req or req.caller ~= pinnedSeat then
++                                    return
++                                end
++                                if S.s.phase ~= K.PHASE_PLAY then return end
++                                S.s.swaRequest = nil
++                                N.HostResolveSWA(pinnedSeat, pinnedHand)
++                            end)
++                        end
++                    else
++                        -- Instant claim (≤ 3 cards or permission disabled).
++                        broadcast(("%s;%d;%s"):format(K.MSG_SWA, seat, enc))
++                        N.HostResolveSWA(seat, hand)
++                    end
++                    return
++                end
+                 if not S.s.meldsDeclared[seat] then
+
+--- a/tests/test_pickswa.lua (new file)
++++ b/tests/test_pickswa.lua
+@@ -0,0 +1,166 @@
++-- tests/test_pickswa.lua
++--
++-- Unit tests for Bot.PickSWA (C-2).
++--
++-- Scenarios exercised:
++--   A. Gate checks: wrong phase, too many cards, non-Advanced tier all
++--      return false without calling IsValidSWA.
++--   B. Unbeatable single-suit run: seat 1 holds A♠ K♠ Q♠ (3 cards),
++--      opponents have exhausted their spades — PickSWA must return true.
++--   C. Forced-loss position: seat 1 holds only 7♠, opponent holds A♠ —
++--      PickSWA must return false.
++--   D. Boundary: exactly 4 cards held, valid SWA → true.
++--   E. Boundary: 5 cards held → false (gate fires before IsValidSWA).
++--
++-- Run: lua tests/test_pickswa.lua
++--      or via python tests/run.py (after adding this file to the runner).
++
++unpack = unpack or table.unpack
++
++local function addonRoot()
++    if WHEREDNGN_TESTS_ROOT then return WHEREDNGN_TESTS_ROOT end
++    local src = debug.getinfo(1, "S").source
++    if src:sub(1, 1) ~= "@" then
++        error("set WHEREDNGN_TESTS_ROOT before running")
++    end
++    return (src:sub(2):gsub("[/\\]tests[/\\][^/\\]+$", ""))
++end
++local ROOT = addonRoot()
++
++-- -- WoW globals stubs ---------------------------------------------------
++local fakeNow = 1000000.0
++GetTime = function() fakeNow = fakeNow + 0.001; return fakeNow end
++C_Timer = {
++    After     = function() end,
++    NewTicker = function() return { Cancel = function() end } end,
++    NewTimer  = function() return { Cancel = function() end } end,
++}
++GetUnitName = function() return "TestPlayer" end
++UnitName    = function() return "TestPlayer" end
++WHEREDNGNDB = { advancedBots = true }
++SendChatMessage   = function() end
++C_ChatInfo = {
++    RegisterAddonMessagePrefix = function() return true end,
++    SendAddonMessage = function() end,
++}
++CreateFrame = function()
++    return {
++        SetScript      = function() end,
++        RegisterEvent  = function() end,
++        UnregisterEvent= function() end,
++        Hide = function() end, Show = function() end,
++    }
++end
++
++WHEREDNGN = WHEREDNGN or {}
++WHEREDNGN.Sound = { Cue = function() end, ArmCue = function() end }
++WHEREDNGN.Log   = {
++    Debug = function() end, Info = function() end,
++    Warn  = function() end, Error= function() end,
++    Clear = function() end, Dump = function() end,
++}
++WHEREDNGN.UI = {
++    Refresh = function() end, Show = function() end,
++    Hide    = function() end, Toggle = function() end,
++}
++
++-- -- Load modules ---------------------------------------------------------
++local function load(rel)
++    local path = (ROOT .. "/" .. rel):gsub("\\", "/")
++    local chunk, err = loadfile(path)
++    if not chunk then error("failed to load " .. rel .. ": " .. tostring(err)) end
++    chunk()
++end
++load("Constants.lua")
++load("Cards.lua")
++load("Rules.lua")
++load("State.lua")
++load("Bot.lua")
++
++local K   = WHEREDNGN.K
++local C   = WHEREDNGN.Cards
++local R   = WHEREDNGN.Rules
++local S   = WHEREDNGN.State
++local Bot = WHEREDNGN.Bot
++
++math.randomseed(20260503)
++
++-- -- Tiny test framework --------------------------------------------------
++local pass, fail = 0, 0
++local failures   = {}
++local VERBOSE    = (TEST_VERBOSE == true)
++
++local function assertEq(actual, expected, name)
++    if actual == expected then
++        pass = pass + 1
++        if VERBOSE then print(("  PASS  %s"):format(name)) end
++    else
++        fail = fail + 1
++        local msg = ("FAIL  %s\n        expected: %s\n        actual:   %s")
++                       :format(name, tostring(expected), tostring(actual))
++        failures[#failures + 1] = msg
++        print("  " .. msg)
++    end
++end
++local function assertTrue(v, n)  assertEq(not not v, true,  n) end
++local function assertFalse(v, n) assertEq(not not v, false, n) end
++local function section(label) print(""); print("== " .. label .. " ==") end
++
++-- -- Helpers --------------------------------------------------------------
++
++-- Minimal state reset sufficient for PickSWA.
++local function freshState()
++    local s = S.s
++    s.phase     = K.PHASE_IDLE
++    s.isHost    = true
++    s.contract  = nil
++    s.hostHands = nil
++    s.trick     = nil
++    s.tricks    = {}
++    s.turn      = 1
++    s.turnKind  = "play"
++    s.paused    = false
++    s.swaRequest= nil
++    s.swaResult = nil
++    s.playedCardsThisRound = {}
++    s.seats     = { [1]=nil, [2]=nil, [3]=nil, [4]=nil }
++    s.meldsByTeam  = { A={}, B={} }
++    s.meldsDeclared= {}
++end
++
++local function sunContract(bidder)
++    return { type = K.BID_SUN, bidder = bidder or 1 }
++end
++
++-- =====================================================================
++-- A. Gate checks
++-- =====================================================================
++section("A. Gate checks")
++
++freshState()
++S.s.phase     = K.PHASE_PLAY
++S.s.contract  = sunContract(1)
++S.s.hostHands = { [1]={"AS","KS","QS"}, [2]={}, [3]={}, [4]={} }
++-- Non-advanced tier: must return false regardless of hand strength.
++WHEREDNGNDB = {}   -- advancedBots, m3lmBots, etc. all nil/false
++assertFalse(Bot.PickSWA(1), "gate: non-Advanced tier → false")
++WHEREDNGNDB = { advancedBots = true }  -- restore for remaining tests
++
++freshState()
++S.s.phase     = K.PHASE_SCORE   -- wrong phase
++S.s.contract  = sunContract(1)
++S.s.hostHands = { [1]={"AS","KS","QS"}, [2]={}, [3]={}, [4]={} }
++assertFalse(Bot.PickSWA(1), "gate: wrong phase → false")
++
++freshState()
++S.s.phase     = K.PHASE_PLAY
++S.s.contract  = sunContract(1)
++-- 5-card hand: over the 4-card threshold.
++S.s.hostHands = { [1]={"AS","KS","QS","JS","TS"}, [2]={}, [3]={}, [4]={} }
++assertFalse(Bot.PickSWA(1), "gate: 5-card hand → false")
++
++-- =====================================================================
++-- B. Contrived unbeatable single-suit run (the canonical C-2 scenario)
++-- Seat 1 holds A♠ K♠ Q♠.  No spades remain in any other hand.
++-- Opponents have zero cards (they have already played everything).
++-- In a SUN contract, A♠ → K♠ → Q♠ each wins their trick.
++-- R.IsValidSWA minimax must confirm; PickSWA must return true.
++-- =====================================================================
++section("B. Unbeatable single-suit run")
++
++freshState()
++S.s.phase     = K.PHASE_PLAY
++S.s.contract  = sunContract(1)
++-- Seat 1 holds the top three spades.  All other seats empty (they have
++-- played all their cards — late-game endgame).
++S.s.hostHands = {
++    [1] = { "AS", "KS", "QS" },
++    [2] = {},
++    [3] = {},
++    [4] = {},
++}
++-- No in-flight trick: seat 1 is about to lead.
++S.s.trick = { leadSuit = nil, plays = {} }
++S.s.turn  = 1
++-- Mark A♠ K♠ as already played by opponents so rank-order is correct.
++-- (With empty opp hands the minimax has no adversarial moves; it resolves
++-- immediately — every trick won by seat 1.)
++assertTrue(Bot.PickSWA(1), "unbeatable A+K+Q single suit: PickSWA → true")
++
++-- =====================================================================
++-- C. Forced-loss: seat 1 holds only 7♠; opponent holds A♠.
++-- =====================================================================
++section("C. Forced-loss position")
++
++freshState()
++S.s.phase     = K.PHASE_PLAY
++S.s.contract  = sunContract(2)  -- bidder is seat 2
++S.s.hostHands = {
++    [1] = { "7S" },
++    [2] = { "AS" },
++    [3] = {},
++    [4] = {},
++}
++S.s.trick = { leadSuit = nil, plays = {} }
++S.s.turn  = 1
++assertFalse(Bot.PickSWA(1), "forced-loss 7S vs AS: PickSWA → false")
++
++-- =====================================================================
++-- D. Boundary: exactly 4 cards, valid SWA (four top spades).
++-- =====================================================================
++section("D. Boundary: 4-card valid SWA")
++
++freshState()
++S.s.phase     = K.PHASE_PLAY
++S.s.contract  = sunContract(1)
++S.s.hostHands = {
++    [1] = { "AS", "KS", "QS", "JS" },
++    [2] = {},
++    [3] = {},
++    [4] = {},
++}
++S.s.trick = { leadSuit = nil, plays = {} }
++S.s.turn  = 1
++assertTrue(Bot.PickSWA(1), "boundary 4-card valid SWA → true")
++
++-- =====================================================================
++-- E. Boundary: 5 cards → fast-exit gate fires before IsValidSWA.
++-- =====================================================================
++section("E. Boundary: 5-card fast-exit")
++
++freshState()
++S.s.phase     = K.PHASE_PLAY
++S.s.contract  = sunContract(1)
++S.s.hostHands = {
++    [1] = { "AS", "KS", "QS", "JS", "TS" },
++    [2] = {},
++    [3] = {},
++    [4] = {},
++}
++S.s.trick = { leadSuit = nil, plays = {} }
++S.s.turn  = 1
++assertFalse(Bot.PickSWA(1), "boundary 5-card hand → false (gate)")
++
++-- =====================================================================
++-- Summary
++-- =====================================================================
++print("")
++print(("=== test_pickswa: %d passed, %d failed ==="):format(pass, fail))
++for _, m in ipairs(failures) do print(m) end
++if fail > 0 then os.exit(1) else os.exit(0) end

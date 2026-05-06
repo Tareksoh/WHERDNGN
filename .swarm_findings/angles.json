@@ -1,0 +1,802 @@
+{
+  "A-01": {
+    "title": "Hokm R1 threshold sensitivity (TH_HOKM_R1_BASE = 42)",
+    "scope": "Audit whether 42 is correctly calibrated for the Saudi Baloot point economy (J=20, 9=14, A=11). Enumerate all hand configurations that score exactly 38–46 and determine which ones a human expert would bid vs. pass; check for systematic over- or under-bidding near the cliff."
+  },
+  "A-02": {
+    "title": "Hokm R2 threshold gap vs. R1 (r2Base = 38 in Advanced)",
+    "scope": "Inspect the `math.max(r2Base, r1Base - 4)` clamp (line ~572). Verify whether Advanced R2 threshold (38) sits in the correct relationship to R1 (42): R2 allows suit-choice which should raise the bar, not lower it. Confirm the 4-point gap survives all urgency stacking scenarios."
+  },
+  "A-03": {
+    "title": "Sun threshold TH_SUN_BASE = 50 vs. actual Sun win probability",
+    "scope": "Audit whether sunStrength = 50 corresponds to a statistically winning Sun contract (>50% trick-point capture across random opponent distributions). Cross-check against K.HAND_TOTAL_SUN = 130 and the ×2 multiplier — a borderline Sun that makes by 1 trick-point is punishingly costly if wrong."
+  },
+  "A-04": {
+    "title": "BID_JITTER = 6 effect on threshold cliff sharpness",
+    "scope": "Audit the ±6 per-call jitter on all three thresholds. Check whether the jitter range (12-point window) is wide enough to prevent the \"two bots always match bids on similar hands\" pattern but not so wide that strong hands occasionally pass at 42-6=36. Identify edge cases where jitter flips a clear bid into a pass."
+  },
+  "A-05": {
+    "title": "J-step-function 0.4 dampener for no-J hands in Advanced",
+    "scope": "Inspect the `strength * 0.4` penalty (line ~329) for hands with no J, no 9+A, and fewer than 5 cards. Verify this doesn't over-penalize 4-card suits with A+T+K (which are playable Hokm hands) and doesn't create a cliff where a 4-card A9 hand scores lower than a 3-card J hand."
+  },
+  "A-06": {
+    "title": "sideSuitAceBonus cap at 3 aces × 8 = 24 points",
+    "scope": "Audit whether a +24 ace bonus (3 aces, max) correctly reflects Saudi Baloot tournament practice where outside aces are frequently trumped out. Check: is the cap of 3 right, or should the 4th ace (in a potential trump suit) also contribute a partial bonus?"
+  },
+  "A-07": {
+    "title": "Advanced R2 threshold stricter-than-R1 invariant under extreme urgency",
+    "scope": "Audit what happens when scoreUrgency + matchPointUrgency = 17 (max theoretical stack) is applied to both R1 and R2 thresholds. Verify the `math.max` clamp (line ~572) still keeps R2 ≥ R1-4 in desperate scenarios, or whether urgency stacking breaks the invariant."
+  },
+  "A-08": {
+    "title": "Ashkal threshold BOT_ASHKAL_TH = 65 vs. Sun threshold 50",
+    "scope": "Audit the gap between K.BOT_ASHKAL_TH (65) and TH_SUN_BASE (50). Ashkal transfers Sun to partner; if partner's Sun is marginal (50–64), Ashkal is dangerous. Inspect whether the bot can Ashkal when it would have bid Sun itself (sun >= 65 implies sun >= 50 too) and whether that constitutes a double-commit on a medium hand."
+  },
+  "A-09": {
+    "title": "Ashkal J-of-flipped-suit gate (lines ~613-621)",
+    "scope": "Inspect the `hasJflip or sCnt > 2` veto on Ashkal. Verify: holding J of the flipped suit is correctly identified as \"don't Ashkal\" (partner's bid may be marginal without our J). Check whether sCnt > 2 is the right count threshold — having 3 cards of the flipped suit with no J does NOT necessarily mean partner's bid is bluff."
+  },
+  "A-10": {
+    "title": "partnerBidBonus values: +20 matching trump, +10 other Hokm, +15 Sun",
+    "scope": "Audit whether the bonus magnitudes (lines ~401-427) correctly encode signal strength. A partner Hokm in the same suit adds +20 — but this creates a double-count scenario: the bot already scored its own trump strength; adding +20 for confirmation overcounts synergy by applying it to the threshold adjustment rather than the hand score."
+  },
+  "A-11": {
+    "title": "Round-1 Sun before Hokm priority (line ~583)",
+    "scope": "Inspect the precedence: Sun is evaluated before Hokm in round 1 (line ~583 returns K.BID_SUN if sun >= thSun). Verify this matches Saudi convention — in most Saudi Baloot traditions, Hokm and Sun are independent options and the bot should pick the stronger contract, not default to Sun-first. Check if a hand that qualifies for BOTH should always prefer Sun."
+  },
+  "A-12": {
+    "title": "Round-2 Sun vs. best Hokm comparison (line ~649: sun > bestScore)",
+    "scope": "Audit the `sun >= thSun AND sun > bestScore` dual condition (line ~649). This means a hand with Sun=52 and best Hokm=51 bids Sun, while Sun=52 and bestHokm=53 bids Hokm. Verify whether this tie-breaking logic correctly models the Saudi multiplier incentive (Sun = ×2 base vs. Hokm = ×1 base before escalation)."
+  },
+  "A-13": {
+    "title": "Kawesh detection: bots unconditionally call on 5+ low cards",
+    "scope": "Inspect Bot.PickKawesh (line ~1302). The current logic is \"if eligible, call unconditionally.\" Audit: is there any strategic reason to NOT call Kawesh? (e.g., score position where the team is near the target and opponent redeals could give them a better contract). The unconditional redeal may hurt near-win scenarios."
+  },
+  "A-14": {
+    "title": "Preempt threshold BOT_PREEMPT_TH = 75 calibration",
+    "scope": "Audit the PickPreempt threshold (line ~1261). At 75, a seat needs Sun-strong hand plus either the bid Ace (+12) or a Sun-bidding partner (+8). Check whether this threshold is reachable in practice (70% of preempt-eligible positions) vs. too restrictive (bot never exercises preempt right, giving humans a free Sun steal)."
+  },
+  "A-15": {
+    "title": "Bid position ordering in Ashkal gate (lines ~594-603)",
+    "scope": "Inspect the `bidPos` calculation from dealer position. Verify the seat ordering logic `(d%4)+1, ((d+1)%4)+1, ((d+2)%4)+1, d` is correct for Saudi Baloot turn order (dealer bids last). Check whether bidPos=3 and bidPos=4 are the correct seats that can call Ashkal under Saudi rules."
+  },
+  "A-16": {
+    "title": "suitStrengthAsTrump point values vs. POINTS_TRUMP_HOKM table",
+    "scope": "Audit whether the scoring inside suitStrengthAsTrump (lines ~306-319) matches K.POINTS_TRUMP_HOKM exactly. J=20, 9=14, A=11, T=10 match. K=4, Q=3 match. But 8 and 7 are assigned strength=2 inside the function even though K.POINTS_TRUMP_HOKM shows them as 0. Clarify whether strength and point-value should diverge here (length proxy) or converge (bid on real point contribution)."
+  },
+  "A-17": {
+    "title": "Length bonus: (count-2) * 5 calibration",
+    "scope": "Inspect the `math.max(0, count - 2) * 5` length bonus (line ~320). With 5 trump cards, this adds +15 on top of card point values. Verify this doesn't overweight pure length (7-8-9-Q-K of trump has length=5 but only 7 card-points; the +15 length bonus may over-lift mediocre length)."
+  },
+  "A-18": {
+    "title": "J+9 synergy bonus: +10 basic vs. +18 advanced",
+    "scope": "Audit whether the +18 Advanced J+9 bonus (line ~323) correctly reflects the Saudi tournament valuation of J+9 as the two highest trump cards (combined 34 points out of 62 trump-suit total). Consider: does the synergy bonus double-count cards already individually scored (J=+20, 9=+14)?"
+  },
+  "A-19": {
+    "title": "No-J penalty: multiplier 0.4 vs. disqualification",
+    "scope": "Inspect the `strength * 0.4` penalty for no-J hands (lines ~324-330). At 0.4x, a hand with A+T+9+K+Q in trump (raw ~62) becomes ~25, well below any threshold. This effectively prohibits bidding trump suits with no J in Advanced mode. Audit whether Saudi expert players ever bid trump with no J (e.g., A+9+T of 5-card suit), which would make 0.4 too aggressive."
+  },
+  "A-20": {
+    "title": "Trump counting in pickLead: trumpCount < 4 triggers ace-cash first",
+    "scope": "Inspect the `trumpCount < 4` branch (line ~793) that cashes a non-trump Ace before pulling trump. Audit: should the threshold be 3 instead of 4? With exactly 4 trump including J+9, a bidder should pull trump immediately. With 3 or fewer, ace-cash-first is correct."
+  },
+  "A-21": {
+    "title": "opponentsVoidInAll check in pickLead (lines ~823-837)",
+    "scope": "Audit the free-trick detection: this fires when BOTH opponents are void in a non-trump suit. Inspect whether the void inference in OnPlayObserved is reliable enough to trigger this correctly, or whether early-round void inference errors cause phantom free-trick leads."
+  },
+  "A-22": {
+    "title": "suitCardsOutstanding calculation for trump-exhaustion detection",
+    "scope": "Audit the `suitCardsOutstanding` function (lines ~897-913). It counts own hand + all played cards in memory. Verify: (a) it correctly includes in-progress trick plays (not just completed tricks), (b) it handles the case where the bot is playing and its own candidate card has not yet been played — the function reads hands as-is, not after the candidate card is removed."
+  },
+  "A-23": {
+    "title": "highestTrump selection in bidder lead (line ~800)",
+    "scope": "Inspect the bidder's trump lead: `highestTrump(legal, contract)` plays the absolute highest trump. Audit whether this is correct at all trump counts — playing J of trump immediately is textbook J+9 extraction, but playing the J when holding J+9+A+T+K+Q of trump wastes the J-overforce on minor cards; 9 as first lead would be more efficient."
+  },
+  "A-24": {
+    "title": "Trump ruff conservation in pos-3 follow (lines ~1034-1044)",
+    "scope": "Inspect the `lowestByRank(trumpWinners, contract)` path for position-3 trump-only winners (lines ~1041-1043). Verify: when trumpWinners includes J (rank 8), the lowest trump winner could still be J if it's the only trump. Check whether there's a preference to use Q/K of trump for ruffing and save J for lead forcing."
+  },
+  "A-25": {
+    "title": "IsTrump correctness in Sun contracts",
+    "scope": "Inspect C.IsTrump usage throughout pickLead and pickFollow. In Sun contracts there is no trump; verify that every `C.IsTrump(c, contract)` call correctly returns false for all cards in Sun, and that the trump-specific branches never fire in Sun contract context."
+  },
+  "A-26": {
+    "title": "sunStrength: distribution penalty cap lowered 25→18",
+    "scope": "Audit the penalty cap softening (line ~395: `math.min(penalty, 18)`). With 4 weak suits each contributing -10, a fully lopsided hand is only penalized -18 (not -40). Verify this correctly models the Saudi \"a void suit kills your Sun\" principle — should the cap be per-void rather than global?"
+  },
+  "A-27": {
+    "title": "Long-suit walk bonus: count >= 5 AND (hasA or hasK)",
+    "scope": "Inspect the `+6 per card beyond 4` walk bonus (lines ~382-386). A 6-card suit with Ace adds +12. Audit: in Saudi Baloot with 8 cards per suit, 6-card suits are rare (deal deals only 8 cards total). Verify the bonus fires on realistic hands; a player holding 6+ cards of one suit has a 1-card or shorter side suit almost certainly."
+  },
+  "A-28": {
+    "title": "AKQ stopper bonus +8 per suit",
+    "scope": "Audit the `+8` AKQ stopper bonus (line ~387). In Sun the A+K+Q of a suit guarantee 3 tricks from that suit. Verify whether +8 is proportionate to the 3-trick guarantee (roughly 11+4+3=18 points from those cards alone, already scored individually) — is this a double-count of the card values or a legitimate synergy bonus?"
+  },
+  "A-29": {
+    "title": "sunStrength used in ALL escalation decisions (Bel, Triple, Four, Gahwa)",
+    "scope": "Inspect escalationStrength (line ~1191): it calls sunStrength for BOTH Sun and Hokm contracts. In Hokm, sunStrength is a proxy for side-suit strength — but the J of trump (worth 20 in trump suit) is only worth 2 in sunStrength. Audit whether a Hokm-bidder with J+9+A of trump has their escalation strength systematically undervalued."
+  },
+  "A-30": {
+    "title": "PickDouble trump strength blend: sunStrength + trumpStr * 0.5",
+    "scope": "Inspect PickDouble (lines ~1158-1163). Defender's strength = sunStrength + 0.5 * trumpStrength. Verify the 0.5 blend ratio: why 50% of trump-as-trump rather than 100%? A defender with J+9 of trump has 34 trump card-points but only gets 0.5 * 34 = 17 added to sunStrength for Bel decision — potentially undervaluing a strong defensive trump holding."
+  },
+  "A-31": {
+    "title": "Sun penalty: honors vs. distribution (penalty += 10 if count < 2 OR no honors)",
+    "scope": "Audit the OR condition in the distribution penalty (line ~393, implicit in loop). A suit with 2 cards but no honors (count >= 2, honors = false) still gets -10. Verify: a doubleton 7-8 of a suit is a genuine weakness in Sun, but should a doubleton Q-J of the same suit also be penalized? (It has honors but only 2 cards — risky in Sun.)"
+  },
+  "A-32": {
+    "title": "sunStrength in PickBid round 1: evaluated BEFORE suitStrengthAsTrump",
+    "scope": "Inspect PickBid round 1 (lines ~554-636). sunStrength is computed first, and if `sun >= thSun`, the function returns K.BID_SUN immediately without evaluating Hokm options. Audit: for a hand with sun=52 and one suit with a trump strength of 70, the bot bids Sun and leaves a potentially stronger Hokm contract on the table."
+  },
+  "A-33": {
+    "title": "Ashkal Sun strength requirement (BOT_ASHKAL_TH = 65 in K, but actual threshold uses jitter)",
+    "scope": "Inspect the Ashkal threshold in PickBid (line ~623: `K.BOT_ASHKAL_TH or 65`). The K. constant is 65 but the jitter is ±6, meaning actual range is 59–71. Verify K.BOT_ASHKAL_TH vs. TH_SUN_BASE consistency — Ashkal should require stronger Sun than a direct bid (partner takes the contract, not the bot), suggesting a higher base than 65."
+  },
+  "A-34": {
+    "title": "sunStrength for Preempt decisions vs. PREEMPT threshold 75",
+    "scope": "Audit PickPreempt (line ~1262): uses sunStrength + Ace bonus + partner bonus. At threshold 75, verify whether the function ever fires in practice when the bid card IS the Ace of a long suit (the prime preempt scenario). The +12 ace-of-bid-suit bonus is supposed to be the trigger."
+  },
+  "A-35": {
+    "title": "Sun first-trick smother: feedSafe gate excludes trump-led tricks only in Hokm",
+    "scope": "Inspect the feedSafe condition (lines ~937-942): `contract.type ~= K.BID_HOKM OR trick.leadSuit ~= contract.trump`. In Sun contracts this always evaluates to true (no trump condition), so smother fires freely. Audit whether Sun smother is always correct or whether some Sun tricks should not have A/T fed to partner's pile."
+  },
+  "A-36": {
+    "title": "Position-2 sure-stopper detection in Hokm (lines ~981-997)",
+    "scope": "Audit the `trumpOut <= 1` condition for sure-stopper in position 2. This fires only when exactly 0 or 1 trump card remains outstanding — very late game. Check if this is too conservative; a position-2 hold of J of trump (highest possible winner) should always be a sure stopper regardless of trump count."
+  },
+  "A-37": {
+    "title": "Position-2 A or T of lead suit as sure stopper (lines ~1003-1012)",
+    "scope": "Inspect the A/T lead-suit stopper extension (lines ~1003-1012). An Ace of the lead suit IS unbeatable in Sun; in Hokm it can be trumped. Verify: the code applies this equally in both Sun and Hokm contracts. In Hokm, an Ace of a non-trump lead suit is NOT a sure stopper if any opponent might ruff."
+  },
+  "A-38": {
+    "title": "Position-3 highest winner logic vs. overcut risk",
+    "scope": "Audit position-3 \"third hand high\" (line ~1045). The bot plays highestByRank(winners). In Hokm with multiple trump options, the bot might play 9-of-trump as the highest winner when A-of-trump would be wasteful (opponent at position 4 might hold only the 7-of-trump). Check whether there's a \"play just enough to win\" optimization missing here."
+  },
+  "A-39": {
+    "title": "Position-4 cheapest winner (last seat, lowest of winners)",
+    "scope": "Inspect position-4 behavior in pickFollow. The bot plays lowestByRank(winners) at position 4. Audit: in Hokm with both non-trump and trump winners, lowestByRank picks the cheapest winner — this may choose a 7-of-trump (0 points, trick-rank 1) when A-of-side-suit (11 points, trick-rank 8) would also win. Check the TrickRank comparison across contract boundaries."
+  },
+  "A-40": {
+    "title": "partnerWinning path: lowestByRank vs. smother logic gate",
+    "scope": "Inspect the smother gate in pickFollow (lines ~937-956). The `#highInSuit >= 2 or completed >= 3 or lastSeat` condition gates high-card dumping. Audit the `completed >= 3` branch: this means from trick 4 onwards the bot starts dumping high cards on partner's tricks. In early game (tricks 3–4) with only one A and one T in the lead suit, smothering the T (10 pts) on trick 4 is reasonable but smothering the A (11 pts) at trick 3 is aggressive."
+  },
+  "A-41": {
+    "title": "Discard from short non-trump when can't win and not last seat (lines ~1057-1068)",
+    "scope": "Audit the `not lastSeat AND Hokm AND trump present` loser discard (lines ~1057-1067). The bot discards lowest non-trump. Verify: if the bot holds only trumps (no non-trump to discard), it falls through to `lowestByRank(legal)` which would throw the lowest trump. Is under-ruffing (playing below the current trump winner) the correct play here, or should the bot be preserving trump entirely?"
+  },
+  "A-42": {
+    "title": "pickFollow winner selection: wouldWin via full trick simulation",
+    "scope": "Inspect the `wouldWin` helper (lines ~712-718). It constructs a scratch trick with the candidate card appended, then calls R.CurrentTrickWinner. Verify this is called with the correct `trick` state — specifically, check whether `trick.leadSuit` is correctly populated when position-1 plays an off-suit trump (would the scratch trick have leadSuit = trump or leadSuit = original lead?)."
+  },
+  "A-43": {
+    "title": "Sun-contract follow when can't beat: lowest rank vs. lowest point value",
+    "scope": "Audit pickFollow in Sun contracts when no winner exists. The bot plays `lowestByRank(legal)`. In Sun, trick rank is K.RANK_PLAIN where 7 < 8 < 9 < J < Q < K < T < A. Lowest-by-rank is 7 (0 points). Verify this is correct — in Sun you'd prefer to discard a 9 (0 pts, rank 3) over a J (2 pts, rank 4). Both are 0-point or low-point, but the optimal throw-in in Sun is often the J-of-off-suit (2 pts vs. 0 pts for 9/8/7)."
+  },
+  "A-44": {
+    "title": "Trick points threshold for \"decent points, throw lowest-value loser\" in pos-4",
+    "scope": "Audit the last-seat discard (lines ~1051-1068). The bot throws lowest non-trump loser regardless of how many points are at stake. There is no threshold gate for trick points — a trick with 30+ points on it (A+T+K) gets the same discard strategy as a trick with 0 points. Consider whether high-value tricks warrant a trump-ruff attempt from last seat even when the trick has been lost to the opponent."
+  },
+  "A-45": {
+    "title": "pickFollow void inference cross-check: does the follow-logic USE Bot._memory?",
+    "scope": "Audit whether pickFollow ever reads Bot._memory for opponent void status. The lead heuristic (pickLead) uses `opponentsVoidInAll` (free-trick detection), but pickFollow does not appear to read void information. Verify: is there a scenario in follow-play where knowing opponent A is void in the lead suit should change the bot's strategy (e.g., not ruffing because partner can over-ruff for more points)?"
+  },
+  "A-46": {
+    "title": "Legal plays list: legalPlaysFor called in PickPlay before BotMaster.PickPlay",
+    "scope": "Inspect the BotMaster.PickPlay (line ~494) vs. Bot.PickPlay (line ~1110) dispatch. Bot.PickPlay builds its own legal list. BotMaster.PickPlay builds its own legal list independently. Verify: if both functions are called for a Saudi Master bot, the legal list is computed twice. Check for any divergence in R.IsLegalPlay inputs that could cause inconsistency."
+  },
+  "A-47": {
+    "title": "pickLead singleton preference (step 2) before longest-suit preference (step 3)",
+    "scope": "Audit the lead priority: singletons are led before longest suit (lines ~841-847 before ~860). Verify this matches Saudi convention. A singleton K-of-offsuit in a Hokm contract is valuable as a ruff setup, but leading it immediately signals a ruff to opponents. Is singleton-before-longest-suit always correct, or should high singletons be held?"
+  },
+  "A-48": {
+    "title": "fzlokyAvoidSuit + longest-suit tie-break: \"≥2 more cards\" override",
+    "scope": "Inspect the avoid-suit fallback (lines ~867-880). The avoid suit wins only if it exceeds the best non-avoid suit by ≥2 cards. Audit: with avoid-suit=4 cards and best-non-avoid=2 cards, the difference is 2 — does `avoidN >= longestN + 2` use >= (fire) or > (not fire)? Check the boundary condition is intentional."
+  },
+  "A-49": {
+    "title": "escalationStrength: sunStrength + trumpStrength for Hokm bidder",
+    "scope": "Audit escalationStrength (lines ~1191-1200) for the Hokm bidder. They get sunStrength (all-suits side cards) + full trumpStrength. This double-counts the J of trump — J appears in trumpStrength at +20 and in sunStrength at +2 (as J = 2 pts in plain suit scoring). The J bonus inflates Hokm-bidder escalation decisions by ~18."
+  },
+  "A-50": {
+    "title": "Bel threshold K.BOT_BEL_TH = 70 and its gap to Triple TH = 90",
+    "scope": "Audit whether the 20-point gap between Bel (70) and Triple (90) thresholds correctly models the \"Bel opens, Triple requires stronger hand\" sequence. Verify: a defender with strength=75 opens Bel (wantOpen=false), blocking Triple. Check whether `wantOpen = strength >= jth + 20` means a defender needs 70+20=90 strength to open — exactly equal to the Triple threshold, so only defender-strong hands can open a chain the bidder can match."
+  },
+  "A-51": {
+    "title": "Four threshold K.BOT_FOUR_TH = 110 and Gahwa TH = 135",
+    "scope": "Audit the Four (110) and Gahwa (135) thresholds. At 135 for Gahwa, the bidder needs near-perfect strength. Verify: what is the maximum achievable escalationStrength for a realistic deal? If the max is, say, 180, Gahwa fires 26% of the time it's eligible. If the max is 140, it almost never fires. Enumerate realistic upper bounds."
+  },
+  "A-52": {
+    "title": "partnerEscalatedBonus for defender Bel: +5 for doubled, +8 for foured",
+    "scope": "Inspect partnerEscalatedBonus (lines ~496-533). A partner who has Beled adds +5 to our escalation strength; a partner who Foured adds +8. Audit: if the partner already declared Four, there is no further rung for the defender (Four is the last defender rung). A bot receiving +8 from partner's Four will see an inflated strength but has no Bel or Four to call — does this false-positive create a dead-code path?"
+  },
+  "A-53": {
+    "title": "Bel wantOpen decision: strength >= jth + 20",
+    "scope": "Audit the wantOpen logic in PickDouble (line ~1178: `wantOpen = strength >= jth + 20`). Since jth is already jittered, \"strength >= jth + 20\" is a moving target. Verify: on successive calls with the same hand, the jitter can flip wantOpen between true and false (the ±10 BEL_JITTER crosses the +20 buffer). Is this intentional (natural feel) or a consistency bug?"
+  },
+  "A-54": {
+    "title": "Gahwa terminal: wantOpen = false hardcoded (line ~1254)",
+    "scope": "Inspect PickGahwa (line ~1253-1254). It returns `(yes, false)` always. Audit: Gahwa is defined as terminal (match-win), so wantOpen = false is logically correct (no further rung). Verify that the caller in Net.lua consumes the second return value and does NOT accidentally read it as a meaningful signal."
+  },
+  "A-55": {
+    "title": "Escalation during play vs. pre-play phase gating",
+    "scope": "Audit whether the escalation pickers (PickDouble, PickTriple, PickFour, PickGahwa) are correctly gated to the PHASE_DOUBLE / PHASE_TRIPLE / PHASE_FOUR / PHASE_GAHWA phases respectively. If called out of phase (e.g., PickDouble during PHASE_PLAY), what do they return? Verify no phase guard exists in the functions themselves — responsibility falls entirely on Net.lua's dispatcher."
+  },
+  "A-56": {
+    "title": "Score urgency stacking cap: scoreUrgency + matchPointUrgency limit",
+    "scope": "Audit the combined urgency output: scoreUrgency returns max +12, matchPointUrgency returns max +10 (after the cap in matchPointUrgency). Combined max = 22. Applied to BOT_BEL_TH=70: effective threshold drops to 48 in desperate mode. Verify whether a threshold of 48 for Bel is sane (any hand strong enough to hold any cards qualifies) and whether the cap in matchPointUrgency is correctly placed."
+  },
+  "A-57": {
+    "title": "matchPointUrgency cap: was ±8/±3, reduced to ±5/±2 in 13th-bot-audit",
+    "scope": "Inspect matchPointUrgency (lines ~468-487). The comment says magnitudes were \"halved on the opp-near branches\" but the code shows opp >= target-15: mod+5, and opp >= target-40: mod+2. The comment mentions was +8/+3. Verify the cap of `if mod > 10 then mod = 10 end` is still consistent with the halved magnitudes — if the actual branches only reach +5+3=8, the cap of 10 is never hit."
+  },
+  "A-58": {
+    "title": "OnEscalation legacy fallback: kind not in {double,triple,four,gahwa} → m.bels++",
+    "scope": "Audit OnEscalation (lines ~162-172). The else branch (`m.bels = m.bels + 1`) handles unknown rung kinds by incrementing bel count. Verify all callers in Net.lua pass exactly one of the four canonical strings. If any caller passes \"bel\" (not \"double\"), \"x2\", or any other variant, the else branch fires and corrupts the Bel counter."
+  },
+  "A-59": {
+    "title": "BASE_NUM_WORLDS = 30 convergence at 8-candidate decision points",
+    "scope": "Audit whether 30 worlds is sufficient for ISMCTS convergence when there are 7–8 legal cards (e.g., first lead of the hand with full 8-card hand). With 30 worlds × 8 candidates, each candidate gets ~3.75 evaluations per world — insufficient statistical confidence. The dynamic scaling (60 at trick 4, 100 at trick 6) only helps late game."
+  },
+  "A-60": {
+    "title": "Dynamic world scaling thresholds (numTricks >= 6 → 100, >= 4 → 60)",
+    "scope": "Inspect the numTricks scaling in BM.PickPlay (lines ~514-517). Scaling UP to 100 at trick 6 means the last 2–3 tricks get 3.3× more worlds. Audit whether scaling should be inverted (more worlds early when uncertainty is highest, fewer when hands are almost empty) or whether late-game precision is genuinely more valuable."
+  },
+  "A-61": {
+    "title": "buildUnseen: in-progress trick plays are excluded from unseen",
+    "scope": "Audit buildUnseen (lines ~65-92). Cards in `S.s.trick.plays` are marked seen. Verify: when it's our turn at position 2 in the trick, the position-1 card is in the trick and excluded from unseen. But position-1's card was already in their hand — the function would have counted the right unseen set. Verify no double-exclusion of the current-trick cards."
+  },
+  "A-62": {
+    "title": "seatHandSize: total = 8 hardcoded (line ~98)",
+    "scope": "Inspect seatHandSize (line ~98: `local total = 8`). This assumes all cards are dealt. Verify: in PHASE_DEAL1 (5 cards dealt), the total should be 5, not 8. Check whether BM.PickPlay is ever called during deal1 (bidding phase) or only during PHASE_PLAY when all 8 cards are dealt."
+  },
+  "A-63": {
+    "title": "meldPins: meld cards from declared melds pinned to declaring seat",
+    "scope": "Inspect the meldPins build (lines ~160-177). Cards from declared melds that are still unplayed are pinned to their declarer. Audit: a Tierce (3-card sequence) pins those 3 cards. Verify: if the declarer has already played some of those cards, only unplayed ones should be pinned. Check the inner loop's `unseen` membership test is correct."
+  },
+  "A-64": {
+    "title": "pinCard: bid card pinned to the bidder",
+    "scope": "Inspect bid-card pinning (lines ~138-147). If `S.s.bidCard` exists and is not yet played, it's pinned to the bidder's hand. Verify: in round 2, the bidder picks up the bid card — it should be in their S.s.hostHands[bidder] already. The pin would be redundant (the card is already known to be in the bidder's hand). Check whether the pin creates a duplicate assignment in Phase 2 fill."
+  },
+  "A-65": {
+    "title": "sampleConsistentDeal fallback: uniform random ignoring voids",
+    "scope": "Audit the fallback deal (lines ~252-273). If 15 attempts fail to find a void-consistent deal, it falls back to random. This occurs when voids are very constraining (e.g., seat 2 is void in S+H+D but only 3 cards remain to distribute). Verify the fallback doesn't poison the rollout with impossible hand distributions — a single corrupted world in 30 can swing the score by ~10%."
+  },
+  "A-66": {
+    "title": "Biased pick: 70% chance of taking \"desired\" cards for the bidder",
+    "scope": "Inspect the 0.7 probability in Phase 1 biased pick (line ~221). At 70%, the bidder gets most of their \"strong\" cards but not always. Audit: over 30 worlds, the bidder's average strong-card assignment converges but with high variance per world. Check whether 70% or a deterministic \"always take desired if available\" produces better world quality."
+  },
+  "A-67": {
+    "title": "Partner signal suit biasing: desire[pSignalSuit] = 1 (line ~213)",
+    "scope": "Audit the partner signal biasing (line ~213). Weight = 1 triggers the `desire[c] or (desire[C.Suit(c)] and 20)` logic (line ~219), but `desire[pSignalSuit] = 1` sets the SUIT key, not a card key — the `desire[c]` lookup returns nil and the `desire[C.Suit(c)] and 20` path fires (returning 20). Verify the weight calculation is intentional: 70% chance to take ANY card of the signaled suit."
+  },
+  "A-68": {
+    "title": "rolloutValue: initialHands includes already-played cards",
+    "scope": "Inspect rolloutValue (lines ~289-489). initialHands includes sampled remaining cards PLUS all previously played cards (lines ~294-308). This is for meld detection only. Verify: R.DetectMelds uses the initial full hand to detect melds. Is it correct to use the full starting hand for meld detection mid-rollout, given melds are declared in trick 1 only?"
+  },
+  "A-69": {
+    "title": "rolloutValue: heuristicPick lead branch defaults to \"highest non-trump, else lowest\"",
+    "scope": "Inspect heuristicPick lead (lines ~426-436). The bidder-team lead plays the highest trump. Non-bidder plays lowest non-trump. This is a very rough approximation of Bot.lua's multi-step pickLead. Audit: the rollout heuristic misses AKA signals, void detection, singleton leads, and Fzloky suit preferences. Quantify the gap: does a crude rollout systematically under-value certain card choices?"
+  },
+  "A-70": {
+    "title": "rolloutValue: team diff return (us - them) vs. raw score",
+    "scope": "Inspect the return value (lines ~476-488): the function now returns team diff (my_points - opp_points). The 26th-audit fix comment explains this correctly. Audit: with Gahwa bonus of ±10000, a rollout that simulates a Gahwa win dominates all other considerations. Verify: can a non-Gahwa rollout scenario produce a diff > 10000 that would mask a Gahwa loss?"
+  },
+  "A-71": {
+    "title": "scores accumulation: no normalization by world count",
+    "scope": "Inspect the score accumulation in BM.PickPlay (lines ~519-526). Scores are summed raw across all worlds without dividing by numWorlds. The final selection uses `scores[c] > bestScore` (argmax). Verify: since all candidates are evaluated on the same N worlds (same N for each), raw sum and average give the same argmax — but verify that this assumption holds when the fallback deal fires mid-loop (one world is uniform random, skewing the sum for ALL candidates equally)."
+  },
+  "A-72": {
+    "title": "BM.PickPlay nil fallback: returns nil, caller falls back to Bot.PickPlay",
+    "scope": "Inspect what happens when BM.PickPlay returns nil (lines ~495-507). Callers fall back to Bot.PickPlay (M3lm / Fzloky heuristic). Verify: the BM.PickPlay nil-return conditions are `not BM.IsActive()`, `not S.s.contract`, `not hand or #hand == 0`, and `#legal == 0`. Check whether there is a case where `#legal == 1` (single legal play) returns the card directly without sampling — correct, line ~507."
+  },
+  "A-73": {
+    "title": "AKA signal gate: only from trick 2 onwards (line ~1104)",
+    "scope": "Audit Bot.PickAKA's trick number gate (line ~1104: `trickNum <= 1 then return nil`). The comment says \"no opponent voids yet.\" Verify: is it always true that by trick 2 at least one void inference is possible? If no one has discarded yet by trick 2, the AKA signal is still not actionable for the partner. Consider whether the gate should be tricks-with-discards > 0 rather than trickNum > 1."
+  },
+  "A-74": {
+    "title": "AKA dedup: per-suit akaSent flag reset in Bot.ResetMemory",
+    "scope": "Inspect the akaSent flag (lines ~112-113, ~106 in emptyMemory). Confirmed it resets per round. Audit: if the bot leads the boss card of suit H in trick 2 (AKA H sent), then wins it, and the boss of H falls to an opponent — the next trick the bot leads H again but the SECOND-HIGHEST unplayed H is now the new boss. Does the bot incorrectly skip AKA on this re-lead due to the per-suit dedup flag?"
+  },
+  "A-75": {
+    "title": "Fzloky firstDiscard rollback: trump-ruff discards reverted",
+    "scope": "Inspect the trump-ruff rollback (lines ~262-269). If the first discard was a trump-ruff (off-suit trump), it's reverted to nil. Audit: the rollback checks `mem.firstDiscard.suit == cardSuit AND rank == C.Rank(card)`. This compares the just-stored discard against itself — it should always match. Verify: is this correctly reverting the discard set three lines earlier, or is there a timing/reference issue?"
+  },
+  "A-76": {
+    "title": "Fzloky: high (A/T/K) = lead this suit, low (7/8) = avoid this suit",
+    "scope": "Audit the Fzloky signal interpretation (lines ~752-758). Q and J fall into neither category — they are ignored. In Saudi Baloot, a Q discard from a short suit could signal strength or weakness depending on context. Audit whether Q/J first-discards in a non-trump suit should be treated as low/high/neutral."
+  },
+  "A-77": {
+    "title": "Fzloky lead preference: lowest card of signaled suit (line ~771)",
+    "scope": "Inspect the lead-to-partner-signal behavior (lines ~763-772). The bot leads its LOWEST card of the signaled suit. Audit: in Hokm, leading the lowest non-trump of the partner's strong suit allows the partner to win with their A/T/K and then lead again — correct. But verify: if the bot's lowest card of the signaled suit is also the only boss remaining in that suit (e.g., bot holds 7 but K was already played), leading 7 into an exhausted suit is wasteful."
+  },
+  "A-78": {
+    "title": "AKA signal: K.MSG_AKA sent in Net.lua — does bot AKA affect pickLead?",
+    "scope": "Audit whether Bot.PickAKA is connected to the lead card choice. PickAKA is called AFTER pickLead determines the lead card (it's called with the already-chosen leadCard). Verify: does the AKA signal back-propagate to affect the lead decision, or is it purely a communication signal to the partner? If the bot leads a non-boss card but PickAKA returns non-nil, there may be a logic inconsistency."
+  },
+  "A-80": {
+    "title": "partnerBidBonus: reads S.s.bids[partner] which may be nil in R2",
+    "scope": "Inspect partnerBidBonus (lines ~411-427). It reads `S.s.bids[partner]`. In round 2, a partner who bid in round 1 may have their bid stored differently. Verify: does S.s.bids[partner] contain the FINAL bid (the one that won) or the last bid made? In round 1, multiple bids can happen — the contract is finalized by Net.lua after all four bids are in. Check whether the bids table reflects the contract trump suit correctly."
+  },
+  "A-79": {
+    "title": "styleTrumpTempo and styleBelTendency: computed but never consumed",
+    "scope": "Audit `styleTrumpTempo` and `styleBelTendency` (lines ~181-196). Both are `local function` and neither appears to be called by any upstream logic. Verify they are indeed dead code, confirm via grep on the file. Check whether they were intended as inputs to M3lm play decisions but were never wired up — this is the \"partnerStyle ledger READ but not USED\" scenario."
+  },
+  "A-81": {
+    "title": "Bot._memory nil guard in all accessors",
+    "scope": "Audit every usage of `Bot._memory[seat]` that is not preceded by a `Bot._memory or Bot.ResetMemory()` guard. OnPlayObserved has the guard (line ~201). pickLead uses `opponentsVoidInAll` which reads `Bot._memory` with a nil-return guard (line ~274). Identify any access paths where `Bot._memory` is nil and an unguarded read would crash."
+  },
+  "A-82": {
+    "title": "ResetMemory timing: called by Net.lua — verify call site",
+    "scope": "Audit where Bot.ResetMemory() is called relative to the start of each round. It must be called BEFORE any OnPlayObserved calls for the new round. Verify: if the host processes deal3 (second deal) before calling ResetMemory, the new-round plays could corrupt the old-round memory. Check Net.lua's round-start flow."
+  },
+  "A-83": {
+    "title": "ResetStyle timing: called by Reset() / new game",
+    "scope": "Inspect Bot.ResetStyle (line ~149-151). It resets the per-seat style counters. This happens on game reset (not round reset). Verify: is this the correct granularity? The comment says \"accumulated ACROSS the entire GAME.\" Confirm that round-resets do NOT call ResetStyle — the style ledger should persist across rounds to be useful."
+  },
+  "A-84": {
+    "title": "OnPlayObserved call scope: host-only, all 4 seats",
+    "scope": "Audit whether OnPlayObserved is called for ALL four seats' plays (including human players and opponents) or only for bot seats. The comment says \"Driven from Net.lua's MaybeRunBot\" but MaybeRunBot only runs for bot turns. Verify: does Net.lua call OnPlayObserved for human plays too? If not, the memory is incomplete."
+  },
+  "A-85": {
+    "title": "Void inference for trump-ruff: rollback added in latest audit",
+    "scope": "Inspect the trump-ruff rollback in OnPlayObserved (lines ~262-269). The Fzloky firstDiscard reverts if the off-suit play was a trump ruff in Hokm. But the void inference (`mem.void[leadSuit] = true`) is NOT rolled back — a seat that ruffs with trump IS void in the lead suit. Verify this is correct: void inference stands, firstDiscard is reverted."
+  },
+  "A-86": {
+    "title": "mem.played tracking: includes own cards and all observed plays",
+    "scope": "Audit whether `mem.played[card] = true` is set for all four seats' played cards in OnPlayObserved. Since OnPlayObserved is called with `seat` and `card`, each call adds to that specific seat's played set. Verify: suitCardsOutstanding iterates all 4 seats' `mem.played` tables to get the total played count — confirm this loop correctly accounts for the calling seat's own plays."
+  },
+  "A-87": {
+    "title": "Trump tempo counter fires only on trick.plays count == 1 (leads only)",
+    "scope": "Audit the trump tempo counter (lines ~246-255). It checks `#trickPlays == 1` AFTER ApplyPlay, meaning the current play IS the first play of the trick (lead). Verify: `S.s.trick.plays` at this point — does it include the just-applied play (making count 1 for a lead) or not? If ApplyPlay hasn't pushed to trick.plays yet, count=0 for a lead, and the condition fails."
+  },
+  "A-88": {
+    "title": "wasIllegal check: lastPlay match by seat AND card",
+    "scope": "Inspect wasIllegal detection (lines ~211-214). It finds the last play in the current trick and checks `lastPlay.seat == seat AND lastPlay.card == card`. Verify: this is called DURING OnPlayObserved (after a play was observed). The \"last play\" should be the just-played card. But what if two bots play in rapid succession and the host processes them out of order? Race condition check."
+  },
+  "A-89": {
+    "title": "emptyStyle: all counters initialized to 0 (no nil default)",
+    "scope": "Audit emptyStyle (lines ~138-147). All counters start at 0. The styleBelTendency function returns nil if `m.bels < 1`. Verify: with all counters at 0, every style query returns nil (insufficient data). Check that all callers handle nil returns from style functions gracefully, including whether any future M3lm code assumes non-nil returns."
+  },
+  "A-90": {
+    "title": "S.s.meldsByTeam structure compatibility with meldPins (BotMaster)",
+    "scope": "Inspect the meldPins build (BotMaster lines ~162-177). It accesses `S.s.meldsByTeam[team]` with team in {\"A\",\"B\"}, and iterates melds expecting `m.declaredBy` and `m.cards`. Audit State.lua to verify the actual structure of meldsByTeam — does it store melds as {cards=..., declaredBy=...} or a different schema? A schema mismatch would silently skip all pins."
+  },
+  "A-91": {
+    "title": "PickBid R1/R2 phase gate: Bot doesn't check S.s.phase",
+    "scope": "Audit PickBid (lines ~540-656). It reads `S.s.bidRound` (1 or 2) but never checks `S.s.phase`. If called during PHASE_PLAY erroneously, it would evaluate bids against live hands and possibly return a non-PASS value. Verify Net.lua's phase gating prevents PickBid from being called outside PHASE_DEAL1 and PHASE_DEAL2BID."
+  },
+  "A-92": {
+    "title": "PickPlay dispatching: Saudi Master → Fzloky → M3lm → Advanced → Basic fallback chain",
+    "scope": "Audit the full PickPlay dispatch chain in Net.lua's MaybeRunBot. Verify: BM.PickPlay → Bot.PickPlay (with all tier flags active simultaneously) follows the intended precedence. Check whether multiple tiers can be active simultaneously (IsM3lm() returns true if IsFzloky() is true, etc.) and whether the dispatch ever double-evaluates."
+  },
+  "A-93": {
+    "title": "scoreUrgency: S.s.target default = 152 in Hokm context",
+    "scope": "Inspect scoreUrgency (line ~448: `local target = (S.s.target or 152)`). K.HAND_TOTAL_HOKM = 162, but the game target (win condition) is likely a cumulative point total across rounds. Verify S.s.target is populated by State.lua and represents the correct match-win threshold (not the per-round trick-point total)."
+  },
+  "A-94": {
+    "title": "R.Partner, R.TeamOf correctness: seats 1+3 = team A, 2+4 = team B",
+    "scope": "Verify the partner and team assignments (Rules.lua lines ~16-28). Seats 1 and 3 are team A, seats 2 and 4 are team B. Audit whether all five bot tiers use R.Partner and R.TeamOf consistently, with no hardcoded seat+2 patterns that would fail at seat 3 (3+2=5, not 1)."
+  },
+  "A-95": {
+    "title": "PickMelds: first-trick gate (#tricks >= 1 returns empty)",
+    "scope": "Audit PickMelds (lines ~1130-1140). Returns {} if any trick has been completed. Verify: a bot that is the FIRST to play in trick 1 has #tricks == 0 and CAN declare melds. A bot that plays LAST in trick 1 also has #tricks == 0 (trick not yet completed). But after trick 1 closes, #tricks becomes 1 and the gate blocks. Confirm all bot seats get a meld window."
+  },
+  "A-96": {
+    "title": "PickTakweesh: rate decay by trick number (TAKWEESH_RATE_BY_TRICK)",
+    "scope": "Audit Bot.PickTakweesh (lines ~1324-1352). The rate drops from 60% at trick 0 to 5% at trick 7. Verify: `local completed = #(S.s.tricks or {})` gives the number of COMPLETED tricks before the current play. At completed=0 (trick 1 in progress), rate=0.60. Check: once the bot finds an illegal play and decides NOT to call Takweesh (math.random fails), does it ever recheck that same illegal play in a later trick? Or does it forget?"
+  },
+  "A-97": {
+    "title": "sunStrength invoked for Hokm-contract PickDouble/Triple/Four/Gahwa",
+    "scope": "Audit escalationStrength in Hokm context. For a pure Hokm hand (J+9+A of trump, mostly low side cards), sunStrength might score 20–30. Adding 0.5 * trumpStrength might bring it to 45–65. BOT_BEL_TH = 70. Verify whether Hokm defenders with strong trump but weak side suits can ever reach the Bel threshold under the current formula, or whether they are systematically blocked from Beling strong Hokm contracts."
+  },
+  "A-98": {
+    "title": "fzlokyPrefSuit and fzlokyAvoidSuit both nil path in pickLead",
+    "scope": "Audit the Fzloky nil-signal path in pickLead. When both fzlokyPrefSuit and fzlokyAvoidSuit are nil (partner hasn't discarded yet, or signal rank was Q/J), the code falls through to the normal lead logic. Verify there is no accidental early return or state mutation from the Fzloky block that affects later logic."
+  },
+  "A-99": {
+    "title": "BotMaster heuristicPick: \"bidder team leads high trump\" uses placeholder comment",
+    "scope": "Inspect heuristicPick lead in BotMaster (lines ~426-435, comment: \"placeholder: lead high trump\"). This is a simplified version of the real pickLead. Audit whether the placeholder is deliberately simple (performance tradeoff) or an incomplete implementation. Specifically: it picks the highest-ranked legal card with IsTrump=true, but doesn't check whether the bidder has already cleared trump and should be cashing side aces."
+  },
+  "A-100": {
+    "title": "Bot.Reset / Bot.Init: is there a top-level initialization function?",
+    "scope": "Audit whether there exists a Bot.Reset or Bot.Init function that correctly invokes both ResetMemory and ResetStyle at game start. Verify the call chain: new game → ResetStyle; new round → ResetMemory. If Bot.Reset calls both, confirm Net.lua calls it at the right game lifecycle event and not just round events (which would wipe cross-round style learning)."
+  },
+  "B-01": {
+    "title": "Human Hokm bid honesty: do humans bid Hokm with J+9 strictly, or bluff on long suits?",
+    "scope": "Catalog whether Saudi Baloot human players reliably hold J+9 of trump when bidding Hokm, or commonly bid on A+9+T (no J) or pure-length (5+ cards, no honors). Determine what minimum hand the bot should ASSUME a human Hokm bidder holds vs. the range that includes bluffs."
+  },
+  "B-02": {
+    "title": "Human Sun bid honesty: over-optimistic Sun bidders",
+    "scope": "Audit whether humans frequently overcall Sun on marginal hands (sun score 45–55) in hope of the ×2 multiplier, particularly when the score is close. If so, the bot's defender decision should Bel against more Sun contracts than against equivalent Hokm contracts, knowing the Sun bidder is more likely on a marginal hand."
+  },
+  "B-03": {
+    "title": "Human Ashkal usage: is it always honest (partner's J), or positional bluff?",
+    "scope": "Inspect how human players use Ashkal. In Saudi Baloot culture, Ashkal typically signals \"my partner bid Hokm but I hold Sun-strong — flip the suit.\" Audit whether the bot correctly treats an Ashkal caller as confirming partner's J in the original suit AND the Ashkal caller holding strong side cards."
+  },
+  "B-04": {
+    "title": "Human R1 bidding order: position bias (seat 4 = dealer, bids last)",
+    "scope": "Examine Saudi Baloot human tendencies by bidding seat position. The dealer (seat 4) bids last and has the best information. Audit: do humans in seat 4 bid more aggressively (they know all others passed), and how should the bot calibrate its read of a seat-4 Hokm bid vs. a seat-1 Hokm bid?"
+  },
+  "B-05": {
+    "title": "Human \"lock in the Hokm\" over-bidding: bidding R2 on marginal hands to avoid Ashkal",
+    "scope": "Identify whether human players in competitive Saudi Baloot overbid R2 Hokm on slightly substandard hands (strength 30–38) to avoid giving opponents an Ashkal opportunity. If humans do this, the bot should read R2 Hokm bids with a wider uncertainty band than R1 bids."
+  },
+  "B-06": {
+    "title": "Human pass patterns: double-pass as weakness signal",
+    "scope": "Analyze what a human double-pass (pass in both R1 and R2) communicates to the bot. In Saudi Baloot, a forced Sun contract from all-pass is expected. Identify whether humans strategically pass strong hands hoping to force the opponent into an unfavorable contract — a \"trap pass.\""
+  },
+  "B-07": {
+    "title": "Human partner Ashkal as combined strength indicator",
+    "scope": "Audit how the bot currently uses the Ashkal bid from partner. If an Ashkal-bidding partner is always strong (Sun 65+), the bot in the Saudi Master tier should play more aggressively — leading trumped suits earlier, taking tempo risks — since partner confirmed side-suit solidity."
+  },
+  "B-08": {
+    "title": "Preempt (الثالث) usage: does the bot exploit a human's failure to preempt?",
+    "scope": "Identify whether the bot currently detects that a human DECLINED to preempt a Sun-on-Ace bid. Per current PickPreempt logic, a pass on preempt opportunity signals weakness (sun < 75 for that seat). Check if this declination is recorded and used anywhere in the bot's subsequent play or escalation decisions."
+  },
+  "B-09": {
+    "title": "Human bidding in team context: partner's prior bid and its honesty",
+    "scope": "Examine whether the bot correctly adjusts the reliability of partner's bid when the partner is a human vs. a bot. Human partners may under-bid (conservative culture), over-bid (show-off), or use private signals (e.g., always bid Hearts with a specific pattern). Audit whether the bot's partnerBidBonus is human-aware or assumes all partners are honest."
+  },
+  "B-10": {
+    "title": "Human tendency to NEVER pass Sun once in lead (score near target)",
+    "scope": "Identify the human behavioral pattern of refusing to let opponents win the Sun multiplier when the opponent's team is near the win target. Humans near-losing often Bel reflexively against any Sun contract. Audit: the bot doesn't currently MODEL the human opponent's Bel tendency — it only decides whether to Bel itself."
+  },
+  "B-11": {
+    "title": "Reading human Bel decisions: Bel on any 70+ or reflexive Bel?",
+    "scope": "Catalog Saudi Baloot human Bel tendencies: (a) always Bel if strong regardless of score, (b) only Bel when bidding team is near target (desperation Bel), (c) Bel as habit (players who Bel 80% of the time). Identify which pattern the bot's partnerStyle.bels counter approximates and whether the approximation is useful."
+  },
+  "B-12": {
+    "title": "Human Triple tendency: bidders who always or never Triple",
+    "scope": "Examine Saudi Baloot Triple patterns. Some human bidders always accept a Bel with Triple (confidence culture); others always close by not Tripling (conservative). Identify how the bot's `_partnerStyle[seat].triples` counter should be used to predict a HUMAN opponent's next Triple decision."
+  },
+  "B-13": {
+    "title": "Human Gahwa frequency: is Gahwa a cultural show-off move?",
+    "scope": "Audit whether human Saudi Baloot players call Gahwa at much higher rates than the bot's BOT_GAHWA_TH = 135 would suggest (cultural bravado vs. card-optimal). If humans call Gahwa on weak hands, the bot should treat an opponent Gahwa as a potential bluff and play accordingly."
+  },
+  "B-14": {
+    "title": "Human vs. bot bid-signal cross-contamination in partnerBidBonus",
+    "scope": "Inspect partnerBidBonus: it treats partner bids identically regardless of whether the partner is human or bot. A bot partner's Hokm bid is reliable (calibrated thresholds); a human partner's Hokm bid may be from any hand. Audit whether the bonus magnitudes (+20, +10, +15) are appropriate for human partners or only for bot partners."
+  },
+  "B-15": {
+    "title": "Human declarer vs. defender role assignment: exploitation target",
+    "scope": "Identify the key asymmetry: human bidders tend to over-estimate their contract (bid on marginal hands), while human defenders under-estimate their stoppage potential (don't Bel when they should). Summarize whether the bot is currently designed to exploit this asymmetry in escalation decisions."
+  },
+  "B-16": {
+    "title": "Human over-trumping in panic: spending J or 9 of trump on low-value tricks",
+    "scope": "Catalog the \"panic ruff\" pattern: a human is void in the lead suit and ruffs with J-of-trump on a trick worth only 3 points (K+Q+8+7). Audit whether the bot's current play logic can EXPLOIT this by leading low-value suits when the human opponent is inferred to be void, forcing them to waste their J."
+  },
+  "B-17": {
+    "title": "Human under-ruffing: playing low trump when high trump is required",
+    "scope": "Identify whether human opponents under-ruff (play 7-of-trump when forced to ruff, even when they could over-trump the current winner). This is a common mistake in casual Saudi Baloot. Audit: does the bot play to exploit under-ruffing, or does its play logic assume opponents always ruff with the minimum sufficient trump?"
+  },
+  "B-18": {
+    "title": "Human third-hand-low mistake: not playing high in position 3",
+    "scope": "Catalog the human tendency to play low in position 3 (not committing the highest winner), which leaves the trick vulnerable to a 4th-seat overcut. Audit: the bot's position-3 heuristic is \"third hand high.\" Does it exploit a human position-4 opponent's expected ability to cut, or does it always play high even when position-4 is a human known to hold weak trump?"
+  },
+  "B-19": {
+    "title": "Human smother error: not dumping A/T on partner's winning tricks",
+    "scope": "Identify whether human players commonly fail to feed A/T (smother) onto partner's winning tricks — they hold high cards instead of scoring with them now. Audit: the bot's smother logic is aggressive (feeds from trick 4+ or when lastSeat). Does the bot exploit humans who fail to smother by planning multi-trick sequences that isolate those held A/T cards?"
+  },
+  "B-20": {
+    "title": "Human Sun card ordering: leads from shortest suit first (correct) or longest (common mistake)",
+    "scope": "Examine human Sun lead patterns. Expert Saudi play leads the shortest suit in Sun (fewest cards = most likely opponents can't follow and must discard high). Novice humans lead from longest suit habitually. Audit: does the bot read a human's first Sun lead to infer whether they are expert or novice, and adjust defensive strategy?"
+  },
+  "B-21": {
+    "title": "Human singleton lead tell: leading a singleton immediately in trick 1 signals a ruff setup",
+    "scope": "Catalog the human tell: a player who leads a singleton in trick 1 is setting up a ruff. The bot's current logic also leads singletons, so it may produce false signals. Identify how the bot can detect human singleton leads specifically (low-value card, early lead, specific rank) and prepare to cancel the ruff."
+  },
+  "B-22": {
+    "title": "Human high-lead tell in Hokm: leading A tells opponents you're void of J+9 in that suit",
+    "scope": "Audit the human tendency to lead their side-suit Ace early in Hokm defense. This tells the table \"I don't have J or 9 of trump to pull, so I'm cashing aces.\" Identify: does the bot update any memory or inference when an OPPONENT leads an Ace? If not, is there a mechanism to infer \"opponent is probably trump-weak\"?"
+  },
+  "B-23": {
+    "title": "Human cross-trump mistake: Beling on trump strength but void in a key side suit",
+    "scope": "Catalog the human mistake of Beling (×2) with strong trump but a void in one side suit, making the contract easy for the bidder to make by leading that void suit for free tricks. Audit: does the bot currently model opponent void suits and adjust its lead strategy when leading against a human who Beled?"
+  },
+  "B-24": {
+    "title": "Human meld over-declaration: declaring weak sequences hoping to intimidate",
+    "scope": "Examine human meld behavior: do humans in Saudi Baloot declare EVERY eligible meld regardless of its strategic value (signaling the hand), vs. expert bots that declare all melds per PickMelds? Identify whether the current bot's unconditional meld declaration is exploitable by informed humans who now know the bot's exact sequence holdings."
+  },
+  "B-25": {
+    "title": "Human takweesh under-use: humans often miss illegal plays",
+    "scope": "Identify that human players in casual games frequently miss opponent illegal plays (revoke) because they're focused on their own hand. Audit: the bot's PickTakweesh fires with 60% probability on trick 1. Does the 60% rate correctly model human detection vs. bot detection, or should the HUMAN takweesh rate (in tracks where humans can also call) be lower?"
+  },
+  "B-26": {
+    "title": "Human endgame SWA: overconfident SWA claims with 2–3 risky tricks remaining",
+    "scope": "Catalog the human tendency to claim SWA (سوا, \"I win every remaining trick\") prematurely — declaring before trump is fully exhausted. Audit: does the bot have any mechanism to respond to an opponent SWA by playing sub-optimally on purpose (trying to win a trick before the SWA resolves)?"
+  },
+  "B-27": {
+    "title": "Human point-counting errors: undervaluing 10 of trump in Hokm (J=20, 9=14, but T=10 often forgotten)",
+    "scope": "Identify whether human Saudi Baloot players frequently undervalue the 10-of-trump in trick-point terms (10 points, same as non-trump 10). If humans trade away their T-of-trump cheaply, the bot should exploit by forcing trump-T discards through non-trump suit pressure."
+  },
+  "B-28": {
+    "title": "Human bid-round timing tells: slow human = marginal hand",
+    "scope": "Examine whether the turn timeout mechanic (K.TURN_TIMEOUT_SEC = 60) creates exploitable tells. A human who takes 40+ seconds to bid is often on a borderline hand (counting cards). Audit: does the bot have access to elapsed time on a human's turn, and could this be used to adjust threshold confidence in the human's bid?"
+  },
+  "B-29": {
+    "title": "Human consistent trump-lead culture: \"always pull trump first\" players",
+    "scope": "Catalog the Saudi Baloot convention of always leading trump immediately as the bidder. Human bidders who follow this culture signal their plan early. Audit: when the bot DEFENDS against a human who always leads trump first, the bot should expect tricks 1–3 to be trump-led and can adjust its discarding strategy to dump losing side cards in those tricks."
+  },
+  "B-30": {
+    "title": "Human first-trick meld silence: not declaring when opponent meld would be crushed",
+    "scope": "Identify the human strategist pattern of NOT declaring a meld (even an eligible one) when the opponent's already-declared meld outranks it. In Saudi Baloot, a lower-ranking meld is overridden by a higher one. Audit whether the bot's current PickMelds declares all melds regardless — and whether silence on a meld when opponents have a higher meld is ever correct strategy."
+  },
+  "B-31": {
+    "title": "Fzloky signal honesty: do human players actually give suit-preference discards?",
+    "scope": "Audit whether real Saudi Baloot human players use first-discard as a high/low signal (the Fzloky convention), or whether it's an advanced-only behavior that most humans don't practice. If humans don't signal, the bot's Fzloky firstDiscard interpretation of human discards is noise — it should only apply Fzloky inference to BOT partners."
+  },
+  "B-32": {
+    "title": "Human signal exploitation: bot should SEND false signals to human opponents",
+    "scope": "Identify whether the bot has any mechanism to MISLEAD human opponents via deceptive discards. Currently the bot sends honest Fzloky signals to its partner. Audit: should a Fzloky+ bot send a HIGH discard in a suit it's actually strong in (when opponent is watching) to lure a trump-lead from a human opponent?"
+  },
+  "B-33": {
+    "title": "Human AKA interpretation: do human players respect bot AKA signals?",
+    "scope": "Examine whether human players in practice honor an AKA signal from a bot partner (not over-trumping the signaled suit). If humans routinely ignore AKA, the bot's AKA signal has no partner-coordination value. Identify whether AKA should only be sent when ALL partners are bots, or whether it's still worth sending to human partners."
+  },
+  "B-34": {
+    "title": "Human partner reading: bot should model human over-Trump tendencies from style ledger",
+    "scope": "Inspect the trumpEarly/trumpLate counters in _partnerStyle. These count bot plays, but if human plays are also observed via OnPlayObserved, the counters would capture human patterns too. Audit: are human plays passed to OnPlayObserved? If yes, the trumpEarly counter for a human \"always leads trump\" player should accumulate and be readable."
+  },
+  "B-35": {
+    "title": "Exploiting human predictable second-seat ducking",
+    "scope": "Catalog the human second-seat low pattern. Most human players automatically play low in position 2 even with A in hand. Audit: the bot should recognize a human at position 2 who consistently ducks and plan to WIN the trick at position 3 (rather than assuming position 2 might have a stopper). This requires tracking per-seat human duck frequency in _partnerStyle."
+  },
+  "B-36": {
+    "title": "Human tendency to lead partner's bid suit back",
+    "scope": "Identify whether human Saudi Baloot players reliably return their partner's bid suit (the trump suit chosen by their partner's Hokm bid) on the first available non-trump lead. If yes, the bot at position 4 (last to play in the trick) can anticipate a partner-suit return and play accordingly."
+  },
+  "B-37": {
+    "title": "Human \"honor-trap\" lead: leading K hoping to capture A from opponent",
+    "scope": "Catalog the human honor-trap pattern: leading K of a side suit to \"flush out\" the A from an opponent (hoping opponent plays A to win, wasting it). Audit whether the bot's follow-play logic plays the A when a K is led (it would, since A is a winner), and whether this means humans successfully trap bot Aces regularly."
+  },
+  "B-38": {
+    "title": "Human \"denial\" discard: throwing A of a side suit defensively to avoid being forced",
+    "scope": "Identify the human pattern of discarding a side-suit Ace in a non-trump trick to deny opponents a forced trick in that suit later. Bot logic would smother an A onto partner's trick (score points) but never discard A wastefully. Audit: if a human opponent discards an A prematurely, the bot's suitCardsOutstanding for that suit is now affected — verify the memory update."
+  },
+  "B-39": {
+    "title": "Human wantOpen leaks: human body language / hesitation on escalation decisions",
+    "scope": "Examine the escalation chain timing. Humans who hesitate before Beling signal a borderline hand. Humans who Bel immediately (< 5 seconds) are confident. Audit: does the addon capture or store human response timing anywhere (e.g., turn timestamps)? If not, this is an unimplemented exploitation opportunity."
+  },
+  "B-40": {
+    "title": "Human first-card-of-hand tell: suit choice on trick 1 as distribution signal",
+    "scope": "Catalog what a human's very first lead reveals about their hand. In Saudi Baloot, expert defenders lead from a 3-card suit they want ruffed later; novices lead from their best suit. Identify whether the bot records human first-card-led information in _partnerStyle or memory and uses it in subsequent play."
+  },
+  "B-41": {
+    "title": "Human escalation culture mismatch: Gulf players vs. non-Gulf players Bel frequency",
+    "scope": "Identify that Saudi Baloot human players from the Gulf region tend to Bel more aggressively (cultural norm) than players from other regions. Audit whether the bot's Bel-decision logic already accounts for this via the style ledger, or whether it requires a separate \"region/culture\" configuration parameter."
+  },
+  "B-42": {
+    "title": "Human Sun defender over-pressure: leading trump against Sun contracts",
+    "scope": "Catalog the human error of leading trump against a Sun contract (where there IS no trump). In Sun, all cards are plain — there is no suit hierarchy. Audit: does the bot detect when a human makes a non-standard first lead in Sun (e.g., leading their Ace early vs. leading low from a weak suit) and adjust its play to exploit the opening?"
+  },
+  "B-43": {
+    "title": "Human opponent void inference from ruff plays: faster void modeling for human-held hands",
+    "scope": "Audit whether the bot's void inference (OnPlayObserved: card-suit != leadSuit → void[leadSuit] = true) fires correctly for human opponent plays. Verify: when a HUMAN opponent ruffs in trick 3, the bot correctly infers that human is void in the led suit and updates their memory[seat].void table. This is critical for free-trick lead detection."
+  },
+  "B-44": {
+    "title": "Human \"I have to save something\" discard: minimum-rank discard under pressure",
+    "scope": "Identify the human discard pattern when they CAN'T win a trick: they typically discard the 7 or 8 of their most expendable suit. The bot does the same (lowestByRank). Audit: does the bot exploit situations where a human's LOW discard reveals suit exhaustion (only had the 7 in that suit) vs. a low discard from a long suit?"
+  },
+  "B-45": {
+    "title": "Human Kawesh under-use: humans in casual play often don't call Kawesh",
+    "scope": "Catalog whether human players in casual Saudi Baloot frequently miss their Kawesh (hand-annul) eligibility — they play bad hands when they should redeal. If humans commonly play Kawesh-eligible hands, the bot will face unusually weak opponents who take no tricks, potentially affecting trick-point distribution."
+  },
+  "B-46": {
+    "title": "Near-win pressure: human behavior changes when their team is 10 points from target",
+    "scope": "Identify human behavioral shifts near the win condition. Humans near winning tend to become conservative (pass contracts they'd normally bid, avoid Beling). Audit: does the bot's scoreUrgency mechanism cause it to UNDER-BID in conservative mode when the human near-win situation calls for AGGRESSIVE disruption?"
+  },
+  "B-47": {
+    "title": "Near-loss desperation: humans in deficit often Gahwa recklessly",
+    "scope": "Catalog human Gahwa desperation patterns: teams trailing by 80+ points often risk Gahwa on sub-optimal hands. Audit: if the bot detects a human opponent team at cumulative >= target-30, should it LOWER its own Bel/Four thresholds to take advantage of the human's likely reckless escalation?"
+  },
+  "B-48": {
+    "title": "Human score-blind bidding: ignoring match position in bid decisions",
+    "scope": "Identify whether human Saudi Baloot players frequently ignore their cumulative score when bidding (bid on the strength of the hand alone, not position). If humans do this, the bot's matchPointUrgency modifiers create an exploitable asymmetry — the bot plays position-aware while the human does not."
+  },
+  "B-49": {
+    "title": "Human target-score awareness: do humans know the target is 152 or play to a custom target?",
+    "scope": "Inspect K.s.target usage. The addon supports configurable targets. Human players in informal games often play to 150 or 200. Audit: if the human doesn't know the configured target, their near-win behavior changes unpredictably. Check whether the bot should announce the current target prominently in the UI to prevent human confusion."
+  },
+  "B-50": {
+    "title": "Human comeback mechanic: does losing team try harder or give up?",
+    "scope": "Catalog whether Saudi Baloot human teams that are far behind (80+ points deficit) play statistically better or worse. Some teams play more carefully when losing; others panic-bid. Audit whether the bot's urgency modifiers correctly model the most common human response to being far behind."
+  },
+  "B-51": {
+    "title": "Human Al-Kaboot awareness: do humans play for the sweep?",
+    "scope": "Identify whether human players in Saudi Baloot actively play for Al-Kaboot (sweeping all 8 tricks, worth 250 Hokm or 220 Sun raw points). If humans rarely consider Al-Kaboot as a goal, the bot should never cede tricks unnecessarily (even 1 defensive trick costs the Al-Kaboot bonus). Audit whether the bot accounts for Al-Kaboot possibility in its rollout scoring."
+  },
+  "B-52": {
+    "title": "Human reaction to bot AKA signal: do they take the appropriate trick?",
+    "scope": "Examine whether a human partner receiving a bot AKA signal (K.MSG_AKA) actually adapts their play. The AKA signal tells the partner \"I hold the boss of this non-trump suit, don't over-trump it.\" Audit whether the AKA UI message is visible and legible to the human during their turn, and whether the bot's PickAKA decision wastes signals on human partners who never read them."
+  },
+  "B-53": {
+    "title": "Human fatigue pattern: late-game plays more mechanical, less strategic",
+    "scope": "Catalog the Saudi Baloot human tendency to play more mechanically in tricks 6–8 (game tiredness). \"Just play highest\" is a common late-game human behavior. Audit: does the Saudi Master tier's increased world count at trick 6+ (numWorlds=100) correctly exploit late-game human predictability, or does it over-model complexity that isn't there?"
+  },
+  "B-54": {
+    "title": "Human bluffing Bel to test bot Triple response",
+    "scope": "Identify the human \"probe Bel\" tactic: Beling on a marginal hand specifically to see if the bot Triples (revealing the bot has a strong hand / the contract is confirmed). If the bot doesn't Triple, the human knows the bot-bidder is weak. Audit: does the bot vary its Triple response based on hand strength, or does a fixed threshold make it perfectly readable?"
+  },
+  "B-55": {
+    "title": "Human \"sacrifice play\" in critical tricks: deliberate self-defeat to score position",
+    "scope": "Catalog the human sacrifice play: a human defender intentionally wins a trick they didn't want (to gain LEAD) and then leads a killer suit. This \"tempo steal\" is common in bridge but less so in Saudi Baloot. Audit: does the bot's current pickFollow/pickLead logic account for the possibility that an opponent is LETTING it win a trick to steal a lead?"
+  },
+  "B-56": {
+    "title": "Human repeat-lead pattern: humans who always return to the same suit",
+    "scope": "Identify whether certain human players habitually return to their opening lead suit (first-trick suit preference that persists). Audit whether the trumpEarly/trumpLate counters or the firstDiscard memory captures this tendency, and if not, what lightweight counter would encode \"human prefers suit X.\""
+  },
+  "B-57": {
+    "title": "Human anti-bot exploitation: humans who deliberately play unpredictably against bots",
+    "scope": "Catalog whether experienced Saudi Baloot players notice bot patterns and deliberately vary their play. E.g., a human who knows bots lead trump early might hold the K-of-trump specifically to be played on the bot's forced J lead. Audit: does the Saudi Master tier's ISMCTS sampling generate enough variety in its own play to be harder to predict?"
+  },
+  "B-58": {
+    "title": "Human void-suit leak through discard speed or card choice",
+    "scope": "Identify whether human online Saudi Baloot players tend to discard their HIGHEST card when void (honor-signaling) or LOWEST card (rank-signaling). The bot's Fzloky signal treats high = \"lead this\" and low = \"don't lead this\" for BOT partners. Audit whether this convention applies to HUMAN discard interpretation, or whether human discards should be treated as structurally different."
+  },
+  "B-59": {
+    "title": "Bot exploiting human \"always Bel against Sun\" reflex",
+    "scope": "Identify the human pattern of reflexively Beling against any Sun contract. If the bot knows a specific human opponent always Bels Sun, the bot's bidder team should raise the Gahwa threshold (more likely to Triple and win the escalation chain) when that human is a defender. Audit whether the style ledger's `bels` counter captures this."
+  },
+  "B-60": {
+    "title": "Human partner-signal blindness: not reading bot AKA or Fzloky signals",
+    "scope": "Catalog whether human partners in Saudi Baloot practice (or cultural expectation) include explicit partner signaling. The bot sends AKA signals to all partners; Fzloky signals are implicit (first-discard). If human partners don't recognize these signals, the bot is sending signals into a void. Audit: should the bot suppress expensive signals when the partner is human?"
+  },
+  "B-61": {
+    "title": "Human \"defensive\" Sun: using Sun to block opponent Hokm when holding no Hokm-quality hand",
+    "scope": "Identify the human tactic of bidding Sun purely defensively (to deny the opponent a Hokm contract) when their own Sun is marginal (50–55 score). If humans do this frequently, the bot should raise its Bel threshold slightly for opponent Sun contracts (human is more likely to fail a defensive Sun than a genuine Sun)."
+  },
+  "B-62": {
+    "title": "Human bid pattern by hand count: humans bet more aggressively with 5-card suits",
+    "scope": "Examine whether human Saudi Baloot players systematically over-bid on 5-card suits (length-over-quality bias). If yes, the bot's getStrongCards heuristic in BotMaster should apply a skepticism penalty when sampling hand distributions for human bidders who bid Hokm."
+  },
+  "B-63": {
+    "title": "Human escalation hesitation as information",
+    "scope": "Examine the timing gap between the escalation window opening (K.PHASE_DOUBLE) and the human's response. If the addon tracks response latency, a 20-second wait before declining Bel signals a weak-ish hand that nearly met threshold. Audit whether latency data is accessible to the bot's inference engine."
+  },
+  "B-64": {
+    "title": "Human last-trick concession: humans often concede the last trick rather than fight",
+    "scope": "Identify human tendency to concede the last trick when they're losing the round by a large margin (throw-in instead of fighting for 10 last-trick bonus). Audit: does the bot's rollout scoring include the K.LAST_TRICK_BONUS = 10 in its R.ScoreRound call, and does it play optimally for the last trick even when the round is already decided?"
+  },
+  "B-65": {
+    "title": "Human misplay identification: tracking per-seat illegal play rate",
+    "scope": "Inspect the `p.illegal` flag in the play history. Audit: if a specific human seat has 3+ illegal plays across the game (detected by host logic), the bot's PickTakweesh rate should be raised for that seat (human is error-prone). Currently the TAKWEESH_RATE_BY_TRICK table is static. Consider a per-human-seat rate multiplier."
+  },
+  "B-66": {
+    "title": "Human over-dependent on bot partner: expecting bot to \"cover\" mistakes",
+    "scope": "Identify the human play style of taking risks early (aggressive leads, loose Bel decisions) because they trust the bot partner to bail them out. Audit whether the bot's pickLead/pickFollow heuristics are \"defensive\" enough to absorb a reckless human partner's mistakes or whether they also play aggressively."
+  },
+  "B-67": {
+    "title": "Tracking per-seat A/T retention: human who holds A until late game",
+    "scope": "Catalog the human pattern of holding A/T in hand until the last 2–3 tricks (A-hoarding). If the bot knows a specific human retains As late (trumpEarly=low, typically), it should lead non-trump aggressively early to force the human to spend trump on low-value tricks, depleting their trump before the A can be used."
+  },
+  "B-68": {
+    "title": "Exploiting human card-memory limitations: repeating suits humans have forgotten about",
+    "scope": "Identify human limitations in tracking all 32 played cards. Humans commonly forget whether a specific Ace has been played. Audit: the bot has perfect card memory via Bot._memory. Exploit: lead a suit where the human opponent has already played their only stopper (A or T), knowing they'll lose that trick even though they might \"think\" they can win it."
+  },
+  "B-69": {
+    "title": "Human score miscount: playing as if score target is 152 when it is different",
+    "scope": "Audit whether the addon's configurable target (S.s.target) is clearly communicated to all human players. If humans are playing toward the wrong target, their urgency decisions are miscalibrated. The bot always uses S.s.target correctly. Identify whether this asymmetry is exploitable."
+  },
+  "B-70": {
+    "title": "Human cultural convention: Saudi Baloot \"Bel is a compliment to the bidder\" norm",
+    "scope": "Catalog the Saudi Baloot cultural norm where Beling is considered a respectful acknowledgment of the bidder's strength — some humans Bel as social convention even on marginal hands. If a human Bels on every contract regardless of hand, the style ledger's `bels` counter will saturate and lose predictive value. Audit whether a Bel-saturation detection (bels > 3) should suppress the partnerStyle usage for that seat."
+  },
+  "B-71": {
+    "title": "Dynamic Bel threshold lowering when opponent human Bel-tendency is known",
+    "scope": "Propose how the bot's BOT_BEL_TH and BOT_TRIPLE_TH should CHANGE when the _partnerStyle ledger shows an opponent human with bels >= 2 (habitual Beler). If the human always Bels, the bot-bidder should lower its Triple threshold — the human's Bel is less informative, so the bot needs a lower bar to accept the Triple challenge."
+  },
+  "B-72": {
+    "title": "Detecting human \"tell\" via trump tempo: humans who lead trump in tricks 1–3",
+    "scope": "Identify the exploit path: if trumpEarly for a human seat is 2+ (they always lead trump aggressively early), the bot-defender should save high trumps for tricks 4–8 when the human has likely exhausted their trump supply. Audit whether this trump-timing model is implemented in pickFollow/pickLead defensive logic."
+  },
+  "B-73": {
+    "title": "Human over-reliance on first-deal information (5 cards only)",
+    "scope": "Catalog the human cognitive bias of anchoring on the first 5-card deal and not fully adjusting when the second 3 cards arrive. Humans who make bidding decisions based on 5 cards and then play as if the 3 new cards \"don't change things\" are exploitable because they'll play predictably based on their first-deal assessment."
+  },
+  "B-74": {
+    "title": "Human over-ruffing tell: ruffing when partner is already winning",
+    "scope": "Catalog the human mistake of ruffing a trick where their own partner is currently winning. This \"partner-ruff\" error gives the trick to the wrong team. Audit: does Bot._memory record cases where a human opponent RUFFED a trick their own partner was winning? If so, this flags the human as error-prone and the bot should adjust its play to make those ruffing scenarios more frequent."
+  },
+  "B-75": {
+    "title": "Human tendency to lead highest card in suit (vs. bot's lead lowest)",
+    "scope": "Examine the contrast: the bot leads the LOWEST card from its longest non-trump suit (preserving high cards). Many human Saudi Baloot players do the opposite — they lead their HIGHEST card to \"test\" if opponents can beat it. Audit whether the bot can detect this pattern from a human's opening leads and use it to infer the human's complete suit structure."
+  },
+  "B-76": {
+    "title": "Human reaction to losing multiple tricks: \"tilt\" behavior",
+    "scope": "Identify whether humans who lose 4+ consecutive tricks change their play style (more reckless leading, attempting come-back Gahwa). The style ledger does not currently model \"consecutive loss\" behavior. Audit whether a cumulative loss indicator (last N tricks won by opponent) would be valuable."
+  },
+  "B-77": {
+    "title": "Exploiting human over-commitment to one suit",
+    "scope": "Identify the human bias of committing to a single suit throughout the round (leading it repeatedly even after opponents are void). Audit: if the bot's void memory shows a human opponent has no H and keeps leading H anyway (error), the bot should ruff efficiently and build point totals rather than ducking."
+  },
+  "B-78": {
+    "title": "Human Kawesh-eligible hand detection by bot: pre-redeal strategy",
+    "scope": "Audit the scenario: the bot detects via memory that a human opponent's first 5 cards show all low (played 7/8/9 in initial tricks and never won). Identify whether the bot can infer \"this human has/had a Kawesh-eligible hand but didn't call it\" — meaning the human may have 5+ low cards and the bot can play aggressively knowing the opponent has no winners."
+  },
+  "B-79": {
+    "title": "Human bid-card reading: humans react to the visible bid card",
+    "scope": "Identify the human cognitive bias toward the face-up bid card in Saudi Baloot. A bid card of Ace-of-Hearts makes human players evaluate their Hearts suit more heavily. Audit: does the bot have any \"bid card reaction\" heuristic that models human over-weighting of the visible Ace? This could be used to predict a human's bidding and play."
+  },
+  "B-80": {
+    "title": "Human bluff-pass: passing a strong hand to see if opponents commit",
+    "scope": "Catalog the human \"trap pass\" in R1: a player with a 60+ strength hand passes R1 to see if opponents bid, then potentially R2 Hokm or Sun. Audit: does the bot's PickBid lower its R2 threshold when R1 was all-pass (everyone might have trapped), or does it apply the same thresholds regardless of R1 bid history?"
+  },
+  "B-81": {
+    "title": "Human post-Takweesh play change: caught humans play more carefully afterward",
+    "scope": "Identify behavioral shift: a human who has been caught for an illegal play (Takweesh) tends to play more carefully for the next 2–3 tricks (fear of another call). Audit: the bot's Takweesh rate DECAYS per trick (TAKWEESH_RATE_BY_TRICK). Consider whether the rate should also DECREASE if the bot already called Takweesh this round (the human is now on guard)."
+  },
+  "B-82": {
+    "title": "Human Hokm bidder \"trump drought\" tell: delayed first trump lead",
+    "scope": "Identify the human tell when the Hokm bidder delays leading trump (goes 3+ tricks without pulling trump). This usually indicates a trump-poor hand (fewer than 4 trump). Audit: the bot's trumpEarly counter for the human bidder would be low (trumpEarly=0 through first 4 tricks). Identify whether the bot uses this to infer the human bidder is trump-poor and exploits by ruffing more freely."
+  },
+  "B-83": {
+    "title": "Human Gahwa bluff exploitation: does the bot track failed Gahwas?",
+    "scope": "Audit the _partnerStyle.gahwas counter. It tracks Gahwa calls but not Gahwa FAILURES. Identify whether a human who called Gahwa and failed (match not won) should have a \"reckless\" tag applied. Audit: does the style ledger capture the outcome of escalation decisions, or only the decisions themselves?"
+  },
+  "B-84": {
+    "title": "Human follow-suit error patterns: suit confusion between similar colors (Hearts/Diamonds, Spades/Clubs)",
+    "scope": "Identify the human error of playing the wrong suit due to visual confusion (especially on small screens). The four-color card palette in Constants.lua (♠black, ♥red, ♦blue, ♣green) is designed to prevent this. Audit: if a human plays an off-suit card that's NOT from their void suit (genuine confusion, not a revoke), the bot's void inference would incorrectly infer a void."
+  },
+  "B-85": {
+    "title": "Exploiting human \"natural\" play: leading from strength in the suit partner bid",
+    "scope": "Catalog whether human Saudi Baloot defenders exploit the information in the partner's Hokm bid by leading the bid trump suit back immediately. This is \"natural\" play but incorrect (gives up defensive tricks). Audit: does the bot model a human partner who naturally leads trump as a signal that the human doesn't understand partner-coordination?"
+  },
+  "B-86": {
+    "title": "Human AKA ignorance: humans often don't know the AKA signal exists",
+    "scope": "Examine whether the AKA signal (K.MSG_AKA, K.SND_VOICE_AKA) is visible and understandable to human players in the UI. If the AKA announcement is unclear, the human partner won't stop over-trumping. Audit: does the UI display an explicit \"partner holds boss of X suit\" message, or only plays a sound? If sound-only, it's not exploitable for partner coordination with a human."
+  },
+  "B-87": {
+    "title": "Human partner signal suppression: bots withholding signals against humans",
+    "scope": "Identify whether the bot's Fzloky firstDiscard signal would CONFUSE a human partner (human interprets a high discard as \"I have these cards\" rather than \"lead this suit\"). Audit: should IsFzloky signals be gated to \"partner is also a bot\" to prevent sending confusing signals to human partners who may not know the convention?"
+  },
+  "B-88": {
+    "title": "Human \"echo\" signal: playing a high card then low in the same suit (attitude signal)",
+    "scope": "Catalog whether Saudi Baloot human players use the \"echo\" convention (play high-then-low in a suit to signal strength). This is a standard bridge convention adopted by some Saudi Baloot advanced players. Audit: does the bot's memory track rank sequences for the same seat in the same suit across multiple tricks?"
+  },
+  "B-89": {
+    "title": "Human partner bid suit exploitation: bot leading partner's bid suit back",
+    "scope": "Identify whether the bot should lead the human partner's bid trump suit back when holding 2–3 cards of it (standard partner-return play). The bot's current pickLead logic does not have an explicit \"return partner's bid suit\" heuristic. Audit: this is a high-value addition for human-bot coordination."
+  },
+  "B-90": {
+    "title": "Human partner trust calibration: should the bot trust a human partner's discard?",
+    "scope": "Audit whether the bot should apply Fzloky firstDiscard inference differently for a human partner vs. a bot partner. A human's first discard may be entirely random (no convention awareness). Audit: if the bot is IsFzloky and the partner is human, applying the signal could mislead the bot's lead decisions. Propose a \"signal confidence\" discount for human partners."
+  },
+  "B-91": {
+    "title": "Human partner meld information: meld declarations as hand reveals",
+    "scope": "Examine whether the bot uses human partner meld declarations as hand information beyond R.DetectMelds. A declared Tierce in Hearts (7-8-9 of Hearts) tells the bot the partner holds at least those three cards. Audit: does the bot's BotMaster sampleConsistentDeal pin human partner meld cards correctly (meldPins logic), or only for bot-declared melds?"
+  },
+  "B-92": {
+    "title": "Human partner under-bidding: partner passes both rounds on a 38-strength hand",
+    "scope": "Identify the human tendency to pass marginal hands out of overcautiousness. If the bot's partnerBidBonus applies -10 for a PASS partner, but the human partner actually held a 38-strength hand that passed conservatively, the bot over-penalizes its combined team strength. Audit: should human-partner passes be discounted to -5 instead of -10?"
+  },
+  "B-93": {
+    "title": "Human opponent Bel timing exploit: Beling late in the window signals hesitation",
+    "scope": "Audit the Bel phase timing. If a human opponent waits until near the K.TURN_TIMEOUT_SEC = 60 threshold to Bel, that hesitation may signal borderline strength. Identify whether the bot's Triple response (after human Bel) should be more aggressive when the human hesitated, since hesitation implies borderline hand."
+  },
+  "B-94": {
+    "title": "Human partner's void inference leak: humans rarely disguise voids",
+    "scope": "Identify the human tendency to immediately discard visibly when void in a suit (no hesitation, obvious tell). In contrast, an expert player delays to conceal voids. Audit: since the bot already tracks void inference via OnPlayObserved, it gains this information regardless. But the bot should not EXPLOIT void information to mislead its human partner."
+  },
+  "B-95": {
+    "title": "Human score-position signaling via bid aggressiveness",
+    "scope": "Catalog whether human Saudi Baloot players signal their cumulative score pressure through bid aggressiveness. A team down by 60+ tends to bid more Sun contracts (higher multiplier). Audit: the bot's scoreUrgency reads S.s.cumulative and adjusts thresholds. But for OPPONENT bidders, the bot doesn't currently read opponent score pressure and predict opponent bid aggressiveness."
+  },
+  "B-96": {
+    "title": "Human \"show the Ace\" culture: Aces are always played early in Saudi Baloot",
+    "scope": "Examine the Saudi cultural norm of playing Aces early in a round (before they can be trumped). If human opponents follow this norm, the bot should expect Aces from opponents in tricks 1–3 and plan its trump use accordingly — hold trump for tricks 4+ when Ace threats have been exhausted."
+  },
+  "B-97": {
+    "title": "Human post-meld play pattern: humans who declared a sequence lead from it",
+    "scope": "Identify human post-meld leading pattern: a human who declared a Tierce (3-sequence) in a suit often leads from that suit in early tricks to establish trick count. Audit: does the bot read a human's declared meld as a lead-intention signal and prepare the void/cover response?"
+  },
+  "B-98": {
+    "title": "Human endgame A-of-trump retention: waiting for the last trick",
+    "scope": "Identify human tendency to hold the A-of-trump as a guaranteed last-trick capture (for the 10-point last-trick bonus). Audit: in Hokm, A-of-trump is the second-highest trump (below J and 9). If the opponent holds A-of-trump and the bot has exhausted J+9 through trump pulls, the human WILL win the last trick. Does the Saudi Master rollout model this correctly?"
+  },
+  "B-99": {
+    "title": "Human hesitation on Kawesh call: some humans don't know they're eligible",
+    "scope": "Identify that human players unfamiliar with Kawesh rules frequently play Kawesh-eligible hands. If the bot detects an opponent played all 7/8/9 cards in tricks 1–3 (and never won), it can infer the opponent had a Kawesh hand and didn't call it. This means the current round's full 8 tricks with no opponent Aces — the bot's team should capture all trick points."
+  },
+  "B-100": {
+    "title": "Human deception detection: human plays a sequence inconsistent with their bid",
+    "scope": "Identify the bot's capability to detect a human playing a card INCONSISTENT with their declared bid (e.g., human bid Hokm in Spades but leads Hearts in trick 1 — possible if hand changed character after R2 deal). Audit: does the bot's play logic adjust when the bidder behaves unexpectedly, or does it commit to a plan based on the bid signal and never revise?"
+  }
+}

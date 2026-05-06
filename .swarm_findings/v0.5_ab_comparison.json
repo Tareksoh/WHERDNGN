@@ -1,0 +1,536 @@
+{
+  "meta": {
+    "generated": "2026-05-03",
+    "purpose": "A/B comparison v0.4.13 / v0.5.0 / v0.5.1"
+  },
+  "table": {
+    "all_advanced__forced": {
+      "v0.4.13": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "v0.5.1": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      }
+    },
+    "all_advanced__natural": {
+      "v0.4.13": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0625,
+        "avg_A": 7.375,
+        "avg_B": 9.5,
+        "winner": "B"
+      },
+      "v0.5.0": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0625,
+        "avg_A": 7.375,
+        "avg_B": 9.5,
+        "winner": "B"
+      },
+      "v0.5.1": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0625,
+        "avg_A": 7.375,
+        "avg_B": 9.5,
+        "winner": "B"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      }
+    },
+    "all_basic__forced": {
+      "v0.4.13": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 29.3333,
+        "avg_B": 19.3333,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 29.3333,
+        "avg_B": 19.3333,
+        "winner": "A"
+      },
+      "v0.5.1": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 29.3333,
+        "avg_B": 19.3333,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      }
+    },
+    "all_basic__natural": {
+      "v0.4.13": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0556,
+        "avg_A": 8.6111,
+        "avg_B": 8.2222,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0556,
+        "avg_A": 8.6111,
+        "avg_B": 8.2222,
+        "winner": "A"
+      },
+      "v0.5.1": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0588,
+        "avg_A": 9.2353,
+        "avg_B": 7.5882,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0032,
+        "avg_A": 0.6242,
+        "avg_B": -0.634,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0032,
+        "avg_A": 0.6242,
+        "avg_B": -0.634,
+        "winner_flip": null
+      }
+    },
+    "all_m3lm__forced": {
+      "v0.4.13": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "v0.5.1": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      }
+    },
+    "all_m3lm__natural": {
+      "v0.4.13": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0667,
+        "avg_A": 6.6,
+        "avg_B": 10.3333,
+        "winner": "B"
+      },
+      "v0.5.0": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0667,
+        "avg_A": 6.6,
+        "avg_B": 10.3333,
+        "winner": "B"
+      },
+      "v0.5.1": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0667,
+        "avg_A": 6.6,
+        "avg_B": 10.3333,
+        "winner": "B"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 0.0,
+        "avg_B": 0.0,
+        "winner_flip": null
+      }
+    },
+    "all_master__forced": {
+      "v0.4.13": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 27.8333,
+        "avg_B": 21.0,
+        "winner": "A"
+      },
+      "v0.5.1": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 27.1667,
+        "avg_B": 21.0,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": -0.1667,
+        "avg_A": -5.5,
+        "avg_B": 1.1667,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -0.6666,
+        "avg_B": 0.0,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": -0.1667,
+        "avg_A": -6.1666,
+        "avg_B": 1.1667,
+        "winner_flip": null
+      }
+    },
+    "all_master__natural": {
+      "v0.4.13": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0667,
+        "avg_A": 6.6,
+        "avg_B": 10.3333,
+        "winner": "B"
+      },
+      "v0.5.0": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 7.8889,
+        "avg_B": 8.5,
+        "winner": "B"
+      },
+      "v0.5.1": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0556,
+        "avg_A": 8.8333,
+        "avg_B": 8.1111,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": -0.0667,
+        "avg_A": 1.2889,
+        "avg_B": -1.8333,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0556,
+        "avg_A": 0.9444,
+        "avg_B": -0.3889,
+        "winner_flip": "B -> A"
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": -0.0111,
+        "avg_A": 2.2333,
+        "avg_B": -2.2222,
+        "winner_flip": "B -> A"
+      }
+    },
+    "mixed_basic_master__forced": {
+      "v0.4.13": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 29.3333,
+        "avg_B": 19.3333,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 21.8571,
+        "avg_B": 26.7143,
+        "winner": "B"
+      },
+      "v0.5.1": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.0,
+        "avg_A": 23.0,
+        "avg_B": 25.5714,
+        "winner": "B"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -7.4762,
+        "avg_B": 7.381,
+        "winner_flip": "A -> B"
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 1.1429,
+        "avg_B": -1.1429,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -6.3333,
+        "avg_B": 6.2381,
+        "winner_flip": "A -> B"
+      }
+    },
+    "mixed_basic_master__natural": {
+      "v0.4.13": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 7.5263,
+        "avg_B": 8.7895,
+        "winner": "B"
+      },
+      "v0.5.0": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": 4.6923,
+        "avg_B": 11.6923,
+        "winner": "B"
+      },
+      "v0.5.1": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0714,
+        "avg_A": 5.4286,
+        "avg_B": 11.5,
+        "winner": "B"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -2.834,
+        "avg_B": 2.9028,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0714,
+        "avg_A": 0.7363,
+        "avg_B": -0.1923,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0714,
+        "avg_A": -2.0977,
+        "avg_B": 2.7105,
+        "winner_flip": null
+      }
+    },
+    "mixed_m3lm_master__forced": {
+      "v0.4.13": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 33.3333,
+        "avg_B": 19.8333,
+        "winner": "A"
+      },
+      "v0.5.0": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 30.8333,
+        "avg_B": 21.8333,
+        "winner": "A"
+      },
+      "v0.5.1": {
+        "bel_rate": 1.0,
+        "sweep_rate": 0.1667,
+        "avg_A": 30.5,
+        "avg_B": 22.1667,
+        "winner": "A"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -2.5,
+        "avg_B": 2.0,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -0.3333,
+        "avg_B": 0.3334,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -2.8333,
+        "avg_B": 2.3334,
+        "winner_flip": null
+      }
+    },
+    "mixed_m3lm_master__natural": {
+      "v0.4.13": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0667,
+        "avg_A": 6.6,
+        "avg_B": 10.3333,
+        "winner": "B"
+      },
+      "v0.5.0": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.1333,
+        "avg_A": 7.2667,
+        "avg_B": 10.2,
+        "winner": "B"
+      },
+      "v0.5.1": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.1333,
+        "avg_A": 7.2,
+        "avg_B": 10.2667,
+        "winner": "B"
+      },
+      "delta_0_to_A": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0666,
+        "avg_A": 0.6667,
+        "avg_B": -0.1333,
+        "winner_flip": null
+      },
+      "delta_A_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0,
+        "avg_A": -0.0667,
+        "avg_B": 0.0667,
+        "winner_flip": null
+      },
+      "delta_0_to_B": {
+        "bel_rate": 0.0,
+        "sweep_rate": 0.0666,
+        "avg_A": 0.6,
+        "avg_B": -0.0666,
+        "winner_flip": null
+      }
+    }
+  }
+}

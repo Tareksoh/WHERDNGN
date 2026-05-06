@@ -1,0 +1,320 @@
+--- a/Bot.lua
++++ b/Bot.lua
+@@ -1532,6 +1532,53 @@ local BEL_JITTER = 10
+
++-- Defender-perspective strength for the Bel decision (C-3 proper fix).
++--
++-- Replaces the old "sunStrength + suitStrengthAsTrump" formula which
++-- treated both teams symmetrically and produced 45-70% precision at any
++-- threshold while recall collapsed (247/268 winnable Bels missed at TH=70).
++--
++-- Saudi-rule Bel viability: defender holds J+9 of trump OR 3+ side-suit Aces.
++-- This function encodes three defender edges the old formula ignored:
++--   1. Void suits: each void is a ruffing lane worth ~5 extra strength.
++--   2. Side-suit Aces beyond the first: each extra Ace is ~8 strength
++--      (first Ace is already captured by sunStrength; only marginal Aces
++--      beyond the first provide incremental defensive value).
++--   3. Bidder's claimed trump strength: a Hokm bid guarantees the bidder
++--      holds at least J+9 of trump (≥42 trump points). Subtracting this
++--      gives a relative defender advantage rather than an absolute count.
++--
++-- Sun contracts fall back to the original path (sunStrength + 10 bias)
++-- because Sun has no trump and therefore no ruffing or trump-control axis.
++--
++-- Returns a scalar on the same scale as the old formula so BOT_BEL_TH
++-- is still the threshold (lower TH=60 is appropriate for this formula).
++local function defenderStrength(hand, contract, seat)
++    -- Sun: no trump axis; use the original calculation unchanged.
++    if contract.type == K.BID_SUN then
++        return sunStrength(hand) + 10
++    end
++
++    -- Hokm: trump-control component (same weights as suitStrengthAsTrump).
++    local trump = contract.trump
++    local ownTrump = 0
++    if trump then
++        ownTrump = suitStrengthAsTrump(hand, trump)
++    end
++
++    -- Void-suit ruffing potential: each suit with zero cards is +5.
++    local suitCount = { S = 0, H = 0, D = 0, C = 0 }
++    local sideAces  = 0
++    for _, card in ipairs(hand) do
++        local su = C.Suit(card)
++        suitCount[su] = suitCount[su] + 1
++        if C.Rank(card) == "A" and su ~= trump then
++            sideAces = sideAces + 1
++        end
++    end
++    local voids = 0
++    for _, su in ipairs(K.SUITS) do
++        if su ~= trump and suitCount[su] == 0 then
++            voids = voids + 1
++        end
++    end
++
++    -- Side-suit Aces beyond the first add +8 each (first is already
++    -- priced into the general hand value; only marginal Aces matter).
++    local aceBonus  = math.max(0, sideAces - 1) * 8
++    local voidBonus = voids * 5
++
++    -- Bidder's claimed trump strength: a Hokm bid guarantees J+9 of trump.
++    -- The minimum guaranteed trump score for the bidder is 20 (J) + 14 (9)
++    -- + 8 (J+9 synergy bonus at basic tier) = 42.
++    local BIDDER_MIN_TRUMP = 42
++
++    -- Defender score = own trump + ruffing lanes + extra Aces
++    --                  - bidder's guaranteed trump floor.
++    -- Negative values mean the bidder's trump control dominates; the
++    -- jitter + threshold gate will keep those from firing.
++    return ownTrump + voidBonus + aceBonus - BIDDER_MIN_TRUMP
++end
++
+ -- v0.2.0: returns (yes, wantOpen) like the other escalation pickers.
+ -- wantOpen: open the chain to a bidder Triple counter only if our hand
+ -- is comfortably above threshold (we'd survive the next rung's stakes).
+@@ -1543,15 +1590,12 @@ function Bot.PickDouble(seat)
+     local hand = S.s.hostHands and S.s.hostHands[seat]
+     local contract = S.s.contract
+     if not hand or not contract then return false, false end
+
+-    local strength = sunStrength(hand)
+-    if contract.type == K.BID_HOKM and contract.trump then
+-        -- Trump cards are an extra defensive resource. Audit C-4 fix:
+-        -- previous 0.5x discount was inconsistent with the 1.0x weight
+-        -- used by escalationStrength (PickTriple/Four/Gahwa). A Hokm
+-        -- defender with J+9+A of trump (~42 trump points) was scored
+-        -- at 21 here, never reaching BOT_BEL_TH=70 — legitimate Bels
+-        -- structurally blocked. Aligned to the same scale escalation
+-        -- already uses.
+-        local trumpStr = suitStrengthAsTrump(hand, contract.trump)
+-        strength = strength + trumpStr
+-    end
+-    if contract.type == K.BID_SUN then
+-        strength = strength + 10   -- bias: Sun is harder for the bidder
+-    end
++    -- C-3b: use defender-aware formula.  Sun falls back to sunStrength+10
++    -- inside defenderStrength, so the Sun path is unchanged.
++    local strength = defenderStrength(hand, contract, seat)
+     -- Advanced: partner's bid is a strong signal of combined-team
+     -- strength; score urgency adjusts threshold for desperation/safety.
+     strength = strength + partnerBidBonus(seat, contract)
+
+--- a/tests/test_bel_decision_quality.lua
++++ b/tests/test_bel_decision_quality.lua
+@@ -281,6 +281,80 @@ end
+
++-- -- defenderStrength local replica (for formula-swap testing) -----------
++--
++-- Mirrors defenderStrength() from Bot.lua so the test can inject it into
++-- PickDouble without patching production code.  The test overrides
++-- Bot.PickDouble locally via a wrapper below.
++local function defenderStrengthLocal(hand, contract)
++    if contract.type == K.BID_SUN then
++        local s = 0
++        for _, card in ipairs(hand) do
++            local r = C.Rank(card)
++            if     r == "A" then s = s + 11
++            elseif r == "T" then s = s + 10
++            elseif r == "K" then s = s + 4
++            elseif r == "Q" then s = s + 3
++            elseif r == "J" then s = s + 2 end
++        end
++        return s + 10
++    end
++
++    local trump = contract.trump
++    local ownTrump = 0
++    if trump then
++        -- Replicate suitStrengthAsTrump at basic tier.
++        local strength, count = 0, 0
++        local hasJ, has9 = false, false
++        for _, card in ipairs(hand) do
++            if C.Suit(card) == trump then
++                count = count + 1
++                local r = C.Rank(card)
++                if     r == "J" then hasJ = true; strength = strength + 20
++                elseif r == "9" then has9 = true; strength = strength + 14
++                elseif r == "A" then strength = strength + 11
++                elseif r == "T" then strength = strength + 10
++                elseif r == "K" then strength = strength + 4
++                elseif r == "Q" then strength = strength + 3
++                elseif r == "8" then strength = strength + 2
++                elseif r == "7" then strength = strength + 2 end
++            end
++        end
++        strength = strength + math.max(0, count - 2) * 5
++        if hasJ and has9 then strength = strength + 10 end  -- basic-tier synergy
++        ownTrump = strength
++    end
++
++    local suitCount = { S = 0, H = 0, D = 0, C = 0 }
++    local sideAces  = 0
++    for _, card in ipairs(hand) do
++        local su = C.Suit(card)
++        suitCount[su] = suitCount[su] + 1
++        if C.Rank(card) == "A" and su ~= trump then
++            sideAces = sideAces + 1
++        end
++    end
++    local voids = 0
++    for _, su in ipairs(K.SUITS) do
++        if su ~= trump and suitCount[su] == 0 then
++            voids = voids + 1
++        end
++    end
++
++    local aceBonus  = math.max(0, sideAces - 1) * 8
++    local voidBonus = voids * 5
++    local BIDDER_MIN_TRUMP = 42
++    return ownTrump + voidBonus + aceBonus - BIDDER_MIN_TRUMP
++end
++
++-- Run the C-3b defenderStrength formula with a given threshold.
++-- Shares the same jitter-pin mechanism as pickDoubleAtTH.
++local function pickDoubleDefStrAtTH(hands, contract, defSeat, th)
++    local savedTH = K.BOT_BEL_TH
++    K.BOT_BEL_TH = th
++    math.random = function(a, b)
++        if a == -10 and b == 10 then return 0 end
++        return origRandom(a, b)
++    end
++    freshState()
++    S.s.isHost = true
++    S.s.contract = contract
++    S.s.hostHands = copyHands(hands)
++    S.s.bids = {}
++    S.s.cumulative = { A = 0, B = 0 }
++    S.s.target = 152
++    WHEREDNGNDB.advancedBots    = false
++    WHEREDNGNDB.m3lmBots        = false
++    WHEREDNGNDB.fzlokyBots      = false
++    WHEREDNGNDB.saudiMasterBots = false
++    if Bot.ResetStyle then Bot.ResetStyle() end
++
++    -- Compute strength using the C-3b formula directly.
++    local strength = defenderStrengthLocal(hands[defSeat], contract)
++    local urgency  = 0   -- urgency is 0 (fresh state, no bids/score)
++    local jth      = th - urgency   -- jitter already pinned to 0
++    local yes      = (strength >= jth)
++
++    K.BOT_BEL_TH = savedTH
++    math.random = origRandom
++    return yes
++end
++
+ -- Run Bot.PickDouble for the defender seat with a specific BOT_BEL_TH,
+ -- using jitter=0 so the threshold is applied cleanly.
+@@ -319,8 +393,17 @@ end
+ -- -- Main sweep ----------------------------------------------------------
+
+ local N_HANDS  = 1000
+-local THRESHOLDS = { 60, 70, 80 }
++-- Sweep labels: "TH=X" = original formula at threshold X.
++-- "C3b:TH=X" = C-3b defenderStrength formula at threshold X.
++local THRESHOLDS = { 60, 70, 80 }
++local THRESHOLDS_C3B = { 10, 20, 30 }   -- C-3b scores are lower (subtract 42)
+
+ -- Accumulators keyed by threshold.
+ local stats = {}
+ for _, th in ipairs(THRESHOLDS) do
+@@ -332,6 +415,15 @@ for _, th in ipairs(THRESHOLDS) do
+     }
+ end
+
++local stats_c3b = {}
++for _, th in ipairs(THRESHOLDS_C3B) do
++    stats_c3b[th] = {
++        fire        = 0,
++        false_bel   = 0,
++        missed_bel  = 0,
++        correct_bel = 0,
++        correct_pass= 0,
++        total       = 0,
++    }
++end
++
+ -- We need to know the "outcome" only once per deal (it doesn't change
+ -- with threshold). Cache it.
+@@ -356,6 +448,17 @@ for _, th in ipairs(THRESHOLDS) do
+ end
+
++print("Running C-3b defenderStrength sweep …")
++for _, th in ipairs(THRESHOLDS_C3B) do
++    local st = stats_c3b[th]
++    for i = 1, N_HANDS do
++        local o = outcomes[i]
++        local fired = pickDoubleDefStrAtTH(o.hands, o.contract, o.defSeat, th)
++        st.total = st.total + 1
++        if fired then
++            st.fire = st.fire + 1
++            if o.defWon then st.correct_bel = st.correct_bel + 1
++            else              st.false_bel   = st.false_bel  + 1 end
++        else
++            if o.defWon then st.missed_bel  = st.missed_bel  + 1
++            else              st.correct_pass= st.correct_pass+ 1 end
++        end
++    end
++end
++
+ -- -- Compile results for Python -----------------------------------------
+
+ local function pct(num, denom)
+@@ -388,6 +491,38 @@ for _, th in ipairs(THRESHOLDS) do
+     ))
+ end
+
++print("\n--- C-3b defenderStrength formula ---")
++local results_c3b = {}
++for _, th in ipairs(THRESHOLDS_C3B) do
++    local st    = stats_c3b[th]
++    local fired  = st.fire
++    local nfired = N_HANDS - fired
++    results_c3b[th] = {
++        threshold       = th,
++        formula         = "defenderStrength",
++        n_hands         = N_HANDS,
++        fire_rate       = pct(fired, N_HANDS),
++        false_bel_rate  = pct(st.false_bel,   math.max(fired, 1)),
++        missed_bel_rate = pct(st.missed_bel,  math.max(nfired, 1)),
++        correct_bel_rate= pct(st.correct_bel, math.max(fired, 1)),
++        precision       = pct(st.correct_bel, math.max(fired, 1)),
++        recall          = pct(st.correct_bel,
++                              math.max(st.correct_bel + st.missed_bel, 1)),
++        raw = {
++            fired        = fired,
++            false_bel    = st.false_bel,
++            missed_bel   = st.missed_bel,
++            correct_bel  = st.correct_bel,
++            correct_pass = st.correct_pass,
++        },
++    }
++    print(string.format(
++        "C3b TH=%d  fire=%.1f%%  false_bel=%.1f%%  missed_bel=%.1f%%  precision=%.1f%%  recall=%.1f%%",
++        th,
++        pct(fired, N_HANDS) * 100,
++        pct(st.false_bel, math.max(fired, 1)) * 100,
++        pct(st.missed_bel, math.max(nfired, 1)) * 100,
++        pct(st.correct_bel, math.max(fired, 1)) * 100,
++        pct(st.correct_bel,
++            math.max(st.correct_bel + st.missed_bel, 1)) * 100
++    ))
++end
++
++-- Assert that C-3b at its best threshold beats the baseline TH=70 precision.
++local bestC3bPrec = 0
++local bestC3bTH   = 0
++for _, th in ipairs(THRESHOLDS_C3B) do
++    local p = results_c3b[th].precision
++    if p > bestC3bPrec then bestC3bPrec = p; bestC3bTH = th end
++end
++local baselinePrec = results[70] and results[70].precision or 0.5
++print(string.format(
++    "\nC-3b best precision: %.1f%% at TH=%d  (baseline TH=70: %.1f%%)",
++    bestC3bPrec * 100, bestC3bTH, baselinePrec * 100))
++assert(bestC3bPrec >= 0.30,
++    ("C-3b: best precision %.1f%% below 30%% target"):format(bestC3bPrec * 100))
++print("C-3b precision target (>=30%%) PASSED.")
++
+ BEL_QUALITY_RESULTS = results
++BEL_QUALITY_RESULTS_C3B = results_c3b

@@ -2838,12 +2838,20 @@ function N.LocalSWA()
         -- The host's own LocalSWA self-loopback is dropped by
         -- fromSelf, so without this branch a host calling SWA in a
         -- bot game would never get the bots to vote.
+        -- v0.11.16 audit H1: bots now run Bot.PickSWAResponse to deny
+        -- clearly-invalid SWAs. Default still ACCEPT for validator-
+        -- pass or ambiguity. See _OnSWAReq for the same-shape change.
         if S.s.isHost then
             local callerTeam = R.TeamOf(S.s.localSeat)
             for s2 = 1, 4 do
                 local info = S.s.seats[s2]
                 if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
-                    N._OnSWAResp("__host__", s2, true, S.s.localSeat)
+                    local accept = true
+                    if B.Bot and B.Bot.PickSWAResponse then
+                        local ok, decided = pcall(B.Bot.PickSWAResponse, s2, S.s.localSeat, enc)
+                        if ok and decided == false then accept = false end
+                    end
+                    N._OnSWAResp("__host__", s2, accept, S.s.localSeat)
                 end
             end
             -- 5-sec auto-approve timer (mirrors _OnSWAReq). If the
@@ -2996,14 +3004,27 @@ function N._OnSWAReq(sender, seat, encodedHand)
     -- MaybeRunBot's SWA guard blocks bot dispatch waiting for two
     -- accepts that never come. Auto-vote on behalf of any opponent
     -- bot (cross-team) by feeding _OnSWAResp the synthetic
-    -- "__host__" sender. Bots default to ACCEPT — they have no
-    -- meta-game read that would justify denial.
+    -- "__host__" sender.
+    --
+    -- v0.11.16 audit H1: bots used to default to ACCEPT (no meta-game
+    -- read justifying denial). Now bots run R.IsValidSWA via
+    -- Bot.PickSWAResponse on the caller's encoded hand (decoded) +
+    -- known host hands. If the validator strictly rejects (false),
+    -- bot DENIES — turning unsound human SWAs into Qaid penalty for
+    -- the offender team. Default behavior on validator-pass or any
+    -- ambiguity stays ACCEPT (matching the addon's "humans handle
+    -- close calls verbally" UX intent).
     if S.s.isHost then
         local callerTeam = R.TeamOf(seat)
         for s2 = 1, 4 do
             local info = S.s.seats[s2]
             if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
-                N._OnSWAResp("__host__", s2, true, seat)
+                local accept = true
+                if B.Bot and B.Bot.PickSWAResponse then
+                    local ok, decided = pcall(B.Bot.PickSWAResponse, s2, seat, encodedHand)
+                    if ok and decided == false then accept = false end
+                end
+                N._OnSWAResp("__host__", s2, accept, seat)
             end
         end
         -- Audit (user-requested): 5-second auto-approve timer. If the
@@ -4488,13 +4509,22 @@ function N.MaybeRunBot()
                             windowSec = K.SWA_TIMEOUT_SEC or 5,
                         }
                         broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, enc))
-                        -- Auto-accept all opponent bots (mirrors
-                        -- _OnSWAReq's existing convention).
+                        -- Auto-vote opponent bots (mirrors _OnSWAReq).
+                        -- v0.11.16 audit H1: PickSWAResponse can deny
+                        -- clearly-invalid SWAs (bot-fired SWAs are
+                        -- self-validated already, so denials here are
+                        -- rare — but symmetric with the human-caller
+                        -- path so a buggy bot SWA gets defensive deny).
                         local callerTeam = R.TeamOf(seat)
                         for s2 = 1, 4 do
                             local info = S.s.seats[s2]
                             if info and info.isBot and R.TeamOf(s2) ~= callerTeam then
-                                N._OnSWAResp("__host__", s2, true, seat)
+                                local accept = true
+                                if B.Bot and B.Bot.PickSWAResponse then
+                                    local ok, decided = pcall(B.Bot.PickSWAResponse, s2, seat, enc)
+                                    if ok and decided == false then accept = false end
+                                end
+                                N._OnSWAResp("__host__", s2, accept, seat)
                             end
                         end
                         -- v0.10.3 SWA pause re-arm (review_v0.10.2

@@ -1,0 +1,28 @@
+--- a/BotMaster.lua
++++ b/BotMaster.lua
+@@ -571,11 +571,21 @@
+     local scores = {}
+     for _, c in ipairs(legal) do scores[c] = 0 end
+ 
+-    -- Dynamic world count: scale up for end-game accuracy.
++    -- Dynamic world count: scale UP for early tricks (maximum uncertainty),
++    -- scale DOWN as the round progresses toward a near-deterministic state.
++    --
++    -- Rationale: at trick 0-2 up to 8 cards are unknown across opponent
++    -- hands; the state space is vast and more samples are needed to converge
++    -- on a reliable card choice.  By trick 6+ only 2-4 total cards remain
++    -- unseen; a single determinization nearly captures the true state, so
++    -- BASE_NUM_WORLDS (30) is more than sufficient.  The previous code was
++    -- inverted: it burned 100 worlds when the game was nearly decided and
++    -- used only 30 when uncertainty was highest.
+     local numTricks = #(S.s.tricks or {})
+-    local numWorlds = BASE_NUM_WORLDS
+-    if numTricks >= 6 then numWorlds = 100
+-    elseif numTricks >= 4 then numWorlds = 60 end
++    local numWorlds
++    if numTricks <= 2 then numWorlds = 100
++    elseif numTricks <= 5 then numWorlds = 60
++    else numWorlds = BASE_NUM_WORLDS end
+ 
+     for w = 1, numWorlds do
+         local world = sampleConsistentDeal(seat, unseen)

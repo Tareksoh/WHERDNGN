@@ -1,0 +1,476 @@
+--- a/Bot.lua
++++ b/Bot.lua
+@@ -839,6 +839,36 @@ local function lowestByRank(cards, contract)
+ -- Play
+ -- ---------------------------------------------------------------------
+
++-- H-4: Belote-preservation helper.
++--
++-- Returns true when `hand` contains BOTH K-of-trump AND Q-of-trump under
++-- a Hokm contract.  Used by pickFollow's discard path to exclude those two
++-- cards from the cheapest-discard candidates before trick 5, so the bot
++-- doesn't shed them via lowestByRank before it has had a chance to play
++-- and score the +20 raw Belote bonus.
++--
++-- Saudi rule recap: Belote is detected post-hoc in Rules.lua by scanning
++-- all trick.plays for a seat that played BOTH K and Q of trump.  The bot
++-- therefore needs to actually PLAY both cards during the round — holding
++-- them is necessary but not sufficient.  This gate prevents accidental
++-- early discard only; the bot still plays whichever of K/Q leads to a win
++-- when following suit normally (those code paths are untouched).
++--
++-- Hokm-only: IsTrump returns false for SUN/ASHKAL, so the suit comparison
++-- below is always false in those contracts.  No special-case needed.
++local function holdsBeloteThusFar(hand, contract)
++    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
++        return false
++    end
++    local trump = contract.trump
++    local hasK, hasQ = false, false
++    for _, c in ipairs(hand) do
++        local r = C.Rank(c)
++        if C.Suit(c) == trump then
++            if r == "K" then hasK = true end
++            if r == "Q" then hasQ = true end
++        end
++    end
++    return hasK and hasQ
++end
++
+ local function lowestByRank(cards, contract)
+     local best, bestR = cards[1], math.huge
+     for _, c in ipairs(cards) do
+@@ -1432,12 +1462,41 @@ local function pickFollow(legal, hand, trick, contract, seat)
+     -- Can't win. If we're closing the trick (4th seat) and the trick
+     -- already has decent points, throw the lowest-value loser. If
+     -- earlier in the trick AND we have a trump that we'd need to
+     -- cross-trump with, save the trump and instead discard from a
+     -- short side suit to preserve flexibility.
+     if not lastSeat and contract.type == K.BID_HOKM and contract.trump then
+         local discardable = {}
+         for _, c in ipairs(legal) do
+             if not C.IsTrump(c, contract) then
+                 discardable[#discardable + 1] = c
+             end
+         end
+         if #discardable > 0 then
+             return lowestByRank(discardable, contract)
+         end
+     end
+-    return lowestByRank(legal, contract)
++    -- H-4: Belote-preservation gate on the final catch-all discard.
++    --
++    -- When both K and Q of trump are still in hand (holdsBeloteThusFar),
++    -- we exclude them from the candidates fed to lowestByRank so the bot
++    -- doesn't shed either Belote card as cheap padding before trick 5.
++    --
++    -- Trick threshold: S.s.tricks holds COMPLETED tricks; the current
++    -- in-flight trick is not yet archived.  Completed count < 4 means we
++    -- are at most in trick 5 (tricks 1-4 done).  We release the hold from
++    -- trick 5 onward (completed >= 4) so that a stranded K/Q that was never
++    -- naturally played becomes freely discardable rather than permanently
++    -- frozen (the bot would have had four lead/follow opportunities already).
++    --
++    -- Legality safety: if after filtering the candidate list is empty (the
++    -- ONLY legal cards are K and Q of trump), we fall back to the unfiltered
++    -- `legal` list so the bot always produces a valid play.
++    local completed = #(S.s.tricks or {})
++    if completed < 4
++       and contract.type == K.BID_HOKM
++       and holdsBeloteThusFar(hand, contract) then
++        local belote = { ["K" .. contract.trump] = true,
++                         ["Q" .. contract.trump] = true }
++        local withoutBelote = {}
++        for _, c in ipairs(legal) do
++            if not belote[c] then
++                withoutBelote[#withoutBelote + 1] = c
++            end
++        end
++        if #withoutBelote > 0 then
++            return lowestByRank(withoutBelote, contract)
++        end
++        -- Only K/Q of trump are legal — must play one; fall through.
++    end
++    return lowestByRank(legal, contract)
+ end
+--- a/tests/test_H4_belote_preservation.lua
++++ b/tests/test_H4_belote_preservation.lua
+@@ -0,0 +1,261 @@
++-- tests/test_H4_belote_preservation.lua
++--
++-- Regression test for issue H-4: bot must not discard K or Q of trump
++-- (the Belote pair) as cheap padding before trick 5.
++--
++-- Strategy: load Bot.lua from a patched in-memory string (applying the
++-- H-4 diff programmatically) so we never touch production files.  We then
++-- expose the module-local pickFollow via Bot._testPickFollow and exercise
++-- it with contrived hands.
++--
++-- Run via:  lua tests/test_H4_belote_preservation.lua
++--           (or add to the python runner manifest)
++
++unpack = unpack or table.unpack
++
++-- -- Locate addon root ----------------------------------------------------
++
++local function addonRoot()
++    if WHEREDNGN_TESTS_ROOT then return WHEREDNGN_TESTS_ROOT end
++    local src = debug.getinfo(1, "S").source
++    if src:sub(1, 1) ~= "@" then
++        error("set WHEREDNGN_TESTS_ROOT before running")
++    end
++    return (src:sub(2):gsub("[/\\]tests[/\\][^/\\]+$", ""))
++end
++local ROOT = addonRoot()
++
++-- -- WoW global stubs (same minimal set as test_H1_pin_J9_trump.lua) ------
++
++local fakeNow = 3000000.0
++GetTime = function()
++    fakeNow = fakeNow + 0.001
++    return fakeNow
++end
++C_Timer = {
++    NewTicker = function(_, _) return { Cancel = function() end } end,
++    NewTimer  = function(_, _) return { Cancel = function() end } end,
++    After     = function(_, _) end,
++}
++GetUnitName = function() return "TestPlayer" end
++UnitName    = function() return "TestPlayer" end
++WHEREDNGNDB = { saudiMasterBots = true }
++SendChatMessage = function() end
++C_ChatInfo = {
++    RegisterAddonMessagePrefix = function() return true end,
++    SendAddonMessage = function() end,
++}
++CreateFrame = function()
++    return {
++        SetScript     = function() end,
++        RegisterEvent = function() end,
++        UnregisterEvent = function() end,
++        Hide = function() end,
++        Show = function() end,
++    }
++end
++
++WHEREDNGN = WHEREDNGN or {}
++WHEREDNGN.Sound = { Cue = function() end, ArmCue = function() end }
++WHEREDNGN.Log   = {
++    Debug = function() end, Info  = function() end,
++    Warn  = function() end, Error = function() end,
++    Clear = function() end, Dump  = function() end,
++}
++WHEREDNGN.UI = {
++    Refresh = function() end, Show = function() end,
++    Hide    = function() end, Toggle = function() end,
++}
++
++-- -- Load base modules (no Bot yet) ----------------------------------------
++
++local function loadFile(rel)
++    local path = (ROOT .. "/" .. rel):gsub("\\", "/")
++    local chunk, err = loadfile(path)
++    if not chunk then error("failed to load " .. rel .. ": " .. tostring(err)) end
++    chunk()
++end
++
++loadFile("Constants.lua")
++loadFile("Cards.lua")
++loadFile("Rules.lua")
++loadFile("State.lua")
++
++local K = WHEREDNGN.K
++local R = WHEREDNGN.Rules
++local S = WHEREDNGN.State
++local C = WHEREDNGN.Cards
++
++-- -- Apply H-4 patch to Bot.lua source in memory --------------------------
++--
++-- Two hunks:
++--   1. Insert holdsBeloteThusFar() before the existing lowestByRank().
++--   2. Replace the final `return lowestByRank(legal, contract)` in pickFollow
++--      with the Belote-guard block.
++
++local botPath = (ROOT .. "/Bot.lua"):gsub("\\", "/")
++local fh = assert(io.open(botPath, "r"), "cannot open Bot.lua")
++local src = fh:read("*a")
++fh:close()
++
++-- Hunk 1 anchor: the line that opens lowestByRank (unique in the file).
++local ANCHOR1 = "\nlocal function lowestByRank(cards, contract)\n"
++
++local HELPER_BLOCK = [[
++
++-- H-4: Belote-preservation helper.
++local function holdsBeloteThusFar(hand, contract)
++    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
++        return false
++    end
++    local trump = contract.trump
++    local hasK, hasQ = false, false
++    for _, c in ipairs(hand) do
++        local r = C.Rank(c)
++        if C.Suit(c) == trump then
++            if r == "K" then hasK = true end
++            if r == "Q" then hasQ = true end
++        end
++    end
++    return hasK and hasQ
++end
++]]
++
++assert(src:find(ANCHOR1, 1, true),
++    "H-4 test: ANCHOR1 not found in Bot.lua — patch target has moved")
++
++local h1Applied = false
++src = src:gsub(ANCHOR1, function(_)
++    if h1Applied then return nil end
++    h1Applied = true
++    return HELPER_BLOCK .. ANCHOR1
++end)
++assert(h1Applied, "H-4 test: hunk-1 replacement did not fire")
++
++-- Hunk 2 anchor: the tail of pickFollow, identified by the unique
++-- `if not lastSeat ... discardable` block that precedes the final return.
++-- This 4-line span does not appear anywhere else in Bot.lua.
++local ANCHOR2 = "        if #discardable > 0 then\n"
++    .. "            return lowestByRank(discardable, contract)\n"
++    .. "        end\n"
++    .. "    end\n"
++    .. "    return lowestByRank(legal, contract)\n"
++    .. "end\n"
++
++-- GUARD_BLOCK replaces ANCHOR2 entirely; it must re-emit the discardable
++-- return that ANCHOR2 matched, then append the new Belote-guard logic.
++local GUARD_BLOCK = "        if #discardable > 0 then\n"
++    .. "            return lowestByRank(discardable, contract)\n"
++    .. "        end\n"
++    .. "    end\n"
++    -- H-4 addition starts here:
++    .. "    -- H-4: Belote-preservation gate on the final catch-all discard.\n"
++    .. "    --\n"
++    .. "    -- When both K and Q of trump are still in hand we exclude them\n"
++    .. "    -- from discard candidates before trick 5 so the +20 raw Belote\n"
++    .. "    -- bonus is not wasted by an accidental early shed.\n"
++    .. "    local completed = #(S.s.tricks or {})\n"
++    .. "    if completed < 4\n"
++    .. "       and contract.type == K.BID_HOKM\n"
++    .. "       and holdsBeloteThusFar(hand, contract) then\n"
++    .. "        local belote = { [\"K\" .. contract.trump] = true,\n"
++    .. "                         [\"Q\" .. contract.trump] = true }\n"
++    .. "        local withoutBelote = {}\n"
++    .. "        for _, c in ipairs(legal) do\n"
++    .. "            if not belote[c] then\n"
++    .. "                withoutBelote[#withoutBelote + 1] = c\n"
++    .. "            end\n"
++    .. "        end\n"
++    .. "        if #withoutBelote > 0 then\n"
++    .. "            return lowestByRank(withoutBelote, contract)\n"
++    .. "        end\n"
++    .. "        -- Only K/Q of trump are legal — must play one; fall through.\n"
++    .. "    end\n"
++    .. "    return lowestByRank(legal, contract)\n"
++    .. "end\n"
++
++-- Count occurrences to ensure unique match.
++local matchCount = 0
++for _ in src:gmatch(ANCHOR2, 1) do matchCount = matchCount + 1 end
++-- gmatch variant: just count manually
++matchCount = 0
++local searchPos = 1
++while true do
++    local s2, e2 = src:find(ANCHOR2, searchPos, true)
++    if not s2 then break end
++    matchCount = matchCount + 1
++    searchPos = e2 + 1
++end
++assert(matchCount == 1,
++    ("H-4 test: ANCHOR2 found %d times in Bot.lua (expected exactly 1)"):format(matchCount))
++
++local h2Applied = false
++src = src:gsub(ANCHOR2, function(_)
++    if h2Applied then return nil end
++    h2Applied = true
++    return GUARD_BLOCK
++end)
++assert(h2Applied, "H-4 test: hunk-2 replacement did not fire")
++
++-- Append test shim: expose pickFollow.
++local SHIM = "\nWHEREDNGN.Bot._testPickFollow = pickFollow\n"
++src = src .. SHIM
++
++-- Load patched source.
++local chunk, compErr
++if _VERSION >= "Lua 5.2" then
++    chunk, compErr = load(src, "Bot.lua[H-4-patched]", "t", _ENV)
++else
++    chunk, compErr = loadstring(src, "Bot.lua[H-4-patched]")
++    if chunk then setfenv(chunk, getfenv(1)) end
++end
++assert(chunk, "H-4 test: failed to compile patched Bot.lua: " .. tostring(compErr))
++chunk()
++
++local Bot = WHEREDNGN.Bot
++local pickFollow = Bot._testPickFollow
++assert(type(pickFollow) == "function",
++    "H-4 test: _testPickFollow shim not installed")
++
++-- -- Tiny test framework -------------------------------------------------
++
++local pass, fail = 0, 0
++local failures = {}
++
++local function assertEq(actual, expected, name)
++    if actual == expected then
++        pass = pass + 1
++        if TEST_VERBOSE then print(("  PASS  %s"):format(name)) end
++    else
++        fail = fail + 1
++        local msg = ("FAIL  %s\n        expected: %s\n        actual:   %s")
++            :format(name, tostring(expected), tostring(actual))
++        failures[#failures + 1] = msg
++        print("  " .. msg)
++    end
++end
++local function assertNe(actual, bad, name)
++    if actual ~= bad then
++        pass = pass + 1
++        if TEST_VERBOSE then print(("  PASS  %s"):format(name)) end
++    else
++        fail = fail + 1
++        local msg = ("FAIL  %s\n        should NOT be: %s"):format(name, tostring(bad))
++        failures[#failures + 1] = msg
++        print("  " .. msg)
++    end
++end
++local function section(label) print(""); print("== " .. label .. " ==") end
++
++-- -- State helper ----------------------------------------------------------
++
++local function setupState(completedTrickCount)
++    S.s.phase        = K.PHASE_PLAY
++    S.s.isHost       = true
++    S.s.contract     = { type = K.BID_HOKM, trump = "H", bidder = 2 }
++    S.s.trick        = { leadSuit = nil, plays = {} }
++    S.s.tricks       = {}
++    -- Populate s.tricks with `completedTrickCount` dummy completed tricks.
++    for i = 1, completedTrickCount do
++        S.s.tricks[i] = {
++            plays  = { { seat=1, card="7S" }, { seat=2, card="8S" },
++                       { seat=3, card="9S" }, { seat=4, card="7C" } },
++            winner = 1, points = 0,
++        }
++    end
++    S.s.meldsByTeam  = { A = {}, B = {} }
++    S.s.hostHands    = {}
++    for seat = 1, 4 do S.s.hostHands[seat] = {} end
++    if Bot.ResetMemory then Bot.ResetMemory() end
++end
++
++-- -- Tests -----------------------------------------------------------------
++
++-- Scenario: bot holds KH + QH + several cheap non-trump cards.
++-- Trick is already being won by an opponent (so bot can't win).
++-- pickFollow must NOT return KH or QH as the discard candidate.
++
++local TRUMP = "H"
++local CONTRACT = { type = K.BID_HOKM, trump = TRUMP, bidder = 2 }
++-- Opponent plays AS (leads with Ace of Spades), opponent seat 2 winning.
++local TRICK_OPP_WINNING = {
++    leadSuit = "S",
++    plays    = { { seat = 2, card = "AS" } },
++}
++
++-- Bot hand: KH, QH, 7S, 8S (KH/QH are trump, 7S/8S are discardable non-trump).
++-- Legal follow-suit: bot is void in spades? No — 7S and 8S are spades.
++-- Actually bot must follow suit when possible. Let's make bot void in spades
++-- so it can legally play any card (void => free to play anything including trump).
++-- Hand: KH, QH, 7D, 8D (void in spades and clubs).
++local SEAT = 1
++local HAND_WITH_BELOTE = { "KH", "QH", "7D", "8D" }
++-- Legal plays when void in lead suit: all cards are legal.
++local LEGAL_ALL = { "KH", "QH", "7D", "8D" }
++
++section("H-4 core: bot discards non-trump instead of Belote pair (trick 1)")
++setupState(0)  -- 0 completed tricks => trick 1 in progress
++S.s.hostHands[SEAT] = HAND_WITH_BELOTE
++
++local choice1 = pickFollow(LEGAL_ALL, HAND_WITH_BELOTE,
++                            TRICK_OPP_WINNING, CONTRACT, SEAT)
++assertNe(choice1, "KH",
++    "trick1: bot must not discard KH (K-of-trump Belote)")
++assertNe(choice1, "QH",
++    "trick1: bot must not discard QH (Q-of-trump Belote)")
++-- It should pick one of the cheap non-trump discards.
++assertEq(choice1 == "7D" or choice1 == "8D", true,
++    "trick1: bot discards a cheap non-trump (7D or 8D)")
++
++section("H-4 core: same scenario at trick 3 (completed=2) — still protected")
++setupState(2)
++S.s.hostHands[SEAT] = HAND_WITH_BELOTE
++
++local choice3 = pickFollow(LEGAL_ALL, HAND_WITH_BELOTE,
++                            TRICK_OPP_WINNING, CONTRACT, SEAT)
++assertNe(choice3, "KH", "trick3: KH still protected")
++assertNe(choice3, "QH", "trick3: QH still protected")
++assertEq(choice3 == "7D" or choice3 == "8D", true,
++    "trick3: bot discards cheap non-trump")
++
++section("H-4 release: trick 5+ (completed=4) — Belote pair may be discarded freely")
++setupState(4)  -- 4 completed tricks => we are now in trick 5
++S.s.hostHands[SEAT] = HAND_WITH_BELOTE
++
++-- With non-trump available, lowestByRank still picks 7D (rank 1 in plain).
++-- The test here checks that the gate does NOT block the Belote pair at this
++-- point; i.e. withoutBelote is never applied (completed >= 4 skips the block).
++-- The actual pick should still be the cheapest card overall.
++local choice5 = pickFollow(LEGAL_ALL, HAND_WITH_BELOTE,
++                            TRICK_OPP_WINNING, CONTRACT, SEAT)
++-- lowestByRank over {KH, QH, 7D, 8D}: TrickRank(7D)=1, TrickRank(8D)=2,
++-- TrickRank(QH as trump)=3, TrickRank(KH as trump)=4 => picks 7D.
++-- Result is the same as protected path here, but for the right reason.
++assertEq(choice5 == "7D" or choice5 == "8D", true,
++    "trick5: gate released, cheapest card selected normally")
++
++section("H-4 legality safety: only K/Q of trump are legal — must play one")
++setupState(0)
++local LEGAL_ONLY_BELOTE = { "KH", "QH" }
++local HAND_ONLY_BELOTE  = { "KH", "QH" }
++S.s.hostHands[SEAT] = HAND_ONLY_BELOTE
++
++local choiceSafe = pickFollow(LEGAL_ONLY_BELOTE, HAND_ONLY_BELOTE,
++                               TRICK_OPP_WINNING, CONTRACT, SEAT)
++assertEq(choiceSafe == "KH" or choiceSafe == "QH", true,
++    "legality safety: returns K or Q of trump when those are the only legal cards")
++
++section("H-4 negative: only one of K/Q in hand — no Belote pair, normal discard")
++setupState(0)
++local HAND_ONLY_K = { "KH", "7D", "8D", "9D" }
++local LEGAL_ONLY_K = { "KH", "7D", "8D", "9D" }
++S.s.hostHands[SEAT] = HAND_ONLY_K
++
++local choiceK = pickFollow(LEGAL_ONLY_K, HAND_ONLY_K,
++                            TRICK_OPP_WINNING, CONTRACT, SEAT)
++-- holdsBeloteThusFar returns false => normal lowestByRank path => 7D
++assertEq(choiceK, "7D",
++    "negative: only K (no Q) in hand — normal lowestByRank picks 7D")
++
++section("H-4 negative: SUN contract — no Belote concept, normal discard")
++setupState(0)
++local CONTRACT_SUN = { type = K.BID_SUN, bidder = 2 }
++local TRICK_SUN = { leadSuit = "S", plays = { { seat = 2, card = "AS" } } }
++-- In SUN, IsTrump is false for everything; KH and QH are plain cards.
++-- The non-lastSeat HOKM trump-save block won't fire (contract.type ~= HOKM).
++-- Falls straight through to lowestByRank(legal, contract) => 7D.
++local choiceSun = pickFollow(LEGAL_ALL, HAND_WITH_BELOTE,
++                              TRICK_SUN, CONTRACT_SUN, SEAT)
++assertEq(choiceSun, "7D",
++    "negative: SUN contract — holdsBeloteThusFar=false, picks 7D normally")
++
++-- -- Summary ---------------------------------------------------------------
++print("")
++print(("== Result: %d passed, %d failed =="):format(pass, fail))
++for _, msg in ipairs(failures) do print(msg) end
++TEST_RESULTS = { passed = pass, failed = fail }
++if fail == 0 then return true end
++return false

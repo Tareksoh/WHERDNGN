@@ -1,0 +1,79 @@
+--- a/BotMaster.lua
++++ b/BotMaster.lua
+@@ -55,6 +55,34 @@ local function getStrongCards(contract)
+     return strong
+ end
+
++-- Helper: desire map for defender seats in a Hokm contract.
++--
++-- Defenders cluster non-trump Aces and Kings because the bidder committed
++-- to trump strength — side-suit power cards tend to live in non-bidder hands.
++--
++-- Three bias tiers (weights feed the `weight > 0` branch in the pool loop):
++--   desire["A"..s] = 8   non-trump Ace  (strong clustering)
++--   desire["K"..s] = 4   non-trump King (lighter secondary bias)
++--   desire[s]      = true long-suit incentive: activates the existing
++--                          `desire[C.Suit(c)] and 20` fallback for every
++--                          other card in the suit, biasing 4+ length onto
++--                          defenders.  The card-level A/K entries above take
++--                          precedence (desire[card] is checked first in the
++--                          pool loop), so Kings and Aces use their own weight
++--                          rather than the suit-level 20.
++--
++-- Returns {} for SUN contracts (no trump, side-suit distribution is uniform).
++local function getDefenderCards(contract)
++    local desire = {}
++    if not contract or contract.type ~= K.BID_HOKM or not contract.trump then
++        return desire
++    end
++    local t = contract.trump
++    for _, s in ipairs(K.SUITS) do
++        if s ~= t then
++            desire["A"..s] = 8    -- non-trump Ace: weight 8
++            desire["K"..s] = 4    -- non-trump King: weight 4
++            desire[s]      = true -- long-suit incentive for remaining cards
++        end
++    end
++    return desire
++end
++
+ -- Helper: returns true if Saudi-Master tier is active.
+ function BM.IsActive()
+@@ -125,6 +153,10 @@ local function sampleConsistentDeal(seat, unseen)
+     local contract = S.s.contract
+     local bidder = contract and contract.bidder
+     local strong = getStrongCards(contract)
++    -- H-2: pre-compute defender desire once; both defender seats share it.
++    -- "Defender" = not the bidder AND on the opposing team.  Partner of the
++    -- bidder gets {} here (H-3 will add partner-specific logic separately).
++    local defenderDesire = getDefenderCards(contract)
+     local partner = R.Partner(seat)
+     local pMem = B.Bot._memory and B.Bot._memory[partner]
+     local pSignalSuit = pMem and pMem.firstDiscard and pMem.firstDiscard.suit
+@@ -210,8 +242,24 @@ local function sampleConsistentDeal(seat, unseen)
+
+                 -- Phase 1: Biased pick from pool.
+                 -- Bidder gets strong cards; partner gets signaled suit.
+-                local desire = (s == bidder) and strong or {}
++                --
++                -- H-2: role-based desire dispatch for Hokm contracts.
++                -- Role is determined by absolute team comparison so that BOTH
++                -- defender seats get the same bias regardless of which seat is
++                -- calling the sampler (avoids seat-index asymmetry).
++                --
++                --   bidder   -> strong cards (J/9/A of trump + side Aces at 15)
++                --   defender -> defenderDesire (non-trump A=8, K=4, suit=true)
++                --   other    -> {} (bidder's partner; H-3 patch handles this seat)
++                --
++                -- isDefender: s is on the opposing team AND is not the bidder.
++                -- (When bidder == nil the entire desire block is a no-op since
++                -- defenderDesire is {} for non-Hokm contracts.)
++                local isDefender = bidder ~= nil
++                                   and R.TeamOf(s) ~= R.TeamOf(bidder)
++                                   and s ~= bidder
++                local desire
++                if     s == bidder  then desire = strong
++                elseif isDefender   then desire = defenderDesire
++                else                     desire = {}
++                end
+                 if s == partner and pSignalSuit then desire[pSignalSuit] = 1 end

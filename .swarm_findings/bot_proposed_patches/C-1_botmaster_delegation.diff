@@ -1,0 +1,72 @@
+--- a/Bot.lua
++++ b/Bot.lua
+@@ -1493,6 +1493,29 @@ end
++-- C-1 RATIONALE (100 words):
++-- Bot.PickPlay is called directly from _HostTurnTimeout (AFK recovery) and from
++-- test harnesses, bypassing the Saudi Master ISMCTS sampler even when
++-- saudiMasterBots=true. The only path that ever reached BotMaster.PickPlay was
++-- Net.lua:3540-3544's explicit guard, leaving AFK and test paths on heuristics.
++-- The fix delegates at the top of Bot.PickPlay, gated by Bot._inRollout so
++-- BotMaster's internal rolloutValue → heuristicPick closure (BotMaster.lua:388)
++-- cannot re-enter ISMCTS. heuristicPick is currently a local closure and does
++-- NOT call Bot.PickPlay, but the guard is required to make that invariant
++-- explicit and safe against future refactors.
++--
++-- TEST COVERAGE SUGGESTION:
++-- Add a fixture in test_state_bot.lua (or a new test_botmaster_delegation.lua):
++--   1. setTier("master") so WHEREDNGNDB.saudiMasterBots = true.
++--   2. Spy on BM.PickPlay by wrapping it: local orig = BM.PickPlay;
++--      local delegated = false; BM.PickPlay = function(...) delegated=true; return orig(...) end
++--   3. Call Bot.PickPlay(seat) with a 2+ legal card scenario.
++--   4. Assert delegated == true.
++--   5. Reset the spy, set Bot._inRollout = true, call Bot.PickPlay again,
++--      assert delegated == false (recursion guard fires).
++--   6. Also assert that with tier="basic", delegated == false (no spurious delegation).
+
+ function Bot.PickPlay(seat)
++    -- C-1: Delegate to Saudi Master (ISMCTS) when the tier is active and we are
++    -- NOT inside a rollout. BotMaster.PickPlay's internal rolloutValue closure
++    -- uses its own heuristicPick; _inRollout prevents any future path from
++    -- re-entering ISMCTS recursively.
++    if not Bot._inRollout then
++        local BM = WHEREDNGN and WHEREDNGN.BotMaster
++        if BM and BM.IsActive and BM.IsActive() and BM.PickPlay then
++            local masterCard = BM.PickPlay(seat)
++            if masterCard then return masterCard end
++        end
++    end
++
+     local hand = S.s.hostHands and S.s.hostHands[seat]
+     local trick = S.s.trick
+     local contract = S.s.contract
+--- a/BotMaster.lua
++++ b/BotMaster.lua
+@@ -553,6 +553,20 @@ end
+ -- Public entry point: pick the best play using ISMCTS-flavoured
+ -- determinization sampling. Returns nil if not enough info, in
+ -- which case callers fall back to the lower-tier picker.
+ function BM.PickPlay(seat)
+     if not BM.IsActive() then return nil end
+     if not S.s.contract then return nil end
+     local hand = S.s.hostHands and S.s.hostHands[seat]
+     if not hand or #hand == 0 then return nil end
++    -- C-1: Set the recursion guard for the duration of all sampling work.
++    -- rolloutValue's local heuristicPick closure does NOT call Bot.PickPlay
++    -- today (BotMaster.lua:388-498), but _inRollout makes that invariant
++    -- explicit and safe against future refactors that might extract
++    -- heuristicPick into a shared helper that could re-enter ISMCTS.
++    local B = WHEREDNGN
++    local prevInRollout = B.Bot and B.Bot._inRollout
++    if B.Bot then B.Bot._inRollout = true end
+     -- Build legal-plays list.
+     local trick = S.s.trick or { leadSuit = nil, plays = {} }
+     local legal = {}
+@@ -585,5 +599,8 @@ function BM.PickPlay(seat)
+     local best, bestScore = legal[1], -math.huge
+     for _, c in ipairs(legal) do
+         if scores[c] > bestScore then best, bestScore = c, scores[c] end
+     end
++    -- C-1: Restore the recursion guard regardless of early returns above.
++    if B.Bot then B.Bot._inRollout = prevInRollout end
+     return best
+ end

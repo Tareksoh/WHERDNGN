@@ -825,6 +825,27 @@ local function hokmMinShape(hand, suit)
             hasAnyAce  = true
         end
     end
+    -- v0.11.16 BS-1 fix (audit A2): Belote K+Q-of-trump escape clause.
+    -- Saudi rule B-6 (Mandatory, video #26): "K+Q of trump (سراء ملكي)
+    -- + count >= 2 -> Mandatory Hokm with that suit as trump." The +20
+    -- multiplier-immune Belote bonus is structural — failing to bid
+    -- the Belote suit forfeits the canonical Saudi-tournament-mandatory
+    -- bid. Pre-v0.11.16 the J-floor at line below blocked this when
+    -- the hand had K+Q of suit X but no JX; e.g. [KS QS 8C 9C 7H]
+    -- (K+Q spades + 2 trumps) was rejected. Saudi convention says J
+    -- is irrelevant when K+Q-Belote locks the contract. Runs BEFORE
+    -- the J-floor so this single canonical pattern bypasses all other
+    -- shape gates.
+    do
+        local hasKsuit, hasQsuit = false, false
+        for _, c in ipairs(hand) do
+            if C.Suit(c) == suit then
+                if C.Rank(c) == "K" then hasKsuit = true
+                elseif C.Rank(c) == "Q" then hasQsuit = true end
+            end
+        end
+        if hasKsuit and hasQsuit and count >= 2 then return true end
+    end
     if not hasJ then return false end          -- B-4 absolute floor
     if count >= 4 then return true end         -- B-2 self-sufficient
     -- v0.11.15 Q2 user-audit: self-sufficient mardoofa relax.
@@ -935,6 +956,22 @@ local function aceCountAndMardoofa(hand)
         if hasA[su] and hasT[su] then mardoofaCount = mardoofaCount + 1 end
     end
     return aceCount, mardoofaCount
+end
+
+-- v0.11.16 audit BC-1: hypothetical post-win hand helper. The bidder
+-- gets the bidcard appended to their final hand at HostDealRest
+-- (State.lua:1950). Pre-v0.11.16, only the R1 Hokm-on-flipped path
+-- (v0.11.15) included the bidcard in evaluation; R1 Sun, R2 Hokm,
+-- R2 Sun, PickPreempt, and PickOvercall didn't. This helper unifies
+-- the pattern across all bid pickers. Returns `hand` unchanged when
+-- there's no bidcard (defensive — should always be present in
+-- bidding phases).
+local function withBidcard(hand, bidcard)
+    if not bidcard then return hand end
+    local out = {}
+    for _, c in ipairs(hand) do out[#out + 1] = c end
+    out[#out + 1] = bidcard
+    return out
 end
 
 -- Score for a Sun bid: high cards across all suits, length is irrelevant.
@@ -1305,14 +1342,27 @@ function Bot.PickBid(seat)
     -- crosses thSun in ~70% of jitter outcomes vs ~30% under +12.
     -- Sources: decision-trees.md S-3 (Definite, video 25), S-8
     -- (Common, video 25); Wave-2 audit calibration analysis.
-    local sun = sunStrength(hand)
-    if aceCount >= 3 then sun = sun + K.BOT_SUN_3ACE_BONUS
+    -- v0.11.16 audit BC-1: include bidcard in Sun evaluation. The
+    -- bidder will receive the bidcard added to their final hand —
+    -- its face value contributes directly to sunStrength (no trump
+    -- in Sun, so suit doesn't matter; only rank face value). E.g.,
+    -- bidcard AC adds +11 to sunStrength of any seat that wins the
+    -- bid. Pre-v0.11.16 this was undercounted in R1 Sun, R2 Sun,
+    -- PickPreempt, and PickOvercall paths.
+    local sunHand = withBidcard(hand, S.s.bidCard)
+    local sun = sunStrength(sunHand)
+    -- Recompute aceCount on the post-bidcard hand for bonus eligibility.
+    local sunAces = aceCount
+    if S.s.bidCard and C.Rank(S.s.bidCard) == "A" then
+        sunAces = sunAces + 1
+    end
+    if sunAces >= 3 then sun = sun + K.BOT_SUN_3ACE_BONUS
     -- v0.11.14 user-bidcalc trace: 2-Ace hands without mardoofa or AKQ
     -- triple were consistently rejected (sun=17-21 vs thSun=38-46).
     -- Per Saudi rule S-1, 2 Aces IS the canonical Sun shape — these
     -- hands SHOULD bid. Adding the bonus brings score into the jitter
     -- fire-band. elseif gates against double-applying with 3-Ace.
-    elseif aceCount == 2 then sun = sun + K.BOT_SUN_2ACE_BONUS end
+    elseif sunAces == 2 then sun = sun + K.BOT_SUN_2ACE_BONUS end
     sun = sun + math.min(mardoofaCount, K.BOT_SUN_MARDOOFA_PAIR_CAP)
               * K.BOT_SUN_MARDOOFA_BONUS
 
@@ -1515,12 +1565,12 @@ function Bot.PickBid(seat)
         -- locks on the first direct Sun. Bot bids Sun whenever its
         -- threshold passes; if another seat already won the Sun chair
         -- earlier, the host silently treats this as a no-op.
-        if sunMinShape(hand) and sun >= thSun then
+        if sunMinShape(sunHand) and sun >= thSun then
             btrace("R1 direct Sun fires: sun=%d >= thSun=%d (sunMinShape=true)", sun, thSun)
             return K.BID_SUN
         end
         btrace("R1 direct Sun skipped: sunMinShape=%s sun=%d thSun=%d",
-               tostring(sunMinShape(hand)), sun, thSun)
+               tostring(sunMinShape(sunHand)), sun, thSun)
 
         -- Hokm-on-flipped only available if no prior Hokm/Sun.
         -- v0.5.8 patches B-1, B-4, B-6: gate on hokmMinShape (J of
@@ -1602,7 +1652,7 @@ function Bot.PickBid(seat)
         if g4_partnerBidHokm then
             -- Partner committed Hokm. Allow Sun overcall (different
             -- contract type, not a "competing Hokm" violation).
-            if sunMinShape(hand) and sun >= thSun then
+            if sunMinShape(sunHand) and sun >= thSun then
                 return K.BID_SUN
             end
             return K.BID_PASS
@@ -1614,11 +1664,18 @@ function Bot.PickBid(seat)
     -- or fewer than 3 trumps, are skipped — Saudi rule, not heuristic.
     -- Belote suit (K+Q same suit) gets the +20 multiplier-immune bonus.
     -- Sources: decision-trees.md B-1, B-4 (Definite, video 26), B-6 (Definite, video 26).
+    -- v0.11.16 audit BC-1: include bidcard in R2 Hokm evaluation. R2
+    -- skips bidcard's suit as a candidate trump (line below: `suit ~=
+    -- bidCardSuit`), so the bidcard becomes a non-trump card in the
+    -- bidder's post-win hand. It contributes via sideSuitAceBonus
+    -- (if it's an Ace) and via face value implicitly through the
+    -- standard suitStrengthAsTrump pipeline. Pre-v0.11.16 missing.
+    local hokmHand = withBidcard(hand, S.s.bidCard)
     local bestSuit, bestScore = nil, 0
     for _, suit in ipairs(K.SUITS) do
-        if suit ~= bidCardSuit and hokmMinShape(hand, suit) then
-            local s = suitStrengthAsTrump(hand, suit)
-            s = s + sideSuitAceBonus(hand, suit)
+        if suit ~= bidCardSuit and hokmMinShape(hokmHand, suit) then
+            local s = suitStrengthAsTrump(hokmHand, suit)
+            s = s + sideSuitAceBonus(hokmHand, suit)
             -- v0.5.13: +20 → K.BOT_PICKBID_BELOTE_BONUS (mirrors K.MELD_BELOTE).
             if belote == suit then s = s + K.BOT_PICKBID_BELOTE_BONUS end
             if s > bestScore then bestSuit, bestScore = suit, s end
@@ -1631,7 +1688,7 @@ function Bot.PickBid(seat)
     -- the +10 raw downside swing.
     -- Sources: decision-trees.md B-5 (Definite, videos 25 + 26).
     -- Patch S-1 also gates Sun on minimum shape (mardoofa or 2+ Aces).
-    if sunMinShape(hand) and sun >= thSun then
+    if sunMinShape(sunHand) and sun >= thSun then
         local hokmViable = (bestSuit and bestScore >= thHokmR2)
         if not hokmViable then
             btrace("R2 Sun fires (Hokm not viable): sun=%d thSun=%d bestSuit=%s bestScore=%d",
@@ -1651,7 +1708,7 @@ function Bot.PickBid(seat)
         -- (falls through to Hokm return below).
     else
         btrace("R2 Sun skipped: sunMinShape=%s sun=%d thSun=%d",
-               tostring(sunMinShape(hand)), sun, thSun)
+               tostring(sunMinShape(sunHand)), sun, thSun)
     end
     if bestSuit and bestScore >= thHokmR2 then
         btrace("R2 Hokm fires: %s bestScore=%d >= thHokmR2=%d", bestSuit, bestScore, thHokmR2)
@@ -2085,18 +2142,58 @@ local function pickLead(legal, contract, seat)
         end
     end
     if tahreebPrefSuit then
-        -- Lead our LOWEST card in the partner-preferred suit. Partner
-        -- has the high cards there (or wants to receive the suit);
-        -- we lead low so partner's tops win the trick.
+        -- v0.11.16 audit H-2: Tahreeb-return decision tree.
+        -- Pre-v0.11.16 we always led the LOWEST card in the partner-
+        -- preferred suit. Per signals.md Section 1 + decision-trees.md
+        -- Section 8 receiver-side, that's correct ONLY for the
+        -- "T+2+ tripled" and "3+ no-T" cases. The two T-priority cases
+        -- demand a different lead:
+        --   * Bare-T (singleton T in the pref suit) -> lead T
+        --     immediately. Otherwise opps "tafranak" (duck) to capture
+        --     our T later when we're forced to lead small.
+        --   * Doubled-T (T + 1 cover, partner is NOT Sun bidder) ->
+        --     lead the T. Leading the cover telegraphs the T to opps
+        --     who duck low and capture later.
+        --   * Doubled-T (T + 1 cover, partner IS Sun bidder) -> lead
+        --     the cover. Sun-bidder partner has the A; we keep the T
+        --     to follow partner's A and avoid forcing partner to
+        --     overtake.
+        --   * 3+ cards (with or without T) -> lead LOW (legacy).
         local fromPref = {}
+        local hasT, tCard = false, nil
+        local nonTpref = {}
         for _, c in ipairs(legal) do
             if C.Suit(c) == tahreebPrefSuit
                and not C.IsTrump(c, contract) then
                 fromPref[#fromPref + 1] = c
+                if C.Rank(c) == "T" then
+                    hasT = true; tCard = c
+                else
+                    nonTpref[#nonTpref + 1] = c
+                end
             end
         end
         if #fromPref > 0 then
-            return lowestByRank(fromPref, contract)
+            local count = #fromPref
+            if hasT and count == 1 then
+                -- Bare-T: lead immediately.
+                return tCard
+            elseif hasT and count == 2 then
+                -- Doubled-T: branch on partner-is-Sun-bidder.
+                local partner = R.Partner(seat)
+                local partnerIsSunBidder = (contract and contract.bidder == partner
+                                            and contract.type == K.BID_SUN)
+                if partnerIsSunBidder then
+                    -- Lead cover; keep T for partner's A.
+                    return lowestByRank(nonTpref, contract)
+                else
+                    -- Lead T; otherwise opp tafranaks to capture later.
+                    return tCard
+                end
+            else
+                -- 3+ cards OR no T: lead low (legacy).
+                return lowestByRank(fromPref, contract)
+            end
         end
     end
 
@@ -3489,12 +3586,20 @@ function Bot.PickAKA(seat, leadCard)
     Bot._memory = Bot._memory or emptyMemory()
     local mem = Bot._memory[seat]
     if mem and mem.akaSent and mem.akaSent[su] then return nil end
-    -- Skip on the very first trick lead: at that point no opponent has
-    -- shown a void yet, so the signal isn't actionable for partner —
-    -- they have no reason to over-trump a fresh suit yet anyway.
-    -- AKA is most useful in the mid/late hand once voids are showing.
+    -- v0.11.16 audit H-1: trick-1 AKA suppression DROPPED. Per
+    -- signals.md Section 4 ("AKA at trick-1 or trick-2 is the
+    -- strongest read") and decision-trees.md Section 6 (canonical
+    -- Saudi convention recognizes trick-1/2 AKAs as the most
+    -- meaningful window), the prior heuristic was inverted: trick-1
+    -- AKA on K/Q/J of side suits IS the highest-EV announcement. The
+    -- prior comment "no opponent has shown a void yet" misframed the
+    -- mechanism — partner's must-ruff obligation kicks in regardless
+    -- of opp voids; the AKA is what cancels it. The partner-certainly-
+    -- void-in-trump gate below already covers the case where AKA
+    -- carries zero coordination value. Pre-v0.11.16 bots played
+    -- "without AKA" half the time it would matter. The trickNum is
+    -- still computed for the trick-6+ clutch-only gate at line ~3590.
     local trickNum = #(S.s.tricks or {}) + 1
-    if trickNum <= 1 then return nil end
     -- v0.9.1 AKA precondition (f) (audit AUDIT_REPORT_v0.7.1.md
     -- missing item #5, decision-trees.md Section 6 row "preconditions"
     -- subitem (f)): NOT (partner certainly void in trump). The whole
@@ -3879,20 +3984,17 @@ end
 function Bot.PickPreempt(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     if not hand then return false end
-    local strength = sunStrength(hand)
-    -- Slight bonus when we hold the Ace of the bid suit ourselves
-    -- (it would have been our trick-winner anyway). 13th-bot-audit
-    -- raised this from +8 to +12 (Codex+Claude consensus): the Ace
-    -- is worth ~11 points + tempo control + guaranteed first-trick,
-    -- under-weighted at +8.
-    local bidSuit = S.s.bidCard and C.Suit(S.s.bidCard)
-    if bidSuit then
-        for _, c in ipairs(hand) do
-            if C.Rank(c) == "A" and C.Suit(c) == bidSuit then
-                strength = strength + 12; break
-            end
-        end
-    end
+    -- v0.11.16 audit BC-1 + PP-1 fix: include bidcard in sunStrength.
+    -- PickPreempt fires only when bidCard.rank == "A" (gated by
+    -- Net.lua _OnPreempt phase). The pre-emption winner becomes the
+    -- new bidder and gets the bidcard appended to their hand. Pre-
+    -- v0.11.16 the dead-code "+12 if hand contains A of bidSuit"
+    -- bonus was unreachable: the A of bidSuit IS the bidcard, so no
+    -- non-host seat can hold it. Replacing with the canonical
+    -- bidcard-inclusion via withBidcard correctly adds +11 (A face
+    -- value) to sunStrength via the same mechanism as R1 Sun.
+    local sunHand = withBidcard(hand, S.s.bidCard)
+    local strength = sunStrength(sunHand)
     -- 13th-bot-audit fix (Codex): factor partner's bid history.
     -- Partner who already passed (Sun option declined) → preempt is
     -- riskier (no fallback if our Sun fails). Partner who bid Sun or
@@ -3963,7 +4065,15 @@ function Bot.PickOvercall(seat)
         voidBonus = K.BOT_OVERCALL_SHORT_TRUMP_BONUS
     end
 
-    local sunStr = sunStrength(hand) + voidBonus
+    -- v0.11.16 audit BC-1: include the R1 bidcard (carried in
+    -- S.s.overcall.bidCard) in overcall evaluation. Whoever wins the
+    -- overcall becomes the new bidder and gets the bidcard appended
+    -- to their hand. Pre-v0.11.16 the bidcard was accessed only for
+    -- the CanOvercall gate; not factored into strength. For non-
+    -- bidder TAKE/TAKE_HOKM the +11 (A bidcard) or smaller face value
+    -- contribution can flip threshold-borderline overcall decisions.
+    local hypHand = withBidcard(hand, bidCard)
+    local sunStr = sunStrength(hypHand) + voidBonus
     if seat == contract.bidder then
         -- UPGRADE option (non-Ace-bid only — CanOvercall already
         -- filters Ace case). Threshold is BOT_OVERCALL_SELF_TH.
@@ -3989,14 +4099,16 @@ function Bot.PickOvercall(seat)
     end
     for _, suit in ipairs({ "S", "H", "D", "C" }) do
         if suit ~= contract.trump then
-            local trumpStr, trumpCnt = suitStrengthAsTrump(hand, suit)
+            -- v0.11.16 BC-1: include bidcard in cross-trump-Hokm shape +
+            -- strength evaluation (parallels R2 Hokm path).
+            local trumpStr, trumpCnt = suitStrengthAsTrump(hypHand, suit)
             -- Saudi minimum-Hokm shape gate (mirror of B-1 from
             -- pickBid): require J of trump + count >= 3 to even
             -- consider taking this as Hokm. Without this gate the
             -- threshold can be cleared by side-suit-Ace stacking on
             -- a hand with no actual trump support.
             local hasJ = false
-            for _, c in ipairs(hand) do
+            for _, c in ipairs(hypHand) do
                 if C.Suit(c) == suit and C.Rank(c) == "J" then
                     hasJ = true; break
                 end
@@ -4024,18 +4136,23 @@ end
 -- ---------------------------------------------------------------------
 -- A bot scans completed and in-progress tricks for any opponent play
 -- flagged .illegal by the host (only the host runs bots, and only the
--- host fills .illegal during S.ApplyPlay). Probability is higher in
--- the early tricks where a botched play is still fresh / "obvious",
--- and degrades as the hand progresses (a clever human caller would
--- catch it earlier; bots that wait too long feel more lifelike).
+-- host fills .illegal during S.ApplyPlay).
 --
--- Returns the offending play table if the bot decides to call, else
--- nil. Net.lua's MaybeRunBot consumes this on each bot turn before
--- scheduling the normal play.
+-- v0.11.16 audit H2: rate-table inverted+over-soft to flat ~0.95.
+-- Pre-v0.11.16 the rate decayed 0.60 -> 0.05 across tricks, framing
+-- Takweesh as a "looks more obvious early" tactical option. Per
+-- saudi-rules.md:163-166 (video #36) Takweesh is a HARD rule-correctness
+-- call — humans call ALL detected violations promptly regardless of
+-- trick number. The decay was leaving ~95% of trick-6/7 illegal plays
+-- silently uncalled. Flat 0.95 keeps a tiny "human realism" softener
+-- (not all humans catch every violation) while restoring tournament-
+-- grade vigilance. Returns the offending play table if the bot
+-- decides to call, else nil. Net.lua's MaybeRunBot consumes this
+-- on each bot turn before scheduling the normal play.
 
 local TAKWEESH_RATE_BY_TRICK = {
-    [0] = 0.60, [1] = 0.55, [2] = 0.45, [3] = 0.40,
-    [4] = 0.30, [5] = 0.20, [6] = 0.10, [7] = 0.05,
+    [0] = 0.95, [1] = 0.95, [2] = 0.95, [3] = 0.95,
+    [4] = 0.95, [5] = 0.95, [6] = 0.95, [7] = 0.95,
 }
 
 function Bot.PickTakweesh(seat)
@@ -4074,14 +4191,20 @@ end
 -- Gates:
 --   • Bot.IsAdvanced() — Basic bots never call SWA
 --   • Phase == PLAY
---   • S.s.hostHands[seat] exists and has ≤4 cards
+--   • S.s.hostHands[seat] exists and has ≤6 cards (v0.11.16 audit H3:
+--     was ≤4; raised to allow legitimate 5/6-card SWAs per Saudi rule
+--     "5+ cards is mandatory PERMISSION", NOT forbidden — endgame.md
+--     191-198, decision-trees.md:207, CLAUDE.md:64-76. The Net.lua
+--     5-second permission flow handles 5+ correctly; the artificial
+--     #hand>4 cap was eliminating legitimate SWAs especially in Sun
+--     where holding A+T+A+T at trick 4 is a guaranteed claim.)
 --   • R.IsValidSWA returns true on the reconstructed trick state
 function Bot.PickSWA(seat)
     if not Bot.IsAdvanced() then return false end
     if S.s.phase ~= K.PHASE_PLAY then return false end
     if not S.s.contract then return false end
     local hand = S.s.hostHands and S.s.hostHands[seat]
-    if not hand or #hand == 0 or #hand > 4 then return false end
+    if not hand or #hand == 0 or #hand > 6 then return false end
     -- v0.11.7 user feedback: don't bother SWA-claiming with only 1
     -- card left — the bot is about to play that card as the final
     -- trick anyway. An SWA banner + permission flow + claim-verified
@@ -4155,5 +4278,83 @@ function Bot.PickSWA(seat)
         end
     end
 
+    return true
+end
+
+-- ---------------------------------------------------------------------
+-- SWA-response: deny clearly-invalid claims (v0.11.16 audit H1)
+-- ---------------------------------------------------------------------
+-- When an opponent (human or bot) calls SWA, the host runs the bots'
+-- response on cross-team seats. Pre-v0.11.16 bots auto-accepted ALL
+-- incoming SWAs (Net.lua line ~3006: `_OnSWAResp("__host__", s2, true, ...)`)
+-- — eliminating the entire defensive side of SWA. Humans got free EV
+-- by SWA-bluffing against bot opponents who couldn't deny.
+--
+-- This function returns true (ACCEPT) for any plausible SWA and false
+-- (DENY) only when R.IsValidSWA strictly rejects the claim. Bots
+-- default toward ACCEPT to match the addon UX intent (5-second auto-
+-- approve was designed for human deadlock prevention, not bot
+-- adversarial play); the deny path is reserved for clearly-invalid
+-- claims where the validator can prove failure under perfect knowledge.
+--
+-- Caveats:
+--   * Bots run host-side, so they have access to S.s.hostHands —
+--     full information for ALL seats. The validator runs against
+--     real hands, producing a strict yes/no on the SWA claim.
+--   * Defensive: if encodedHand is missing/short, fall through to
+--     accept (the v0.11.5 XR-06 cap means we never see >16 chars).
+--   * If R.IsValidSWA itself errors (defensive pcall), accept by
+--     default — a bot crash should not deny a valid SWA.
+--
+-- Saudi rule reference:
+--   * endgame.md:185-187 + decision-trees.md:209: "Opp denies your
+--     SWA claim via Takweesh, demanding شرح (proof) — if they
+--     cannot prove the claim, Qaid is awarded against them."
+--   * saudi-rules.md:110: "Opponents can deny via Takweesh OR demand
+--     proof."
+function Bot.PickSWAResponse(seat, callerSeat, encodedCallerHand)
+    if not S.s.isHost then return true end  -- only host runs bots
+    if not S.s.contract then return true end
+    if not callerSeat or callerSeat < 1 or callerSeat > 4 then
+        return true
+    end
+    if seat == callerSeat then return true end  -- can't deny own SWA
+    if R.TeamOf(seat) == R.TeamOf(callerSeat) then
+        return true  -- partner always accepts
+    end
+
+    -- Reconstruct trick state for the validator (mirrors Bot.PickSWA
+    -- and N.HostResolveSWA logic).
+    local trickPlays = (S.s.trick and S.s.trick.plays) or {}
+    local trickLead = S.s.trick and S.s.trick.leadSuit
+    local trickLeader
+    if #trickPlays > 0 then
+        trickLeader = trickPlays[1].seat
+    else
+        trickLeader = S.s.turn or callerSeat
+    end
+    local trickState = {
+        leadSuit = trickLead, leader = trickLeader, plays = trickPlays,
+    }
+
+    -- Hands: caller's via the wire (encoded); others via host's
+    -- authoritative hostHands. If encoded is missing, accept (we
+    -- can't validate without it; default to safe ACCEPT).
+    local hands = {}
+    for s2 = 1, 4 do
+        if s2 == callerSeat and encodedCallerHand and #encodedCallerHand > 0 then
+            hands[s2] = (C and C.DecodeHand) and C.DecodeHand(encodedCallerHand) or
+                        (S.s.hostHands and S.s.hostHands[s2]) or {}
+        else
+            hands[s2] = (S.s.hostHands and S.s.hostHands[s2]) or {}
+        end
+    end
+
+    -- Defensive pcall — never crash a bot on validator edge cases;
+    -- accept by default. Strict-deny only on a definitively-false
+    -- validator return.
+    local ok, valid = pcall(R.IsValidSWA, callerSeat, hands, S.s.contract, trickState)
+    if not ok then return true end  -- pcall fail → accept
+    if valid == false then return false end  -- deny clearly-invalid
     return true
 end

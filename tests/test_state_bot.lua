@@ -2637,7 +2637,11 @@ do
     local fnStart = botSrc:find("local function hokmMinShape")
     assertTrue(fnStart ~= nil, "T.3 setup: hokmMinShape found")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 3500)
+        -- v0.11.16: hokmMinShape grew with Belote-K+Q escape clause; cap
+        -- search by the next top-level `local function` boundary.
+        local body = botSrc:sub(fnStart)
+        local nextFn = body:find("\nlocal function ", 2, true)
+        if nextFn then body = body:sub(1, nextFn) end
         -- New gate references hasTrumpNine and hasTrumpA tracked in
         -- the loop, then requires (hasTrumpNine or hasTrumpA) in the
         -- count==2 branch.
@@ -2956,10 +2960,13 @@ do
     local fnStart = botSrc:find("function Bot%.PickBid")
     assertTrue(fnStart ~= nil, "W.1 setup: Bot.PickBid found")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 5000)
-        assertTrue(body:find("aceCount == 2") ~= nil
-                   and body:find("K%.BOT_SUN_2ACE_BONUS") ~= nil,
-                   "W.1 (v0.11.14): PickBid applies K.BOT_SUN_2ACE_BONUS for aceCount==2")
+        local body = botSrc:sub(fnStart, fnStart + 6000)
+        -- v0.11.16 audit BC-1 renamed local `aceCount` to `sunAces` in
+        -- the bonus block (post-bidcard recount). Either symbol satisfies.
+        local hasAceMatch = body:find("aceCount == 2") ~= nil
+                            or body:find("sunAces == 2") ~= nil
+        assertTrue(hasAceMatch and body:find("K%.BOT_SUN_2ACE_BONUS") ~= nil,
+                   "W.1 (v0.11.14): PickBid applies K.BOT_SUN_2ACE_BONUS for 2-Ace count")
     end
 end
 
@@ -3075,7 +3082,11 @@ do
     local fnStart = botSrc:find("local function hokmMinShape")
     assertTrue(fnStart ~= nil, "X.2 setup: hokmMinShape found")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 3000)
+        -- v0.11.16: hokmMinShape grew; cap by the next top-level
+        -- `local function` boundary instead of fixed window.
+        local body = botSrc:sub(fnStart)
+        local nextFn = body:find("\nlocal function ", 2, true)
+        if nextFn then body = body:sub(1, nextFn) end
         assertTrue(body:find("count >= 3 and hasTrumpNine") ~= nil,
                    "X.2 (Q2): hokmMinShape adds J+9+count>=3 self-sufficient path")
         -- Verify the new path comes BEFORE the L07 gate, otherwise
@@ -3137,6 +3148,120 @@ do
     S.s.hostHands = s_save.hostHands
     S.s.cumulative = s_save.cumulative
     S.s.bids = s_save.bids
+end
+
+-- =====================================================================
+-- Y. v0.11.16 — Tier-1 audit fixes (A1-A7)
+-- =====================================================================
+print("")
+print("=== Section Y: v0.11.16 Tier-1 audit fixes ===")
+
+-- Y.1 (A1) — withBidcard helper exists at file scope
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local function withBidcard%(hand, bidcard%)") ~= nil,
+               "Y.1 (A1): withBidcard helper defined at file scope")
+end
+
+-- Y.2 (A2) — Belote K+Q escape clause in hokmMinShape
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function hokmMinShape")
+    if fnStart then
+        local body = botSrc:sub(fnStart)
+        local nextFn = body:find("\nlocal function ", 2, true)
+        if nextFn then body = body:sub(1, nextFn) end
+        assertTrue(body:find("hasKsuit and hasQsuit and count >= 2") ~= nil,
+                   "Y.2 (A2 / BS-1): Belote K+Q-of-trump escape clause in hokmMinShape")
+        -- Verify it appears BEFORE the J-floor.
+        local belotePath = body:find("hasKsuit and hasQsuit and count >= 2")
+        local jFloor = body:find("if not hasJ then return false end")
+        if belotePath and jFloor then
+            assertTrue(belotePath < jFloor,
+                       "Y.2b (A2): Belote escape runs BEFORE J-floor (J-less Belote hands pass)")
+        end
+    end
+end
+
+-- Y.3 (A1) — R1 Sun uses sunHand (with bidcard)
+-- Y.3 (A1) — R1 Sun + R2 Hokm + PickPreempt + PickOvercall use bidcard
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local pickBid = botSrc:find("function Bot%.PickBid")
+    if pickBid then
+        local body = botSrc:sub(pickBid, pickBid + 25000)
+        assertTrue(body:find("local sunHand = withBidcard%(hand, S%.s%.bidCard%)") ~= nil,
+                   "Y.3a (A1): PickBid Sun uses withBidcard")
+        assertTrue(body:find("local hokmHand = withBidcard%(hand, S%.s%.bidCard%)") ~= nil,
+                   "Y.3b (A1): PickBid R2 Hokm uses withBidcard")
+    end
+    local pickPreempt = botSrc:find("function Bot%.PickPreempt")
+    if pickPreempt then
+        local body = botSrc:sub(pickPreempt, pickPreempt + 3000)
+        assertTrue(body:find("withBidcard%(hand, S%.s%.bidCard%)") ~= nil,
+                   "Y.3c (A1 / PP-1): PickPreempt uses withBidcard")
+    end
+    local pickOvercall = botSrc:find("function Bot%.PickOvercall")
+    if pickOvercall then
+        local body = botSrc:sub(pickOvercall, pickOvercall + 4000)
+        assertTrue(body:find("local hypHand = withBidcard%(hand, bidCard%)") ~= nil,
+                   "Y.3d (A1): PickOvercall uses withBidcard")
+    end
+end
+
+-- Y.4 (A4) — Takweesh rate flat 0.95
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local rateStart = botSrc:find("local TAKWEESH_RATE_BY_TRICK = {")
+    if rateStart then
+        local body = botSrc:sub(rateStart, rateStart + 200)
+        assertTrue(body:find("%[0%] = 0%.95") ~= nil
+                   and body:find("%[7%] = 0%.95") ~= nil,
+                   "Y.4 (A4): Takweesh rate table flattened to 0.95 across all tricks")
+    end
+end
+
+-- Y.5 (A5) — PickSWA cap raised 4 -> 6
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("if not hand or #hand == 0 or #hand > 6 then return false end") ~= nil,
+               "Y.5 (A5): PickSWA cap raised to 6 cards")
+end
+
+-- Y.6 (A3) — Bot.PickSWAResponse exists
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("function Bot%.PickSWAResponse") ~= nil,
+               "Y.6a (A3): Bot.PickSWAResponse defined")
+    -- Net.lua wires it (replaces unconditional accept=true)
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find("B%.Bot%.PickSWAResponse") ~= nil,
+               "Y.6b (A3): Net.lua wires Bot.PickSWAResponse into _OnSWAReq bot-vote path")
+end
+
+-- Y.7 (A6) — AKA trick-1 suppression dropped (no `if trickNum <= 1 then return nil end`)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickAKA")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 5000)
+        -- The trickNum local is still computed, but the "<= 1 -> nil"
+        -- early-return must be gone.
+        assertTrue(body:find("if trickNum <= 1 then return nil end") == nil,
+                   "Y.7 (A6 / H-1): trick-1 AKA suppression dropped")
+    end
+end
+
+-- Y.8 (A7) — Tahreeb-return decision tree fires bare-T branch
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Pattern-pin the bare-T and doubled-T branches.
+    assertTrue(botSrc:find("hasT and count == 1") ~= nil,
+               "Y.8a (A7 / H-2): Tahreeb-return bare-T branch")
+    assertTrue(botSrc:find("hasT and count == 2") ~= nil,
+               "Y.8b (A7 / H-2): Tahreeb-return doubled-T branch")
+    assertTrue(botSrc:find("partnerIsSunBidder") ~= nil,
+               "Y.8c (A7 / H-2): Tahreeb-return doubled-T branches on partner-is-Sun-bidder")
 end
 
 -- =====================================================================

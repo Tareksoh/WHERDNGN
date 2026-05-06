@@ -1,0 +1,133 @@
+--- a/Bot.lua
++++ b/Bot.lua
+@@ -1328,6 +1328,32 @@ local function pickFollow(legal, hand, trick, contract, seat)
+         return lowestByRank(legal, contract)
+     end
+
++    -- H-5: AKA receiver — do NOT ruff over partner's announced boss.
++    --
++    -- When partner leads a suit and announces AKA ("I hold the boss of
++    -- this suit, don't ruff over me"), and partner is currently winning
++    -- the trick, and we are void in the led suit (so our only "winners"
++    -- would be trump), we should discard a low non-trump card instead of
++    -- ruffing.  Spending trump here steals the trick from partner for no
++    -- gain and wastes a trump that is better used against opponents.
++    --
++    -- Gate: Advanced mode only (same gate as Bot.PickAKA sender), Hokm
++    -- only (AKA is a Hokm-specific convention), and only when at least
++    -- one non-trump discard is available (if we are completely trump-only
++    -- we have no choice and must play trump — rule cannot be honoured).
++    if Bot.IsAdvanced()
++       and contract.type == K.BID_HOKM
++       and contract.trump
++       and trick.leadSuit
++       and S.s.akaCalled
++       and S.s.akaCalled.seat == R.Partner(seat)
++       and S.s.akaCalled.suit == trick.leadSuit
++       and partnerWinning then
++        local discards = {}
++        for _, c in ipairs(legal) do
++            if not C.IsTrump(c, contract) then
++                discards[#discards + 1] = c
++            end
++        end
++        if #discards > 0 then
++            return lowestByRank(discards, contract)
++        end
++    end
++
+     -- Opponent winning: try to beat them.
+     local winners = {}
+     for _, c in ipairs(legal) do
+--- a/tests/test_state_bot.lua
++++ b/tests/test_state_bot.lua
+@@ -710,6 +710,76 @@ print(("    [info] Basic avg = %.1f, M3lm = %.1f, Master = %.1f over %d rounds")
+       :format(basicSum / NUM_ROUNDS, m3lmSum / NUM_ROUNDS, masterSum / NUM_ROUNDS, NUM_ROUNDS))
+
++-- =====================================================================
++-- E. H-5 AKA receiver — bot must not ruff over partner's AKA boss
++-- =====================================================================
++section("E. H-5 AKA receiver (discard low instead of ruffing)")
++
++-- Scenario:
++--   Contract: Hokm, trump = Spades (S)
++--   Seat layout: seats 1+3 = Team A, seats 2+4 = Team B
++--   Active seat under test: seat 3 (partner of seat 1)
++--   Trick so far:
++--     pos 1 — seat 1 leads AH (Ace of Hearts)   <- AKA announced by seat 1
++--     pos 2 — seat 2 plays 7H (low Hearts, loses)
++--   AKA banner: { seat=1, suit="H" }
++--   Seat 3 hand:  { "JH" is absent — void in Hearts }
++--                 hand = { "JS", "9S", "8D", "7C" }
++--                 (JS and 9S are trump; 8D and 7C are non-trump discards)
++--   Current trick winner: seat 1 (AH beats 7H in Hearts)
++--   Without the AKA receiver fix, the bot at seat 3 would see it is void
++--   in the led suit (Hearts) and would ruff with the cheapest trump (9S).
++--   With the fix, it should detect that partner (seat 1) announced AKA
++--   on Hearts AND is currently winning, so it should discard a low
++--   non-trump instead (7C or 8D).
++
++do
++    freshState()
++    S.s.isHost = true
++    WHEREDNGNDB.advancedBots = true  -- Advanced mode required for AKA receiver
++    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
++    -- Two completed tricks so the AKA trickNum > 1 gate is satisfied.
++    S.s.tricks = {
++        { winner = 1, points = 0, plays = {} },
++        { winner = 2, points = 0, plays = {} },
++    }
++    S.s.playedCardsThisRound = {}
++    -- Partial trick: seat 1 led AH (AKA), seat 2 played 7H.
++    S.s.trick = {
++        leadSuit = "H",
++        plays = {
++            { seat = 1, card = "AH" },
++            { seat = 2, card = "7H" },
++        },
++    }
++    -- AKA banner set by S.ApplyAKA (as Net.lua would call it when seat 1 leads).
++    S.s.akaCalled = { seat = 1, suit = "H" }
++    -- Seat 3 is void in Hearts; holds two trumps and two low side cards.
++    S.s.hostHands = {
++        [1] = { "AH" },   -- already played; kept for realism
++        [2] = { "7H" },   -- already played
++        [3] = { "JS", "9S", "8D", "7C" },
++        [4] = { "KH" },
++    }
++    if Bot.ResetMemory then Bot.ResetMemory() end
++
++    local pick = Bot.PickPlay(3)
++
++    -- The pick must be a legal card.
++    local legal3 = S.GetLegalPlaysFor and S.GetLegalPlaysFor(3)
++    -- Manually verify legality: void in H → any card is legal (Hokm follow rules).
++    -- The pick must NOT be a spade (trump) — that would be ruffing over partner's AKA.
++    local isTrump = pick and C.Suit(pick) == "S"
++    assertFalse(isTrump,
++        ("H-5 AKA receiver: seat 3 must NOT ruff (got %s)"):format(tostring(pick)))
++
++    -- The pick should be one of the non-trump discards.
++    local isNonTrump = pick and (C.Suit(pick) == "D" or C.Suit(pick) == "C")
++    assertTrue(isNonTrump,
++        ("H-5 AKA receiver: seat 3 discards a non-trump (got %s)"):format(tostring(pick)))
++
++    -- It should specifically be the LOWEST non-trump (7C before 8D).
++    assertEq(pick, "7C",
++        ("H-5 AKA receiver: discards the lowest non-trump 7C (got %s)"):format(tostring(pick)))
++
++    -- Baseline: without the AKA banner (S.s.akaCalled = nil) the bot SHOULD
++    -- ruff — verifies the gate is the distinguishing factor, not some other
++    -- heuristic.
++    S.s.akaCalled = nil
++    if Bot.ResetMemory then Bot.ResetMemory() end
++    local pickNoAKA = Bot.PickPlay(3)
++    local isRuff = pickNoAKA and C.Suit(pickNoAKA) == "S"
++    assertTrue(isRuff,
++        ("H-5 AKA receiver baseline: without AKA banner bot DOES ruff (got %s)")
++            :format(tostring(pickNoAKA)))
++end
++
+ -- =====================================================================
+ -- Summary
+ -- =====================================================================

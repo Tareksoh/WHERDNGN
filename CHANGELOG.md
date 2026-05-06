@@ -1,5 +1,112 @@
 # Changelog
 
+## v0.11.16 — Tier 1: 7 deep-audit fixes for human-like bot play
+
+User-requested 4-agent deep audit of bot behavior surfaced 17 HIGH-severity
+issues across bidding, trick play, endgame, and BotMaster. v0.11.16 ships
+Tier 1 (7 highest user-visible-impact fixes) ahead of Tier 2/3 in
+follow-up releases.
+
+### Added
+
+- **`withBidcard(hand, bidcard)`** file-local helper in Bot.lua —
+  unifies the v0.11.15 hypHand pattern (5-card hand + bidcard) used
+  for evaluating the bidder's post-win hand structure.
+
+- **`Bot.PickSWAResponse(seat, callerSeat, encodedCallerHand)`** —
+  new function letting bots DENY clearly-invalid SWA claims via
+  `R.IsValidSWA` strict-rejection. Pre-v0.11.16 bots auto-accepted
+  every incoming SWA, eliminating the entire defensive side of the
+  mechanic. Wired in `Net.lua` `_OnSWAReq` + parallel host-localSWA
+  + bot-fired SWA paths.
+
+### Changed (audit-driven behavioral fixes)
+
+- **A1 (BC-1) — bidcard inclusion in 5 remaining bid paths.** v0.11.15
+  fixed only R1 Hokm-on-flipped; v0.11.16 extends to R1 Sun, R2 Hokm,
+  R2 Sun, `Bot.PickPreempt`, and `Bot.PickOvercall`. The bidder
+  receives the bidcard (`HostDealRest` State.lua:1950); evaluating
+  bid decisions on the 5-card pre-deal hand systematically
+  underestimated post-win strength. R1 Sun also recomputes
+  `aceCount` post-bidcard so the +15 2-Ace bonus correctly fires
+  on hands like `[KH 8H 7C 9D 8S]` + bidcard `AC`.
+
+- **A2 (BS-1) — Belote K+Q-of-trump escape clause in `hokmMinShape`.**
+  Saudi rule B-6 (decision-trees.md, **Mandatory** verdict, video #26):
+  K+Q of trump + count >= 2 = mandatory Hokm-of-that-suit. Pre-v0.11.16
+  the J-floor (`if not hasJ then return false end`) blocked these
+  hands when J-of-trump was missing, even though +20 multiplier-immune
+  Belote bonus locks the Royal Hand. Escape clause runs BEFORE J-floor.
+
+- **A3 (H1) — `Bot.PickSWAResponse` denies clearly-invalid SWAs.**
+  Prior bot auto-accept gave humans free SWA-bluff EV. Bots now
+  validate via `R.IsValidSWA` over decoded caller hand + known
+  hostHands. Strict-reject -> DENY. Default-accept on ambiguity
+  matches the addon's "humans handle close calls verbally" UX intent.
+
+- **A4 (H2) — Takweesh rate flat 0.95 (was decaying 0.60->0.05).**
+  saudi-rules.md:163-166 (video #36): Takweesh is a HARD rule-correctness
+  call; humans call ALL detected violations promptly. Prior decay made
+  the bot effectively dead at trick 6/7. The 0.95 keeps a tiny
+  human-realism softener while restoring tournament-grade vigilance.
+
+- **A5 (H3) — `Bot.PickSWA` cap raised 4 -> 6 cards.** Saudi rule:
+  5+ cards = mandatory PERMISSION flow, NOT forbidden. The Net.lua
+  5-second permission flow already handles 5+ correctly; the
+  artificial #hand>4 cap eliminated legitimate Sun-A+T+A+T late-trick
+  SWAs.
+
+- **A6 (H-1) — AKA trick-1 suppression DROPPED.** signals.md Section 4
+  + decision-trees.md Section 6: "AKA at trick-1/trick-2 is the
+  STRONGEST read." Prior `if trickNum <= 1 then return nil end`
+  inverted canonical Saudi practice. The partner-certainly-void-in-
+  trump gate already covers the case where AKA carries zero
+  coordination value.
+
+- **A7 (H-2) — Tahreeb-return decision tree.** Pre-v0.11.16 always
+  led the lowest in partner's preferred suit. Per signals.md Section 1
+  + decision-trees.md Section 8 receiver:
+  - Bare-T (singleton T) -> lead T immediately (else opps tafranak)
+  - Doubled-T + partner is Sun bidder -> lead the cover (preserve T
+    for partner's A overtake)
+  - Doubled-T + partner is NOT Sun bidder -> lead the T (else cover-
+    lead telegraphs T to opps)
+  - 3+ cards -> lead low (legacy, unchanged)
+
+- **PP-1 cleanup (in A1)** — removed dead-code "+12 if hand contains
+  A of bidSuit" bonus in `Bot.PickPreempt`. The +12 was unreachable
+  because PickPreempt only fires when `bidCard.rank == "A"`, and
+  there's only one A per suit in 32-card deck — so no bot can hold
+  it. Replaced with the canonical `withBidcard` pattern that adds
+  +11 (A face value) via the same mechanism as R1 Sun.
+
+### Test coverage (Section Y added)
+
+- **Y.1 (A1)**: `withBidcard` helper at file scope
+- **Y.2 (A2 / BS-1)**: Belote K+Q escape + ordering before J-floor
+- **Y.3 (A1)**: bidcard inclusion in PickBid R1 Sun, R2 Hokm,
+  PickPreempt, PickOvercall
+- **Y.4 (A4)**: Takweesh rate flat 0.95
+- **Y.5 (A5)**: PickSWA cap raised to 6
+- **Y.6 (A3)**: `Bot.PickSWAResponse` exists + Net.lua wiring
+- **Y.7 (A6 / H-1)**: trick-1 AKA suppression dropped
+- **Y.8 (A7 / H-2)**: Tahreeb-return bare-T + doubled-T branches +
+  partner-is-Sun-bidder branch
+
+Plus updated T.3 / X.2 source-pins for the bigger `hokmMinShape`,
+W.1 for the `aceCount` -> `sunAces` rename. 608/608 tests pass.
+
+### Deferred to v0.11.17/v0.11.18
+
+Remaining audit findings (not in this release):
+- **B1**: escalation chain calibration (EV-1/EV-2)
+- **B2**: ISMCTS wall-clock budget (3-15s pause at trick 0)
+- **B3**: bidcard public-knowledge in defense
+- **B4**: Tahreeb sender refinements (H-4/H-5/H-6)
+- **B5**: ISMCTS rollout state preservation + sampler fallback
+- **B6**: existential SWA validator for caller's own moves
+- **Tier 3**: dead-code cleanup, calibration nudges, Saudi-Master carve-out
+
 ## v0.11.15 — three bot bidding gaps surfaced by user audit (Q1 overcall, Q2 hokm shape, bidcard inclusion)
 
 User-audit questions revealed three real gaps in bot bidding logic

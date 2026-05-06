@@ -1,0 +1,7 @@
+OK: 01_registration_system (5443b)
+OK: 02_playing_system (7042b)
+OK: 03_secrets_pro_1 (2507b)
+OK: 04_secrets_pro_3 (5210b)
+OK: 05_what_is_baloot (4720b)
+OK: 06_third (3016b)
+OK: 07_doubling_system (2141b)

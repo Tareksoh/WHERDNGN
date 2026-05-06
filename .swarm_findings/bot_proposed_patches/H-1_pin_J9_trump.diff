@@ -1,0 +1,55 @@
+--- a/BotMaster.lua
++++ b/BotMaster.lua
+@@ -156,6 +156,37 @@ local function sampleConsistentDeal(seat, unseen)
+     local meldPins = {}
+     if S.s.meldsByTeam then
+         for _, team in ipairs({ "A", "B" }) do
+             for _, m in ipairs(S.s.meldsByTeam[team] or {}) do
+                 if m.declaredBy and m.declaredBy ~= seat
+                    and m.cards then
+                     for _, c in ipairs(m.cards) do
+                         -- Only pin if still in unseen pool (not played).
+                         for _, u in ipairs(unseen) do
+                             if u == c then
+                                 meldPins[c] = m.declaredBy
+                                 break
+                             end
+                         end
+                     end
+                 end
+             end
+         end
+     end
++
++    -- H-1 fix: for Hokm contracts, hard-pin the J and 9 of trump to the
++    -- bidder seat.  The J (trick-rank 8, worth 20 pts) and 9 (trick-rank 7,
++    -- worth 14 pts) are structurally bidder-held: the bidder buys the Hokm
++    -- contract precisely because they hold these power cards.  Allowing 30%
++    -- of sampled worlds to place them on a defender inverts every rollout
++    -- value for the bidder team (the sampler sees the defenders as holding
++    -- the trump power cards and rates defensive plays too highly).
++    --
++    -- Three skip conditions — all reduce to "is the card still in unseen?":
++    --   • Already played: buildUnseen() excludes played cards from `unseen`.
++    --   • In our own hand: buildUnseen() excludes S.s.hostHands[seat].
++    --   • Already covered by pinCard (bidder's bid card IS the J or 9):
++    --     pinCard is already excluded from the pool; double-adding to
++    --     meldPins would leave it in neither pool nor hand slot.
++    if contract and contract.type == K.BID_HOKM and contract.trump and bidder then
++        local trump = contract.trump
++        for _, powerCard in ipairs({ "J" .. trump, "9" .. trump }) do
++            -- Skip if pinCard already covers this card.
++            if powerCard ~= pinCard and not meldPins[powerCard] then
++                -- Only pin if the card is still unseen (not played, not in
++                -- our hand — both cases are already excluded by buildUnseen).
++                for _, u in ipairs(unseen) do
++                    if u == powerCard then
++                        meldPins[powerCard] = bidder
++                        break
++                    end
++                end
++            end
++        end
++    end
+
+     local maxAttempts = 15
