@@ -404,7 +404,12 @@ local function buildMain()
     -- Title
     local title = makeText(f, 16, "CENTER")
     title:SetPoint("TOP", 0, -10)
-    title:SetText("|cff66ddffWHEREDNGN|r")
+    -- v0.11.21 user-requested rename: window title now "Loot & Baloot"
+    -- (the addon's friendly Saudi-Baloot brand). Internal namespace
+    -- WHEREDNGN remains for code organization (no folder rename, no
+    -- SavedVariables migration needed). Subtitle "(KZKZ will come)"
+    -- below preserved as the tagline/branding.
+    title:SetText("|cff66ddffLoot & Baloot|r")
 
     -- Subtitle next to the title (host's tagline / branding).
     local subtitle = makeText(f, 12, "LEFT")

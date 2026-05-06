@@ -1,5 +1,5 @@
 ## Interface: 120005
-## Title: WHEREDNGN
+## Title: Loot & Baloot
 ## Notes: 4-player Saudi Baloot card game over party addon channel.
 ## Author: Tareksoh
 ## Version: @project-version@

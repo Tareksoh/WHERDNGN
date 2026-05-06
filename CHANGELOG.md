@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.11.21 — Display rename: "Loot & Baloot"
+
+User-requested rebrand. Two-line change:
+
+- **`WHEREDNGN.toc`** `## Title:` field: `WHEREDNGN` → `Loot & Baloot`
+  (this is what users see in the in-game AddOns list)
+- **`UI.lua:407`** main window title: `WHEREDNGN` → `Loot & Baloot`
+  (cyan-colored brand at the top of the bot's window)
+
+The "(KZKZ will come)" subtitle/tagline on line 412 is preserved as
+the addon's signature branding.
+
+### What stays
+
+- Folder name: `WHEREDNGN/` (changing requires GitHub repo rename +
+  CurseForge project migration + 600+ test pin updates; defer to a
+  future v0.12.0 if ever).
+- Lua namespace: `WHEREDNGN.Bot`, `WHEREDNGN.K`, etc. (internal code
+  organization; invisible to users).
+- SavedVariables key: `WHEREDNGNDB` (zero data loss for existing users).
+- Slash command: `/baloot` (already user-friendly).
+- CurseForge project ID 1529200.
+
+### Why minimal scope
+
+A full namespace rename touches ~30 Lua files with hundreds of
+references and requires SavedVariables migration. The user-visible
+brand is the **Title** in the .toc + the in-game window title — both
+now say "Loot & Baloot". Anyone reading the source still sees
+"WHEREDNGN" but that's an internal-only concern.
+
+675/675 tests pass.
+
 ## v0.11.20 — Tier-1 calibration nudges (Agent 1 math) + R1 Sun-button UI bug
 
 Implements all 4 calibration recommendations from Agent 1's calibration-
