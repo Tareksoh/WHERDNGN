@@ -3109,10 +3109,11 @@ do
     assertTrue(fnStart ~= nil, "X.3 setup: Bot.PickBid found")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 25000)
-        -- Source-pin: hypHand built from hand + bidCard, passed to
-        -- hokmMinShape instead of bare hand.
-        assertTrue(body:find("hypHand%[#hypHand %+ 1%] = S%.s%.bidCard") ~= nil,
-                   "X.3a (audit): R1 Hokm-on-flipped builds hypothetical post-win hand")
+        -- Source-pin: hypHand built via withBidcard helper (post-
+        -- v0.11.16-hotfix BC-INLINE; equivalent semantics to prior
+        -- inline construction).
+        assertTrue(body:find("local hypHand = withBidcard%(hand, S%.s%.bidCard%)") ~= nil,
+                   "X.3a (audit): R1 Hokm-on-flipped builds hypothetical post-win hand via withBidcard")
         assertTrue(body:find("hokmMinShape%(hypHand, bidCardSuit%)") ~= nil,
                    "X.3b (audit): R1 Hokm-on-flipped passes hypHand to hokmMinShape")
     end
@@ -3262,6 +3263,57 @@ do
                "Y.8b (A7 / H-2): Tahreeb-return doubled-T branch")
     assertTrue(botSrc:find("partnerIsSunBidder") ~= nil,
                "Y.8c (A7 / H-2): Tahreeb-return doubled-T branches on partner-is-Sun-bidder")
+end
+
+-- =====================================================================
+-- Z. v0.11.16-hotfix — post-ship audit fixes
+-- =====================================================================
+print("")
+print("=== Section Z: v0.11.16 hotfix ===")
+
+-- Z.1 (GAP-01) — `belote` recomputed on post-bidcard hand
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local belote = beloteSuit%(withBidcard%(hand, S%.s%.bidCard%)%)") ~= nil,
+               "Z.1 (GAP-01): belote computed on post-bidcard hand for K+Q-completion via bidcard")
+end
+
+-- Z.2 (OVC-bidcard) — PickOvercall hypHand precedes trumpCount loop
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local pickOvercall = botSrc:find("function Bot%.PickOvercall")
+    if pickOvercall then
+        local body = botSrc:sub(pickOvercall, pickOvercall + 4500)
+        local hypHand = body:find("local hypHand = withBidcard%(hand, bidCard%)")
+        local trumpLoop = body:find("for _, c in ipairs%(hypHand%) do")
+        if hypHand and trumpLoop then
+            assertTrue(hypHand < trumpLoop,
+                       "Z.2 (OVC-bidcard): PickOvercall hypHand precedes trumpCount loop")
+        end
+    end
+end
+
+-- Z.3 (MD-01) — mardoofa recomputed on post-bidcard hand
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local _, sunMardoofa = aceCountAndMardoofa%(sunHand%)") ~= nil,
+               "Z.3 (MD-01): mardoofa recomputed on post-bidcard sunHand")
+end
+
+-- Z.4 (TC-01) — Takweesh fallback rate aligned with flat 0.95
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("TAKWEESH_RATE_BY_TRICK%[completed%] or 0%.95") ~= nil,
+               "Z.4 (TC-01): Takweesh fallback rate aligned to 0.95")
+end
+
+-- Z.5 (BC-INLINE) — R1 Hokm-on-flipped uses withBidcard helper
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Inline construction `hypHand[#hypHand + 1] = S.s.bidCard` should
+    -- be GONE; replaced with withBidcard call.
+    assertTrue(botSrc:find("hypHand%[#hypHand %+ 1%] = S%.s%.bidCard") == nil,
+               "Z.5 (BC-INLINE): inline bidcard append replaced with withBidcard helper")
 end
 
 -- =====================================================================

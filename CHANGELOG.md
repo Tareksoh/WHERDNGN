@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.11.16-hotfix — post-ship audit follow-up
+
+Post-ship audit of v0.11.16 caught 5 follow-up issues. All A1-family
+gaps (post-bidcard recomputation needed in additional sites).
+
+### Fixed (HIGH)
+
+- **GAP-01** — `belote = beloteSuit(hand)` was using the bare 5-card
+  hand. v0.11.16's A2 (Belote K+Q-trump escape clause in `hokmMinShape`)
+  passed the post-bidcard hand to the shape gate, but `belote` itself
+  was still pre-bidcard — so a hand `[QS 8C 9C 7H X]` + bidcard `KS`
+  passed the shape gate yet missed the `+K.BOT_PICKBID_BELOTE_BONUS`
+  +20 strength bonus. The two halves of A2 were mutually inconsistent.
+  Fix: `local belote = beloteSuit(withBidcard(hand, S.s.bidCard))`.
+
+- **OVC-bidcard** — `Bot.PickOvercall` `trumpCount` loop iterated the
+  bare 5-card hand, then `hypHand` was built later. A bidcard in
+  `contract.trump` suit was missed by the void/short check, double-
+  counting its contribution to defensive strength. Fix: hoist `hypHand`
+  build BEFORE the trumpCount loop and iterate `hypHand`.
+
+### Fixed (MED)
+
+- **MD-01** — `mardoofaCount` was passed from the pre-bidcard
+  `aceCountAndMardoofa(hand)`. If bidcard provides the missing A or T
+  to complete A+T mardoofa (e.g., hand `[8C 9C TC AS 7H]` + bidcard
+  `AC` -> AC+TC mardoofa), the +20 K.BOT_SUN_MARDOOFA_BONUS missed.
+  Fix: recompute mardoofa on `sunHand` after building it.
+
+### Fixed (LOW)
+
+- **TC-01** — Takweesh fallback rate `or 0.40` was a stale leftover
+  from the pre-A4 decay table. Aligned to flat `or 0.95`.
+
+- **BC-INLINE** — R1 Hokm-on-flipped still used the v0.11.15 inline
+  bidcard-append construction. Replaced with the `withBidcard` helper
+  for consistency with the other 5 bid paths.
+
+### Test coverage (Section Z)
+
+- **Z.1**: `belote` recomputed on post-bidcard hand
+- **Z.2**: PickOvercall `hypHand` precedes `trumpCount` loop
+- **Z.3**: mardoofa recomputed on post-bidcard `sunHand`
+- **Z.4**: Takweesh fallback rate aligned to 0.95
+- **Z.5**: inline bidcard append eliminated
+
+Plus updated X.3a source-pin for the `withBidcard` refactor. 613/613
+tests pass.
+
 ## v0.11.16 — Tier 1: 7 deep-audit fixes for human-like bot play
 
 User-requested 4-agent deep audit of bot behavior surfaced 17 HIGH-severity

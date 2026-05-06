@@ -1363,7 +1363,14 @@ function Bot.PickBid(seat)
     -- hands SHOULD bid. Adding the bonus brings score into the jitter
     -- fire-band. elseif gates against double-applying with 3-Ace.
     elseif sunAces == 2 then sun = sun + K.BOT_SUN_2ACE_BONUS end
-    sun = sun + math.min(mardoofaCount, K.BOT_SUN_MARDOOFA_PAIR_CAP)
+    -- v0.11.16-hotfix MD-01 (post-ship audit): recompute mardoofa
+    -- count on the post-bidcard sunHand. Pre-hotfix the bidcard
+    -- providing the missing A or T to complete an A+T mardoofa pair
+    -- (e.g., hand [8C 9C TC AS 7H] + bidcard AC -> AC+TC mardoofa)
+    -- was missed; the +20 K.BOT_SUN_MARDOOFA_BONUS per pair didn't
+    -- fire because mardoofaCount was from the 5-card hand.
+    local _, sunMardoofa = aceCountAndMardoofa(sunHand)
+    sun = sun + math.min(sunMardoofa, K.BOT_SUN_MARDOOFA_PAIR_CAP)
               * K.BOT_SUN_MARDOOFA_BONUS
 
     -- v0.5.8 patch B-6 (decision-trees.md Section 1, Hokm bidding):
@@ -1372,7 +1379,14 @@ function Bot.PickBid(seat)
     -- trump is a Saudi MUST. Computed once, applied in both round 1
     -- (Hokm-on-flipped) and round 2 (best-suit search).
     -- Sources: decision-trees.md B-6 (Definite, video 26).
-    local belote = beloteSuit(hand)
+    -- v0.11.16-hotfix GAP-01 (post-ship audit): Belote detected on the
+    -- post-bidcard hand. Pre-fix `belote` was computed on the bare
+    -- 5-card hand, so a hand `[QS 8C 9C 7H X]` + bidcard `KS` passed
+    -- the v0.11.16 K+Q-of-trump shape gate (A2/BS-1) BUT missed the
+    -- +20 strength bonus, leaving strength below thHokmR1. The two
+    -- halves of A2 were mutually inconsistent — shape-pass without
+    -- the strength-pass that justifies it. Recompute on hand+bidcard.
+    local belote = beloteSuit(withBidcard(hand, S.s.bidCard))
 
     -- v0.6.0 H-7: capped at ±15 to prevent garbage Bels under desperation.
     local urgency = combinedUrgency(R.TeamOf(seat))
@@ -1598,12 +1612,10 @@ function Bot.PickBid(seat)
             -- it's the trump suit). Threshold thHokmR1=42 unchanged
             -- — the small upshift aligns with user-audit goal of
             -- "more bot Hokm bidding". Tune empirically post-ship.
-            local hypHand = hand
-            if S.s.bidCard then
-                hypHand = {}
-                for _, c in ipairs(hand) do hypHand[#hypHand + 1] = c end
-                hypHand[#hypHand + 1] = S.s.bidCard
-            end
+            -- v0.11.16-hotfix BC-INLINE: use the file-local withBidcard
+            -- helper (same semantics as v0.11.15's inline construction;
+            -- factored out so all bid pickers share one path).
+            local hypHand = withBidcard(hand, S.s.bidCard)
             if hokmMinShape(hypHand, bidCardSuit) then
                 local strength = suitStrengthAsTrump(hypHand, bidCardSuit)
                 strength = strength + sideSuitAceBonus(hand, bidCardSuit)
@@ -4045,6 +4057,22 @@ function Bot.PickOvercall(seat)
     local bidCard  = S.s.overcall.bidCard
     if not R.CanOvercall(seat, contract, bidCard) then return "WAIVE" end
 
+    -- v0.11.16 audit BC-1: include the R1 bidcard (carried in
+    -- S.s.overcall.bidCard) in overcall evaluation. Whoever wins the
+    -- overcall becomes the new bidder and gets the bidcard appended
+    -- to their hand at HostDealRest. For non-bidder TAKE/TAKE_HOKM
+    -- the +11 (A bidcard) or smaller face value contribution can
+    -- flip threshold-borderline overcall decisions.
+    --
+    -- v0.11.16-hotfix OVC-bidcard (post-ship audit): hypHand build
+    -- moved BEFORE the void/short trumpCount loop. Pre-hotfix the
+    -- count operated on the bare 5-card hand, so a bidcard in
+    -- contract.trump suit was missed — a seat with 0 trump in their
+    -- hand but bidcard-of-trump (1 effective trump post-win) still
+    -- got the +15 void bonus, double-counting the bidcard's
+    -- contribution to defensive strength.
+    local hypHand = withBidcard(hand, bidCard)
+
     -- v0.11.15 Q1 user-audit: void-in-trump signal for Sun overcall.
     -- When the bidder's Hokm trump is a suit we have ZERO (or one)
     -- cards in, that's the canonical Saudi Sun-overcall trigger —
@@ -4054,7 +4082,7 @@ function Bot.PickOvercall(seat)
     -- same as balanced ones.
     local trumpCount = 0
     if contract.trump then
-        for _, c in ipairs(hand) do
+        for _, c in ipairs(hypHand) do
             if C.Suit(c) == contract.trump then trumpCount = trumpCount + 1 end
         end
     end
@@ -4065,14 +4093,6 @@ function Bot.PickOvercall(seat)
         voidBonus = K.BOT_OVERCALL_SHORT_TRUMP_BONUS
     end
 
-    -- v0.11.16 audit BC-1: include the R1 bidcard (carried in
-    -- S.s.overcall.bidCard) in overcall evaluation. Whoever wins the
-    -- overcall becomes the new bidder and gets the bidcard appended
-    -- to their hand. Pre-v0.11.16 the bidcard was accessed only for
-    -- the CanOvercall gate; not factored into strength. For non-
-    -- bidder TAKE/TAKE_HOKM the +11 (A bidcard) or smaller face value
-    -- contribution can flip threshold-borderline overcall decisions.
-    local hypHand = withBidcard(hand, bidCard)
     local sunStr = sunStrength(hypHand) + voidBonus
     if seat == contract.bidder then
         -- UPGRADE option (non-Ace-bid only — CanOvercall already
@@ -4159,7 +4179,10 @@ function Bot.PickTakweesh(seat)
     if not S.s.contract then return nil end
     local myTeam = R.TeamOf(seat)
     local completed = #(S.s.tricks or {})
-    local rate = TAKWEESH_RATE_BY_TRICK[completed] or 0.40
+    -- v0.11.16-hotfix TC-01: fallback rate aligned with A4's flat 0.95.
+    -- Unreachable in normal play (8 tricks per round indexed 0..7) but
+    -- kept consistent.
+    local rate = TAKWEESH_RATE_BY_TRICK[completed] or 0.95
 
     -- Find the first illegal opposing play.
     local function scan(plays)
