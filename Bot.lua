@@ -1464,7 +1464,11 @@ function Bot.PickBid(seat)
     -- ≥100 (Sun-Bel-gate context)" (Common, video 25).
     if S.s.cumulative then
         local myTotal = S.s.cumulative[R.TeamOf(seat)] or 0
-        if myTotal >= K.SUN_BEL_CUMULATIVE_GATE then
+        -- v0.11.18 audit BG-1: strict > 100 (matches R.CanBel's strict
+        -- check — opp cannot Bel us at our.cum == 100 exactly). Pre-
+        -- fix the >= 100 check was one point too eager, biasing thSun
+        -- up by +8 even at the boundary where opp couldn't Bel us.
+        if myTotal > K.SUN_BEL_CUMULATIVE_GATE then
             thSun = thSun + 8
         end
     end
@@ -4000,7 +4004,26 @@ function Bot.PickFour(seat)
     if not hand or not contract then return false, false end
     -- v0.10.0 R2 defense-in-depth: Sun has no Four rung.
     if contract.type == K.BID_SUN then return false, false end
+    -- v0.11.18 audit P4-1: read partner's Bel `belOpen` flag. A CLOSED
+    -- Bel by partner (other defender chose to halt escalation) is a
+    -- "I have just enough for ×2, no more" signal — overriding with
+    -- a Four would be reckless against partner's stated intent. An
+    -- OPEN Bel signals "I'm strong enough I'd survive a Triple counter"
+    -- — combined-team strength bonus beyond raw partnerEscalatedBonus.
+    -- Pre-v0.11.18 PickFour was blind to this open/closed signal.
+    if contract.belOpen == false then
+        -- Partner explicitly closed the escalation chain. Suppress
+        -- Four unless our own hand is overwhelming (clears even the
+        -- floored threshold below).
+        return false, false
+    end
     local strength = escalationStrength(seat, hand, contract)
+    -- v0.11.18 P4-1 strength bonus: open Bel = +5 (combined-team
+    -- strength signal — partner believes their hand can survive a
+    -- Triple counter, which means our combined position is strong).
+    if contract.belOpen == true then
+        strength = strength + 5
+    end
     -- v0.5 H-8: defender Four uses context="defend" — same logic as Bel.
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_FOUR_TH - combinedUrgency(R.TeamOf(seat), "defend")
@@ -4172,7 +4195,21 @@ function Bot.PickOvercall(seat)
         voidBonus = K.BOT_OVERCALL_SHORT_TRUMP_BONUS
     end
 
-    local sunStr = sunStrength(hypHand) + voidBonus
+    -- v0.11.18 audit OE-1: Sun Bel-fear bias for overcall. Mirror
+    -- PickBid's check (line 1465-1473): if our cumulative > 100 and
+    -- we're considering taking as Sun, the OTHER team can still Bel
+    -- us in Sun (per R.CanBel — only the team <100 may Bel; opp at
+    -- ≤100 still qualifies). A failed Bel'd Sun is 26 game points
+    -- against us. Bias overcall threshold UP by +8 to deter, mirroring
+    -- the same magnitude as the bid-side gate.
+    local overcallBelFear = 0
+    if S.s.cumulative then
+        local myTotal = S.s.cumulative[R.TeamOf(seat)] or 0
+        if myTotal > K.SUN_BEL_CUMULATIVE_GATE then
+            overcallBelFear = 8
+        end
+    end
+    local sunStr = sunStrength(hypHand) + voidBonus - overcallBelFear
     if seat == contract.bidder then
         -- UPGRADE option (non-Ace-bid only — CanOvercall already
         -- filters Ace case). Threshold is BOT_OVERCALL_SELF_TH.

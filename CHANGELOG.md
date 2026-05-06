@@ -1,5 +1,98 @@
 # Changelog
 
+## v0.11.18 — Tier 3: ISMCTS state preservation + existential SWA + calibration cleanups
+
+Final tier of the deep-audit fix sequence. Closes:
+- **B5** (BM-01, BM-04): rolloutMemory preserves observed signals; meldPins respects voids
+- **B6** (M5): IsValidSWA existential when caller's own turn
+- **BG-1**: Sun Bel-fear gate strict > 100
+- **OE-1**: PickOvercall mirrors Bel-fear bias
+- **P4-1**: PickFour reads partner's belOpen flag
+
+### Fixed (HIGH)
+
+- **B5 / BM-01 — `rolloutMemory` preserves `firstDiscard` and `likelyKawesh`.**
+  Pre-v0.11.18 BotMaster's per-rollout memory was initialized empty
+  except for played/void from `simTricks`. The C-14/Bot1-01 audit
+  explicitly omitted firstDiscard/likelyKawesh as "cross-round signal
+  layer not relevant" — but they're PER-ROUND state populated by
+  real-game `OnPlayObserved` BEFORE the rollout starts. A Saudi
+  Master rollout where partner already showed a high-card preference
+  via firstDiscard couldn't model that future leads should exploit
+  it (Fzloky pref-suit logic, Bot.lua:2117-2129). Now copies these
+  two fields from `B.Bot._memory[s]` into `rolloutMemory[s]`. akaSent
+  remains uncopied — truly cross-round, not consumed by per-rollout
+  heuristics.
+
+- **B5 / BM-04 — `meldPins` respects observed voids.** Pre-fix a meld
+  declared by seat 2 in trick 1 (e.g., Hearts Tierce containing 7H)
+  was always pinned to seat 2's hand even if seat 2 LATER showed
+  Hearts-void in trick 5 (`mem.void.H = true`). The deal was internally
+  inconsistent: seat 2 simultaneously holds 7H AND is void in Hearts.
+  Now: if observed void, drop the meld pin (the unplayed meld card
+  must've been disposed of even if not in our `played` map yet).
+
+- **B6 / M5 — `R.IsValidSWA` existential when caller's own turn.**
+  Pre-v0.11.18 the v0.5.17 strict-strict recursion enumerated EVERY
+  legal caller-card adversarially — but the caller will pick optimally
+  on their own turn, not adversarially. SWAs like `[J of trump, 7 of
+  side]` in Hokm where J wins but 7 doesn't were rejected because
+  the universal check failed on 7. New behavior: when `nextSeat ==
+  callerSeat`, return true if SOME caller-move preserves the SWA
+  (existential). Other-seat branches retain universal (partner adversarial,
+  opponent adversarial). Tightens v0.5.17's over-strict rejection
+  while preserving Saudi's "deterministic-or-bust" intent for non-
+  caller plays.
+
+### Fixed (MED)
+
+- **BG-1 — Sun Bel-fear gate strict `> 100`.** Pre-fix `>= 100` was
+  one point too eager; opp cannot Bel us at our.cum == 100 exactly
+  per `R.CanBel`'s strict `> 100`. The +8 thSun bias should mirror
+  the legality boundary.
+
+- **OE-1 — `Bot.PickOvercall` mirrors Bel-fear.** When considering
+  TAKE-as-Sun and our cum > 100, opp can still Bel the Sun for ×2.
+  PickBid had this bias; PickOvercall didn't. Same magnitude (-8).
+
+- **P4-1 — `Bot.PickFour` reads `contract.belOpen` flag.** Partner's
+  CLOSED Bel = "I have just enough for ×2, no more"; PickFour
+  overriding with a Four would defy partner's stated intent —
+  suppress unless overwhelming. OPEN Bel = "I'd survive a Triple
+  counter" — combined-team strength signal beyond raw partnerEscalatedBonus,
+  +5 strength bonus.
+
+### Test coverage (Section AC)
+
+- **AC.1**: `rolloutMemory` copies firstDiscard / likelyKawesh
+- **AC.2**: `meldPins` respects observed voids
+- **AC.3**: `IsValidSWA` existential branch on caller's turn
+- **AC.4**: Bel-fear gate uses strict `> 100`
+- **AC.5**: PickOvercall biases sunStr down by Bel-fear
+- **AC.6a/b**: PickFour suppresses Four on closed Bel; +5 bonus on open Bel
+
+640/640 tests pass.
+
+### Deferred to post-v0.11.18 (future work)
+
+The 4-agent deep audit + 3 release cycles + ultra-audit have closed
+the highest-impact items. Remaining audit items not yet addressed:
+- **B3 deeper integration**: trump-J-tracking, opp-trump-exhausted
+  checks, side-suit boss-lead decisions consult `bidderHoldsBidcard`
+- **B4 (H-4)**: Tahreeb sender doesn't avoid strong suit
+- **B4 (H-6)**: pickFollow released-from-must-ruff doesn't prefer
+  non-trump discard
+- **BM-03**: ISMCTS perf instrumentation (`/baloot ismctsdiag` to
+  surface `_lastWorldsCompleted` and `_fallbackCount`)
+- **BM-06**: Saudi-Master-only carve-out (T-sacrifice in Sun)
+- **Tier 3 doc-drift**: stale comments in BotMaster.lua header,
+  bot-personalities.md retracted "probabilistic SWA"
+- **PB-1**: split `partnerBidBonus` into bidder-team / defender-team variants
+- **Behavioral test gaps** for source-pin-only assertions (Y, AA, AB, AC)
+
+A final ultra-audit + report on all post-audit-cycle status follows
+this release.
+
 ## v0.11.17-hotfix — post-ship audit follow-up
 
 5 findings from the v0.11.17 post-ship audit, all fixed.

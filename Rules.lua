@@ -513,26 +513,36 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
     -- a higher card; if partner CAN over-take in any legal play,
     -- the SWA fails.
     --
-    -- Was (pre-v0.5.17): cooperative branch accepted "SOME partner
-    -- play leads to a win" — partner could optimally duck low to
-    -- preserve caller's eventual win. Per the user's reported
-    -- expectation ("no back-and-forth with teammate"), that's too
-    -- permissive. This release tightens to "EVERY partner play
-    -- leads to a win", which is symmetric with the opponent branch.
+    -- v0.11.18 audit B6/M5 fix: existential branch when nextSeat IS
+    -- the caller. Pre-fix the universal recursion required EVERY
+    -- legal caller-card to preserve the SWA — but the caller will
+    -- pick optimally on their own turn, not adversarially. This was
+    -- an over-strict rejection: e.g., caller has 2 cards [J of trump,
+    -- 7 of side] in Hokm, J wins the next trick, 7 doesn't — but the
+    -- universal check rejected because 7 fails. Saudi convention:
+    -- caller plays optimally; the claim must hold under SOME caller
+    -- play (existential), AND under EVERY partner/opponent play
+    -- (universal). Self-adversarial recursion was the bug.
     --
-    -- Trade-off: SWA becomes harder to validly claim. Some hands
-    -- that previously passed (caller-relies-on-partner-ducking) now
-    -- fail. Saudi-strict convention says caller must be self-
-    -- sufficient. Sources: docs/strategy/decision-trees.md Section 7
-    -- rule "SWA = deterministic-or-bust" (Definite, video 35) +
-    -- direct user intent on the v0.5.16 → v0.5.17 transition.
-    for _, card in ipairs(legal) do
-        local nh, ns = applyMove(card)
-        if not R.IsValidSWA(callerSeat, nh, contract, ns) then
-            return false
+    -- Other-seat branches retain universal: partner may try to
+    -- legally over-take, opponents may try every legal lead/follow.
+    if nextSeat == callerSeat then
+        for _, card in ipairs(legal) do
+            local nh, ns = applyMove(card)
+            if R.IsValidSWA(callerSeat, nh, contract, ns) then
+                return true
+            end
         end
+        return false
+    else
+        for _, card in ipairs(legal) do
+            local nh, ns = applyMove(card)
+            if not R.IsValidSWA(callerSeat, nh, contract, ns) then
+                return false
+            end
+        end
+        return true
     end
-    return true
 end
 
 function R.SumMeldValue(list)

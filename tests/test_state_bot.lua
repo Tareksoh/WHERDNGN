@@ -3437,6 +3437,73 @@ do
 end
 
 -- =====================================================================
+-- AC. v0.11.18 — Tier 3 audit fixes (B5-B6 + Tier 3 cleanup)
+-- =====================================================================
+print("")
+print("=== Section AC: v0.11.18 Tier-3 audit fixes ===")
+
+-- AC.1 (B5 / BM-01) — rolloutMemory copies firstDiscard / likelyKawesh
+do
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find("rolloutMemory%[s%]%.firstDiscard") ~= nil,
+               "AC.1a (B5 / BM-01): rolloutMemory copies firstDiscard")
+    assertTrue(bmSrc:find("rolloutMemory%[s%]%.likelyKawesh = pm%.likelyKawesh") ~= nil,
+               "AC.1b (B5 / BM-01): rolloutMemory copies likelyKawesh")
+end
+
+-- AC.2 (B5 / BM-04) — meldPins respects observed voids
+do
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find("local declarerVoid = false") ~= nil,
+               "AC.2a (BM-04): meldPins checks observed voids")
+    assertTrue(bmSrc:find("mem%.void%[C%.Suit%(c%)%]") ~= nil,
+               "AC.2b (BM-04): meldPins reads declarer void from Bot._memory")
+end
+
+-- AC.3 (B6) — IsValidSWA existential branch when nextSeat is caller
+do
+    local rulesSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Rules.lua"):read("*a")
+    assertTrue(rulesSrc:find("if nextSeat == callerSeat then") ~= nil,
+               "AC.3a (B6): IsValidSWA branches on nextSeat == callerSeat")
+    -- Existential pattern: returns true if SOME caller move preserves the SWA
+    -- (vs the universal pattern in the else branch).
+    assertTrue(rulesSrc:find("return true\n        end") ~= nil,
+               "AC.3b (B6): IsValidSWA caller branch returns true on first matching move (existential)")
+end
+
+-- AC.4 (BG-1) — Sun Bel-fear gate uses strict > 100
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("myTotal > K%.SUN_BEL_CUMULATIVE_GATE then") ~= nil,
+               "AC.4 (BG-1): Sun Bel-fear gate uses strict > 100 (matches R.CanBel)")
+end
+
+-- AC.5 (OE-1) — PickOvercall mirrors Bel-fear bias
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickOvercall")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 4500)
+        assertTrue(body:find("overcallBelFear") ~= nil
+                   and body:find("K%.SUN_BEL_CUMULATIVE_GATE") ~= nil,
+                   "AC.5 (OE-1): PickOvercall biases sunStr down by Bel-fear when our.cum > 100")
+    end
+end
+
+-- AC.6 (P4-1) — PickFour reads contract.belOpen
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickFour")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find("contract%.belOpen == false") ~= nil,
+                   "AC.6a (P4-1): PickFour suppresses Four when partner's Bel was CLOSED")
+        assertTrue(body:find("contract%.belOpen == true") ~= nil,
+                   "AC.6b (P4-1): PickFour adds +5 strength bonus on partner's OPEN Bel")
+    end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

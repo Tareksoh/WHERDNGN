@@ -246,11 +246,30 @@ local function sampleConsistentDeal(seat, unseen)
                 if m.declaredBy and m.declaredBy ~= seat
                    and m.cards then
                     for _, c in ipairs(m.cards) do
-                        -- Only pin if still in unseen pool (not played).
-                        for _, u in ipairs(unseen) do
-                            if u == c then
-                                meldPins[c] = m.declaredBy
-                                break
+                        -- v0.11.18 audit BM-04 fix: respect observed
+                        -- voids when pinning meld cards. Pre-fix a meld
+                        -- declared trick-1 by seat 2 (e.g., Hearts Tierce
+                        -- including 7H) was always pinned to seat 2,
+                        -- even if seat 2 LATER showed Hearts-void in
+                        -- trick 5 (mem.void.H = true). The deal would
+                        -- be internally inconsistent (seat 2 has 7H
+                        -- AND is void in Hearts). Right resolution:
+                        -- if void observed, drop the pin — the meld
+                        -- card must've been played even if not yet
+                        -- in our `played` map (could be hostHands-
+                        -- only data depending on game state).
+                        local declarerVoid = false
+                        local mem = B.Bot and B.Bot._memory and B.Bot._memory[m.declaredBy]
+                        if mem and mem.void and mem.void[C.Suit(c)] then
+                            declarerVoid = true
+                        end
+                        if not declarerVoid then
+                            -- Only pin if still in unseen pool (not played).
+                            for _, u in ipairs(unseen) do
+                                if u == c then
+                                    meldPins[c] = m.declaredBy
+                                    break
+                                end
                             end
                         end
                     end
@@ -680,12 +699,34 @@ local function rolloutValue(seat, card, world, contract)
     -- card's suit didn't match leadSuit, set void[leadSuit]=true.
     -- The Sun K/T-loses inference (Bot.lua:385-406) is omitted in the
     -- rollout — it's a real-observation rule and the rollout's
-    -- simulated picks aren't observed signal events. firstDiscard /
-    -- likelyKawesh / akaSent are omitted (cross-round signal layer
-    -- not relevant to a single-round rollout).
+    -- simulated picks aren't observed signal events.
+    --
+    -- v0.11.18 audit BM-01 fix: COPY firstDiscard / likelyKawesh from
+    -- prevMemory into rolloutMemory. Pre-fix these were dropped, so
+    -- a Saudi Master rollout couldn't model that future leads should
+    -- exploit partner's already-shown signal-suit (Fzloky firstDiscard
+    -- → leadSuit preference, Bot.lua:2117-2129) or that we believe a
+    -- specific seat may be Kaweshing (Bot.lua:402-404 desire-clear).
+    -- akaSent is NOT copied — it's a cross-round signal layer that
+    -- the per-rollout heuristics don't consume directly.
     local rolloutMemory = {}
+    local prevForCopy = B.Bot and B.Bot._memory or {}
     for s = 1, 4 do
         rolloutMemory[s] = { played = {}, void = {} }
+        local pm = prevForCopy[s]
+        if pm then
+            -- Deep-copy firstDiscard (table or nil) so rollout
+            -- mutations don't bleed back into real Bot._memory.
+            if pm.firstDiscard then
+                rolloutMemory[s].firstDiscard = {
+                    suit = pm.firstDiscard.suit,
+                    rank = pm.firstDiscard.rank,
+                    bucket = pm.firstDiscard.bucket,
+                }
+            end
+            -- likelyKawesh is a boolean
+            rolloutMemory[s].likelyKawesh = pm.likelyKawesh
+        end
     end
     for _, t in ipairs(simTricks) do
         for _, p in ipairs(t.plays or {}) do
