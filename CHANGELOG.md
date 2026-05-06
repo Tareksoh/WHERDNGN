@@ -1,5 +1,96 @@
 # Changelog
 
+## v1.0.4 — Bot-vs-human behavior gap closure (8 audit findings)
+
+Closes the 8-finding bot-behavior audit from the v1.0.3 cycle.
+Addresses structural gaps in trick-play decision-making that were
+NOT on the original v1.0.0 deferred list. 726/726 tests pass.
+
+### HIGH severity (2 items)
+
+- **#1 Trick-play urgency-blindness (Bot.lua:pickFollow ~3997).**
+  PickBid/PickDouble/PickTriple/PickFour/PickGahwa/PickPreempt/
+  PickOvercall/PickAKA all consult `scoreUrgency` /
+  `combinedUrgency` / `matchPointUrgency` — but pickLead and
+  pickFollow ignored cumulative state. A defender at 145/152 plays
+  the same as at 0/152. Now pickFollow's winners-block pre-empts
+  the pos-aware ducks with a `highestByRank` swing under match-
+  point pivotal pressure (myCum >= target-25 OR oppCum >=
+  target-15). M3lm-gated. Skips trick 8 (M5 already handles it).
+
+- **#2 Trick-play multiplier-blindness (Bot.lua:pickFollow ~3490).**
+  Smother / winners-block / M5 trick-8 logic ignored
+  `contract.doubled` / `tripled` / `foured` — but a 10-face-value
+  swing in a Foured (×4) round is worth 40 effective. Smother gate
+  now tightens to **lastSeat-only** (free-dump path) when any
+  escalation is active. Speculative donates (≥2 point cards spare
+  OR late-round) deferred under multiplier ≥ 2.
+
+### MEDIUM severity (6 items)
+
+- **#3 BotMaster sampler bidcard downweight
+  (BotMaster.lua:sampleConsistentDeal).** The v0.11.19 U-3 bidcard
+  inference flips trump-pull-exhaustion in pickFollow but
+  `sampleConsistentDeal` still placed side-suit-A bidcard cards in
+  defender hands via the H-2 defenderDesire bias (each non-trump
+  Ace = 8). When bidcard is a side-suit Ace owned by bidder, the
+  defender bias for THAT specific Ace is now cleared so the
+  sampler doesn't waste cycles on inconsistent worlds.
+
+- **#4 PickDouble bid-history inflection
+  (Bot.lua:Bot.PickDouble).** The contract's provenance carries
+  hand-quality info: a Sun-on-A-bidcard with prior bidders implies
+  preempt-Sun shape (strong). `contract.overcallFromHokm` flag
+  implies overcall-converted Sun (very strong). Both bias `th`
+  upward by +5 to deter Bel'ing strong-tells contracts. M3lm-gated.
+
+- **#5 Bargiya receiver phase-split (Bot.lua:pickLead ~2425).**
+  Per signals.md §3 (canonical): receiver of a confirmed bargiya
+  with ≥5 cards remaining (opening / mid-round) should burn 1-2
+  of own tricks first to set up the eventual lead-back — not
+  surrender initiative immediately. Endgame (≤4 cards) DOES lead
+  the bargiya'd suit immediately. Phase-split now suppresses the
+  pref for confirmed-bargiya signals when handSize >= 5; bargiya_
+  hint / want / endgame retain the immediate lead-back behavior.
+
+- **#6 Touching-honors signal in pickFollow
+  (Bot.lua:pickFollow smother ~3450).** F3 wired the partner-touch-
+  honor read in pickLead in v1.0.0. Mirrored here in the smother
+  branch: when partner has shown a K-singleton (entry.cleared =
+  {Q,J}) or any T/Q signal in the LED suit, save A and T — let
+  partner cash the run on their own lead. Filters A/T out of
+  pointCards; K/Q/J still donate.
+
+- **#7 M5 trick-8 defender mirror (Bot.lua:pickFollow trick-8).**
+  v0.11.19 M5 added bidder-team make-the-bid awareness on trick 8.
+  Symmetric defender goal (force bidder fail at strict-majority,
+  target+1 raw) now gets the same `highestByRank` preference when
+  defender is in the make-or-break band. Defender at 75 raw needs
+  ≥82 raw to force Hokm-bidder fail; trick 8 = swing.
+
+- **#8 Mathlooth K-tripled trickle in Sun
+  (Bot.lua:pickFollow ~4257).** Per decision-trees.md §4 row 11
+  (Definite, video 17): Sun + K + 2 lower in side-suit + suit
+  led + tricks 1-2 → reserve K for trick 3 (after A and T fall).
+  Now excludes K from the lowestByRank candidate pool when this
+  shape exists, so the trickle dumps 7/8 first and K cashes
+  trick 3. M3lm-gated.
+
+### Tests
+
+- 8 new source-pin assertions in Section AI covering each of the
+  8 agent findings.
+- Total: 726/726 tests pass (was 718/718 at end of v1.0.3).
+
+### Deferred to v1.0.5
+
+- **Cluster 7 test-debt closure** (~10 source-pin tests to convert
+  to behavioral counterparts). Pure mechanical work, no behavior
+  change. Held since adding more source-pin tests in this release
+  (Section AI's 8 new pins, plus the prior Section AH's 10) would
+  go in the wrong direction; the test-debt closure is best done as
+  a focused refactor pass with no other changes mixed in.
+
 ## v1.0.3 — Deferred-queue closure: 22 audit items from clusters 2-5
 
 Closes the entire v1.0.0-deferred queue from CHANGELOG.md (the

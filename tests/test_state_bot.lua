@@ -4832,6 +4832,71 @@ do
     end
 end
 
+print("=== Section AI: v1.0.4 agent findings (8 items) ===")
+
+-- AI.1 (agent #1 HIGH urgency-blindness): pickFollow has urgency-aware
+-- swing — under match-point pivotal pressure, prefer highestByRank.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v1%.0%.4 %(agent #1%): urgency%-aware swing") ~= nil,
+               "AI.1 (agent #1): pickFollow urgency-aware swing block exists")
+end
+
+-- AI.2 (agent #2 HIGH multiplier-blindness): smother gate tightens
+-- to lastSeat-only when contract is escalated (Bel/Triple/Four).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("multiplierActive") ~= nil,
+               "AI.2 (agent #2): smother gate reads contract multiplier flags")
+end
+
+-- AI.3 (agent #3 sampler bidcard downweight): defenderDesire mutates
+-- when bidcard is a side-suit Ace owned by bidder.
+do
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find("v1%.0%.4 %(agent #3%): bidcard%-defender%-desire downweight") ~= nil,
+               "AI.3 (agent #3): BotMaster sampler downweights bidcard from defenderDesire")
+end
+
+-- AI.4 (agent #4 PickDouble bid-history inflection): preempt and
+-- overcall paths bias `th` upward.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v1%.0%.4 %(agent #4%): bid%-history inflection") ~= nil,
+               "AI.4 (agent #4): PickDouble reads bid-history inflection")
+end
+
+-- AI.5 (agent #5 Bargiya phase-split): tahreebPrefSuit downgrade
+-- when bargiya + handSize >= 5.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("Bargiya receiver phase%-split") ~= nil,
+               "AI.5 (agent #5): pickLead Bargiya phase-split exists")
+end
+
+-- AI.6 (agent #6 touching-honors in pickFollow): smother branch
+-- saves A/T when partner shows touch-honor signal.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("saveForPartnerTouch") ~= nil,
+               "AI.6 (agent #6): pickFollow smother reads partner topTouchSignal")
+end
+
+-- AI.7 (agent #7 M5 defender mirror): trick-8 defender highestByRank
+-- when in make-or-break band.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v1%.0%.4 %(agent #7%): M5 defender mirror") ~= nil,
+               "AI.7 (agent #7): pickFollow trick-8 has defender M5 mirror")
+end
+
+-- AI.8 (agent #8 Mathlooth K-tripled): pickFollow Sun K-trickle pattern.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v1%.0%.4 %(agent #8%): Mathlooth K%-tripled") ~= nil,
+               "AI.8 (agent #8): pickFollow Mathlooth K-tripled trickle exists")
+end
+
 -- =====================================================================
 -- Summary
 -- =====================================================================

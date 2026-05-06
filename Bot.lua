@@ -2350,6 +2350,9 @@ local function pickLead(legal, contract, seat)
     -- Sources: decision-trees.md Section 8 (Definite, videos 01,
     -- 02, 09, 10) + Section 9 N-3 (Common, video 10).
     local tahreebPrefSuit = nil
+    local tahreebPrefFlavor = nil  -- v1.0.4 (agent #5): track flavor
+                                   -- of the chosen pref suit to gate
+                                   -- the receiver phase-split below.
     local tahreebAvoidSet = {}  -- v0.5.14: revives former dead
                                 -- `tahreebAvoidSuit` — set is now
                                 -- consumed by the conflict-resolution
@@ -2361,7 +2364,7 @@ local function pickLead(legal, contract, seat)
             local pStyle = Bot._partnerStyle[p]
             local signals = pStyle and pStyle.tahreebSent
             if signals then
-                local best, bestScore = nil, 0
+                local best, bestScore, bestFlavor = nil, 0, nil
                 for _, su in ipairs({ "S", "H", "D", "C" }) do
                     -- Don't bias toward trump (leading trump has its
                     -- own dedicated logic below).
@@ -2378,14 +2381,17 @@ local function pickLead(legal, contract, seat)
                                    or (cls == "bargiya_hint" and 1)
                                    or 0
                         if score > bestScore then
-                            best, bestScore = su, score
+                            best, bestScore, bestFlavor = su, score, cls
                         end
                         if cls == "dontwant" then
                             tahreebAvoidSet[su] = true
                         end
                     end
                 end
-                if best then tahreebPrefSuit = best end
+                if best then
+                    tahreebPrefSuit = best
+                    tahreebPrefFlavor = bestFlavor
+                end
             end
         end
         -- v0.5.14 Section 9 N-3 receiver: opp positive signals → avoid.
@@ -2422,6 +2428,25 @@ local function pickLead(legal, contract, seat)
         -- when both signals point at the same suit (rare).
         if tahreebPrefSuit and tahreebAvoidSet[tahreebPrefSuit] then
             tahreebPrefSuit = nil
+        end
+        -- v1.0.4 (agent #5): Bargiya receiver phase-split. Per
+        -- signals.md §3 (canonical): receiver of a confirmed bargiya
+        -- with ≥5 cards remaining (opening / mid-round) should burn
+        -- 1-2 of own tricks first to set up the eventual lead-back —
+        -- not surrender initiative immediately. Endgame (≤4 cards)
+        -- DOES lead the bargiya'd suit immediately. Phase split:
+        --   * confirmed bargiya + #hand >= 5 → downgrade to "consider,
+        --     not mandate". We drop the pref so the standard low-from-
+        --     longest path runs; bargiya may still win on the next
+        --     trick when fewer cards remain.
+        --   * bargiya_hint / want / endgame → keep the pref (low-conf
+        --     hint AND endgame both want the immediate lead-back).
+        if tahreebPrefSuit and tahreebPrefFlavor == "bargiya" then
+            local handSize = #legal  -- pickLead's `legal` is the full
+                                     -- hand (no must-follow constraint)
+            if handSize >= 5 then
+                tahreebPrefSuit = nil
+            end
         end
     end
     if tahreebPrefSuit then
@@ -3422,10 +3447,57 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
             local completed = #(S.s.tricks or {})
+            -- v1.0.4 (agent #6): touching-honors signal in pickFollow.
+            -- F3 wired the partner-touch-honor READ in pickLead. Mirror
+            -- the read here in the smother branch: if partner has
+            -- shown a K-singleton (entry.cleared = {Q,J}) or a touching
+            -- T or Q signal in the LED suit, partner intends to lead
+            -- this suit again with their middle honor. Donating our
+            -- A or T now wastes our future cash — partner's run on
+            -- their own lead is the bigger play. Suppress the donate
+            -- of A/T (let pointCards fall through to lower honors or
+            -- the lowestByRank fall-through). M3lm-gated since
+            -- _partnerStyle is M3lm-tier infrastructure.
+            local saveForPartnerTouch = false
+            if Bot.IsM3lm() and Bot._partnerStyle and lead then
+                local partnerStyle = Bot._partnerStyle[R.Partner(seat)]
+                local sig = partnerStyle and partnerStyle.topTouchSignal
+                            and partnerStyle.topTouchSignal[lead]
+                if sig and not sig.broke and (sig.nextDown or sig.cleared) then
+                    saveForPartnerTouch = true
+                end
+            end
+            if saveForPartnerTouch then
+                -- Filter A and T out of pointCards; let K/Q/J donate.
+                local filtered = {}
+                for _, c in ipairs(pointCards) do
+                    local r = C.Rank(c)
+                    if r ~= "A" and r ~= "T" then
+                        filtered[#filtered + 1] = c
+                    end
+                end
+                pointCards = filtered
+            end
             -- Gate: ≥2 point cards spare, OR late round, OR pos 4.
             -- v0.5.18 keeps the same gate logic but applies to the
             -- expanded candidate set.
-            if #pointCards >= 2 or completed >= 3 or lastSeat then
+            -- v1.0.4 (agent #2): multiplier-aware tightening. Under
+            -- a Bel-doubled (×2), Triple-tripled (×3), or Foured
+            -- (×4) contract, a single mis-played 10-face-value swing
+            -- is worth 20-40 effective. Speculative donates (≥2
+            -- point cards spare OR late-round) are too risky when
+            -- the multiplier amplifies regret. Tighten the gate to
+            -- ONLY lastSeat (free dump — trick is already going to
+            -- partner's pile) when the contract has any escalation.
+            local multiplierActive = (contract.foured or contract.tripled
+                                      or contract.doubled) and true or false
+            local gateOk
+            if multiplierActive then
+                gateOk = lastSeat  -- only the safest donate fires
+            else
+                gateOk = (#pointCards >= 2 or completed >= 3 or lastSeat)
+            end
+            if gateOk then
                 table.sort(pointCards, function(a, b)
                     return C.TrickRank(a, contract) > C.TrickRank(b, contract)
                 end)
@@ -3939,6 +4011,40 @@ local function pickFollow(legal, hand, trick, contract, seat)
     end
 
     if #winners > 0 then
+        -- v1.0.4 (agent #1): urgency-aware swing. Pre-fix the trick-
+        -- play winner picker uniformly preferred low-cost winners
+        -- (cheapest-winner pos-4 default, position-2 ducks). But when
+        -- we're in cumulative match-point pressure (near clinch on
+        -- our side OR near loss to opp), winning THIS trick reliably
+        -- matters more than saving a card for a future trick that
+        -- may never happen. Mirror M5's "make-or-break" trick-8
+        -- highestByRank preference, but extend it to mid-round
+        -- tricks where score-position is decisive.
+        --
+        -- Gate: M3lm-tier (urgency-reading is M3lm); team is
+        -- defender-side near-clinch (forcing bidder fail = match
+        -- swing) OR bidder-side near-clinch (making bid = match
+        -- swing). Skip on trick 8 (M5 already handles it).
+        if Bot.IsM3lm() and S.s.cumulative then
+            local trickNumPF = #(S.s.tricks or {}) + 1
+            if trickNumPF < 8 then
+                local myTeam = R.TeamOf(seat)
+                local myCum = S.s.cumulative[myTeam] or 0
+                local oppCum = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
+                local target = S.s.target or 152
+                -- Either side of clinch: we're at target-25+ OR opp
+                -- is at target-15+ (opp clinching faster is also a
+                -- decisive moment).
+                local pivotalSwing = (myCum >= target - 25)
+                                     or (oppCum >= target - 15)
+                if pivotalSwing then
+                    -- Win this trick at maximum reliability — over-
+                    -- trump-resistant card. Skip the pos-aware ducks
+                    -- which would save cards we may never get to use.
+                    return highestByRank(winners, contract)
+                end
+            end
+        end
         -- Position-aware (advanced):
         --   pos 2: "second hand low" — partner hasn't played yet.
         --     Don't commit our highest unless the card we'd win with
@@ -4072,6 +4178,32 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     return highestByRank(winners, contract)
                 end
             end
+            -- v1.0.4 (agent #7): M5 defender mirror. Defender team's
+            -- primary goal #2 (decision-trees.md Section 7) is to FORCE
+            -- BIDDER FAIL. Bidder fails on tied half-and-half: Hokm
+            -- target=81 raw, Sun target=65 raw post-mult. Defender
+            -- needs strictly MORE than half (target+1). When defender
+            -- raw is in the make-or-break band on trick 8, the swing
+            -- is winning-this-trick > face-value. Same highestByRank
+            -- preference as the bidder-team mirror; just symmetric.
+            if not m5_isBidderTeam and contract.bidder and S.s.tricks then
+                local raw = 0
+                for _, t in ipairs(S.s.tricks) do
+                    if R.TeamOf(t.winner) == m5_myTeam then
+                        for _, p in ipairs(t.plays or {}) do
+                            raw = raw + (C.PointValue(p.card, contract) or 0)
+                        end
+                    end
+                end
+                -- Defender forces bidder fail at strict-majority.
+                -- Defender total of (target + 1) raw = bidder fails.
+                -- E.g. Hokm: defender at 82 raw → bidder ≤ 80 raw.
+                local defenderTarget = ((contract.type == K.BID_SUN) and 65 or 81) + 1
+                local gap = defenderTarget - raw
+                if gap > 0 and gap <= 30 then
+                    return highestByRank(winners, contract)
+                end
+            end
             return highestByFaceValue(winners, contract)
         end
         -- Default / pos 4 / no advanced: cheapest winner.
@@ -4138,6 +4270,41 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- this correctly — no Sun-specific branch needed here. Left as
     -- a documentation marker.
     -- Sources: decision-trees.md Section 4 rule 1A (Common, video 05).
+    --
+    -- v1.0.4 (agent #8): Mathlooth K-tripled trickle in Sun.
+    -- Per decision-trees.md §4 row 11 (Definite, video 17): "Sun,
+    -- you hold K + 2 lower in side suit, side suit led → reserve K
+    -- for trick 3 — A and T fall in tricks 1-2, K becomes top-live
+    -- and cashes." When followed-suit cards include K + ≥2 lowers
+    -- AND we're in early tricks (1-2), exclude K from the lowestByRank
+    -- candidate pool. The fall-through then picks 7 (or 8) instead
+    -- of K — preserving K for the trick-3 cash.
+    -- Gate: Sun only; trick 1 or 2; we're not partnerWinning (handled
+    -- above); we have ≥3 cards of led suit including K. M3lm-gated
+    -- since the K-trickle pattern is tournament-strategy nuance.
+    if Bot.IsM3lm() and contract.type == K.BID_SUN
+       and trick.leadSuit and (#(S.s.tricks or {}) <= 1) then
+        local lead = trick.leadSuit
+        local suitCards = {}
+        local hasK, kCard = false, nil
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == lead then
+                suitCards[#suitCards + 1] = c
+                if C.Rank(c) == "K" then hasK = true; kCard = c end
+            end
+        end
+        -- ≥3 same-suit AND we have K → K-tripled shape. Exclude K
+        -- from the candidate pool so lowestByRank picks 7/8/9/J/Q.
+        if hasK and #suitCards >= 3 then
+            local nonK = {}
+            for _, c in ipairs(legal) do
+                if c ~= kCard then nonK[#nonK + 1] = c end
+            end
+            if #nonK > 0 then
+                return lowestByRank(nonK, contract)
+            end
+        end
+    end
 
     -- v0.5.14 Section 9 N-1 sender (Tanfeer / تنفير).
     -- When opp is winning AND we're VOID in led (so we're discarding
@@ -4488,6 +4655,45 @@ function Bot.PickDouble(seat)
         local bidUrg = opponentUrgency(contract.bidder)
         if bidUrg >= 6 then
             th = th - 5
+        end
+    end
+
+    -- v1.0.4 (agent #4): bid-history inflection read. The contract's
+    -- provenance carries information about hand quality:
+    --   • PREEMPT path (someone Sun-preempted a prior Hokm bid on
+    --     A-bidcard): bidder's hand exceeded the preempt threshold
+    --     under bidcard. Strong-hand tell.
+    --   • OVERCALL conversion (Hokm→Sun via Sun overcall): bidder's
+    --     hand exceeded BOTH the original Hokm threshold AND the
+    --     Sun-overcall threshold. Even stronger tell.
+    -- In both cases the bidder is more likely to MAKE their contract
+    -- → Bel'ing it is a worse bet. Bias `th` upward by +5 to deter.
+    -- Detection is heuristic — we read S.s.bids array for bid-history
+    -- shape. Not perfect but cheap and the magnitude is conservative.
+    -- M3lm-gated since cross-bid-history reading is a tier-3 nuance.
+    if Bot.IsM3lm() and S.s.bids and contract.bidder and S.s.bidCard then
+        local bidcardRank = C.Rank(S.s.bidCard)
+        local bidderBid = S.s.bids[contract.bidder]
+        -- Detect "Sun on A-bidcard with at least one prior bidder":
+        -- iterate bids, count non-pass non-bidder bids that came BEFORE
+        -- the bidder. If >= 1 and bidder bid SUN on A-bidcard, that's
+        -- a preempt-Sun shape.
+        if bidcardRank == "A" and bidderBid == K.BID_SUN then
+            local priorBids = 0
+            for _, b in pairs(S.s.bids) do
+                if b and b ~= K.BID_PASS and b ~= bidderBid then
+                    priorBids = priorBids + 1
+                end
+            end
+            if priorBids >= 1 then
+                th = th + 5
+            end
+        end
+        -- Detect overcall conversion: contract.type=Sun but contract
+        -- has an `overcall` history flag (set by S.ApplyOvercall paths).
+        -- If present, bidder converted Hokm→Sun = strong-hand tell.
+        if contract.type == K.BID_SUN and contract.overcallFromHokm then
+            th = th + 5
         end
     end
 

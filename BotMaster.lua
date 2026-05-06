@@ -227,6 +227,29 @@ local function sampleConsistentDeal(seat, unseen)
         end
     end
 
+    -- v1.0.4 (agent #3): bidcard-defender-desire downweight. The
+    -- bidcard is publicly held by the bidder (post-HostDealRest pin).
+    -- defenderDesire's per-side-Ace bias (8) was set up under the
+    -- pre-bidcard assumption that ALL non-trump Aces could be in
+    -- defender hands. With the bidcard-pin live, when bidcard is a
+    -- side-suit Ace owned by the bidder, the defenders cannot hold
+    -- it. Drop that specific Ace's desire to 0 so the sampler doesn't
+    -- waste rollouts placing it in a defender hand (where the
+    -- pinSeat=bidder constraint would just reject the world).
+    if pinCard and pinSeat == bidder and contract.type == K.BID_HOKM
+       and contract.trump then
+        local pinSuit = C.Suit(pinCard)
+        local pinRank = C.Rank(pinCard)
+        if pinRank == "A" and pinSuit ~= contract.trump then
+            -- Mutate a clone — defenderDesire is shared. Use the
+            -- v0.9.0 M3 clone-on-mutation pattern.
+            local clone = {}
+            for k, v in pairs(defenderDesire) do clone[k] = v end
+            clone[pinCard] = nil  -- remove the explicit Ace bias
+            defenderDesire = clone
+        end
+    end
+
     -- 26th-audit fix (Codex Saudi Master finding #5): pin every
     -- unplayed card from a DECLARED MELD to its declarer. Melds
     -- expose exact cards (m.cards + m.declaredBy) — without pinning,
