@@ -2630,7 +2630,9 @@ do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local fnStart = botSrc:find("local function sunStrength")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 3000)
+        -- v0.11.20: window bumped to 4500 to accommodate AKQ-stopper
+        -- comment block and CRLF line endings.
+        local body = botSrc:sub(fnStart, fnStart + 4500)
         assertTrue(body:find("math%.min%(penalty, K%.BOT_SUN_VOID_PENALTY_CAP%)") ~= nil,
                    "T.2b (v0.11.11): sunStrength uses K.BOT_SUN_VOID_PENALTY_CAP")
         assertTrue(body:find("math%.min%(penalty, 18%)") == nil,
@@ -3592,9 +3594,9 @@ do
     end
 end
 
--- AD.8: BOT_BEL_TH lowered 60 -> 45
+-- AD.8: BOT_BEL_TH lowered 60 -> 45 (v0.11.19) -> 35 (v0.11.20)
 do
-    assertEq(K.BOT_BEL_TH, 45, "AD.8 (audit): K.BOT_BEL_TH = 45 (was 60)")
+    assertEq(K.BOT_BEL_TH, 35, "AD.8 (v0.11.20 calib): K.BOT_BEL_TH = 35")
 end
 
 -- AD.9 (btrace fix): hand log uses POST-bidcard sunAces / sunMardoofa
@@ -4329,6 +4331,58 @@ do
     end
     WHEREDNGNDB = prevDB
     restore()
+end
+
+-- =====================================================================
+-- AF. v0.11.20 — calibration nudges (Agent 1) + R1 Sun-button UI fix
+-- =====================================================================
+print("")
+print("=== Section AF: v0.11.20 fixes ===")
+
+-- AF.1 — AKQ stopper bonus +8 -> +12
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function sunStrength")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 4500)
+        assertTrue(body:find("hasA%[su%] and hasK%[su%] and hasQ%[su%] then s = s %+ 12") ~= nil,
+                   "AF.1 (Agent 1 calib): AKQ-stopper bonus 8 -> 12")
+    end
+end
+
+-- AF.2 — R2 Advanced bump REMOVED (now a comment-only reference)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Pin the rationale comment that explains why it's removed.
+    assertTrue(botSrc:find("Advanced R2 bump REMOVED") ~= nil,
+               "AF.2 (Agent 1 calib): Advanced R2 bump removed (rationale documented)")
+end
+
+-- AF.3 — PickPreempt 2-Ace + mardoofa bonus stack
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickPreempt")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 3000)
+        assertTrue(body:find("local preemptAces = 0") ~= nil
+                   and body:find("preemptMardoofa") ~= nil,
+                   "AF.3 (Agent 1 PE-1): PickPreempt applies 2-Ace + mardoofa bonus stack")
+    end
+end
+
+-- AF.4 — K.BOT_PREEMPT_TH 75 -> 60
+do
+    assertEq(K.BOT_PREEMPT_TH, 60,
+             "AF.4 (Agent 1 calib): K.BOT_PREEMPT_TH = 60 (was 75)")
+end
+
+-- AF.5 — UI R1 Sun button hidden when anySun=true
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    -- The `addAction("Sun", ...)` call should be wrapped in
+    -- `if not anySun then ... end` for the R1 branch.
+    assertTrue(uiSrc:find('if not anySun then\n%s+addAction%("Sun"') ~= nil,
+               "AF.5 (user-reported UI): R1 Sun button gated on `not anySun`")
 end
 
 -- =====================================================================

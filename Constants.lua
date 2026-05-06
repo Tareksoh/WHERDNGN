@@ -366,22 +366,21 @@ K.OVERCALL_TIMEOUT_SEC = 5
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
 -- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).
-K.BOT_BEL_TH          = 45    -- defenders bel with own strength >= TH.
-                              -- v0.11.19 audit (3-game forensic): lowered
-                              -- 60 -> 45. 33-round dataset showed 0% Bel
-                              -- across all sessions. Math walkthrough on
-                              -- 5 typical defender hands showed effective
-                              -- belStr range 31-53; 60 was structurally
-                              -- unreachable on most 5-card defender hands.
-                              -- New target: ~10-20% Bel rate per Hokm
-                              -- contract (vs 20-35% Saudi tournament
-                              -- baseline; conservative initial drop).
-                              -- Sub-finding from agent: side-AKQ stopper
-                              -- bonus (+8 in sunStrength) under-rewards
-                              -- 3 guaranteed tricks (~30 raw value).
-                              -- Future: bump K/Q face values for
-                              -- defender context, or add explicit
-                              -- AKQ-stopper-pair bonus in PickDouble.
+K.BOT_BEL_TH          = 35    -- defenders bel with own strength >= TH.
+                              -- v0.11.20 (post-v0.11.19 empirical):
+                              -- v0.11.19 lowered 60 -> 45 but trace showed
+                              -- 3 defender Bel evals at strength 4, 5, 22
+                              -- vs jth 28-52 — still 0% fire. Drop to 35
+                              -- per Agent 1's math + your empirical data:
+                              -- jth at TH=35 ≈ [25, 45], catches the
+                              -- strength=22 case ~30% of jitter rolls,
+                              -- canonical mardoofa-strength hands ~60%.
+                              -- AKQ stopper bonus also bumped 8 -> 12
+                              -- this release (sunStrength), so defender
+                              -- belStr distribution shifts up slightly.
+                              -- v0.11.19 history: 60 -> 45 (still
+                              -- structurally too high vs 5-card
+                              -- defender realism).
                               -- (was 70; v0.5 C-3 calibration: TH=70 produced
                               --  50% false-Bel coin-flip + 247/268 winnable
                               --  Bels missed per 1000 hands; TH=60 best F1)
@@ -402,7 +401,17 @@ K.BOT_GAHWA_TH        = 120   -- bidder gahwa (match-win) — terminal, near-cer
                               -- Gahwa firing on extreme outliers (1-3% of
                               -- bidder rounds).
 K.BOT_ASHKAL_TH       = 65    -- partner-of-Hokm-bidder calls Ashkal with Sun-strong hand
-K.BOT_PREEMPT_TH      = 75    -- earlier seat pre-empts a Sun-on-Ace bid
+K.BOT_PREEMPT_TH      = 60    -- earlier seat pre-empts a Sun-on-Ace bid.
+                              -- v0.11.20 (Agent 1 calibration math):
+                              -- 75 was structurally unreachable —
+                              -- 2A post-bidcard hands have median
+                              -- sun=24, p95=37; jitter band [65, 85]
+                              -- meant <0.01% fire rate. Sim shows
+                              -- TH=60 + 2-Ace bonus +15 produces
+                              -- ~0.72% fire per A-bidcard, matching
+                              -- canonical Saudi 1-3% rate. Both
+                              -- changes required (TH alone or bonus
+                              -- alone is insufficient).
 
 -- v0.5.13 PickBid magic-number promotion: pulled out of Bot.lua
 -- inline literals so they're tunable from one place. Each maps to

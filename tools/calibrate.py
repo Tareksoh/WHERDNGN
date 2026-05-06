@@ -431,7 +431,7 @@ def report(rows: list[dict[str, Any]],
     print(f"  - bidder fail rate: {fail_rate:.1f}%  "
           f"(target ~30-40% on competitive bidding; lower --> too conservative)")
     print(f"  - Bel rate: {bel_rate:.1f}%  "
-          f"(BOT_BEL_TH=60; expect 20-35% in mixed-tier play)")
+          f"(BOT_BEL_TH=35 post-v0.11.20; expect 10-25% in mixed-tier play)")
     print(f"  - Triple rate: {trp_rate:.1f}%  "
           f"(BOT_TRIPLE_TH=90; expect 5-15% downstream of Bel)")
     print(f"  - Gahwa rate: {gah_rate:.1f}%  "

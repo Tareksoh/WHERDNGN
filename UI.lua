@@ -1733,7 +1733,18 @@ local function renderActions()
                     addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end)
                 end
 
-                addAction("Sun", function() net().LocalBid(K.BID_SUN) end)
+                -- v0.11.20 user-reported UI bug: Sun button was shown
+                -- unconditionally in R1, but per State.lua:2046 the
+                -- FIRST direct Sun locks the contract — subsequent
+                -- Sun bids are no-ops. Showing the button after `anySun`
+                -- was misleading. Saudi rule: once Sun is bid, remaining
+                -- seats can only PASS (the bid round still completes
+                -- formally for record-keeping; per host wait-for-all-4
+                -- design at HostAdvanceBidding line 2023). Now hidden
+                -- when anySun=true.
+                if not anySun then
+                    addAction("Sun", function() net().LocalBid(K.BID_SUN) end)
+                end
 
                 -- Kawesh: 5-card hand of only 7/8/9 → annul & redeal.
                 -- Available throughout round 1 to the qualifying player.

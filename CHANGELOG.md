@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.11.20 — Tier-1 calibration nudges (Agent 1 math) + R1 Sun-button UI bug
+
+Implements all 4 calibration recommendations from Agent 1's calibration-
+math analysis (validated against your 33-round empirical data + 8 fresh
+v0.11.19 rounds with the new eltrace observability).
+
+Plus a user-reported UI bug: R1 Sun button was shown unconditionally
+even when SUN was already bid in the round.
+
+### Calibration changed (Agent 1 math)
+
+- **`K.BOT_BEL_TH 45 → 35`.** Empirical 3-sample defender Bel-eval data
+  (strength 5, 22, 4 from v0.11.19 trace) validates Agent 1's math:
+  defender 5-card hands genuinely score in the 4-22 range. At TH=45,
+  jth ≈ [35, 55] — strength=22 case never fires. At TH=35, jth ≈ [25, 45],
+  catches ~30% of strength=22 hands and ~60% of canonical mardoofa-
+  strength hands. v0.11.19 history: 60 → 45 (still too high empirically).
+
+- **AKQ stopper bonus +8 → +12** (`Bot.lua:1044`). Agent 1: AKQ-trio = 3
+  guaranteed tricks ≈ 30 raw. Existing face value contributes 18; bonus
+  closes the gap. Modest +0.18pp Bel-rate impact alone (rare shape:
+  0.87% of 5-card hands), but rule-correct.
+
+- **R2 Advanced bump REMOVED** (`Bot.lua:1443`). Pre-fix
+  `if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base - 4)`
+  bumped Advanced R2 from 36 to 38. Sim showed (n=20K, jitter=±6):
+  - r2=36 → R1/R2 split 56.8/43.2 (closest to canonical 50/50)
+  - r2=38 → 58.1/41.9 (over-suppressed R2 by 1.3pp)
+  Empirical 33-round data showed R1 over-fires 73%; removing bump
+  shifts R2 share up ~1.3pp.
+
+- **`K.BOT_PREEMPT_TH 75 → 60`** + **PickPreempt 2-Ace+mardoofa bonus
+  stack added.** Pre-fix structurally unreachable: 2A post-bidcard
+  hands have median sun=24, p95=37; jitter band [65, 85] meant
+  <0.01% fire. Both changes required:
+  - PE_TH 75 → 60 (jitter band [50, 70])
+  - 2-Ace +15 / 3-Ace +15 / mardoofa-pair-cap*+20 bonus stack mirrors
+    PickBid R1 Sun
+  Combined: ~0.72% canonical fire rate per A-bidcard (vs <0.01%
+  pre-fix). Saudi tournament target 1-3% per A-bidcard.
+
+### Fixed (user-reported UI)
+
+- **R1 Sun button hidden when `anySun=true`** (`UI.lua:1736`). User
+  observed: "if someone bids SUN before you, why do you still have
+  Sun button?" Per `State.lua:2046` (HostAdvanceBidding), the FIRST
+  direct Sun in R1 locks the contract; subsequent SUN bids are
+  silent no-ops. The button was misleading. Now gated on
+  `if not anySun then addAction("Sun", ...) end`. Hokm-on-flipped
+  (line 1704) and Ashkal (line 1732) were already correctly gated.
+  PASS button always shown — bidding round still completes formally
+  per host wait-for-all-4 design.
+
+### Tooling
+
+- **`tools/calibrate.py`** stale comment: was reporting "BOT_BEL_TH=60;
+  expect 20-35%" — now reads "BOT_BEL_TH=35 post-v0.11.20; expect
+  10-25% in mixed-tier play".
+
+### Test coverage (Section AF)
+
+5 pins (AKQ +12, R2 bump removed, PickPreempt 2-Ace, PE_TH=60, UI
+gate). 675/675 tests pass.
+
+### What to expect on next play session
+
+| Behavior | Expected |
+|---|---|
+| Bel rate | 0% (v0.11.19) → 5-15% per Hokm contract (target zone) |
+| Strength=22 defender hand | Should now sometimes Bel (~30% of jitter rolls) |
+| R2 contracts | Up ~1.3pp share (more rounds reaching R2) |
+| PickPreempt fire | Was 0% on A-bidcard; now ~0.7% canonical |
+| R1 UI after Sun bid | Sun button hidden, only PASS shown |
+| Trick-8 make-or-break | M5 actually fires (post-hotfix) |
+
+### Recommended validation
+
+1. Pull v0.11.20 from CurseForge (~10 min after push)
+2. `/baloot history clear`, `/baloot bidcalc`, play 10-15 rounds
+3. Look for `[bel sN] PickDouble FIRE` lines (was always PASS pre-v0.11.20)
+4. Run `python tools/calibrate.py --breakdown=escalation <savevars>` to confirm Bel rate > 0%
+5. After Sun is bid in R1, verify Sun button is hidden in your UI
+
 ## v0.11.19-hotfix — F1 (M5 dead) + agent-delivered tooling + 19 behavioral tests
 
 Post-v0.11.19 4-agent parallel audit returned. **Critical finding from

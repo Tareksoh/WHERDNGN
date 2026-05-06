@@ -1041,7 +1041,13 @@ local function sunStrength(hand)
             s = s + (count[su] - 4) * 6
         end
         -- Stopper triple: AKQ in same suit means 3 guaranteed tricks.
-        if hasA[su] and hasK[su] and hasQ[su] then s = s + 8 end
+        -- v0.11.20 (Agent 1 calibration math): +12 (was +8). AKQ-trio
+        -- = 3 guaranteed tricks ≈ 30 raw points. Existing face value
+        -- of A+K+Q = 11+4+3 = 18 already contributes ~60% of trick
+        -- value; the +12 bonus closes the structural gap to 30.
+        -- Modest +0.18pp Bel-rate impact alone (rare shape: 0.87% of
+        -- 5-card hands have AKQ in any suit), but rule-correct.
+        if hasA[su] and hasK[su] and hasQ[su] then s = s + 12 end
     end
     if Bot.IsAdvanced() then
         local penalty = 0
@@ -1434,7 +1440,18 @@ function Bot.PickBid(seat)
     -- Advanced after urgency stacks).
     local r1Base = TH_HOKM_R1_BASE
     local r2Base = TH_HOKM_R2_BASE
-    if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base - 4) end
+    -- v0.11.20 (Agent 1 calibration math): Advanced R2 bump REMOVED.
+    -- Pre-fix `if Bot.IsAdvanced() then r2Base = math.max(r2Base, r1Base - 4) end`
+    -- bumped Advanced R2 from 36 to 38. Sim showed (n=20K, jitter=±6):
+    --   r2=36 -> R1/R2 split 56.8/43.2 (closest to canonical 50/50)
+    --   r2=38 -> 58.1/41.9 (over-suppresses R2 by 1.3pp)
+    -- Empirical 33-round data showed R1 over-fires 73% (well above
+    -- canonical 50-60%). Removing the bump shifts R2 share up ~1.3pp
+    -- and tightens toward the canonical Saudi distribution. The
+    -- 13th-bot-audit comment claimed the bump prevented R2 < R1
+    -- leakage, but real data shows the opposite — R2 was already
+    -- over-suppressed. Net: r2Base = 36 unconditionally for all
+    -- tiers via the K constant.
     -- Audit Tier 4 (B-80 / H-10): trap-pass detection. When R1 was
     -- all-pass (every seat declined the flipped suit), the table is
     -- weak overall — R2 thresholds should drop slightly so we don't
@@ -4273,6 +4290,26 @@ function Bot.PickPreempt(seat)
     -- value) to sunStrength via the same mechanism as R1 Sun.
     local sunHand = withBidcard(hand, S.s.bidCard)
     local strength = sunStrength(sunHand)
+    -- v0.11.20 PE-1 (Agent 1 calibration math): mirror PickBid R1 Sun's
+    -- ace-count + mardoofa bonus stack. PickPreempt only fires when
+    -- bidCard.rank == "A", so post-bidcard sunHand has at least 1 Ace.
+    -- If bot's hand also holds an Ace, post-bidcard hand has 2 Aces —
+    -- canonical Saudi S-1 Sun shape. Pre-fix sunStrength alone gave
+    -- median sun=24 / p95=37, structurally below BOT_PREEMPT_TH=75.
+    -- Combined with TH 75 -> 60 (Constants.lua), gives ~0.72%
+    -- canonical fire rate per A-bidcard (vs <0.01% pre-fix).
+    local preemptAces = 0
+    for _, c in ipairs(sunHand) do
+        if C.Rank(c) == "A" then preemptAces = preemptAces + 1 end
+    end
+    if preemptAces >= 3 then
+        strength = strength + K.BOT_SUN_3ACE_BONUS
+    elseif preemptAces == 2 then
+        strength = strength + K.BOT_SUN_2ACE_BONUS
+    end
+    local _, preemptMardoofa = aceCountAndMardoofa(sunHand)
+    strength = strength + math.min(preemptMardoofa, K.BOT_SUN_MARDOOFA_PAIR_CAP)
+                        * K.BOT_SUN_MARDOOFA_BONUS
     -- 13th-bot-audit fix (Codex): factor partner's bid history.
     -- Partner who already passed (Sun option declined) → preempt is
     -- riskier (no fallback if our Sun fails). Partner who bid Sun or
