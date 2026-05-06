@@ -958,6 +958,23 @@ local function aceCountAndMardoofa(hand)
     return aceCount, mardoofaCount
 end
 
+-- v0.11.17 audit B3: known-cards-held-by-bidder helper. After
+-- HostDealRest the bidder owns the bidcard; this is PUBLIC knowledge
+-- (the bidcard was face-up during bidding). Defender bots that don't
+-- factor this in waste a trick or two probing for trump distribution
+-- that was already known. Returns true iff the seat is the bidder
+-- AND the card is the bidcard AND the bidcard hasn't yet been played.
+local function bidderHoldsBidcard(seat, card)
+    if not S.s or not S.s.contract or not S.s.bidCard then return false end
+    if seat ~= S.s.contract.bidder then return false end
+    if card ~= S.s.bidCard then return false end
+    -- If the bidcard's already been played, the bidder no longer
+    -- holds it. Bot._memory tracks played-by-seat.
+    local mem = Bot._memory and Bot._memory[seat]
+    if mem and mem.played and mem.played[card] then return false end
+    return true
+end
+
 -- v0.11.16 audit BC-1: hypothetical post-win hand helper. The bidder
 -- gets the bidcard appended to their final hand at HostDealRest
 -- (State.lua:1950). Pre-v0.11.16, only the R1 Hokm-on-flipped path
@@ -2817,9 +2834,19 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- MSG_AKA). The implicit branch here still fires only when the
     -- seat has lead-suit cards (partner-winning shortcut keeps
     -- legality permissive) — see review_v0.10.0/xref_X2_aka.md B1.
+    -- v0.11.17 audit H-5: AKA-receiver relief fires regardless of
+    -- partnerWinning. Pre-v0.11.17 the gate required `partnerWinning`
+    -- (current trick winner = partner). But the legality layer (Rules.lua
+    -- :202-206) correctly relieves the receiver from must-ruff even
+    -- when an opp over-trumped partner's A-led trick — the receiver
+    -- is still exempt from must-trump-ruff per J-066/J-067. Pre-fix
+    -- when opp over-trumps, this branch fell through to the natural
+    -- must-ruff/winners flow, sometimes burning trump unnecessarily.
+    -- Now fires whenever AKA was called on the led suit, regardless
+    -- of who's currently winning.
+    local akaLive = explicitAKA or implicitAKA
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM and contract.trump
-       and trick.leadSuit and partnerWinning
-       and (explicitAKA or implicitAKA) then
+       and trick.leadSuit and akaLive then
         local discards = {}
         for _, c in ipairs(legal) do
             if not C.IsTrump(c, contract) then
@@ -3865,6 +3892,38 @@ local function escalationStrength(seat, hand, contract)
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
+        -- v0.11.17 EV-1 (audit): mirror PickDouble's defender bonuses
+        -- on the BIDDER side. Pre-v0.11.17 escalationStrength missed
+        -- void/side-Ace bonuses while PickDouble (defender) added
+        -- them, putting bidder/defender on different scales for the
+        -- same hand quality. Combined with EV-2 (BOT_GAHWA_TH=135 on
+        -- 5-card hand), this is the root cause of escalation.md's
+        -- "0% chain fire in symmetric pure-bot play" diagnostic.
+        local voidCount, sideAces = 0, 0
+        local sideSuits = { S = 0, H = 0, D = 0, C = 0 }
+        for _, c in ipairs(hand) do
+            local r, su = C.Rank(c), C.Suit(c)
+            if su ~= contract.trump then
+                sideSuits[su] = sideSuits[su] + 1
+                if r == "A" then sideAces = sideAces + 1 end
+            end
+        end
+        for _, su in ipairs({ "S", "H", "D", "C" }) do
+            if su ~= contract.trump and sideSuits[su] == 0 then
+                voidCount = voidCount + 1
+            end
+        end
+        strength = strength + voidCount * 5 + math.max(sideAces - 1, 0) * 8
+    elseif contract.type == K.BID_SUN then
+        -- v0.11.17 EV-1: mirror Sun-bidder's PickBid bonuses (mardoofa
+        -- + 2/3-Ace) so bidder's escalation comparison is on the same
+        -- scale as the bid-acceptance formula.
+        local aceCount, mardoofaCount = aceCountAndMardoofa(hand)
+        if aceCount >= 3 then strength = strength + K.BOT_SUN_3ACE_BONUS
+        elseif aceCount == 2 then strength = strength + K.BOT_SUN_2ACE_BONUS
+        end
+        strength = strength + math.min(mardoofaCount, K.BOT_SUN_MARDOOFA_PAIR_CAP)
+                            * K.BOT_SUN_MARDOOFA_BONUS
     end
     -- Advanced: factor in partner's bid as combined-team strength
     -- info. PASS both rounds → -10; HOKM matching trump → +20; etc.

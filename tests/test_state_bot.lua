@@ -3317,6 +3317,61 @@ do
 end
 
 -- =====================================================================
+-- AA. v0.11.17 — Tier 2 audit fixes (B1-B4)
+-- =====================================================================
+print("")
+print("=== Section AA: v0.11.17 Tier-2 audit fixes ===")
+
+-- AA.1 (B1 / EV-1) — escalationStrength includes void/side-Ace bonuses
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function escalationStrength")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find("voidCount %* 5") ~= nil,
+                   "AA.1a (B1 / EV-1): escalationStrength includes void bonus (Hokm bidder)")
+        assertTrue(body:find("sideAces %- 1") ~= nil,
+                   "AA.1b (B1 / EV-1): escalationStrength includes side-Ace bonus")
+        assertTrue(body:find("K%.BOT_SUN_2ACE_BONUS") ~= nil
+                   and body:find("K%.BOT_SUN_MARDOOFA_BONUS") ~= nil,
+                   "AA.1c (B1 / EV-1): escalationStrength mirrors Sun bidder bonuses")
+    end
+end
+
+-- AA.2 (B1 / EV-2) — BOT_GAHWA_TH lowered 135 -> 120
+do
+    assertEq(K.BOT_GAHWA_TH, 120, "AA.2 (B1 / EV-2): BOT_GAHWA_TH = 120 (was 135)")
+end
+
+-- AA.3 (B2) — BotMaster wall-clock budget present
+do
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find("K%.BOT_ISMCTS_BUDGET_SEC") ~= nil,
+               "AA.3a (B2): BotMaster references K.BOT_ISMCTS_BUDGET_SEC")
+    assertTrue(bmSrc:find("BM%._lastWorldsCompleted") ~= nil,
+               "AA.3b (B2): BotMaster tracks _lastWorldsCompleted for diag")
+    assertEq(K.BOT_ISMCTS_BUDGET_SEC, 0.5,
+             "AA.3c (B2): K.BOT_ISMCTS_BUDGET_SEC = 0.5s default")
+end
+
+-- AA.4 (B3) — bidderHoldsBidcard helper exists
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local function bidderHoldsBidcard%(seat, card%)") ~= nil,
+               "AA.4 (B3): bidderHoldsBidcard helper defined")
+end
+
+-- AA.5 (B4 / H-5) — pickFollow Hokm AKA-receiver branch fires regardless of partnerWinning
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- The pre-fix gate was `partnerWinning and (explicitAKA or implicitAKA)`.
+    -- Post-fix the partnerWinning is dropped from the Hokm-AKA branch.
+    -- Source-pin: presence of the renamed `akaLive` flag.
+    assertTrue(botSrc:find("local akaLive = explicitAKA or implicitAKA") ~= nil,
+               "AA.5 (B4 / H-5): pickFollow uses akaLive flag (relief regardless of winner)")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

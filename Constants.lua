@@ -372,7 +372,20 @@ K.BOT_BEL_TH          = 60    -- defenders bel with own strength >= TH
                               --  Bels missed per 1000 hands; TH=60 best F1)
 K.BOT_TRIPLE_TH       = 90    -- bidder triples (×3) — needs strong hand
 K.BOT_FOUR_TH         = 110   -- defenders four (×4) — very strong hand
-K.BOT_GAHWA_TH        = 135   -- bidder gahwa (match-win) — terminal, near-certain
+K.BOT_GAHWA_TH        = 120   -- bidder gahwa (match-win) — terminal, near-certain.
+                              -- v0.11.17 EV-2 (audit): lowered 135 -> 120. With
+                              -- 5-card hand evaluation, max possible escalation
+                              -- strength was ~99 (J+9+A+T+K trump) + +20 partner
+                              -- bonus = 119 — Gahwa was structurally unreachable
+                              -- via the BOT_GAHWA_TH-15 floor (=120) on most
+                              -- jitter rolls. With v0.11.17 EV-1 (void/side-Ace
+                              -- bonuses added to escalationStrength) effective
+                              -- max climbs to ~140; threshold 120 keeps Gahwa
+                              -- as the rarest rung but actually reachable on
+                              -- top-tier hands. escalation.md "0% in symmetric
+                              -- pure-bot play" diagnostic should now show
+                              -- Gahwa firing on extreme outliers (1-3% of
+                              -- bidder rounds).
 K.BOT_ASHKAL_TH       = 65    -- partner-of-Hokm-bidder calls Ashkal with Sun-strong hand
 K.BOT_PREEMPT_TH      = 75    -- earlier seat pre-empts a Sun-on-Ace bid
 
@@ -475,3 +488,12 @@ K.BOT_OVERCALL_TAKE_HOKM_TH = 80
 -- meaningful for normal (non-void) overcall decisions.
 K.BOT_OVERCALL_VOID_TRUMP_BONUS  = 15  -- 0 cards in opp's trump suit
 K.BOT_OVERCALL_SHORT_TRUMP_BONUS =  8  -- 1 card in opp's trump suit
+
+-- v0.11.17 audit B2: ISMCTS wall-clock budget per Saudi Master move.
+-- Pre-v0.11.17 the world loop ran fixed 100/60/30 worlds with no time
+-- cap, producing 3-15s pauses on early-trick moves (16,800 full
+-- Bot.PickPlay invocations per move). Budget caps per-move latency;
+-- completed worlds vote, remaining skipped. UI responsiveness chosen
+-- over marginal accuracy at world 80-100. Set to 0 to disable cap
+-- (full numWorlds always); 0.5s default keeps stutter imperceptible.
+K.BOT_ISMCTS_BUDGET_SEC = 0.5

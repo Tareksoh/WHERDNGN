@@ -1,5 +1,84 @@
 # Changelog
 
+## v0.11.17 — Tier 2: escalation chain + ISMCTS perf + bidcard-in-defense
+
+Continues the deep-audit fix sequence. Tier 2 closes:
+- **B1**: escalation chain unblock (EV-1 + EV-2)
+- **B2**: ISMCTS wall-clock budget (3-15s pause -> 0.5s cap)
+- **B3**: bidcard public-knowledge helper (light wiring; deeper integration deferred)
+- **B4**: pickFollow Hokm AKA-receiver gate extension (H-5)
+
+### Fixed (HIGH)
+
+- **B1 (EV-1) — `escalationStrength` now mirrors PickDouble/PickBid bonuses.**
+  Pre-v0.11.17 the bidder-side escalation strength missed:
+  - Hokm: void-count × 5 + (sideAces - 1) × 8 (defender-side had this; bidder didn't)
+  - Sun: 2-Ace bonus (+15), 3-Ace bonus (+15), mardoofa-pair bonus (+20)
+  Combined effect: bidder/defender ran on different scales for the same
+  hand quality. Triple/Four/Gahwa rungs systematically under-fired.
+
+- **B1 (EV-2) — `BOT_GAHWA_TH` lowered 135 -> 120.** Prior threshold
+  was structurally unreachable on 5-card hands (max ~99 raw + +20
+  partner-bonus = 119 < 120 floor at urgency=15). Combined with EV-1's
+  added bonuses, max climbs to ~140; threshold 120 keeps Gahwa as the
+  rarest rung but actually reachable on top-tier hands. Closes
+  escalation.md "0% chain fire in symmetric pure-bot play" diagnostic.
+
+- **B2 — ISMCTS wall-clock budget.** Pre-v0.11.17 fixed numWorlds
+  (100/60/30) × ~8 candidates × ~21 rollout-policy calls = ~16,800
+  full `Bot.PickPlay` invocations per move at trick 0 (post-v0.11.1
+  C-14 the rollout policy is full PickPlay, not the cheap simulator
+  decisions the original "150 ms perceptually instant" comment
+  assumed). Realistic load was 3-15 seconds per Saudi-Master move on
+  early tricks. New `K.BOT_ISMCTS_BUDGET_SEC = 0.5` caps wall-clock
+  per-move; completed worlds vote, remaining skipped. Tracks
+  `BM._lastWorldsCompleted` for `/baloot ismctsdiag`. Set budget to
+  0 to disable cap and run full numWorlds always.
+
+### Added (B3 light)
+
+- **`bidderHoldsBidcard(seat, card)`** file-local helper. Returns true
+  iff the seat is the bidder, the card matches `S.s.bidCard`, AND
+  the bidcard hasn't yet been played. The bidder gets the bidcard
+  at HostDealRest; this is PUBLIC knowledge (visible during bidding).
+  Defender bots that don't factor this in waste tricks probing for
+  trump distribution that's already known. Helper is in place; deeper
+  integration into trump-J-tracking, opp-trump-exhausted checks, and
+  side-suit boss-lead decisions deferred to v0.11.18 (each requires
+  careful per-callsite evaluation).
+
+### Fixed (MED)
+
+- **B4 (H-5) — pickFollow Hokm AKA-receiver gate now fires regardless
+  of `partnerWinning`.** Pre-v0.11.17 the gate required current trick
+  winner = partner. But `Rules.lua` legality layer (line 202-206)
+  correctly relieves the receiver from must-trump-ruff EVEN when an
+  opp over-trumped partner's A-led trick. Pre-fix when opp over-
+  trumped, the heuristic fell through to natural must-ruff/winners
+  flow, sometimes burning trump unnecessarily. Now: AKA on led suit
+  -> always prefer non-trump discard (matches legality semantics).
+
+### Test coverage (Section AA added)
+
+- **AA.1**: `escalationStrength` includes void/sideAce/Sun bonuses
+- **AA.2**: `BOT_GAHWA_TH = 120`
+- **AA.3**: `K.BOT_ISMCTS_BUDGET_SEC = 0.5` + BotMaster wires it +
+  tracks `_lastWorldsCompleted`
+- **AA.4**: `bidderHoldsBidcard` helper defined
+- **AA.5**: `pickFollow` uses `akaLive` flag (relief regardless of winner)
+
+622/622 tests pass.
+
+### Deferred to v0.11.18
+
+Remaining Tier 2/3 items:
+- **B3 deeper integration**: trump-J-tracking, opp-exhaust checks, side-suit-boss leads consult `bidderHoldsBidcard`
+- **B4 (H-4)**: Tahreeb sender doesn't avoid strong suit
+- **B4 (H-6)**: released-from-must-ruff doesn't prefer non-trump discard
+- **B5**: ISMCTS rollout state preservation (BM-01) + sampler fallback (BM-02) + meldPins voids (BM-04)
+- **B6**: existential SWA validator for caller's own moves
+- **Tier 3 cleanup**: PB-1, PP-1 (already done in v0.11.16), BG-1, OE-1, P4-1, BM-06, doc drift
+
 ## v0.11.16-hotfix — post-ship audit follow-up
 
 Post-ship audit of v0.11.16 caught 5 follow-up issues. All A1-family

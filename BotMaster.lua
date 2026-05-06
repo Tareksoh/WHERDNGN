@@ -940,7 +940,22 @@ function BM.PickPlay(seat)
     -- typical, losing 1-2 to errors is statistically irrelevant;
     -- losing all 100 to one bad world was the prior pathology.
     local rolloutErrors = 0
+    -- v0.11.17 audit B2: wall-clock budget. Pre-v0.11.17 fixed numWorlds
+    -- (100/60/30) × ~8 candidates × ~21 rollout-policy calls per world
+    -- = ~16,800 full Bot.PickPlay invocations per move at trick 0.
+    -- With each call traversing M3lm partner-style + memory + multiple
+    -- HighestUnplayedRank scans, realistic load is 3-15 seconds per
+    -- early-trick move — UI-perceptible stutter. Budget caps per-move
+    -- at K.BOT_ISMCTS_BUDGET_SEC (default 0.5s); already-completed
+    -- worlds vote, remaining worlds skipped. Saudi Master move
+    -- responsiveness > marginal accuracy gained from world 80-100.
+    local startedAt = (GetTime and GetTime()) or 0
+    local budgetSec = (K and K.BOT_ISMCTS_BUDGET_SEC) or 0.5
+    local worldsCompleted = 0
     for w = 1, numWorlds do
+        if budgetSec > 0 and (GetTime and GetTime() or 0) - startedAt > budgetSec then
+            break
+        end
         local ok, err = pcall(function()
             local world = sampleConsistentDeal(seat, unseen)
             if world then
@@ -951,7 +966,10 @@ function BM.PickPlay(seat)
             end
         end)
         if not ok then rolloutErrors = rolloutErrors + 1 end
+        worldsCompleted = w
     end
+    -- Track for ismctsdiag: actual worlds completed (vs configured numWorlds).
+    BM._lastWorldsCompleted = worldsCompleted
     -- If literally every world errored (suggests a deterministic bug
     -- not a sampling edge), fall back to heuristics with restored flag.
     if rolloutErrors == numWorlds then
