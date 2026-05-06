@@ -4914,11 +4914,25 @@ function Bot.PickTriple(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false, false end
+    -- v1.0.8 (user-requested observability): eltrace mirror of
+    -- PickDouble's `[bel sN]` pattern. When debugBidcalc toggle is on,
+    -- log `[trp sN] PickTriple eval/PASS/FIRE` so users debugging
+    -- "why never Triple?" can see strength + threshold. Was missing
+    -- pre-v1.0.8; only PickDouble had observability.
+    local function eltrace(fmt, ...)
+        if not (WHEREDNGNDB and WHEREDNGNDB.debugBidcalc) then return end
+        local ok, msg = pcall(string.format, fmt, ...)
+        if not ok then return end
+        print(("|cff66ddff[trp s%d]|r %s"):format(seat or 0, msg))
+    end
     -- v0.10.0 R2 defense-in-depth: Sun has no Triple rung. The phase
     -- machine prevents PHASE_TRIPLE on Sun in practice, but a stale
     -- caller path (test or future refactor) reaching here on a Sun
     -- contract should still no-op. Source: review_v0.10.0/reaudit_R2.
-    if contract.type == K.BID_SUN then return false, false end
+    if contract.type == K.BID_SUN then
+        eltrace("PickTriple blocked: Sun has no Triple rung")
+        return false, false
+    end
     local strength = escalationStrength(seat, hand, contract)
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_TRIPLE_TH - combinedUrgency(R.TeamOf(seat))
@@ -4948,7 +4962,17 @@ function Bot.PickTriple(seat)
     -- the well-calibrated threshold range. Floor at -16 mirrors
     -- PickFour's K.BOT_FOUR_TH - 16 = 94; here that's 74.
     if th < K.BOT_TRIPLE_TH - 16 then th = K.BOT_TRIPLE_TH - 16 end
-    return escalateDecision(strength, th)
+    local jth = jitter(th, BEL_JITTER)
+    eltrace("PickTriple eval: strength=%d th=%d jth=%d (BOT_TRIPLE_TH=%d)",
+            strength, th, jth, K.BOT_TRIPLE_TH)
+    if strength < jth then
+        eltrace("PickTriple PASS: strength=%d < jth=%d", strength, jth)
+        return false, false
+    end
+    local wantOpen = strength >= jth + 20
+    eltrace("PickTriple FIRE: strength=%d >= jth=%d wantOpen=%s",
+            strength, jth, tostring(wantOpen))
+    return true, wantOpen
 end
 
 function Bot.PickFour(seat)
@@ -4958,8 +4982,18 @@ function Bot.PickFour(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false, false end
+    -- v1.0.8: eltrace observability (mirror of PickDouble pattern).
+    local function eltrace(fmt, ...)
+        if not (WHEREDNGNDB and WHEREDNGNDB.debugBidcalc) then return end
+        local ok, msg = pcall(string.format, fmt, ...)
+        if not ok then return end
+        print(("|cffff8855[for s%d]|r %s"):format(seat or 0, msg))
+    end
     -- v0.10.0 R2 defense-in-depth: Sun has no Four rung.
-    if contract.type == K.BID_SUN then return false, false end
+    if contract.type == K.BID_SUN then
+        eltrace("PickFour blocked: Sun has no Four rung")
+        return false, false
+    end
     -- v0.11.18 audit P4-1: read partner's Bel `belOpen` flag.
     -- v0.11.18-final DEAD-1 (ultra audit): the `belOpen == false`
     -- branch was DEAD CODE. PHASE_FOUR is structurally unreachable
@@ -5007,7 +5041,18 @@ function Bot.PickFour(seat)
     -- combined drop; it should apply unconditionally (matching
     -- PickDouble's v0.5.2 unconditional floor at line ~1850).
     if th < K.BOT_FOUR_TH - 16 then th = K.BOT_FOUR_TH - 16 end
-    return escalateDecision(strength, th)
+    -- v1.0.8: eltrace eval/PASS/FIRE.
+    local jth = jitter(th, BEL_JITTER)
+    eltrace("PickFour eval: strength=%d th=%d jth=%d (BOT_FOUR_TH=%d)",
+            strength, th, jth, K.BOT_FOUR_TH)
+    if strength < jth then
+        eltrace("PickFour PASS: strength=%d < jth=%d", strength, jth)
+        return false, false
+    end
+    local wantOpen = strength >= jth + 20
+    eltrace("PickFour FIRE: strength=%d >= jth=%d wantOpen=%s",
+            strength, jth, tostring(wantOpen))
+    return true, wantOpen
 end
 
 function Bot.PickGahwa(seat)
@@ -5022,8 +5067,18 @@ function Bot.PickGahwa(seat)
     local hand = S.s.hostHands and S.s.hostHands[seat]
     local contract = S.s.contract
     if not hand or not contract then return false, false end
+    -- v1.0.8: eltrace observability.
+    local function eltrace(fmt, ...)
+        if not (WHEREDNGNDB and WHEREDNGNDB.debugBidcalc) then return end
+        local ok, msg = pcall(string.format, fmt, ...)
+        if not ok then return end
+        print(("|cffff5555[ghw s%d]|r %s"):format(seat or 0, msg))
+    end
     -- v0.10.0 R2 defense-in-depth: Sun has no Gahwa rung.
-    if contract.type == K.BID_SUN then return false, false end
+    if contract.type == K.BID_SUN then
+        eltrace("PickGahwa blocked: Sun has no Gahwa rung")
+        return false, false
+    end
     local strength = escalationStrength(seat, hand, contract)
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_GAHWA_TH - combinedUrgency(R.TeamOf(seat))
@@ -5038,7 +5093,16 @@ function Bot.PickGahwa(seat)
     -- Acceptable because Gahwa is bidder-side (we have all the info),
     -- and combined-urgency >= 15 only fires when our team is near-loss
     -- desperation (terminal swing OK).
-    local yes = strength >= jitter(th, BEL_JITTER)
+    local jth = jitter(th, BEL_JITTER)
+    eltrace("PickGahwa eval: strength=%d th=%d jth=%d (BOT_GAHWA_TH=%d)",
+            strength, th, jth, K.BOT_GAHWA_TH)
+    local yes = strength >= jth
+    if yes then
+        eltrace("PickGahwa FIRE: strength=%d >= jth=%d (terminal, match-win)",
+                strength, jth)
+    else
+        eltrace("PickGahwa PASS: strength=%d < jth=%d", strength, jth)
+    end
     return yes, false
 end
 

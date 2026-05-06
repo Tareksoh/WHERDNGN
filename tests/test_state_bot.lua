@@ -4785,12 +4785,14 @@ do
                "AH.2b (L2): IsValidSWA enforces budget guard")
 end
 
--- AH.3 (FLOOR-3 PickTriple symmetric defense): floor cap
+-- AH.3 (FLOOR-3 PickTriple symmetric defense): floor cap.
+-- v1.0.8: bumped 2500 -> 4000 to accommodate the new eltrace block
+-- in PickTriple. Behavior unchanged.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickTriple")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 2500)
+        local body = botSrc:sub(fnStart, fnStart + 4000)
         assertTrue(body:find("th < K%.BOT_TRIPLE_TH %- 16 then th = K%.BOT_TRIPLE_TH %- 16") ~= nil,
                    "AH.3 (FLOOR-3): PickTriple has floor cap symmetric with PickFour")
     end

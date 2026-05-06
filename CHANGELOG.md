@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.0.8 — Triple/Four/Gahwa eltrace observability
+
+User-requested: the existing `[bel sN] PickDouble eval/PASS/FIRE`
+trace shows defender Bel decisions when `WHEREDNGNDB.debugBidcalc`
+is on. The downstream rungs (Triple, Four, Gahwa) had no
+equivalent trace — leaving "why never Triple?" debugging blind.
+
+### Added
+
+- **`Bot.PickTriple` eltrace** (Bot.lua:Bot.PickTriple). Mirror of
+  PickDouble's pattern. Logs `[trp sN] PickTriple eval: strength=X
+  th=Y jth=Z (BOT_TRIPLE_TH=W)` then PASS or FIRE with wantOpen
+  flag. Also logs the `Sun has no Triple rung` short-circuit when
+  the Sun-blocked branch fires.
+
+- **`Bot.PickFour` eltrace** (Bot.lua:Bot.PickFour). `[for sN]`
+  prefix (orange). Same eval/PASS/FIRE shape.
+
+- **`Bot.PickGahwa` eltrace** (Bot.lua:Bot.PickGahwa). `[ghw sN]`
+  prefix (red). Logs eval/PASS/FIRE; FIRE notes "terminal,
+  match-win".
+
+### Why this matters
+
+Across the 51-round v1.0.7 sample, Bel fired 3× but Triple fired 0×.
+Two interpretations were possible:
+1. Bidder correctly didn't escalate marginal Bels (calibrated)
+2. Triple threshold structurally too high (mis-calibrated)
+
+The eltrace now disambiguates: the next time PHASE_TRIPLE fires,
+the trace will show the bidder's strength score and threshold,
+making it visible whether the bidder was below threshold by 1 or
+by 30. Same applies to Four (PHASE_FOUR) and Gahwa (PHASE_GAHWA).
+
+### Tests
+
+753/753 pass. AH.3 source-pin window bumped 2500→4000 to
+accommodate the new eltrace block in PickTriple.
+
+### How to use
+
+`/baloot bidcalc` toggles the existing debug flag. With it on,
+all four escalation rungs now log to chat with color-coded
+prefixes:
+- `[bel sN]` cyan-green — defender Bel decision
+- `[trp sN]` cyan — bidder Triple decision
+- `[for sN]` orange — defender Four decision
+- `[ghw sN]` red — bidder Gahwa decision
+
 ## v1.0.7 — Test-debt closure (Section AK behavioral coverage)
 
 Test-only release. Adds 7 behavioral tests (Section AK) that exercise
