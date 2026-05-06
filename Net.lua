@@ -2902,8 +2902,16 @@ function N.LocalSWA()
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end
-    -- Direct claim (≤3 cards or permission disabled): send the actual
-    -- SWA wire and let the host resolve immediately.
+    -- Direct claim (permission disabled — `swaRequiresPermission == false`):
+    -- send the actual SWA wire and let the host resolve immediately.
+    --
+    -- v1.0.2 (L1): comment cleanup. Pre-v0.5.17 the fall-through also
+    -- fired for ≤3-card claims (Saudi rule: ≤3 cards = instant, no
+    -- permission needed). v0.5.17 routed ALL counts through the
+    -- permission window so the caller's cards display in the
+    -- 5-second banner regardless of count — `if needPerm then ...`
+    -- above now catches every claim when permission is enabled.
+    -- The "≤3 cards" half of the prior comment was stale.
     local enc = C.EncodeHand(S.s.hand or {})
     N.SendSWA(S.s.localSeat, enc)
     if S.s.isHost then N.HostResolveSWA(S.s.localSeat, S.s.hand or {}) end

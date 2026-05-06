@@ -3336,7 +3336,10 @@ do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local fnStart = botSrc:find("local function escalationStrength")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 2500)
+        -- v1.0.3: bumped 2500 -> 4000 chars; ESC-1 fix added a Sun-
+        -- penalty inversion preamble that pushed the void/side-Ace
+        -- pins past the prior window. Behavior preserved.
+        local body = botSrc:sub(fnStart, fnStart + 4000)
         assertTrue(body:find("voidCount %* 5") ~= nil,
                    "AA.1a (B1 / EV-1): escalationStrength includes void bonus (Hokm bidder)")
         assertTrue(body:find("sideAces %- 1") ~= nil,
@@ -4749,6 +4752,84 @@ do
     end
     WHEREDNGNDB = prevDB
     restore()
+end
+
+print("=== Section AH: v1.0.3 deferred-queue closure ===")
+
+-- AH.1 (PARTNERSTYLE-INVARIANT): source-pin test that
+-- BotMaster.PickPlay never reassigns Bot._partnerStyle during a
+-- rollout. The C-14 closure swaps Bot._memory under _inRollout flag
+-- to avoid heuristic-rollout pollution; _partnerStyle is intentionally
+-- kept SHARED across rollout/main-game (the style ledger represents
+-- per-game observations, not per-rollout state) — but no test
+-- asserts the absence of a stray reassignment.
+do
+    local botMasterSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    -- The pattern `Bot._partnerStyle =` (with assignment, not just
+    -- read) should NOT appear inside BotMaster.lua. Allow `Bot._partnerStyle and Bot._partnerStyle[s]`
+    -- read patterns; reject `Bot._partnerStyle = anything`.
+    local badAssign = botMasterSrc:find("Bot%._partnerStyle%s*=")
+    assertTrue(badAssign == nil,
+               "AH.1 (PARTNERSTYLE-INVARIANT): BotMaster.lua never reassigns Bot._partnerStyle")
+end
+
+-- AH.2 (L2 IsValidSWA recursion budget): pin the budget guard exists.
+do
+    local rulesSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Rules.lua"):read("*a")
+    assertTrue(rulesSrc:find("SWA_RECURSION_BUDGET") ~= nil,
+               "AH.2a (L2): IsValidSWA defines SWA_RECURSION_BUDGET cap")
+    assertTrue(rulesSrc:find("_depth%s*>%s*SWA_RECURSION_BUDGET") ~= nil,
+               "AH.2b (L2): IsValidSWA enforces budget guard")
+end
+
+-- AH.3 (FLOOR-3 PickTriple symmetric defense): floor cap
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickTriple")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find("th < K%.BOT_TRIPLE_TH %- 16 then th = K%.BOT_TRIPLE_TH %- 16") ~= nil,
+                   "AH.3 (FLOOR-3): PickTriple has floor cap symmetric with PickFour")
+    end
+end
+
+-- AH.4 (BM-04-FALLBACK void-respecting): pin the two-pass fallback.
+do
+    local botMasterSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(botMasterSrc:find("Pass 1: void%-respecting allocation") ~= nil,
+               "AH.4a (BM-04-FALLBACK): fallback has void-respecting Pass 1")
+    assertTrue(botMasterSrc:find("Pass 2:.*give%-up") ~= nil,
+               "AH.4b (BM-04-FALLBACK): fallback has give-up Pass 2 only when Pass 1 under-fills")
+end
+
+-- AH.5 (U-8 AKA clutch threshold pin): constants defined.
+do
+    assertEq(K.BOT_AKA_CLUTCH_DISTANCE, 25,
+             "AH.5a (U-8): BOT_AKA_CLUTCH_DISTANCE = 25 (default — pinned from inline literal)")
+    assertEq(K.BOT_AKA_CLUTCH_RACE_GAP, 20,
+             "AH.5b (U-8): BOT_AKA_CLUTCH_RACE_GAP = 20")
+end
+
+-- AH.6 (PB-1 split partnerBidBonus): defender PASS suppression.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function partnerBidBonus")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2000)
+        assertTrue(body:find("seatIsBidder") ~= nil,
+                   "AH.6 (PB-1): partnerBidBonus splits PASS penalty by bidder vs defender team")
+    end
+end
+
+-- AH.7 (ESC-1 sunStrength void penalty inversion): pin Hokm branch.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function escalationStrength")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find("invert the Sun%-only penalty") ~= nil,
+                   "AH.7 (ESC-1): escalationStrength inverts sunStrength void penalty in Hokm")
+    end
 end
 
 -- =====================================================================

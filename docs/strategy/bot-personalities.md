@@ -47,14 +47,22 @@
 
 ### Tier 5 — Saudi Master
 - **Behavior:** Fzloky + ISMCTS determinization sampling
-  (`BotMaster.PickPlay`). 100/60/30 worlds per trick (early/mid/
-  late).
+  (`BotMaster.PickPlay`). Per-trick world count is configured at
+  100/60/30 (early/mid/late) but actual worlds completed is
+  capped by `K.BOT_ISMCTS_BUDGET_SEC` (default 0.5s wall-clock).
+  v1.0.3 doc refresh (DOC-DRIFT-WORLDS): pre-fix this entry
+  claimed "100/60/30 worlds" without the budget caveat — the
+  v0.11.17 B2 budget change capped early-trick rollouts at ~30-50
+  worlds in practice on slower hardware. The configured ceiling
+  is a best-case; budget truncation is normal and expected.
 - **Bidding:** still uses Bot.PickBid heuristic (ISMCTS not in
   bid phase).
-- **Escalation:** highest-quality Bel/Bel-x2/Four reads via style
-  ledger + sampler.
-- **Play:** evaluates 100 randomized opponent-hand worlds and
-  picks the play with the highest aggregate rollout score.
+- **Escalation:** highest-quality Double/Triple/Four reads via
+  style ledger + sampler. (UI labels post-v1.0.2: "Double x2",
+  "Triple x3" — code identifiers PickDouble/PickTriple unchanged.)
+- **Play:** evaluates UP TO 100 randomized opponent-hand worlds
+  (subject to budget cap) and picks the play with the highest
+  aggregate rollout score across worlds-completed.
 - **Personality fit:** "pro player; reads partner perfectly,
   rarely makes a mistake".
 

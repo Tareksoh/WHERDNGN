@@ -554,17 +554,24 @@ local function sampleConsistentDeal(seat, unseen)
         if ok then return deal end
     end
 
-    -- Fallback: uniform random deal ignoring voids.
+    -- Fallback: uniform random deal — best-effort void respecting.
     --
-    -- 50-agent codebase audit fix (H-6 regression): the prior fallback
-    -- ignored both meldPins AND voids. Voids are intentionally ignored
-    -- here (it's the "give up trying to satisfy constraints" path), but
-    -- meldPins MUST be respected — declared meld cards are exact known
-    -- positions, not soft constraints. Without this, a Tierce 7-8-9 of
-    -- Hearts declared by seat 3 could end up split across all four
-    -- seats in the rollout deal, corrupting every rollout's view of who
-    -- holds what. The primary path (above) handled meldPins correctly;
-    -- the fallback was missing the same logic.
+    -- 50-agent codebase audit fix (H-6 regression): meldPins MUST be
+    -- respected — declared meld cards are exact known positions, not
+    -- soft constraints. Without this, a Tierce 7-8-9 of Hearts
+    -- declared by seat 3 could end up split across all four seats.
+    --
+    -- v1.0.3 (BM-04-FALLBACK): pre-fix the fallback uniformly ignored
+    -- voids. The primary path's BM-04 void filter was bypassed
+    -- whenever the 15-attempt loop couldn't satisfy constraints,
+    -- producing rollout worlds with seats holding cards in suits
+    -- they're observed-void in. Now the fallback first tries to
+    -- allocate respecting voids; cards that would violate are
+    -- pushed to a "void-violating" pool used only when the void-
+    -- respecting pool can't fill the seat. Best-effort, not strict —
+    -- the fallback's contract is "produce SOME deal" not "produce a
+    -- consistent deal", so if voids can't be satisfied we still
+    -- ship a deal (better partial info than no rollout at all).
     local pool = {}
     for _, c in ipairs(unseen) do
         if c ~= pinCard and not meldPins[c] then
@@ -573,7 +580,7 @@ local function sampleConsistentDeal(seat, unseen)
     end
     shuffle(pool)
     local deal = {}
-    local idx = 1
+    local consumed = {}  -- cards already placed (across seats)
     for s = 1, 4 do
         if s == seat then
             deal[s] = (S.s.hostHands and S.s.hostHands[s]) or {}
@@ -585,9 +592,28 @@ local function sampleConsistentDeal(seat, unseen)
             for c, declarerSeat in pairs(meldPins) do
                 if declarerSeat == s then hand[#hand + 1] = c end
             end
-            while #hand < n and idx <= #pool do
-                hand[#hand + 1] = pool[idx]
-                idx = idx + 1
+            local voids = (B.Bot._memory and B.Bot._memory[s]
+                           and B.Bot._memory[s].void) or {}
+            -- Pass 1: void-respecting allocation.
+            for _, c in ipairs(pool) do
+                if #hand >= n then break end
+                if not consumed[c] and not voids[C.Suit(c)] then
+                    hand[#hand + 1] = c
+                    consumed[c] = true
+                end
+            end
+            -- Pass 2: if still under-filled (impossible to satisfy
+            -- voids given remaining pool), accept void-violating
+            -- cards. This is the give-up path — better incomplete
+            -- info than no rollout at all.
+            if #hand < n then
+                for _, c in ipairs(pool) do
+                    if #hand >= n then break end
+                    if not consumed[c] then
+                        hand[#hand + 1] = c
+                        consumed[c] = true
+                    end
+                end
             end
             deal[s] = hand
         end
@@ -717,11 +743,14 @@ local function rolloutValue(seat, card, world, contract)
         if pm then
             -- Deep-copy firstDiscard (table or nil) so rollout
             -- mutations don't bleed back into real Bot._memory.
+            -- v1.0.2 (BM-01-DOC-DRIFT): the schema is `{suit, rank}`
+            -- only — Bot.lua:140/375-376 confirms the writer never
+            -- sets a `.bucket` field. Pre-fix copied a non-existent
+            -- field as nil → harmless but misleading. Removed.
             if pm.firstDiscard then
                 rolloutMemory[s].firstDiscard = {
                     suit = pm.firstDiscard.suit,
                     rank = pm.firstDiscard.rank,
-                    bucket = pm.firstDiscard.bucket,
                 }
             end
             -- likelyKawesh is a boolean

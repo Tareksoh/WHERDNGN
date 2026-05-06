@@ -1,5 +1,185 @@
 # Changelog
 
+## v1.0.3 — Deferred-queue closure: 22 audit items from clusters 2-5
+
+Closes the entire v1.0.0-deferred queue from CHANGELOG.md (the
+"Deferred from v1.0.0" section). 22 items across 4 audit clusters
+plus 10 new source-pin tests in Section AH. No calibration-threshold
+changes. 718/718 tests pass.
+
+### Cluster 2 — Defender play (5 items)
+
+- **F5 (Belote K+Q-trump preservation in pickLead defender,
+  Bot.lua:~3140).** When forced to lead trump (no non-trump in hand)
+  AND we hold both K+Q of trump (Belote pair), prefer trump that's
+  NOT K or Q. Belote scoring is locked at meld declaration so this
+  doesn't affect the +20 bonus, but keeping the pair together for
+  cash-on-our-lead extracts more attack value than an arbitrary
+  K-lead. Layered AFTER `saveHighTrump` so the J/9 protection
+  still wins; only kicks in for "below-J/9" decisions.
+
+- **F6 (Defender Bargiya defensive-shed in Hokm — DEFERRED).**
+  Considered and rejected. The Saudi convention for discard-side-A-
+  with-cover is canonically Sun-only; Hokm has its own side-suit
+  control signaling via implicit AKA on bare-A lead. A Hokm extension
+  conflicted with the U-6 v0.11.19 fix (E.3 test pin). The Sun gate
+  stays as-is; Hokm "lead-back" semantic is carried by AKA flow.
+  Decision documented in code (no behavior change).
+
+- **F7 (firstDiscard vs Tahreeb conflict — RESOLUTION-DOC).** The
+  conflict is structurally resolved via two complementary gates:
+  v0.11.18-final U-2 made the Tahreeb sender's "want" arm Sun-only,
+  and v1.0.3 (U-5 below) added a sender-side trump-discard
+  suppression. firstDiscard ledger no longer carries trump or Sun-
+  Tahreeb-bargiya-emission entries. Documented in pickLead's
+  Fzloky-pref-suit reader (no behavior change).
+
+- **F8 (Sun-bidder-drought tell, Bot.lua:~2916).** Mirror of
+  `bidderTrumpDrought` for Sun contracts. After 3 tricks, if the
+  bidder has LED at least once and NEVER led an Ace, they're Ace-
+  poor — defender team aggressively cashes their highest point
+  card. M3lm-gated; reuses the existing point-card lead branch.
+
+- **F9 (Defender Faranka comment cleanup, Bot.lua:~3469).** Hokm
+  Faranka exception comment block refreshed to reflect current
+  bidder-team gating (v0.9.2 #49 + v0.10.0 X3 widened both
+  exceptions #2 and #4 from bidder-only). Removed the stale
+  Section 10 rule 7 anti-trigger reference (deleted in v0.10.3).
+  No behavior change.
+
+### Cluster 3 — Bidding/escalation residuals (5 items)
+
+- **FLOOR-3 (Bot.lua:Bot.PickTriple ~line 4404).** Floor cap added
+  matching the symmetric defenses in PickDouble/PickFour/PickGahwa.
+  `combinedUrgency + styleBelTendency` could drop `th` from base 90
+  to 67 on top-tier hands; floor at `BOT_TRIPLE_TH - 16 = 74`.
+
+- **ESC-1 (Bot.lua:escalationStrength).** sunStrength applies a
+  Sun-only void penalty (capped 8). In Hokm, voids = ruff capacity
+  (POSITIVE), not negative. escalationStrength now inverts that
+  penalty in its Hokm branch so the per-hand score is honest.
+
+- **PEB-DEAD (Bot.lua:partnerEscalatedBonus).** Doc'd `contract
+  .foured` and `contract.gahwa` branches as INTENTIONALLY dead —
+  they fire only from post-Gahwa override pickers (none currently);
+  reserved for future. No behavior change.
+
+- **OVC-DOUBLE (Bot.lua:Bot.PickOvercall).** Doc'd the calibration
+  interaction between sunStrength's void-penalty (capped 8 cumulative
+  on short/honorless suits) and PickOvercall's voidBonus (only fires
+  on TRUE voids). They don't fully cancel; the asymmetry is by design
+  and documented.
+
+- **PB-1 (Bot.lua:partnerBidBonus).** Split PASS-penalty semantics by
+  bidder-team membership. For BIDDER side, partner-PASS is a
+  legitimate weakness signal (partner couldn't bid) — penalty
+  applies. For DEFENDER side, partner is the OTHER defender; both
+  defenders pass in any bidding round (only the bidder team bids),
+  so partner-PASS is uninformative. Penalty suppressed for
+  defenders so escalation thresholds aren't unfairly raised.
+
+### Cluster 4 — Trick play / signaling (5 items)
+
+- **U-4 (Bot.lua:topTouchSignal writer).** Mirror of v0.9.2 #46
+  baitedSuit forced-J gate. Suppress T/K/Q signal recording when
+  no lower-rank cards of the suit have been observed played by
+  this seat (the honor play might have been mathematically forced).
+  7/8/9 broke-signals remain unconditional (forced-or-not, the
+  "no honor in suit" inference is unambiguous).
+
+- **U-5 (Bot.lua:Bot.OnPlayObserved).** Sender-side trump-discard
+  suppression on `mem.firstDiscard`. In Hokm, must-trump-ruff
+  forces a trump play when void in led suit — that's not a
+  voluntary discard, so it shouldn't pollute the suit-preference
+  signal ledger. The reader-side already filtered trump; now we
+  symmetrically gate at the writer.
+
+- **U-7 (Bot.lua:pickLead sweep-pursuit-early).** Kaboot-feasibility
+  hand-shape gate. Pre-fix the early pursuit fired purely on "won
+  every prior trick" — a thin-hand sweep at trick 3 commits us to a
+  failing track. Now M3lm-gated additional check: count trump J/9/A
+  in hand + side-suit bosses; require count >= remaining-needed
+  tricks. False-positives just keep us in default play, not a worse
+  path.
+
+- **U-8 (Constants.lua + Bot.lua:Bot.PickAKA).** Promoted the inline
+  `25` and `20` clutch thresholds to `K.BOT_AKA_CLUTCH_DISTANCE` /
+  `K.BOT_AKA_CLUTCH_RACE_GAP` constants for tunability. No behavior
+  change at default values.
+
+- **Defender sweep-pursuit (Bot.lua:pickLead).** Pre-fix the early
+  sweep-pursuit gate required `isBidderTeam`. Defenders sweeping
+  every prior trick is the canonical Reverse Al-Kaboot setup
+  (K.AL_KABOOT_REVERSE = 88 raw). Gate now allows defender-team
+  pursuit too.
+
+### Cluster 5 — SWA + BotMaster cross-cutting (8 items)
+
+- **M6 (Bot.lua:Bot.PickSWAResponse).** Partner-team gate doc'd as
+  defense-in-depth. Net.LocalSWAResp / _OnSWAResp already filter
+  partners out at the wire layer; the team gate here is unreachable
+  through normal flow but kept for any future direct invocation.
+
+- **L1 (Net.lua:LocalSWA fall-through).** Stale "≤3 cards or
+  permission disabled" comment refreshed. v0.5.17 routed ALL counts
+  through the permission window when permission is enabled; the
+  fall-through now only fires for `swaRequiresPermission == false`.
+
+- **L2 (Rules.lua:R.IsValidSWA).** Defensive recursion budget
+  (`SWA_RECURSION_BUDGET = 200`). Natural max depth is ~32
+  (8 tricks × 4 plays). Budget caps unchecked depth on malformed
+  inputs; failure mode = deny SWA (better than hang).
+
+- **BM-01-DOC (BotMaster.lua:rolloutMemory firstDiscard copy).**
+  Removed dead-copy of non-existent `.bucket` field. Schema is
+  `{suit, rank}` only.
+
+- **BM-04-FALLBACK (BotMaster.lua:sampleConsistentDeal fallback).**
+  Two-pass void-respecting allocation. Pass 1 places only void-
+  respecting cards; Pass 2 (give-up path) accepts void-violating
+  cards only when Pass 1 under-fills. Better incomplete info than
+  no rollout.
+
+- **DOC-DRIFT-WORLDS (docs/strategy/bot-personalities.md).** Saudi
+  Master tier description refreshed: "100/60/30 worlds" is the
+  CONFIGURED ceiling; actual worlds-completed is capped by
+  `K.BOT_ISMCTS_BUDGET_SEC` (default 0.5s wall-clock). Pre-doc
+  claimed the configured count without the budget caveat.
+
+- **PARTNERSTYLE-INVARIANT (tests/test_state_bot.lua AH.1).**
+  Source-pin test asserting BotMaster.lua never reassigns
+  `Bot._partnerStyle` during a rollout (the C-14 closure swaps
+  `Bot._memory` but `_partnerStyle` is intentionally shared across
+  rollout/main-game).
+
+- **BM-06 (Bot.lua:Bot.IsSaudiMaster).** Predicate intentionally
+  retained with no current heuristic carve-out — tier API symmetry
+  with IsAdvanced/IsM3lm/IsFzloky. Decision documented in code.
+
+### Plus 1 stale-comment refresh
+
+- **CONSTANT-COMMENT-DRIFT (Constants.lua:K.BOT_GAHWA_TH).** Comment
+  refreshed to reflect 8-card-hand evaluation context (Gahwa fires
+  post-HostDealRest). Pre-doc cited the 5-card bidding-time max,
+  which was the original v0.11.17 justification but doesn't apply
+  at the threshold's actual fire point.
+
+### Tests
+
+- 10 new source-pin assertions in Section AH covering FLOOR-3,
+  L2, BM-04-FALLBACK, U-8, PB-1, ESC-1, PARTNERSTYLE-INVARIANT.
+- 1 source-pin window bumped (AA.1) to accommodate ESC-1's
+  Sun-penalty inversion preamble.
+- Total: 718/718 tests pass.
+
+### Deferred to v1.0.4
+
+The bot-vs-human behavior gap audit (8 findings — 2 HIGH on trick-
+play urgency/multiplier blindness + 6 MED on signal/sampler
+refinements) and Cluster 7 test-debt closure (~10 source-pin tests
+to convert to behavioral) are scoped for v1.0.4. Held to keep this
+release surgical.
+
 ## v1.0.2 — User-supplied Saudi-vocal sounds + escalation-rung UI rename
 
 User supplied 9 .mp3 vocal cues for the Saudi-Baloot escalation chain

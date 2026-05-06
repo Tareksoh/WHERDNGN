@@ -415,9 +415,24 @@ end
 --   trickState   — { leadSuit, leader, plays } current trick state
 --                  (leader is the seat that started this trick;
 --                  plays may be empty or partial mid-trick)
-function R.IsValidSWA(callerSeat, hands, contract, trickState)
+-- v1.0.3 (L2): defensive recursion budget. Natural max depth is
+-- bounded by total cards remaining (~32 = 8 tricks × 4 plays). A
+-- corrupted hands table or contract.trump combo could in theory
+-- create a non-terminating loop; the budget caps unchecked depth.
+-- Failure mode: return false (deny SWA) — better to falsely-deny
+-- than to hang the host on a malformed input. 200 is comfortably
+-- above the natural max with margin for "every legal exists"
+-- branching factor.
+local SWA_RECURSION_BUDGET = 200
+
+function R.IsValidSWA(callerSeat, hands, contract, trickState, _depth)
     if not callerSeat or not hands or not contract then return false end
     if not trickState then trickState = { plays = {}, leader = callerSeat } end
+    -- v1.0.3 (L2): budget guard. _depth is internal recursion counter
+    -- — defaults to 0 on first call, increments on each recursive
+    -- call. Public callers don't need to pass it.
+    _depth = (_depth or 0) + 1
+    if _depth > SWA_RECURSION_BUDGET then return false end
 
     local plays = trickState.plays or {}
     local leadSuit = trickState.leadSuit
@@ -435,7 +450,7 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
         if winner ~= callerSeat then return false end
         return R.IsValidSWA(callerSeat, hands, contract, {
             leader = callerSeat, leadSuit = nil, plays = {}
-        })
+        }, _depth)
     end
 
     -- Done: caller emptied their hand BETWEEN tricks (i.e. trick just
@@ -529,7 +544,7 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
     if nextSeat == callerSeat then
         for _, card in ipairs(legal) do
             local nh, ns = applyMove(card)
-            if R.IsValidSWA(callerSeat, nh, contract, ns) then
+            if R.IsValidSWA(callerSeat, nh, contract, ns, _depth) then
                 return true
             end
         end
@@ -537,7 +552,7 @@ function R.IsValidSWA(callerSeat, hands, contract, trickState)
     else
         for _, card in ipairs(legal) do
             local nh, ns = applyMove(card)
-            if not R.IsValidSWA(callerSeat, nh, contract, ns) then
+            if not R.IsValidSWA(callerSeat, nh, contract, ns, _depth) then
                 return false
             end
         end

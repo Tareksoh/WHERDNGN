@@ -415,19 +415,25 @@ K.BOT_BEL_TH          = 35    -- defenders bel with own strength >= TH.
 K.BOT_TRIPLE_TH       = 90    -- bidder triples (×3) — needs strong hand
 K.BOT_FOUR_TH         = 110   -- defenders four (×4) — very strong hand
 K.BOT_GAHWA_TH        = 120   -- bidder gahwa (match-win) — terminal, near-certain.
-                              -- v0.11.17 EV-2 (audit): lowered 135 -> 120. With
-                              -- 5-card hand evaluation, max possible escalation
-                              -- strength was ~99 (J+9+A+T+K trump) + +20 partner
-                              -- bonus = 119 — Gahwa was structurally unreachable
-                              -- via the BOT_GAHWA_TH-15 floor (=120) on most
-                              -- jitter rolls. With v0.11.17 EV-1 (void/side-Ace
-                              -- bonuses added to escalationStrength) effective
-                              -- max climbs to ~140; threshold 120 keeps Gahwa
-                              -- as the rarest rung but actually reachable on
-                              -- top-tier hands. escalation.md "0% in symmetric
-                              -- pure-bot play" diagnostic should now show
-                              -- Gahwa firing on extreme outliers (1-3% of
-                              -- bidder rounds).
+                              -- v0.11.17 EV-2 (audit): lowered 135 -> 120. The
+                              -- escalation chain runs on the FULL 8-card hand
+                              -- (post-HostDealRest) by the time PHASE_GAHWA
+                              -- fires, so the relevant max is the 8-card
+                              -- escalationStrength ceiling. With v0.11.17 EV-1
+                              -- (void/side-Ace bonuses added to
+                              -- escalationStrength) effective max sits around
+                              -- ~140; threshold 120 keeps Gahwa as the rarest
+                              -- rung but actually reachable on top-tier hands.
+                              -- escalation.md "0% in symmetric pure-bot play"
+                              -- diagnostic should now show Gahwa firing on
+                              -- extreme outliers (1-3% of bidder rounds).
+                              -- v1.0.3 (CONSTANT-COMMENT-DRIFT): refreshed
+                              -- comment to reflect the 8-card-hand evaluation
+                              -- context — the prior "5-card hand evaluation,
+                              -- max ~99" reasoning was the original v0.11.17
+                              -- justification but referenced the bidding-time
+                              -- 5-card window, not the escalation-time 8-card
+                              -- window where this threshold actually fires.
 K.BOT_ASHKAL_TH       = 65    -- partner-of-Hokm-bidder calls Ashkal with Sun-strong hand
 K.BOT_PREEMPT_TH      = 60    -- earlier seat pre-empts a Sun-on-Ace bid.
                               -- v0.11.20 (Agent 1 calibration math):
@@ -526,6 +532,16 @@ K.BOT_OVERCALL_TAKE_TH = 80   -- non-bidder take-as-Sun threshold
 -- close to OVERCALL_TAKE_TH so cross-trump-Hokm takes are roughly as
 -- demanding as a Sun take.
 K.BOT_OVERCALL_TAKE_HOKM_TH = 80
+
+-- v1.0.3 (U-8): AKA late-round clutch threshold. Bot.PickAKA fires AKA
+-- on tricks 6-8 only when the round is "decisive" — opp near-win,
+-- self near-clinch, or close race. Pre-v1.0.3 this was a magic 25
+-- inline. Pulled to a constant for tunability and pinned from the
+-- 152 game target: 25/152 ≈ 16.4% of the target as the "clutch
+-- distance". Future calibration may vary it; the inline literal is
+-- now a single tweak point.
+K.BOT_AKA_CLUTCH_DISTANCE   = 25
+K.BOT_AKA_CLUTCH_RACE_GAP   = 20  -- "close race" tolerance: |myCum-oppCum| <= GAP
 
 -- v0.11.15 user-audit Q1: void-in-trump bonus for Sun overcall.
 -- Saudi canonical signal: when the opp bid Hokm in a suit where

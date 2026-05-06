@@ -96,6 +96,15 @@ function Bot.IsFzloky()
             or WHEREDNGNDB.saudiMasterBots == true)
 end
 
+-- v1.0.2 (BM-06 keep-decision): predicate intentionally retained
+-- with no current heuristic carve-out. Tier API symmetry —
+-- IsAdvanced / IsM3lm / IsFzloky all expose Is* predicates; future
+-- Saudi-Master-only heuristics (e.g. T-sacrifice in Sun, opp-
+-- seat-tracking-aware leads) will use this. Removing it now would
+-- break the symmetric tier-detection idiom across the codebase.
+-- Bot.PickPlay's BM.IsActive() delegation gates the ISMCTS-vs-
+-- heuristic split; Bot.IsSaudiMaster() is for tier-specific code
+-- inside the heuristic layer.
 function Bot.IsSaudiMaster()
     return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots == true
 end
@@ -372,7 +381,21 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
         -- Fzloky: stash the FIRST off-suit discard. It's the
         -- moment a seat reveals what they care about — their
         -- suit-preference signal.
-        if not mem.firstDiscard then
+        --
+        -- v1.0.3 (U-5) sender symmetry: in Hokm, when a seat is void
+        -- in leadSuit AND has trump, must-trump-ruff forces them to
+        -- play trump — that's not a discard, it's a forced ruff. The
+        -- "suit-preference" signal interpretation only applies to
+        -- truly free non-trump discards. The READER side at
+        -- pickLead's firstDiscard branch already filters trump (see
+        -- e.g. Bot.lua:~2474 in baitedSuit reader, similar pattern
+        -- in firstDiscard consumer); we now mirror at the WRITER
+        -- side so the ledger doesn't carry polluted entries.
+        local s_contract = S.s and S.s.contract
+        local isTrumpDiscard = s_contract and s_contract.type == K.BID_HOKM
+                               and s_contract.trump
+                               and cardSuit == s_contract.trump
+        if not mem.firstDiscard and not isTrumpDiscard then
             mem.firstDiscard = { suit = cardSuit, rank = C.Rank(card) }
         end
     end
@@ -513,19 +536,49 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
             touchContext = true
         end
         if touchContext then
-            local entry = style.topTouchSignal[cardSuit] or {}
-            if theirRank == "T" then
-                entry.nextDown = "K"                       -- rule 1
-            elseif theirRank == "K" then
-                -- v0.10.0 R6 fix: K-signal = K-singleton, not has-Q.
-                entry.cleared = { "Q", "J" }               -- rule 2
-            elseif theirRank == "Q" then
-                entry.nextDown = "J"                       -- rule 3
-            elseif theirRank == "7" or theirRank == "8"
-                or theirRank == "9" then
-                entry.broke = true                         -- rule 4
+            -- v1.0.3 (U-4) forced-play gate. Mirror v0.9.2's #46
+            -- baitedSuit forced-J gate (line ~562-590 below). The
+            -- T/K/Q-under-partner-A signal is only meaningful if the
+            -- seat had a CHOICE — i.e., they could have followed with
+            -- a lower card and chose the honor. If we've observed no
+            -- lower-rank cards from this seat in this suit yet, the
+            -- honor play might have been mathematically forced (only
+            -- card of suit in hand). Approximation: if any lower of
+            -- this suit has been observed-played by THIS seat (mem
+            -- .played accounts for prior plays this round + this one),
+            -- record the signal. Otherwise suppress to avoid noise.
+            -- Exception: 7/8/9 plays (rule 4 "broke") are SUPPRESSORS
+            -- ("partner doesn't have any high left"), so they should
+            -- always be recorded — a seat following with 7-9 is
+            -- unambiguous "no honor in this suit". Forced-7/8/9 is
+            -- the same signal regardless of choice.
+            local recordOk = true
+            if theirRank == "T" or theirRank == "K" or theirRank == "Q" then
+                local lowerSeen = false
+                if mem and mem.played then
+                    for _, low in ipairs({ "7", "8", "9" }) do
+                        if mem.played[low .. cardSuit] then
+                            lowerSeen = true; break
+                        end
+                    end
+                end
+                if not lowerSeen then recordOk = false end
             end
-            style.topTouchSignal[cardSuit] = entry
+            if recordOk then
+                local entry = style.topTouchSignal[cardSuit] or {}
+                if theirRank == "T" then
+                    entry.nextDown = "K"                       -- rule 1
+                elseif theirRank == "K" then
+                    -- v0.10.0 R6 fix: K-signal = K-singleton, not has-Q.
+                    entry.cleared = { "Q", "J" }               -- rule 2
+                elseif theirRank == "Q" then
+                    entry.nextDown = "J"                       -- rule 3
+                elseif theirRank == "7" or theirRank == "8"
+                    or theirRank == "9" then
+                    entry.broke = true                         -- rule 4
+                end
+                style.topTouchSignal[cardSuit] = entry
+            end
         end
     end
 
@@ -1128,6 +1181,24 @@ local function partnerBidBonus(seat, contract)
     if b == K.BID_SUN then return 15 end
     if b == K.BID_ASHKAL then return 15 end
     if b == K.BID_PASS then
+        -- v1.0.3 (PB-1): split bidder vs defender semantics for PASS.
+        -- For the BIDDER side (seat == contract.bidder, partner = bidder's
+        -- teammate), partner's PASS is legitimate weakness signal — they
+        -- couldn't bid this contract type, suggesting partner's hand
+        -- doesn't reinforce ours. Penalty applies.
+        --
+        -- For DEFENDERS, partner is the OTHER defender; both defenders
+        -- pass in any bidding round (only the bidder team's seat bids).
+        -- Defender-partner PASS is uninformative noise — escalating
+        -- (Bel/Four) is a hand-quality decision unrelated to whether
+        -- our partner-defender passed earlier. Suppress the penalty for
+        -- defenders so the threshold isn't unfairly raised on their
+        -- escalation paths.
+        local seatIsBidder = (contract and contract.bidder
+                              and R.TeamOf(seat) == R.TeamOf(contract.bidder))
+        if not seatIsBidder then
+            return 0
+        end
         return Bot.IsBotSeat(partner) and -10 or -5
     end
     if b:sub(1, #K.BID_HOKM) == K.BID_HOKM then
@@ -1335,11 +1406,27 @@ local function partnerEscalatedBonus(seat, contract)
     -- Defender-team partner: their team has been escalating (Bel/Four).
     if pIsDefender then
         if contract.doubled then bonus = bonus + 5  end
+        -- v1.0.3 (PEB-DEAD): the `contract.foured` branch is currently
+        -- DEAD CODE — partnerEscalatedBonus is consulted from
+        -- escalationStrength via PickTriple/PickFour/PickGahwa, and
+        -- contract.foured is only set AFTER PickFour returns true.
+        -- PickFour runs at PHASE_FOUR with foured=false (it's the
+        -- defender's CURRENT decision); subsequent rungs (PickGahwa)
+        -- run on the bidder side, where the partner's team is the
+        -- BIDDER team — pIsDefender=false. Reserved for any future
+        -- "post-Gahwa override" decision points where a defender-side
+        -- partner with a Foured contract might re-evaluate. Kept
+        -- intentionally so the bonus is one edit away when needed.
         if contract.foured  then bonus = bonus + 8  end
     end
     -- Bidder-team partner: their team has been escalating (Triple/Gahwa).
     if pIsBidderTeam then
         if contract.tripled then bonus = bonus + 5  end
+        -- v1.0.3 (PEB-DEAD): the `contract.gahwa` branch mirrors the
+        -- foured-dead-code rationale above. PickGahwa runs at
+        -- PHASE_GAHWA with gahwa=false (the bidder's CURRENT decision).
+        -- gahwa=true is only seen by post-Gahwa override pickers
+        -- (none currently). Same reserved-for-future stance.
         if contract.gahwa   then bonus = bonus + 12 end
     end
     return bonus
@@ -2071,7 +2158,14 @@ local function pickLead(legal, contract, seat)
     -- K.AL_KABOOT_SUN=220 (×2=440). Worth pursuing aggressively.
     local trickNum = #(S.s.tricks or {}) + 1
     local sweepPursuitEarly = false
-    if trickNum >= 3 and trickNum <= 7 and isBidderTeam then
+    -- v1.0.3 (Cluster 4 defender sweep-pursuit): pre-fix the gate
+    -- required `isBidderTeam`. But defenders sweeping every prior
+    -- trick is the canonical Reverse Al-Kaboot setup (K.AL_KABOOT_
+    -- REVERSE = 88 raw per Rules.lua:826-844 + video #16). When the
+    -- bidder team is collapsing and our defender team has won every
+    -- prior trick, pursuing the sweep is correct symmetric play.
+    -- Saudi convention treats this as rarer but valid.
+    if trickNum >= 3 and trickNum <= 7 then
         local mySwept = 0
         for _, t in ipairs(S.s.tricks or {}) do
             if R.TeamOf(t.winner) == myTeam then
@@ -2079,6 +2173,54 @@ local function pickLead(legal, contract, seat)
             end
         end
         sweepPursuitEarly = (mySwept == trickNum - 1)
+        -- v1.0.3 (U-7) Kaboot-feasibility hand-shape gate. Pre-fix
+        -- the early-pursuit fired purely on "won every prior trick"
+        -- — but a clean trick-3 sweep with a thin remaining hand
+        -- (no high trump, no boss in hand) commits us to a sweep
+        -- track that fails at trick 4-5, costing the high cards we
+        -- spent + the missed Faranka/Kaboot risk premium. Per
+        -- decision-trees.md Section 7 row "Kaboot pursuit feasibility
+        -- check" (Definite, video 15): only pursue when we hold
+        -- enough remaining-trick winners. Count: trump J/9/A in hand
+        -- (each ≈1 guaranteed trick when trump pool isn't exhausted)
+        -- + side-suit bosses (each ≈1 trick when opps trump-exhausted
+        -- or void in suit). Need count >= (8 - trickNum + 1) to be
+        -- feasible. M3lm-gated since the hand-shape introspection is
+        -- a tournament-strategy nuance; lower tiers rely on the simple
+        -- "won everything so far" trigger only.
+        if sweepPursuitEarly and Bot.IsM3lm() and S.HighestUnplayedRank
+           and contract.trump then
+            local remainingNeeded = 8 - trickNum + 1
+            local feasibleWinners = 0
+            for _, c in ipairs(legal) do
+                local r = C.Rank(c)
+                local su = C.Suit(c)
+                if su == contract.trump then
+                    -- Trump J/9/A always count; lower trump counts
+                    -- only if remaining trump pool indicates we
+                    -- dominate (HighestUnplayedRank == this rank).
+                    if r == "J" or r == "9" or r == "A" then
+                        feasibleWinners = feasibleWinners + 1
+                    elseif S.HighestUnplayedRank(contract.trump) == r then
+                        feasibleWinners = feasibleWinners + 1
+                    end
+                else
+                    -- Non-trump: count if it's the boss of its suit
+                    -- (reflects "opp can't beat with same suit"; for
+                    -- Hokm we additionally need opp trump-exhausted
+                    -- which the existing trumpExhausted check covers
+                    -- before fire — keep this estimate slightly
+                    -- generous since false-positives just keep us in
+                    -- the v0.5.19 default, not a worse path).
+                    if S.HighestUnplayedRank(su) == r then
+                        feasibleWinners = feasibleWinners + 1
+                    end
+                end
+            end
+            if feasibleWinners < remainingNeeded then
+                sweepPursuitEarly = false
+            end
+        end
     end
     if trickNum == 8 or sweepPursuitEarly then
         -- Sweep pursuit: our team won every prior trick → maximise
@@ -2352,6 +2494,20 @@ local function pickLead(legal, contract, seat)
     -- Reading a human's discard as a "lead this suit" signal misdirects
     -- the bot's lead priority for the rest of the round. Only honour
     -- the signal when the partner is also a bot.
+    -- v1.0.3 (F7): firstDiscard vs Tahreeb conflict resolution.
+    -- Both signals can fire on the same partner discard event: the
+    -- Tahreeb sender records intentional suit signaling (Section 8
+    -- T-1 Bargiya / want / refuse) while firstDiscard is a more
+    -- general "first off-suit reveal". v0.11.18-final U-2 wrapped
+    -- the Tahreeb sender's "want" arm in a Sun-only gate
+    -- (decision-trees.md Section 8 is canonically Sun); in Hokm,
+    -- only the firstDiscard signal fires and the Tahreeb sender
+    -- doesn't pollute the ledger with bargiya/want emissions.
+    -- Plus v1.0.3 (U-5) wrote the "trump-discard suppression" at
+    -- the WRITER side so trump-ruff plays no longer become first
+    -- Discard records. The conflict is therefore structurally
+    -- resolved via two complementary gates — not behavior change
+    -- here, just documenting the resolution path.
     if Bot.IsFzloky() and Bot._memory then
         local p = R.Partner(seat)
         if Bot.IsBotSeat(p) then
@@ -2772,6 +2928,31 @@ local function pickLead(legal, contract, seat)
         end
     end
 
+    -- v1.0.3 (F8): Sun-bidder-drought tell — mirror of bidderTrump
+    -- Drought for Sun contracts. Sun has no trump, but bidders
+    -- typically lead Aces when they hold them (tempo). After 3
+    -- tricks, if the bidder has LED at least once and NEVER led
+    -- an Ace, they're Ace-poor (didn't have the canonical
+    -- 2-Ace+ Sun shape, or have spent them already off-lead). As
+    -- defenders we should aggressively cash our own high-point
+    -- side-suit cards. M3lm-gated; Sun-only mirror.
+    local bidderSunDrought = false
+    if Bot.IsM3lm() and contract.type == K.BID_SUN and not isBidderTeam
+       and S.s.tricks and #S.s.tricks >= 3 and contract.bidder then
+        local bidderLeadCount, bidderAceLeadCount = 0, 0
+        for _, t in ipairs(S.s.tricks) do
+            if t.plays and t.plays[1] and t.plays[1].seat == contract.bidder then
+                bidderLeadCount = bidderLeadCount + 1
+                if C.Rank(t.plays[1].card) == "A" then
+                    bidderAceLeadCount = bidderAceLeadCount + 1
+                end
+            end
+        end
+        if bidderLeadCount >= 1 and bidderAceLeadCount == 0 then
+            bidderSunDrought = true
+        end
+    end
+
     local nonTrumps = {}
     local suitCount = { S = 0, H = 0, D = 0, C = 0 }
     for _, c in ipairs(legal) do
@@ -2785,7 +2966,13 @@ local function pickLead(legal, contract, seat)
     -- non-trump (T or A) — bidder can't ruff so the points fall to
     -- our team or partner. Beats the standard "low from longest"
     -- defender priority. Skip if no point-card non-trump available.
-    if bidderTrumpDrought then
+    -- v1.0.3 (F8): same path also fires on Sun-bidder-drought.
+    -- Sun has no trump so the "bidder can't ruff" logic applies
+    -- trivially; Ace-led tells us bidder is Ace-poor specifically,
+    -- which is the Sun-equivalent of the trump-poor signal. The
+    -- action is the same — cash our highest point card before
+    -- bidder finds something to capture with their remaining honors.
+    if bidderTrumpDrought or bidderSunDrought then
         local pointCard = nil
         local pointVal  = -1
         for _, c in ipairs(nonTrumps) do
@@ -2983,6 +3170,18 @@ local function pickLead(legal, contract, seat)
     -- that isn't J/9 — we want to burn 7/8/Q/K first and hold the
     -- top trump for over-ruff capture later. If only J/9 are legal,
     -- fall through to the regular lowest pick.
+    --
+    -- v1.0.3 (F5): Belote-K+Q-of-trump preservation for defender
+    -- pickLead. When forced to lead trump (no non-trump), and we
+    -- still hold BOTH K and Q of trump (Belote pair), prefer trump
+    -- that is NOT K or Q so the K-Q pair cashes together later.
+    -- Belote scoring is locked at meld declaration, but the +20
+    -- bonus is collected at the SAME PHYSICAL TRICK only if K and
+    -- Q go down together (Saudi convention). Splitting the pair
+    -- via a forced K-lead, only to land Q in a different trick,
+    -- collects the bonus but loses the "pair-cashes-on-our-lead"
+    -- attack pattern. Layered AFTER saveHighTrump so the J/9 save
+    -- still wins; only kicks in for "below-J/9" decisions.
     if saveHighTrump then
         local lowTrump = {}
         for _, c in ipairs(legal) do
@@ -2992,6 +3191,22 @@ local function pickLead(legal, contract, seat)
             end
         end
         if #lowTrump > 0 then
+            -- F5 sub-filter: among non-J/9 trump, prefer non-K/Q
+            -- when we hold the Belote pair. holdsBeloteThusFar checks
+            -- the FULL hand (already pre-bidcard-merged in pickLead's
+            -- caller path, see Bot.lua:1453 belote detection).
+            if holdsBeloteThusFar and holdsBeloteThusFar(legal, contract) then
+                local notKQ = {}
+                for _, c in ipairs(lowTrump) do
+                    local r = C.Rank(c)
+                    if r ~= "K" and r ~= "Q" then
+                        notKQ[#notKQ + 1] = c
+                    end
+                end
+                if #notKQ > 0 then
+                    return lowestByRank(notKQ, contract)
+                end
+            end
             return lowestByRank(lowTrump, contract)
         end
     end
@@ -3264,6 +3479,18 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
 
             -- T-1 Bargiya (Sun only): A-of-side-suit with cover.
+            -- v1.0.3 (F6 deferred-decision-doc): Hokm extension
+            -- considered and rejected. The Saudi convention for
+            -- discard-side-A-with-cover is canonically Sun-only per
+            -- decision-trees.md Section 8 — Hokm has its own
+            -- side-suit-control signaling (implicit AKA on bare-A
+            -- lead, AKA explicit announcement). Adding a Hokm
+            -- Bargiya would conflict with the U-6 v0.11.19 fix
+            -- ("when partnerWinning + Hokm + void in led suit,
+            -- prefer non-trump discard") which currently picks the
+            -- LOWEST non-trump in this exact branch path (E.3 test
+            -- pin). The Sun gate stays as-is; the Hokm "lead-back"
+            -- semantic is carried by the AKA announce flow instead.
             if contract.type == K.BID_SUN then
                 for _, su in ipairs({ "S", "H", "D", "C" }) do
                     local cards = bySuit[su]
@@ -3446,22 +3673,33 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- v0.8.4 Section 10 Hokm Faranka exceptions (Common, video 04).
     -- Default Hokm behavior is "no Faranka — play winners". The
     -- following narrow exceptions allow withholding the top trump
-    -- (play a non-winner instead, saving the top for later):
+    -- (play a non-winner instead, saving the top for later).
     --
-    --   Exception #2: we hold ONLY 2 trumps total — trump posture
-    --     is already weak, so the Faranka EV cost is small.
-    --   Exception #4: we are the bidder AND both opponents are
-    --     observed void in trump — risk-free Faranka (no one can
-    --     punish the withhold).
+    -- v1.0.2 (F9 cleanup): comment refreshed to reflect the
+    -- current bidder-team gating semantics — both #2 and #4 are
+    -- bidder-TEAM exceptions (v0.9.2 #49 + v0.10.0 X3 widened both
+    -- from bidder-only). The anti-trigger paragraph was removed:
+    -- v0.10.3 deleted the "opp bidder led trump-Q AND we hold J+8"
+    -- rule for being sourceless and structurally unreachable post
+    -- v0.10.0 (D-RT-03 S-5).
     --
-    -- Anti-trigger (Section 10 rule 7): opp bidder led trump-Q AND
-    -- we hold both J and 8 of trump → don't Faranka, play J normally.
+    --   Exception #2: bidder-team AND we hold ONLY 2 trumps total
+    --     — trump posture is already weak, so the Faranka EV cost
+    --     is small.
+    --   Exception #3: bidder-team AND J of trump is dead AND we
+    --     hold the 9 of trump — 9 is the new top live trump, so
+    --     withholding it for ambush has clear EV.
+    --   Exception #4: bidder-team AND both opponents are observed
+    --     void in trump (or trump pool exhausted via played-pile)
+    --     — risk-free Faranka, no opp can punish the withhold.
     --
-    -- Exceptions #1, #3, #5 are deferred (sweep-track detection
-    -- exists in pickLead but cross-wiring here adds complexity;
-    -- played-card scan for J-dead detection is doable but separate
-    -- from this batch; partner-extra-trump style ledger needs a
-    -- new counter — all flagged in CHANGELOG).
+    -- F-16 K-cover veto applies to Exceptions #2 and #3 (no K of
+    -- trump → don't Faranka), but is scoped OFF Exception #4
+    -- where the threat model is structurally extinct (D-RT-03 S-1).
+    --
+    -- Exceptions #1 and #5 remain deferred: #1 needs sweep-track
+    -- cross-wiring from pickLead; #5 needs a partner-extra-trump
+    -- style-ledger counter. Both flagged in CHANGELOG history.
     --
     -- M3lm-gated since the exceptions are tournament-strategy
     -- nuances; lower tiers stay with the default no-Faranka.
@@ -4077,14 +4315,20 @@ function Bot.PickAKA(seat, leadCard)
         -- Allow the late-round AKA when score-state is meaningful
         -- (close race, opp near-win, we near-clinch). Suppress when
         -- it's just a normal late-round info reveal.
+        -- v1.0.3 (U-8): magic numbers 25 / 20 promoted to
+        -- K.BOT_AKA_CLUTCH_DISTANCE / K.BOT_AKA_CLUTCH_RACE_GAP for
+        -- tunability. Original 25 was a hand-set heuristic; pinning
+        -- it to a constant makes future calibration a single edit.
         if S.s.cumulative then
             local myTeam = R.TeamOf(seat)
             local meCum = S.s.cumulative[myTeam] or 0
             local oppCum = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
             local target = S.s.target or 152
-            local clutch = (oppCum >= target - 25)  -- opp near-win
-                           or (meCum >= target - 25)  -- we near-clinch
-                           or (math.abs(oppCum - meCum) <= 20)  -- close race
+            local clutchDist = K.BOT_AKA_CLUTCH_DISTANCE or 25
+            local raceGap = K.BOT_AKA_CLUTCH_RACE_GAP or 20
+            local clutch = (oppCum >= target - clutchDist)  -- opp near-win
+                           or (meCum >= target - clutchDist)  -- we near-clinch
+                           or (math.abs(oppCum - meCum) <= raceGap)  -- close race
             if not clutch then return nil end
         else
             return nil
@@ -4303,6 +4547,36 @@ end
 local function escalationStrength(seat, hand, contract)
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
+        -- v1.0.3 (ESC-1): sunStrength applies a void-penalty intended
+        -- for Sun (where short suits can't be ruffed because there's
+        -- no trump). In Hokm, voids = RUFF CAPACITY (positive) — the
+        -- bidder ruffs opp-led suit-X with their trump on the first
+        -- X-led trick. Reversing the penalty here makes the strength
+        -- score honest for the Hokm context. Cap is the same
+        -- K.BOT_SUN_VOID_PENALTY_CAP=8 max applied inside sunStrength;
+        -- recompute the penalty mass to invert it cleanly. Bot.IsAdvanced
+        -- gate matches the gate inside sunStrength so we only invert
+        -- when the penalty was actually applied.
+        if Bot.IsAdvanced() then
+            local count = { S = 0, H = 0, D = 0, C = 0 }
+            local honors = { S = false, H = false, D = false, C = false }
+            for _, card in ipairs(hand) do
+                local r = C.Rank(card)
+                local su = C.Suit(card)
+                count[su] = count[su] + 1
+                if r == "A" or r == "T" or r == "K" then
+                    honors[su] = true
+                end
+            end
+            local penalty = 0
+            for _, su in ipairs({ "S", "H", "D", "C" }) do
+                if count[su] < 2 or not honors[su] then
+                    penalty = penalty + 10
+                end
+            end
+            local applied = math.min(penalty, K.BOT_SUN_VOID_PENALTY_CAP)
+            strength = strength + applied  -- invert the Sun-only penalty
+        end
         strength = strength + suitStrengthAsTrump(hand, contract.trump)
         -- v0.11.17 EV-1 (audit): mirror PickDouble's defender bonuses
         -- on the BIDDER side. Pre-v0.11.17 escalationStrength missed
@@ -4389,6 +4663,14 @@ function Bot.PickTriple(seat)
             end
         end
     end
+    -- v1.0.2 (FLOOR-3): floor cap matches the symmetric defenses in
+    -- PickDouble (v0.5.2), PickFour (v0.5.3), and PickGahwa. The
+    -- combined urgency + style-bel-tendency path can drop `th` from
+    -- 90 base to 75 (-15 urgency cap) → 67 (-8 bel-tendency) on top-
+    -- tier hands. Without this cap the 16-pt drop opens a gap below
+    -- the well-calibrated threshold range. Floor at -16 mirrors
+    -- PickFour's K.BOT_FOUR_TH - 16 = 94; here that's 74.
+    if th < K.BOT_TRIPLE_TH - 16 then th = K.BOT_TRIPLE_TH - 16 end
     return escalateDecision(strength, th)
 end
 
@@ -4621,6 +4903,19 @@ function Bot.PickOvercall(seat)
             overcallBelFear = 8
         end
     end
+    -- v1.0.3 (OVC-DOUBLE) calibration interaction note:
+    -- sunStrength(hypHand) returns the base score WITH the Sun
+    -- void-penalty applied (capped K.BOT_SUN_VOID_PENALTY_CAP = 8).
+    -- voidBonus is then ADDED on top — but they don't fully cancel:
+    --   • sunStrength's penalty hits suits short OR honorless;
+    --   • voidBonus only credits true voids (count==0).
+    -- So a 1-card honorless suit gets penalised but earns no
+    -- voidBonus; a true void earns voidBonus but the penalty was
+    -- already applied with cap 8. The end-to-end calibration
+    -- assumes this asymmetry — keeps shorter "cover-but-not-stop"
+    -- suits as a penalty (they're vulnerable in Sun) while still
+    -- crediting full-void cushion bonus. Documented per audit
+    -- OVC-DOUBLE; no behavioral change.
     local sunStr = sunStrength(hypHand) + voidBonus - overcallBelFear
     if seat == contract.bidder then
         -- UPGRADE option (non-Ace-bid only — CanOvercall already
@@ -4870,8 +5165,15 @@ function Bot.PickSWAResponse(seat, callerSeat, encodedCallerHand)
         return true
     end
     if seat == callerSeat then return true end  -- can't deny own SWA
+    -- v1.0.2 (M6): defense-in-depth — Net.LocalSWAResp / _OnSWAResp
+    -- already gate partners out (Net.lua:2922), so PickSWAResponse
+    -- in normal flow is only ever called with an opp-team `seat`.
+    -- This branch is unreachable through the wire path. Kept as a
+    -- safety net for any future direct invocation (test harness,
+    -- replay path). Documented per audit M6 finding rather than
+    -- removed — symmetric SWA branches all keep their team gates.
     if R.TeamOf(seat) == R.TeamOf(callerSeat) then
-        return true  -- partner always accepts
+        return true  -- partner always accepts (defense-in-depth)
     end
 
     -- Reconstruct trick state for the validator (mirrors Bot.PickSWA
