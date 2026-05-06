@@ -1151,6 +1151,14 @@ function S.ApplyDouble(seat, open)
     s.belPending = nil
     s.turn = nil
     s.turnKind = nil
+    -- v0.11.17-hotfix F5 (post-ship audit): notify bot ledger here so
+    -- both wire-receive and host-direct paths update consistently.
+    -- Pre-fix Bot.OnEscalation was only called from N._OnDouble's
+    -- post-fromSelf branch — never fired for the host's own bot
+    -- decisions or local human escalations, leaving _partnerStyle
+    -- counters silently zero for half the table. Calling at the
+    -- state-apply layer covers all paths uniformly.
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "double") end
     -- Sun rule (Saudi): "في الصن لايوجد الثري والفور والقهوة" — Sun
     -- has only Bel; no Triple/Four/Gahwa. Sun + Bel goes straight to
     -- PLAY regardless of open/closed (no rung to advance to).
@@ -1176,6 +1184,8 @@ function S.ApplyTriple(seat, open)
     s.contract.tripleOpen = (open ~= false)
     s.turn = nil
     s.turnKind = nil
+    -- v0.11.17-hotfix F5: see ApplyDouble for rationale.
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "triple") end
     B.Sound.Try(K.SND_VOICE_TRIPLE)
     if not s.contract.tripleOpen then
         s.phase = K.PHASE_PLAY
@@ -1194,6 +1204,8 @@ function S.ApplyFour(seat, open)
     s.contract.fourOpen = (open ~= false)
     s.turn = nil
     s.turnKind = nil
+    -- v0.11.17-hotfix F5: see ApplyDouble for rationale.
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "four") end
     B.Sound.Try(K.SND_VOICE_FOUR)
     if not s.contract.fourOpen then
         s.phase = K.PHASE_PLAY
@@ -1215,6 +1227,8 @@ function S.ApplyGahwa(seat)
     -- No further escalation; HostFinishDeal proceeds to PLAY.
     s.turn = nil
     s.turnKind = nil
+    -- v0.11.17-hotfix F5: see ApplyDouble for rationale.
+    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "gahwa") end
     B.Sound.Try(K.SND_VOICE_GAHWA)
 end
 

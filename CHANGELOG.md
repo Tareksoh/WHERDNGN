@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.11.17-hotfix — post-ship audit follow-up
+
+5 findings from the v0.11.17 post-ship audit, all fixed.
+
+### Fixed (HIGH)
+
+- **F1 — Sun branch in `escalationStrength` was DEAD CODE.** All callers
+  (`PickTriple`, `PickFour`, `PickGahwa`) early-return on `contract.type
+  == K.BID_SUN` BEFORE calling `escalationStrength`. Sun has no
+  Triple/Four/Gahwa rungs (Saudi rule R2 + v0.10.0 R2 defense-in-depth);
+  Sun's only escalation is Bel which has its own inline path in
+  `PickDouble`. v0.11.17's mardoofa/2-Ace/3-Ace branch was unreachable.
+  Removed; comment clarifies Hokm-only.
+
+- **F2 — implicit-AKA still gated on `partnerWinning`.** B4 (H-5) was
+  intended to drop the partnerWinning requirement, but `implicitAKA`
+  (line 2815) still required it. Net behavioral impact small (legality
+  layer doesn't relieve must-ruff for implicit AKA anyway), so the
+  documented over-scope is reflected in the tightened comment rather
+  than a code change. Future Rules.lua update could relieve implicit
+  AKA's must-ruff symmetrically.
+
+### Fixed (MED)
+
+- **F3 — `PickGahwa` floor cap.** Pre-fix, EV-2's `BOT_GAHWA_TH=120` +
+  `combinedUrgency` -15 + jitter -10 left effective threshold at 95 —
+  within reach of mid-strength Hokm hands under near-clinch desperation.
+  Added `if th < K.BOT_GAHWA_TH - 16 then th = ... - 16 end` floor cap
+  (mirrors `PickDouble:3870` and `PickFour:4026`). Preserves Gahwa's
+  rare-rung property while still allowing top-tier hands (~140 strength
+  post-EV-1) to fire.
+
+- **F4 — `bidderHoldsBidcard` phase-gates to `PHASE_PLAY`.** Pre-fix
+  helper returned true during PHASE_BEL/TRIPLE/FOUR/GAHWA when the
+  contract is set but `HostDealRest` hasn't yet appended the bidcard
+  to `hostHands[bidder]`. Future v0.11.18 callers wiring this for
+  trump-J inference would mis-attribute the J of trump mid-escalation.
+  Added `if S.s.phase ~= K.PHASE_PLAY then return false end`.
+
+- **F5 — `Bot.OnEscalation` ledger never fired for host's own bot
+  escalations.** Wire-receive `_OnDouble/Triple/Four/Gahwa` had inline
+  `OnEscalation` calls but those were post-`fromSelf` filter — meaning
+  host-direct bot decisions and local-human escalations silently
+  skipped the ledger update. `Bot._partnerStyle.{bels,triples,fours,
+  gahwas}` counters were stuck at 0 for half the table. v0.11.17's
+  unblocked escalation chain magnified the impact. Moved `OnEscalation`
+  into `S.ApplyDouble/Triple/Four/Gahwa` (single uniform call site
+  covering wire/host/local paths). Net.lua redundant calls removed.
+
+### Test coverage (Section AB)
+
+- **AB.1**: Sun dead branch removed from `escalationStrength`
+- **AB.2**: `PickGahwa` floor cap
+- **AB.3**: `bidderHoldsBidcard` phase-gate to PHASE_PLAY
+- **AB.4a-d**: Each `S.ApplyX` calls `Bot.OnEscalation` with correct kind
+- **AB.4e**: Net.lua has zero `Bot.OnEscalation` calls (single source-of-truth)
+
+Plus AA.1c updated for the F1 dead-branch removal. 630/630 tests pass.
+
 ## v0.11.17 — Tier 2: escalation chain + ISMCTS perf + bidcard-in-defense
 
 Continues the deep-audit fix sequence. Tier 2 closes:

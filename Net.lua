@@ -1020,9 +1020,10 @@ function N._OnDouble(sender, seat, openField)
     local open = (openField == nil) or (openField ~= "0")
     local wasSun = S.s.contract.type == K.BID_SUN
     S.ApplyDouble(seat, open)
-    -- Audit fix: pass rung kind so the bot style ledger tracks Bel
-    -- separately from Triple/Four/Gahwa.
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "double") end
+    -- v0.11.17-hotfix F5: OnEscalation moved INTO S.ApplyDouble so all
+    -- paths (wire-receive, host-direct, local-human) update the ledger
+    -- uniformly. Pre-fix only fired here, missing host-direct and
+    -- local paths. Inline call removed to avoid double-counting.
     -- Sun: ApplyDouble already set phase=PLAY (Sun has no Triple).
     -- Closed Bel: ApplyDouble set phase=PLAY too.
     -- Open Bel in Hokm: phase=TRIPLE, defer to bot dispatcher.
@@ -1046,7 +1047,7 @@ function N._OnTriple(sender, seat, openField)
     if not authorizeSeat(seat, sender) then return end
     local open = (openField == nil) or (openField ~= "0")
     S.ApplyTriple(seat, open)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "triple") end
+    -- v0.11.17-hotfix F5: OnEscalation moved into S.ApplyTriple.
     if S.s.isHost then
         if open then N.MaybeRunBot() else N.HostFinishDeal() end
     end
@@ -1064,7 +1065,7 @@ function N._OnFour(sender, seat, openField)
     if not authorizeSeat(seat, sender) then return end
     local open = (openField == nil) or (openField ~= "0")
     S.ApplyFour(seat, open)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "four") end
+    -- v0.11.17-hotfix F5: OnEscalation moved into S.ApplyFour.
     if S.s.isHost then
         if open then N.MaybeRunBot() else N.HostFinishDeal() end
     end
@@ -1080,7 +1081,7 @@ function N._OnGahwa(sender, seat)
     if seat ~= S.s.contract.bidder then return end
     if not authorizeSeat(seat, sender) then return end
     S.ApplyGahwa(seat)
-    if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "gahwa") end
+    -- v0.11.17-hotfix F5: OnEscalation moved into S.ApplyGahwa.
     -- Terminal: no further window. Move into PLAY.
     if S.s.isHost then N.HostFinishDeal() end
 end

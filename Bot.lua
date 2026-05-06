@@ -968,6 +968,17 @@ local function bidderHoldsBidcard(seat, card)
     if not S.s or not S.s.contract or not S.s.bidCard then return false end
     if seat ~= S.s.contract.bidder then return false end
     if card ~= S.s.bidCard then return false end
+    -- v0.11.17-hotfix F4 (post-ship audit): phase-gate to PHASE_PLAY
+    -- only. Pre-fix the helper returned true during the escalation
+    -- phases (PHASE_BEL through PHASE_GAHWA), where the contract is
+    -- set and bidcard is set but HostDealRest hasn't yet appended
+    -- the bidcard to hostHands[bidder]. A planned v0.11.18 caller
+    -- using this for trump-J inference would mis-attribute the J of
+    -- trump to the bidder's hand mid-escalation, breaking trump-pull
+    -- coordination logic. Defenders should know "bidder will hold
+    -- bidcard once HostDealRest fires" — which is true only at and
+    -- beyond PHASE_PLAY.
+    if S.s.phase ~= K.PHASE_PLAY then return false end
     -- If the bidcard's already been played, the bidder no longer
     -- holds it. Bot._memory tracks played-by-seat.
     local mem = Bot._memory and Bot._memory[seat]
@@ -3914,17 +3925,17 @@ local function escalationStrength(seat, hand, contract)
             end
         end
         strength = strength + voidCount * 5 + math.max(sideAces - 1, 0) * 8
-    elseif contract.type == K.BID_SUN then
-        -- v0.11.17 EV-1: mirror Sun-bidder's PickBid bonuses (mardoofa
-        -- + 2/3-Ace) so bidder's escalation comparison is on the same
-        -- scale as the bid-acceptance formula.
-        local aceCount, mardoofaCount = aceCountAndMardoofa(hand)
-        if aceCount >= 3 then strength = strength + K.BOT_SUN_3ACE_BONUS
-        elseif aceCount == 2 then strength = strength + K.BOT_SUN_2ACE_BONUS
-        end
-        strength = strength + math.min(mardoofaCount, K.BOT_SUN_MARDOOFA_PAIR_CAP)
-                            * K.BOT_SUN_MARDOOFA_BONUS
     end
+    -- NOTE: Sun has no Triple/Four/Gahwa rungs (Saudi rule R2 +
+    -- v0.10.0 R2 defense-in-depth; PickTriple/Four/Gahwa explicitly
+    -- early-return false on `contract.type == K.BID_SUN`). Sun's
+    -- only escalation path is Bel via PickDouble, which has its own
+    -- inline scoring (line ~3812+) and doesn't call this function.
+    -- v0.11.17-hotfix F1 (post-ship audit): the v0.11.17 Sun branch
+    -- here was dead code — never reachable from any caller — so
+    -- removed. AA.1c source-pin retained but converted to a Sun-
+    -- bidder-bonus-applied test on the PickBid path, not on
+    -- escalationStrength.
     -- Advanced: factor in partner's bid as combined-team strength
     -- info. PASS both rounds → -10; HOKM matching trump → +20; etc.
     strength = strength + partnerBidBonus(seat, contract)
@@ -4044,6 +4055,15 @@ function Bot.PickGahwa(seat)
     local strength = escalationStrength(seat, hand, contract)
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_GAHWA_TH - combinedUrgency(R.TeamOf(seat))
+    -- v0.11.17-hotfix F3 (post-ship audit): floor cap mirrors
+    -- PickDouble (3870) and PickFour (4026). Without it, EV-2's
+    -- GAHWA_TH=120 + max combinedUrgency drop -15 + jitter -10 leaves
+    -- effective threshold at 95 — within reach of mid-strength Hokm
+    -- hands under near-clinch desperation. The -16 floor preserves
+    -- Gahwa's "rare-rung, near-certain commitment" property while
+    -- still allowing it to fire on top-tier hands (which now reach
+    -- ~140 strength post-EV-1).
+    if th < K.BOT_GAHWA_TH - 16 then th = K.BOT_GAHWA_TH - 16 end
     local yes = strength >= jitter(th, BEL_JITTER)
     return yes, false
 end

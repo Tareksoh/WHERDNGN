@@ -3332,9 +3332,12 @@ do
                    "AA.1a (B1 / EV-1): escalationStrength includes void bonus (Hokm bidder)")
         assertTrue(body:find("sideAces %- 1") ~= nil,
                    "AA.1b (B1 / EV-1): escalationStrength includes side-Ace bonus")
-        assertTrue(body:find("K%.BOT_SUN_2ACE_BONUS") ~= nil
-                   and body:find("K%.BOT_SUN_MARDOOFA_BONUS") ~= nil,
-                   "AA.1c (B1 / EV-1): escalationStrength mirrors Sun bidder bonuses")
+        -- v0.11.17-hotfix F1: Sun branch removed (was dead code; all
+        -- escalation callers early-return on Sun). The PickBid path
+        -- already has these bonuses for the bid-acceptance side. Pin
+        -- the comment that explains the intentional removal.
+        assertTrue(body:find("Sun has no Triple/Four/Gahwa rungs") ~= nil,
+                   "AA.1c (F1 hotfix): escalationStrength documents Sun-no-rungs intentionally")
     end
 end
 
@@ -3369,6 +3372,68 @@ do
     -- Source-pin: presence of the renamed `akaLive` flag.
     assertTrue(botSrc:find("local akaLive = explicitAKA or implicitAKA") ~= nil,
                "AA.5 (B4 / H-5): pickFollow uses akaLive flag (relief regardless of winner)")
+end
+
+-- =====================================================================
+-- AB. v0.11.17-hotfix — post-ship audit fixes
+-- =====================================================================
+print("")
+print("=== Section AB: v0.11.17 hotfix ===")
+
+-- AB.1 (F1) — Sun dead branch removed from escalationStrength
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function escalationStrength")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find('elseif contract%.type == K%.BID_SUN then') == nil,
+                   "AB.1 (F1): escalationStrength Sun dead branch removed")
+    end
+end
+
+-- AB.2 (F3) — PickGahwa floor cap added
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickGahwa")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        assertTrue(body:find("th < K%.BOT_GAHWA_TH %- 16") ~= nil,
+                   "AB.2 (F3): PickGahwa floor cap mirrors PickFour")
+    end
+end
+
+-- AB.3 (F4) — bidderHoldsBidcard phase-gates to PHASE_PLAY
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("local function bidderHoldsBidcard")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 1000)
+        assertTrue(body:find("S%.s%.phase ~= K%.PHASE_PLAY") ~= nil,
+                   "AB.3 (F4): bidderHoldsBidcard phase-gates to PHASE_PLAY")
+    end
+end
+
+-- AB.4 (F5) — Bot.OnEscalation moved into S.Apply{Double,Triple,Four,Gahwa}
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    -- Each ApplyX function calls Bot.OnEscalation with its own kind.
+    assertTrue(stateSrc:find('B%.Bot%.OnEscalation%(seat, "double"%)') ~= nil,
+               "AB.4a (F5): S.ApplyDouble calls Bot.OnEscalation")
+    assertTrue(stateSrc:find('B%.Bot%.OnEscalation%(seat, "triple"%)') ~= nil,
+               "AB.4b (F5): S.ApplyTriple calls Bot.OnEscalation")
+    assertTrue(stateSrc:find('B%.Bot%.OnEscalation%(seat, "four"%)') ~= nil,
+               "AB.4c (F5): S.ApplyFour calls Bot.OnEscalation")
+    assertTrue(stateSrc:find('B%.Bot%.OnEscalation%(seat, "gahwa"%)') ~= nil,
+               "AB.4d (F5): S.ApplyGahwa calls Bot.OnEscalation")
+    -- Net.lua's redundant calls removed (avoid double-counting).
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- Search the _OnDouble/Triple/Four/Gahwa region; OnEscalation
+    -- should appear at most ZERO times in those handlers post-fix.
+    -- We pin this by counting occurrences in Net.lua and ensuring
+    -- it's not in the wire-receive paths.
+    local count = 0
+    for _ in netSrc:gmatch("B%.Bot%.OnEscalation") do count = count + 1 end
+    assertEq(count, 0, "AB.4e (F5): Net.lua has no Bot.OnEscalation calls (moved to State)")
 end
 
 -- =====================================================================
