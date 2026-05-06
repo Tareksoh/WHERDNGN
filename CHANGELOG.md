@@ -1,5 +1,128 @@
 # Changelog
 
+## v0.11.18-final — ultra-audit hotfix + comprehensive deferred report
+
+Final hotfix from the post-v0.11.18 ultra-audit (4 parallel agents, ~13
+HIGH findings). Addresses the most actionable items + leaves the rest
+in the structured deferred-work report below.
+
+### Fixed (HIGH from ultra-audit)
+
+- **DEAD-1** — `Bot.PickFour` `belOpen == false` branch was DEAD CODE.
+  PHASE_FOUR is structurally unreachable when belOpen=false (S.ApplyDouble
+  shortcuts to PHASE_PLAY when belOpen=false; PHASE_TRIPLE only fires
+  when belOpen=true; PHASE_FOUR only after open Triple). At PHASE_FOUR
+  belOpen=true is invariant. Removed branch; reframed +5 bonus as
+  unconditional calibration constant (matches reality).
+
+- **U-1** — Implicit-AKA detector still gated on `partnerWinning`.
+  v0.11.17's H-5 fix dropped this for explicit AKA but missed implicit.
+  Rules.lua:142-152 grants implicit-AKA legality relief regardless of
+  who's currently winning, so the heuristic should match. Pre-fix when
+  partner led bare-A and opp pos-2 over-trumped, the receiver got
+  non-trump in legal (relief fired) but pickFollow's branch still
+  didn't fire — burning trump that legality had freed.
+
+- **U-2** — Tahreeb sender "want" arm fired in Hokm. Per
+  decision-trees.md Section 8 every sender row is tagged Sun-only.
+  Pre-fix Hokm "want" emissions biased partner toward leading sideX
+  when natural play is trump-pull. Wrapped want arm in
+  `if contract.type == K.BID_SUN then ... end`; T-4 dump-ordering
+  remains contract-agnostic.
+
+- **B2-FALLBACK-REGRESSION** — Wall-clock budget broke heuristic-
+  fallback gate. Pre-fix `if rolloutErrors == numWorlds` could never
+  fire after early budget break (rolloutErrors=5 != numWorlds=100).
+  Fixed: `worldsCompleted == 0 or rolloutErrors == worldsCompleted`.
+
+- **BM-03** — `/baloot ismctsdiag` slash command added. Surfaces
+  `BM._lastWorldsCompleted` + budget setting. Pre-fix the telemetry
+  was dark — users had no visibility into when ISMCTS quality was
+  truncated by budget.
+
+- **H1** — SWA safety-net asymmetry. `PickSWA` (caller-side) had Hokm
+  trump-coverage safety net rejecting when opp top trump > caller top
+  trump. `Bot.PickSWAResponse` (response-side) only ran IsValidSWA.
+  Bots now defend with same conservatism they call with — mirrored
+  the safety-net check on caller's encoded hand vs hostHands.
+
+- **H2** — `Bot.PickSWAResponse` missing W7 corrupted-state guard.
+  Pre-fix the validator base-case (no cards remaining = trivial
+  caller-win) accepted as valid; HostResolveSWA pre-call forces
+  valid=false on this state. Bot now matches.
+
+### Deferred — comprehensive structured report
+
+The 4-agent ultra-audit produced findings in 4 clusters. After
+applying the HIGH fixes above, the remaining items are explicitly
+deferred for future cycles. Listed by audit cluster + severity:
+
+#### Bidding + Escalation (Audit A)
+
+| ID | Severity | Title | Notes |
+|---|---|---|---|
+| DEAD-2 | HIGH | PickGahwa F3 floor cap unreachable | Math: th range [105,135], floor 104 < min. Cosmetic / documents intent; no behavioral impact. |
+| BC-MANDATORY | HIGH | Belote-no-J fails strength gate despite Mandatory rule | Fix: bypass strength threshold when shape=Mandatory-Belote. ~5 lines; defer pending behavioral test. |
+| FLOOR-3 | MED | PickTriple has no floor cap (asymmetric with PickDouble/Four/Gahwa) | Add `if th < K.BOT_TRIPLE_TH - 16 then th = ...`. |
+| ESC-1 | MED | escalationStrength sunStrength void penalty wrong in Hokm | sunStrength penalty assumes voids=bad; Hokm voids=ruff capacity (positive). Wider refactor. |
+| PE-1 | MED | PickPreempt missing K.BOT_SUN_2ACE_BONUS | Apply 2/3-Ace + mardoofa bonuses post-bidcard recompute. |
+| PEB-DEAD | MED | partnerEscalatedBonus contract.gahwa/foured branches dead | Reserved for future post-Gahwa override pickers. |
+| OVC-DOUBLE | LOW | sunStrength penalty + PickOvercall voidBonus partial double-handling | Document the calibration interaction. |
+| PEB-NEG / PB-1 | LOW | partnerBidBonus PASS penalty inappropriate for defenders | Re-confirmed; split into bidder/defender variants is the proper fix. |
+
+#### Trick play + Signaling (Audit B)
+
+| ID | Severity | Title | Notes |
+|---|---|---|---|
+| U-3 | HIGH | bidderHoldsBidcard helper dead code (3 cycles deferred) | Wire one consumer or delete. Trump-J-inference is highest-leverage callsite. |
+| U-4 | MED | topTouchSignal writer doesn't gate on forced-play | Mirror v0.9.2 baitedSuit forced-J gate. |
+| U-5 | MED | Tahreeb sender records trump discards (recv filters; sender doesn't) | Cheap symmetric guard. |
+| U-6 / H-6 | MED | pickFollow released-from-must-ruff doesn't prefer non-trump discard | Saudi Master tier directly impacted via ISMCTS rollouts. |
+| U-7 | MED | Trick-3 sweep-pursuit lacks Kaboot-feasibility gate | Hand-shape predicate from decision-trees.md. |
+| U-8 | MED | AKA late-round clutch gate uses arbitrary 25-point threshold | Pin to constant or derive from scoreUrgency. |
+| U-9 | LOW | Bot.PickAKA at trick 1 structurally a no-op | Comment update; A6 unsuppression matters for trick 2+. |
+| U-10 | LOW | doubled AKA suppression doesn't account for all rungs explicitly | Defensive symmetry. |
+
+#### SWA + Endgame + Takweesh (Audit C)
+
+| ID | Severity | Title | Notes |
+|---|---|---|---|
+| M3 | MED | Sweep-pursuit early trigger lacks Kaboot-feasibility hand-shape gate | Same as U-7. |
+| M4 | MED | PickSWA cap of 6 leaves 7/8-card SWAs uncomputed | Defensible perf-gate; raise only if telemetry shows missed claims. |
+| M5 | MED | Trick-8 push lacks "make-the-bid" score awareness | Bidder team at 80 raw with N points-to-make. Telemetry-driven calibration. |
+| M6 | MED | Bot.PickSWAResponse partner-team gate is dead code | Defensive; harmless but misleading. |
+| L1 | LOW | Stale comment in LocalSWA fall-through | One-line update. |
+| L2 | LOW | IsValidSWA lacks recursion budget | Defensive; not currently a perf concern. |
+
+#### BotMaster + Cross-cutting (Audit D)
+
+| ID | Severity | Title | Notes |
+|---|---|---|---|
+| B3-DEAD-CODE | MED | bidderHoldsBidcard dead (3 cycles) | Same as U-3. |
+| BM-01-DOC-DRIFT | MED | firstDiscard.bucket field non-existent | Remove dead-copy line. |
+| BUDGET-WORLDS-COUNT | MED | worldsCompleted counts errored worlds | Track worldsSuccessful separately. |
+| BM-04-MELDPIN-FALLBACK | MED | Fallback uniform-deal bypasses BM-04 void filter | Hoist meldPins build, apply void filter once. |
+| DOC-DRIFT-WORLDS | MED | bot-personalities.md claims "100/60/30 worlds" without budget caveat | Two-line doc update. |
+| BM-06 | LOW | Bot.IsSaudiMaster() defined but never called (no carve-out) | Either delete or wire one heuristic Saudi-Master-only feature. |
+| C-14-FRAGILITY | LOW | simTricks reference-copies completed tricks | Defensive deep-copy. |
+| PARTNERSTYLE-INVARIANT | LOW | No test asserts _partnerStyle never swapped during rollout | Source-pin test. |
+| CONSTANT-COMMENT-DRIFT | LOW | K.BOT_GAHWA_TH comment references stale 5-card-hand reasoning | Refresh comment. |
+
+### Behavioral test gaps (cross-cutting)
+
+Sections T, U, V, W, X, Y, Z, AA, AB, AC are mostly source-pin only.
+Audit D specifically called out behavioral coverage gaps:
+- AA.1c (escalationStrength bonuses)
+- AA.3a/b (B2 budget actually truncates)
+- AA.4 (bidderHoldsBidcard per-phase semantics)
+- AA.5 (pickFollow akaLive flag behavioral)
+- AB.3 (bidderHoldsBidcard PHASE_PLAY gate behavioral)
+- AC.6 (PickFour belOpen behavioral — but DEAD-1 makes this moot)
+
+### Test coverage
+
+639/639 tests pass after this hotfix.
+
 ## v0.11.18 — Tier 3: ISMCTS state preservation + existential SWA + calibration cleanups
 
 Final tier of the deep-audit fix sequence. Closes:

@@ -3490,16 +3490,19 @@ do
     end
 end
 
--- AC.6 (P4-1) — PickFour reads contract.belOpen
+-- AC.6 (P4-1) — PickFour reads partner's open-Bel signal
+-- v0.11.18-final DEAD-1 (ultra audit): the v0.11.18 belOpen==false branch
+-- was DEAD CODE (PHASE_FOUR is unreachable when belOpen=false). Reframed
+-- as unconditional +5 calibration. Test pin verifies the unconditional
+-- bonus is in place.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickFour")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2500)
-        assertTrue(body:find("contract%.belOpen == false") ~= nil,
-                   "AC.6a (P4-1): PickFour suppresses Four when partner's Bel was CLOSED")
-        assertTrue(body:find("contract%.belOpen == true") ~= nil,
-                   "AC.6b (P4-1): PickFour adds +5 strength bonus on partner's OPEN Bel")
+        -- Pin the +5 bonus is unconditional at PHASE_FOUR (belOpen==true invariant)
+        assertTrue(body:find("strength = strength %+ 5") ~= nil,
+                   "AC.6 (P4-1 / DEAD-1): PickFour applies unconditional +5 partner-open-Bel bonus")
     end
 end
 

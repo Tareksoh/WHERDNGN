@@ -1011,9 +1011,17 @@ function BM.PickPlay(seat)
     end
     -- Track for ismctsdiag: actual worlds completed (vs configured numWorlds).
     BM._lastWorldsCompleted = worldsCompleted
-    -- If literally every world errored (suggests a deterministic bug
-    -- not a sampling edge), fall back to heuristics with restored flag.
-    if rolloutErrors == numWorlds then
+    -- v0.11.18-final B2-FALLBACK-REGRESSION (ultra audit): compare
+    -- against worldsCompleted, not numWorlds. With B2 budget, the
+    -- loop can break early (worldsCompleted < numWorlds). Pre-fix
+    -- the gate `rolloutErrors == numWorlds` could never fire after
+    -- an early break — even if every completed world errored, we'd
+    -- fall through to scoring with rolloutErrors == 5 != numWorlds == 100,
+    -- picking legal[1] blindly with zero-data scores. Now the gate
+    -- correctly triggers heuristic fallback when all completed
+    -- worlds erred. Also handle worldsCompleted == 0 (budget=0.0 +
+    -- GetTime overshot first iteration; defensive).
+    if worldsCompleted == 0 or rolloutErrors == worldsCompleted then
         return _restore(nil)
     end
 

@@ -156,6 +156,25 @@ local function dispatch(msg)
         return
     end
 
+    -- v0.11.18-final BM-03 (ultra audit): ISMCTS diagnostic slash.
+    -- Surfaces wall-clock-budget telemetry from BotMaster: how many
+    -- worlds the LAST Saudi Master move actually completed, vs. the
+    -- configured ceiling. Useful when users notice ISMCTS-quality
+    -- degradation on slow machines or under stress.
+    if msg == "ismctsdiag" or msg == "ismctsdebug" then
+        local bm = B.BotMaster
+        if not bm then
+            say("ISMCTS: BotMaster module not loaded")
+            return
+        end
+        local last = bm._lastWorldsCompleted or 0
+        local budget = K.BOT_ISMCTS_BUDGET_SEC or 0
+        say(("ISMCTS: last move completed %d worlds (budget %.2fs); "
+             .. "see CHANGELOG v0.11.17 B2 for details")
+            :format(last, budget))
+        return
+    end
+
     if msg == "advanced" or msg == "advbots" then
         WHEREDNGNDB = WHEREDNGNDB or {}
         WHEREDNGNDB.advancedBots = not WHEREDNGNDB.advancedBots

@@ -2824,10 +2824,18 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- bare A in non-trump = implicit AKA". A trick's lead is the
     -- FIRST play (trick.plays[1]). Partner-followed-Ace is just a
     -- normal must-follow play, not an AKA signal.
+    -- v0.11.18-final U-1 (ultra audit): drop `partnerWinning` from
+    -- the implicit-AKA detector. v0.11.17 H-5 fixed the same gate
+    -- on the EXPLICIT AKA branch but left implicit gated on
+    -- partnerWinning; Rules.lua:142-152 grants implicit-AKA legality
+    -- relief regardless. Pre-fix when partner led bare-A and opp
+    -- pos-2 over-trumped, the receiver still got non-trump in legal
+    -- (relief fired) but pickFollow's implicitAKA=false skipped the
+    -- AKA-receiver branch, falling into wouldWin and potentially
+    -- burning trump that the legality layer had freed.
     if not explicitAKA and contract.type == K.BID_HOKM
        and contract.trump and trick.leadSuit
        and trick.leadSuit ~= contract.trump
-       and partnerWinning
        and trick.plays and trick.plays[1] then
         local lead = trick.plays[1]
         if lead.seat == R.Partner(seat)
@@ -3051,6 +3059,18 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- Subsequent events naturally produce the "high" half of
             -- the pattern because the lowest is now gone.
             -- Fires BEFORE T-4 so want suits win over doubleton dump.
+            -- v0.11.18-final U-2 (ultra audit): Sun-only gate. Per
+            -- decision-trees.md Section 8 every sender row is tagged
+            -- "Sun, partner winning; ...". The Bargiya branch above
+            -- correctly gates on K.BID_SUN; this "want" arm did not.
+            -- In Hokm partner-leads-trump-pull is the convention; the
+            -- "want this side suit returned" semantic doesn't fit
+            -- Hokm partnerships. Pre-fix the Hokm "want" emission
+            -- biased partner toward leading sideX when the natural
+            -- play is to continue trump-pull. Wrapped in if-block
+            -- (rather than early-return) so T-4 below still runs in
+            -- Hokm — T-4 is contract-agnostic (refusal signal).
+            if contract.type == K.BID_SUN then
             for _, su in ipairs({ "S", "H", "D", "C" }) do
                 local cards = bySuit[su]
                 if #cards >= 3 then
@@ -3074,6 +3094,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
             end
+            end  -- end of v0.11.18-final U-2 Sun-only gate
 
             -- T-4 Dump-ordering: from a 2-card suit, dump LARGER first.
             -- The encoding only "works" when partner can observe BOTH
@@ -4004,26 +4025,19 @@ function Bot.PickFour(seat)
     if not hand or not contract then return false, false end
     -- v0.10.0 R2 defense-in-depth: Sun has no Four rung.
     if contract.type == K.BID_SUN then return false, false end
-    -- v0.11.18 audit P4-1: read partner's Bel `belOpen` flag. A CLOSED
-    -- Bel by partner (other defender chose to halt escalation) is a
-    -- "I have just enough for ×2, no more" signal — overriding with
-    -- a Four would be reckless against partner's stated intent. An
-    -- OPEN Bel signals "I'm strong enough I'd survive a Triple counter"
-    -- — combined-team strength bonus beyond raw partnerEscalatedBonus.
-    -- Pre-v0.11.18 PickFour was blind to this open/closed signal.
-    if contract.belOpen == false then
-        -- Partner explicitly closed the escalation chain. Suppress
-        -- Four unless our own hand is overwhelming (clears even the
-        -- floored threshold below).
-        return false, false
-    end
+    -- v0.11.18 audit P4-1: read partner's Bel `belOpen` flag.
+    -- v0.11.18-final DEAD-1 (ultra audit): the `belOpen == false`
+    -- branch was DEAD CODE. PHASE_FOUR is structurally unreachable
+    -- when belOpen=false (S.ApplyDouble shortcuts to PHASE_PLAY when
+    -- belOpen=false; PHASE_TRIPLE only fires when belOpen=true; PHASE_FOUR
+    -- only after open Triple). At PHASE_FOUR, belOpen=true is invariant.
+    -- The +5 bonus therefore ALWAYS fires — reframed as honest
+    -- calibration constant rather than conditional signal.
     local strength = escalationStrength(seat, hand, contract)
-    -- v0.11.18 P4-1 strength bonus: open Bel = +5 (combined-team
-    -- strength signal — partner believes their hand can survive a
-    -- Triple counter, which means our combined position is strong).
-    if contract.belOpen == true then
-        strength = strength + 5
-    end
+    -- v0.11.18 P4-1: +5 bonus reflects "partner kept the chain open,
+    -- combined-team strength signal beyond raw partnerEscalatedBonus".
+    -- Per DEAD-1 audit, this is unconditional at PHASE_FOUR.
+    strength = strength + 5
     -- v0.5 H-8: defender Four uses context="defend" — same logic as Bel.
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_FOUR_TH - combinedUrgency(R.TeamOf(seat), "defend")
@@ -4489,11 +4503,53 @@ function Bot.PickSWAResponse(seat, callerSeat, encodedCallerHand)
         end
     end
 
+    -- v0.11.18-final H2 (ultra audit): mirror HostResolveSWA's W7
+    -- corrupted-state guard. Pre-fix the validator's base-case
+    -- short-circuit (no remaining cards = trivial caller-win) was
+    -- accepted as a valid SWA; HostResolveSWA explicitly forces
+    -- valid=false on this state pre-call. Bot now matches.
+    if (#(hands[callerSeat] or {})) == 0 and #trickPlays == 0 then
+        return false
+    end
+
     -- Defensive pcall — never crash a bot on validator edge cases;
     -- accept by default. Strict-deny only on a definitively-false
     -- validator return.
     local ok, valid = pcall(R.IsValidSWA, callerSeat, hands, S.s.contract, trickState)
     if not ok then return true end  -- pcall fail → accept
     if valid == false then return false end  -- deny clearly-invalid
+
+    -- v0.11.18-final H1 (ultra audit): mirror PickSWA's Hokm safety
+    -- net for symmetry. PickSWA (caller-side) rejects when opp's
+    -- top trump > caller's top trump (line ~4389-4418 below). Pre-
+    -- fix PickSWAResponse only ran IsValidSWA, so a human caller
+    -- could fire a validator-passing SWA where PickSWA's safety net
+    -- would have blocked it (e.g., 6-card Hokm where caller-top-trump
+    -- = T but opp-top-trump = A in validator-passing edge cases).
+    -- Bots now defend with the same conservatism they call with.
+    if S.s.contract and S.s.contract.type == K.BID_HOKM and S.s.contract.trump then
+        local trump = S.s.contract.trump
+        local TRUMP_RANK = K.RANK_TRUMP_HOKM or {}
+        local callerTopRank = -1
+        local oppTopRank = -1
+        for s2 = 1, 4 do
+            for _, c in ipairs(hands[s2] or {}) do
+                if C.Suit(c) == trump then
+                    local trickRank = TRUMP_RANK[C.Rank(c)] or 0
+                    if s2 == callerSeat then
+                        if trickRank > callerTopRank then
+                            callerTopRank = trickRank
+                        end
+                    elseif R.TeamOf(s2) ~= R.TeamOf(callerSeat) then
+                        if trickRank > oppTopRank then
+                            oppTopRank = trickRank
+                        end
+                    end
+                end
+            end
+        end
+        if oppTopRank > callerTopRank then return false end
+    end
+
     return true
 end
