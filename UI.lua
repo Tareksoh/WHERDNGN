@@ -2366,14 +2366,17 @@ local function meldCardsForSeat(seat)
 end
 
 -- Per Saudi rule the meld CARDS are only visible briefly in trick 2:
---   • Trick 1: announcement only — text label shows the kind, length
---     and top rank ("Seq3 K (20)"), no cards, no suit.
+--   • Trick 1: ANNOUNCEMENT only — sound cue (S.ApplyMeld fires
+--     K.SND_MELD_SERA / 50 / 100 / 400 from v1.0.2). Text label is
+--     intentionally HIDDEN — Saudi convention is verbal-only in real
+--     play (no on-screen badge). User-requested behavior change in
+--     v1.0.5.
 --   • Trick 2: when a declarer's turn starts, their actual cards are
 --     revealed for 5 seconds (set via S.ApplyTurn -> meldHoldUntil),
 --     then hidden permanently for the rest of the hand.
---   • Trick 3+: cards never visible. Text label also hidden — at this
---     point only the score the meld earned matters, shown in the
---     round-end banner.
+--   • Trick 3+: cards never visible. Text label never visible at any
+--     phase post-v1.0.5. Round-end banner is the canonical source of
+--     "what melds got declared" after the round.
 local function meldStripVisibleFor(seat)
     if S.s.phase ~= K.PHASE_PLAY then return false end
     if not S.s.meldHoldUntil or not S.s.meldHoldUntil[seat] then
@@ -2383,15 +2386,15 @@ local function meldStripVisibleFor(seat)
     return now < S.s.meldHoldUntil[seat]
 end
 
--- Trick-1 text-announcement window. Visible from the moment the
--- meld is declared (PHASE_DEAL3 onwards) through the end of trick 1
--- (when #s.tricks transitions from 0 to 1). After that the cards
--- take over (trick 2 reveal) and the text label hides.
+-- v1.0.5 user-requested: meld text label HIDDEN at all times. The
+-- sound cue (S.ApplyMeld in State.lua) handles the trick-1
+-- announcement; the trick-2 card reveal handles the proof-display.
+-- A persistent on-screen badge under the player name during trick 1
+-- was redundant with the sound cue and visually noisy.
+-- Pre-v1.0.5 this returned true during DEAL3/PLAY when no tricks
+-- had completed (#s.tricks == 0). Now always false.
 local function meldTextVisible()
-    if S.s.phase ~= K.PHASE_DEAL3 and S.s.phase ~= K.PHASE_PLAY then
-        return false
-    end
-    return (#(S.s.tricks or {}) == 0)
+    return false
 end
 
 -- 28th-audit / player feedback: render a player's bid for the seat

@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.0.5 — Hide trick-1 meld text label (user UX request)
+
+User-requested behavior change: the small text label under each
+player's name during trick 1 ("Seq3 K (20)" / "Carre J (100)" etc.)
+is now hidden permanently. Saudi convention is verbal-only
+announcement — no on-screen badge.
+
+### What changed
+
+- **`UI.lua` `meldTextVisible()` always returns `false`.** Pre-v1.0.5
+  it returned true during DEAL3/PLAY when no tricks had completed
+  (`#s.tricks == 0`), making the meld text label visible until
+  trick 1 closed.
+
+### What stays
+
+- **Trick-1 sound cue:** unchanged. `S.ApplyMeld` (v1.0.2 wiring)
+  fires `K.SND_MELD_SERA / 50 / 100 / 400` based on meld value/
+  kind/contract. Audio announcement remains the primary
+  declaration signal.
+- **Trick-2 card reveal:** unchanged. When a declarer's turn
+  arrives in trick 2, their meld cards display for 5 seconds
+  via the `meldHoldUntil` mechanism. Cards-as-proof is preserved.
+- **Round-end summary:** unchanged. The banner at round end
+  shows what melds got declared and their values.
+
+### Tests
+
+726/726 pass. Single-line behavior change to a UI-only helper
+with no test impact.
+
 ## v1.0.4 — Bot-vs-human behavior gap closure (8 audit findings)
 
 Closes the 8-finding bot-behavior audit from the v1.0.3 cycle.
