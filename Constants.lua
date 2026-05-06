@@ -298,17 +298,27 @@ K.SND_CARD_PLAY = SND_BASE .. "card_play.ogg"     -- card-slap noise burst
 K.SND_CARD_SWISH = SND_BASE .. "card_swish.ogg"   -- slide-across-table whoosh
 K.SND_CONTRACT  = SND_BASE .. "contract.ogg"      -- two-note ascending chime
 K.SND_TRICK_WON = SND_BASE .. "trick_won.ogg"     -- triad arpeggio, our team won
-K.SND_BALOOT    = SND_BASE .. "baloot.ogg"        -- four-note fanfare
+K.SND_BALOOT    = SND_BASE .. "baloot.mp3"        -- v1.0.2: user-supplied
+                                                  -- Saudi vocal "بلوت" cue.
+                                                  -- Fires for the K+Q-of-trump
+                                                  -- Belote bonus reveal.
 K.SND_LOST_ROUND = SND_BASE .. "lost_round.ogg"   -- player-supplied stinger,
                                                   -- fires when local team
                                                   -- loses a round
--- v1.0.1 user-reported (Comment 4): meld-declaration cue. Fires from
--- S.ApplyMeld at trick-1 declaration time on every client. Sound file
--- supplied by the user — the path placeholder lives here so the wire
--- in State.lua doesn't need editing when the .ogg lands.
--- File expected at sounds/meld_declare.ogg (drop into the addon folder
--- — no source-edit required, .toc already covers the sounds/ subdir).
-K.SND_MELD_DECLARE = SND_BASE .. "meld_declare.ogg" -- meld declared in trick 1
+
+-- v1.0.2 user-supplied meld announcement cues. S.ApplyMeld dispatches
+-- to the matching cue based on the meld's value/kind/contract. Saudi
+-- convention names each meld by its raw point value; the .mp3 vocals
+-- carry that name (e.g. SERA = ثلاث / "three" colloquial seq3, 50 =
+-- خمسين, 100 = مية, 400 = أربع مية / four-aces-in-Sun). Older
+-- placeholder K.SND_MELD_DECLARE removed — the dispatcher in
+-- S.ApplyMeld now picks the correct per-meld sound directly.
+K.SND_MELD_SERA = SND_BASE .. "SERA.mp3"          -- seq3 (3 consec, same suit) — 20 raw
+K.SND_MELD_50   = SND_BASE .. "khamseen.mp3"      -- seq4 (4 consec, same suit) — 50 raw
+K.SND_MELD_100  = SND_BASE .. "100.mp3"           -- seq5, carré-T/K/Q/J, OR
+                                                  -- carré-A in Hokm — all 100 raw
+K.SND_MELD_400  = SND_BASE .. "400.mp3"           -- carré-A in Sun (200 raw,
+                                                  -- 40 nq player-named "أربع مية")
 
 -- Arabic voice cues (Saudi-accented edge-tts) for the bid actions, in
 -- the spirit of the kammelna.com baloot announcer. Fired from the
@@ -320,9 +330,20 @@ K.SND_VOICE_PASS   = SND_BASE .. "pass.ogg"       -- "بَسْ" — round-1 pass
 K.SND_VOICE_WLA    = SND_BASE .. "wla.ogg"        -- "ولا" — round-2 pass
 K.SND_VOICE_AWAL   = SND_BASE .. "awal.ogg"       -- "أوَل" (round-1 bidding start)
 K.SND_VOICE_THANY  = SND_BASE .. "thany.ogg"      -- "ثآني" (round-2 bidding start)
-K.SND_VOICE_TRIPLE = SND_BASE .. "triple.ogg"     -- "ثري" (×3 — bidder's counter to Bel)
-K.SND_VOICE_FOUR   = SND_BASE .. "four.ogg"       -- "فور" (×4 — defenders' counter to Triple)
-K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.ogg"      -- "قهوة" (Coffee — bidder's terminal, match-win)
+-- v1.0.2 user-supplied: BEL.mp3 is the new Saudi-vocal cue for the
+-- FIRST escalation rung (×2 multiplier — defender team's "double"). UI
+-- relabels the Bel buttons to "Double x2" alongside this. NEW cue —
+-- pre-v1.0.2 the rung had no voice line.
+K.SND_VOICE_DOUBLE = SND_BASE .. "BEL.mp3"        -- "بل" / "Double x2" — defenders escalate ×2
+K.SND_VOICE_TRIPLE = SND_BASE .. "three.mp3"      -- v1.0.2 user-supplied vocal
+                                                  -- (replaces triple.ogg).
+                                                  -- "ثلاث" / "Triple x3" — bidder's counter to Bel.
+K.SND_VOICE_FOUR   = SND_BASE .. "four.mp3"       -- v1.0.2 user-supplied
+                                                  -- (replaces four.ogg).
+                                                  -- "فور" — defenders' counter to Triple.
+K.SND_VOICE_GAHWA  = SND_BASE .. "gahwa.mp3"      -- v1.0.2 user-supplied
+                                                  -- (replaces gahwa.ogg).
+                                                  -- "قهوة" — bidder's terminal call.
 K.SND_VOICE_AKA    = SND_BASE .. "aka.ogg"        -- "إكَهْ" (AKA signal)
 
 -- v0.10.7 user-requested specialized cues. All file names below must

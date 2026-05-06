@@ -1789,40 +1789,50 @@ local function renderActions()
                          S.s.contract, S.s.cumulative)
             if canBel == false then
                 addAction("Skip", function() net().LocalSkipDouble() end)
-                addAction("|cff999999Bel forbidden (Sun >=100)|r",
+                addAction("|cff999999Double forbidden (Sun >=100)|r",
                           function() end)
             else
                 -- v1.0.1 user-reported (Comment 3): Skip leftmost so a
                 -- click-momentum misfire from the just-finished overcall
                 -- phase (slot 1 = "Take as Sun") lands on Skip — the
-                -- safe-default outcome — rather than arming Bel. Bel
+                -- safe-default outcome — rather than arming Double. Bel
                 -- buttons ALREADY use addConfirmAction (two-click arm/
                 -- fire) for an additional safety layer; Skip-leftmost
                 -- closes the residual fast-double-click hole.
+                --
+                -- v1.0.2 user-requested label rename: "Bel" → "Double x2".
+                -- The internal phase / message names (PHASE_DOUBLE,
+                -- LocalDouble, MSG_DOUBLE) are unchanged; this is a
+                -- pure UI-string change matching the new sound asset.
                 addAction("Skip", function() net().LocalSkipDouble() end)
                 local isSun = S.s.contract and S.s.contract.type == K.BID_SUN
                 if isSun then
-                    addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
+                    addConfirmAction("Double x2", "|cffff7755Confirm Double x2?|r",
                         function() net().LocalDouble(false) end)
                 else
-                    addConfirmAction("Bel & open", "|cffff7755Confirm Bel & open?|r",
+                    addConfirmAction("Double & open", "|cffff7755Confirm Double & open?|r",
                         function() net().LocalDouble(true) end)
-                    addConfirmAction("Bel & closed", "|cffff7755Confirm Bel & close?|r",
+                    addConfirmAction("Double & closed", "|cffff7755Confirm Double & close?|r",
                         function() net().LocalDouble(false) end)
                 end
             end
         end
     elseif S.s.phase == K.PHASE_TRIPLE then
         -- v0.2.0: Triple is the BIDDER's response to Bel.
+        -- v1.0.2 user-requested label rename: "Triple ... (x3)" → "Triple x3
+        -- (open|closed)" — matches the simplified naming used on the
+        -- PHASE_DOUBLE rename ("Double x2"). Skip leftmost (slot 1) by the
+        -- same v1.0.1 click-momentum logic; Triple buttons retain
+        -- addConfirmAction (two-click arm/fire) as second-line defense.
         local b = S.s.contract and S.s.contract.bidder
         if b == S.s.localSeat then
-            addConfirmAction("Triple & open (x3)",
-                "|cffff5555Confirm Triple & open?|r",
-                function() net().LocalTriple(true) end)
-            addConfirmAction("Triple & closed (x3)",
-                "|cffff5555Confirm Triple & close?|r",
-                function() net().LocalTriple(false) end)
             addAction("Skip", function() net().LocalSkipDouble() end)
+            addConfirmAction("Triple x3 (open)",
+                "|cffff5555Confirm Triple x3 (open)?|r",
+                function() net().LocalTriple(true) end)
+            addConfirmAction("Triple x3 (closed)",
+                "|cffff5555Confirm Triple x3 (closed)?|r",
+                function() net().LocalTriple(false) end)
         end
     elseif S.s.phase == K.PHASE_FOUR then
         -- v0.2.0: Four is the DEFENDER's response to Triple.
@@ -3159,7 +3169,7 @@ local function renderBanner()
             local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN)
                 and "Sun" or "Hokm"
             local mods = { typeStr }
-            if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Bel" end
+            if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Double x2" end
             if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
             if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
             if S.s.contract and S.s.contract.gahwa  then mods[#mods + 1] = "Gahwa (match-win)" end
@@ -3280,7 +3290,7 @@ local function renderBanner()
     -- Modifiers line: contract type + multiplier
     local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN) and "Sun" or "Hokm"
     local mods = { typeStr }
-    if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Bel" end
+    if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Double x2" end
     if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
     if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
     if S.s.contract and S.s.contract.gahwa then mods[#mods + 1] = "Gahwa (match-win)" end
@@ -3462,8 +3472,8 @@ local function renderStatus()
             trumpStr = (" %s%s|r"):format(col, glyph)
         end
         local mods = {}
-        if c.doubled    then mods[#mods + 1] = "Bel (x2)"        end
-        if c.tripled    then mods[#mods + 1] = "Triple (x3)"     end
+        if c.doubled    then mods[#mods + 1] = "Double x2"       end
+        if c.tripled    then mods[#mods + 1] = "Triple x3"       end
         if c.foured     then mods[#mods + 1] = "Four (x4)"       end
         if c.gahwa      then mods[#mods + 1] = "Gahwa (match)"   end
         local modStr = #mods > 0

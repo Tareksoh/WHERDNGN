@@ -1159,6 +1159,12 @@ function S.ApplyDouble(seat, open)
     -- counters silently zero for half the table. Calling at the
     -- state-apply layer covers all paths uniformly.
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "double") end
+    -- v1.0.2 user-supplied Bel/Double vocal cue. Mirror of the
+    -- existing Triple/Four/Gahwa cues at S.ApplyTriple/Four/Gahwa.
+    -- Fires on every client at the moment the rung is committed
+    -- (defenders escalate ×2). UI relabels "Bel" → "Double x2" to
+    -- match the user's new sound asset name.
+    B.Sound.Try(K.SND_VOICE_DOUBLE)
     -- Sun rule (Saudi): "في الصن لايوجد الثري والفور والقهوة" — Sun
     -- has only Bel; no Triple/Four/Gahwa. Sun + Bel goes straight to
     -- PLAY regardless of open/closed (no rung to advance to).
@@ -1290,18 +1296,39 @@ function S.ApplyMeld(seat, kind, suit, top, encodedCards)
         kind = kind, value = value, suit = nsuit,
         top = top, cards = cards, len = #cards, declaredBy = seat,
     })
-    -- v1.0.1 user-reported (Comment 4): play a sound cue on every
-    -- client at meld-DECLARATION time (trick 1), not at meld-CARDS-
-    -- REVEAL time (trick 2). The declaration is the canonical Saudi
-    -- moment of announcement — by the time trick 2 starts, the cards
-    -- are showing as a courtesy proof, but the auditory cue belongs
-    -- with the verbal-announcement-equivalent in trick 1.
-    -- Hits every client (the declarer's host loopback applies the
-    -- meld here too, so the declarer hears their own announcement).
-    -- Asset slot K.SND_MELD_DECLARE — populated when the user
-    -- supplies a sound file (see Constants.lua placeholder).
-    if B and B.Sound and B.Sound.Try and K and K.SND_MELD_DECLARE then
-        B.Sound.Try(K.SND_MELD_DECLARE)
+    -- v1.0.2 user-supplied meld vocal cues. Dispatch to the matching
+    -- announcement per Saudi convention (each meld value has its own
+    -- spoken name — SERA / 50 / 100 / 400). Fires on every client at
+    -- declaration time (trick 1), not at trick-2 reveal — matches the
+    -- verbal-announcement moment in real Saudi play. The host
+    -- loopback applies the meld here too, so the declarer hears
+    -- their own announcement.
+    --
+    -- Mapping (from value/kind/contract — independent of suit):
+    --   seq3                                              → SERA   (20 raw)
+    --   seq4                                              → 50     (50 raw)
+    --   seq5, carré-T/K/Q/J, carré-A in Hokm              → 100    (100 raw)
+    --   carré-A in Sun                                    → 400    (200 raw, "أربع مية")
+    -- B.Sound.Try nil-guards the file path so a missing .mp3 plays
+    -- nothing instead of erroring.
+    if B and B.Sound and B.Sound.Try and K then
+        local cue
+        if kind == "seq3" then
+            cue = K.SND_MELD_SERA
+        elseif kind == "seq4" then
+            cue = K.SND_MELD_50
+        elseif kind == "seq5" then
+            cue = K.SND_MELD_100
+        elseif kind == "carre" then
+            -- 200-raw branch (carré-A in Sun) → 400 cue.
+            -- All other carrés (T/K/Q/J, plus carré-A in Hokm) → 100 cue.
+            if value == K.MELD_CARRE_A_SUN then
+                cue = K.SND_MELD_400
+            else
+                cue = K.SND_MELD_100
+            end
+        end
+        if cue then B.Sound.Try(cue) end
     end
 end
 

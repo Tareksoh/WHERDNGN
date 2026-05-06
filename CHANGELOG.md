@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.0.2 — User-supplied Saudi-vocal sounds + escalation-rung UI rename
+
+User supplied 9 .mp3 vocal cues for the Saudi-Baloot escalation chain
+and the four meld value tiers, plus a UI label rename matching the
+new sound naming.
+
+### Added (sound assets)
+
+9 .mp3 files in `sounds/`:
+- `BEL.mp3` — first escalation rung (defenders ×2)
+- `three.mp3` — second rung (bidder ×3, replaces former triple.ogg)
+- `four.mp3` — third rung (defenders ×4, replaces four.ogg)
+- `gahwa.mp3` — terminal rung (replaces gahwa.ogg)
+- `baloot.mp3` — Belote bonus (K+Q of trump, replaces baloot.ogg)
+- `SERA.mp3` — seq3 meld (3 consec same suit, 20 raw)
+- `khamseen.mp3` — seq4 meld (4 consec same suit, 50 raw)
+- `100.mp3` — seq5 / carré T,K,Q,J / carré-A in Hokm (100 raw)
+- `400.mp3` — carré-A in Sun (200 raw, "أربع مية")
+
+### Wired
+
+- **`K.SND_VOICE_DOUBLE`** — new constant pointing at `BEL.mp3`. Pre-
+  v1.0.2 the first escalation rung had no voice line; only Triple/
+  Four/Gahwa fired voice cues.
+- **`S.ApplyDouble` fires `K.SND_VOICE_DOUBLE`** on every client at
+  rung commit — symmetric with `S.ApplyTriple` / `Four` / `Gahwa`.
+- **`S.ApplyMeld` dispatches** to one of `K.SND_MELD_SERA / 50 / 100
+  / 400` based on `kind`/`value`/contract. Replaces the v1.0.1
+  placeholder `K.SND_MELD_DECLARE`. Saudi convention names each meld
+  by raw value; the dispatch table mirrors that.
+
+### UI label rename
+
+- `PHASE_DOUBLE` action buttons: "Bel (x2)" → "Double x2";
+  "Bel & open/closed" → "Double & open/closed"; "Bel forbidden..." →
+  "Double forbidden...". Internal phase / message names
+  (PHASE_DOUBLE, LocalDouble, MSG_DOUBLE) unchanged — pure UI string
+  change matching the new sound asset.
+- `PHASE_TRIPLE` action buttons: "Triple & open (x3)" → "Triple x3
+  (open)"; "Triple & closed (x3)" → "Triple x3 (closed)". Plus
+  Skip-leftmost slot ordering (mirrors the v1.0.1 PHASE_DOUBLE
+  click-momentum fix).
+- Score-banner / round-summary modifier badges: "Bel" → "Double x2";
+  "Triple (x3)" → "Triple x3".
+
+### Tests
+
+708/708 pass. No bot-logic, schema, or calibration changes.
+
 ## v1.0.1 — User-reported UX/visual fixes
 
 Three fixes from the post-v1.0.0 user-feedback batch. All
