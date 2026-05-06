@@ -1788,10 +1788,18 @@ local function renderActions()
                 R.CanBel(R.TeamOf(S.s.localSeat),
                          S.s.contract, S.s.cumulative)
             if canBel == false then
+                addAction("Skip", function() net().LocalSkipDouble() end)
                 addAction("|cff999999Bel forbidden (Sun >=100)|r",
                           function() end)
-                addAction("Skip", function() net().LocalSkipDouble() end)
             else
+                -- v1.0.1 user-reported (Comment 3): Skip leftmost so a
+                -- click-momentum misfire from the just-finished overcall
+                -- phase (slot 1 = "Take as Sun") lands on Skip — the
+                -- safe-default outcome — rather than arming Bel. Bel
+                -- buttons ALREADY use addConfirmAction (two-click arm/
+                -- fire) for an additional safety layer; Skip-leftmost
+                -- closes the residual fast-double-click hole.
+                addAction("Skip", function() net().LocalSkipDouble() end)
                 local isSun = S.s.contract and S.s.contract.type == K.BID_SUN
                 if isSun then
                     addConfirmAction("Bel (x2)", "|cffff7755Confirm Bel?|r",
@@ -1802,7 +1810,6 @@ local function renderActions()
                     addConfirmAction("Bel & closed", "|cffff7755Confirm Bel & close?|r",
                         function() net().LocalDouble(false) end)
                 end
-                addAction("Skip", function() net().LocalSkipDouble() end)
             end
         end
     elseif S.s.phase == K.PHASE_TRIPLE then
@@ -2314,23 +2321,36 @@ local function meldsDescForSeat(seat)
     return table.concat(mine, ", ")
 end
 
--- Concatenate every card across every meld this seat has declared,
--- ordered by declaration order. Caller (renderSeats) feeds the result
--- into setMeldStripCards. Caps at 5 cards (the strip's slot count) so
--- a player declaring 2 melds of 3 cards each has the second meld
--- partially hidden — by Saudi rule that's fine, the comparison only
--- cares about the BEST meld each side declared.
+-- Show only the seat's BEST meld (highest .value). Pre-v1.0.1 this
+-- function concatenated cards from EVERY meld the seat declared, then
+-- truncated to the 5-slot strip — producing misleading visuals like
+-- "JS JH JD JC + KS" (carré-J + first card of an unrelated seq3),
+-- which a player could misread as "three Js with K" (an illegal meld
+-- shape). Saudi rule says only the best meld counts for the team-vs-
+-- team comparison anyway, so render only the best one — deterministic
+-- and unambiguous.
+--
+-- Tie-break (same .value across multiple melds): pick the one with
+-- the higher .top rank, then the one declared first (stable order
+-- via list iteration). Sequence vs carré at equal value (e.g. seq5=100
+-- vs carre-K=100) — no canonical Saudi rule, so first-declared wins
+-- (matches `R.CompareMelds` ordering at Rules.lua:548+).
 local function meldCardsForSeat(seat)
     local team = R.TeamOf(seat)
     local list = S.s.meldsByTeam[team] or {}
-    local out = {}
+    local best = nil
     for _, m in ipairs(list) do
         if m.declaredBy == seat and m.cards then
-            for _, c in ipairs(m.cards) do
-                out[#out + 1] = c
-                if #out >= 5 then return out end
+            if not best or (m.value or 0) > (best.value or 0) then
+                best = m
             end
         end
+    end
+    if not best then return {} end
+    local out = {}
+    for _, c in ipairs(best.cards) do
+        out[#out + 1] = c
+        if #out >= 5 then break end
     end
     return out
 end

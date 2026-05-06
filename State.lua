@@ -1290,6 +1290,19 @@ function S.ApplyMeld(seat, kind, suit, top, encodedCards)
         kind = kind, value = value, suit = nsuit,
         top = top, cards = cards, len = #cards, declaredBy = seat,
     })
+    -- v1.0.1 user-reported (Comment 4): play a sound cue on every
+    -- client at meld-DECLARATION time (trick 1), not at meld-CARDS-
+    -- REVEAL time (trick 2). The declaration is the canonical Saudi
+    -- moment of announcement — by the time trick 2 starts, the cards
+    -- are showing as a courtesy proof, but the auditory cue belongs
+    -- with the verbal-announcement-equivalent in trick 1.
+    -- Hits every client (the declarer's host loopback applies the
+    -- meld here too, so the declarer hears their own announcement).
+    -- Asset slot K.SND_MELD_DECLARE — populated when the user
+    -- supplies a sound file (see Constants.lua placeholder).
+    if B and B.Sound and B.Sound.Try and K and K.SND_MELD_DECLARE then
+        B.Sound.Try(K.SND_MELD_DECLARE)
+    end
 end
 
 -- After deal-3, transition to play and seat-after-dealer leads.

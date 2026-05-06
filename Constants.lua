@@ -302,6 +302,13 @@ K.SND_BALOOT    = SND_BASE .. "baloot.ogg"        -- four-note fanfare
 K.SND_LOST_ROUND = SND_BASE .. "lost_round.ogg"   -- player-supplied stinger,
                                                   -- fires when local team
                                                   -- loses a round
+-- v1.0.1 user-reported (Comment 4): meld-declaration cue. Fires from
+-- S.ApplyMeld at trick-1 declaration time on every client. Sound file
+-- supplied by the user — the path placeholder lives here so the wire
+-- in State.lua doesn't need editing when the .ogg lands.
+-- File expected at sounds/meld_declare.ogg (drop into the addon folder
+-- — no source-edit required, .toc already covers the sounds/ subdir).
+K.SND_MELD_DECLARE = SND_BASE .. "meld_declare.ogg" -- meld declared in trick 1
 
 -- Arabic voice cues (Saudi-accented edge-tts) for the bid actions, in
 -- the spirit of the kammelna.com baloot announcer. Fired from the

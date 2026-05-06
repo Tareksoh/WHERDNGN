@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.0.1 — User-reported UX/visual fixes
+
+Three fixes from the post-v1.0.0 user-feedback batch. All
+gameplay/correctness paths unchanged; bot logic and telemetry
+schema untouched. 708/708 tests pass.
+
+### Fixed
+
+- **Meld card display ambiguity (UI.lua `meldCardsForSeat`)**.
+  Pre-v1.0.1 the trick-2 reveal strip concatenated cards from
+  EVERY meld a seat declared and truncated to 5 slots. A seat
+  declaring carré-J (4 cards) + an unrelated seq3 (3 cards) showed
+  as `J♠ J♥ J♦ J♣ K♠` — visually indistinguishable from one
+  illegal "4 Js + K" meld. Per Saudi rule only the BEST meld
+  matters for the team-vs-team comparison anyway, so the strip
+  now renders only the highest-`.value` meld for that seat.
+  Tie-break: higher .top rank, then declaration order.
+
+- **Bel button click-momentum hazard (UI.lua phase-DOUBLE actions)**.
+  The action-button pool reuses fixed slot positions across phases.
+  PHASE_OVERCALL slot 1 = "Take as Sun"; PHASE_DOUBLE slot 1 was
+  "Bel & open" — same screen pixel. A user mid-click on the
+  overcall decision could land their second click on Bel, and a
+  third click could fire it through the confirm-arm. Now
+  PHASE_DOUBLE slot 1 = "Skip" (safe default), Bel buttons after.
+  Confirm-arm pattern still applies as second-line defense.
+
+### Added
+
+- **Meld-declaration sound cue (Sound.lua + State.lua + Constants.lua)**.
+  `K.SND_MELD_DECLARE` placeholder added; `S.ApplyMeld` now fires
+  `B.Sound.Try(K.SND_MELD_DECLARE)` on every client at the moment
+  a meld is registered (trick 1, declaration time) — NOT at trick
+  2 reveal time. Saudi convention treats the declaration as the
+  canonical announcement moment. The .ogg file lives at
+  `sounds/meld_declare.ogg`; user supplies it. If absent, no
+  sound plays (graceful — `B.Sound.Try` nil-guards).
+
+### Tooling
+
+- **`tools/calibrate.py` Windows console encoding** — replaced the
+  Unicode arrow `→` with ASCII `->` so the analyzer runs
+  cleanly under Windows cp1252 (default `cmd.exe` codepage).
+  No analytics changed. Python tool only — not part of the
+  in-game addon.
+
+### Deferred
+
+- **FPS drop on Saudi Master tier (`K.BOT_ISMCTS_BUDGET_SEC`)**.
+  Diagnosed: the per-move 0.5s ISMCTS rollout budget runs on the
+  WoW main thread, causing visible stutter (~30 frames blocked
+  per heavy bot move). Fix options enumerated (drop budget to
+  0.25s; expose as a slash command setting; or refactor to
+  C_Timer-spread rollouts across frames). Held pending explicit
+  user request — the gameplay correctness is unaffected.
+
 ## v1.0.0 — Meld awareness + defender play + telemetry schema v=3
 
 Milestone release. Bundles the highest-leverage residual items from
