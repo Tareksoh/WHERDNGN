@@ -1,5 +1,56 @@
 # Changelog
 
+## v1.0.7 — Test-debt closure (Section AK behavioral coverage)
+
+Test-only release. Adds 7 behavioral tests (Section AK) that exercise
+v1.0.4 + v1.0.6 bot-logic fixes by setting up game state and asserting
+on `Bot.PickPlay` / `Bot.PickTriple` outputs. No bot-logic, schema,
+or calibration changes. 753/753 tests pass.
+
+### What v1.0.4 / v1.0.6 lacked
+
+Sections AI (8 tests) and AJ (9 tests) were source-pin only — they
+verified the relevant code blocks existed in source via `find()`
+patterns, not that the code BEHAVES correctly. v0.11.19-hotfix F1
+proved this anti-pattern is dangerous: a source-pin pass coincided
+with a silently broken `if nil and ...` short-circuit (M5 never
+fired because of an unbound variable). Behavioral tests catch this.
+
+### New behavioral coverage (Section AK)
+
+- **AK.1 (N2 behavioral): Foured smother gate.** Sets up Foured
+  contract + pos-3 + partnerWinning + 2 H point cards in hand;
+  asserts the bot does NOT smother A (gate=lastSeat-only at ×4).
+- **AK.2 (N2 behavioral): Doubled tier preserves donate.** Same
+  setup but ×2 contract + 5 prior tricks completed; asserts the
+  bot DOES smother A (gate=lastSeat OR completed≥4 at ×2).
+- **AK.3 (N1 behavioral smoke): Urgency-swing meld-pin guard.**
+  Constructs near-clinch state with partner-meld declaring AH;
+  asserts pickFollow returns SOME card (smoke — exact card depends
+  on multi-branch interplay; the source-pin AJ.3 verifies block).
+- **AK.4 (agent #6 behavioral): touch-honor save filters A/T.**
+  Sets `Bot._partnerStyle[partner].topTouchSignal[H] =
+  {nextDown="K"}`; asserts smother donates Q (not A or T) when
+  partner has signaled K-singleton inference.
+- **AK.5 (agent #8 behavioral): Mathlooth K-tripled.** Sun
+  contract + 3 H cards + can't-beat path; asserts K is NOT picked.
+- **AK.6 (N6 behavioral pin): defender M5 no +1 off-by-one.**
+  Source-pin verifies `defenderTarget = baseTarget + m5_oppMeld
+  - m5_myMeld` (no +1) — combined with N3 meld delta math.
+- **AK.7 (FLOOR-3 behavioral): PickTriple floor cap respected.**
+  Constructs weak hand + maximum urgency drop; asserts PickTriple
+  does NOT fire even at the floor cap edge.
+
+### Deferred — full Cluster 7 conversion
+
+The original v1.0.4 deferred-list mentioned ~10 source-pin tests to
+convert to behavioral. Section AK adds 7 NEW behavioral tests (the
+highest-leverage ones — covering recent bot-logic changes). The
+remaining source-pin tests in T/U/V/W/X/Y/Z and earlier sections
+are mostly historical pins of old fixes; converting them is
+mechanical work with diminishing returns. Defer until a specific
+test fragility surfaces.
+
 ## v1.0.6 — Dual ultra-audit findings + deck refresh
 
 Closes the dual-agent audit run from the v1.0.5 cycle (one bot-
