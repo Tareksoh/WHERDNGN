@@ -366,7 +366,22 @@ K.OVERCALL_TIMEOUT_SEC = 5
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
 -- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).
-K.BOT_BEL_TH          = 60    -- defenders bel with own strength >= TH
+K.BOT_BEL_TH          = 45    -- defenders bel with own strength >= TH.
+                              -- v0.11.19 audit (3-game forensic): lowered
+                              -- 60 -> 45. 33-round dataset showed 0% Bel
+                              -- across all sessions. Math walkthrough on
+                              -- 5 typical defender hands showed effective
+                              -- belStr range 31-53; 60 was structurally
+                              -- unreachable on most 5-card defender hands.
+                              -- New target: ~10-20% Bel rate per Hokm
+                              -- contract (vs 20-35% Saudi tournament
+                              -- baseline; conservative initial drop).
+                              -- Sub-finding from agent: side-AKQ stopper
+                              -- bonus (+8 in sunStrength) under-rewards
+                              -- 3 guaranteed tricks (~30 raw value).
+                              -- Future: bump K/Q face values for
+                              -- defender context, or add explicit
+                              -- AKQ-stopper-pair bonus in PickDouble.
                               -- (was 70; v0.5 C-3 calibration: TH=70 produced
                               --  50% false-Bel coin-flip + 247/268 winnable
                               --  Bels missed per 1000 hands; TH=60 best F1)

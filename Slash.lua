@@ -169,9 +169,24 @@ local function dispatch(msg)
         end
         local last = bm._lastWorldsCompleted or 0
         local budget = K.BOT_ISMCTS_BUDGET_SEC or 0
-        say(("ISMCTS: last move completed %d worlds (budget %.2fs); "
-             .. "see CHANGELOG v0.11.17 B2 for details")
-            :format(last, budget))
+        local shortCircuit = bm._lastShortCircuit
+        -- v0.11.19 (ultra-audit BM-03 follow-up): differentiate the
+        -- "0 worlds" cases. Single-card-shortcut is normal/expected;
+        -- budget-cut-on-iter-1 would suggest a perf concern.
+        if shortCircuit == "single-card" then
+            say(("ISMCTS: last move had only 1 legal card (no rollout needed); "
+                 .. "budget %.2fs"):format(budget))
+        elseif shortCircuit == "no-legal-moves" then
+            say("ISMCTS: last move had 0 legal moves (defensive fallback)")
+        elseif shortCircuit == "legal-build-failed" then
+            say("ISMCTS: legal-set build pcall failed — heuristic fallback")
+        elseif last == 0 then
+            say(("ISMCTS: last move completed 0 worlds (budget %.2fs cut on iter 1?); "
+                 .. "if you see this often, raise K.BOT_ISMCTS_BUDGET_SEC"):format(budget))
+        else
+            say(("ISMCTS: last move completed %d worlds (budget %.2fs)")
+                :format(last, budget))
+        end
         return
     end
 

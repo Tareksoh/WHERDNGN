@@ -932,12 +932,15 @@ do
     --   H: KH+JH, hi=KH, hiRank="K" → SKIP (gate).
     --   D: AD+9D, hi=AD, hiRank="A" → SKIP (gate).
     --   C: void → skip.
-    -- No T-4 return. Falls through to lowestByRank(legal, contract).
-    -- Lowest trick rank: 7S (trump rank 1 in RANK_TRUMP_HOKM).
-    -- Pre-v0.5.11: T-4 fired on H, returned KH.
+    -- No T-4 return. Falls through to U-6 non-trump-preference.
+    -- v0.11.19 U-6: post-fix prefers non-trump discard when
+    -- partnerWinning + Hokm + void in led suit. Non-trump legal:
+    -- [KH, JH, AD, 9D]. lowestByRank picks 9D (lowest TrickRank
+    -- among non-trump). Pre-U-6 returned 7S (lowest TRUMP) which
+    -- was wasting trump on partner's already-won trick.
     local card = Bot.PickPlay(1)
-    assertEq(card, "7S",
-             "v0.5.11 E.3: T-4 gate skips K/A doubletons → lowestByRank → 7S")
+    assertEq(card, "9D",
+             "v0.5.11 E.3 + v0.11.19 U-6: T-4 gate skips K/A doubletons → non-trump preference → 9D")
     -- Cleanup
     WHEREDNGNDB.m3lmBots = false
 end
@@ -2268,7 +2271,11 @@ do
                "O.2b (Bot1-02): BM.PickPlay calls pcall(buildLegalSet) — _inRollout leak guard")
     -- Confirm the failure path returns _restore(nil) so the flag is
     -- cleared when the legal-set construction errors.
-    assertTrue(bm:find("if not legalOk then return _restore%(nil%) end") ~= nil,
+    -- v0.11.19 (BM-03 follow-up): added _lastShortCircuit tagging
+    -- between the not-legalOk check and the _restore call. Match
+    -- either form (legacy single-line or v0.11.19 multi-line).
+    assertTrue(bm:find("if not legalOk then return _restore%(nil%) end") ~= nil
+               or bm:find('BM%._lastShortCircuit = "legal%-build%-failed"') ~= nil,
                "O.2c (Bot1-02): pcall failure returns _restore(nil) — clears _inRollout")
 end
 
@@ -3397,8 +3404,12 @@ do
     local fnStart = botSrc:find("function Bot%.PickGahwa")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2500)
-        assertTrue(body:find("th < K%.BOT_GAHWA_TH %- 16") ~= nil,
-                   "AB.2 (F3): PickGahwa floor cap mirrors PickFour")
+        -- v0.11.19 DEAD-2: floor cap REMOVED (was unreachable). Test
+        -- now pins the rationale comment instead.
+        assertTrue(body:find("DEAD%-2") ~= nil
+                   or body:find("floor cap removed") ~= nil
+                   or body:find("unreachable") ~= nil,
+                   "AB.2 (DEAD-2): PickGahwa documents floor-cap removal rationale")
     end
 end
 
@@ -3504,6 +3515,95 @@ do
         assertTrue(body:find("strength = strength %+ 5") ~= nil,
                    "AC.6 (P4-1 / DEAD-1): PickFour applies unconditional +5 partner-open-Bel bonus")
     end
+end
+
+-- =====================================================================
+-- AD. v0.11.19 — agent-driven post-3-game audit fixes
+-- =====================================================================
+print("")
+print("=== Section AD: v0.11.19 fixes ===")
+
+-- AD.1 (BC-MANDATORY): Belote bypass strength gate when shape passes
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- R1 Hokm-on-flipped: Belote escape fires unconditionally on shape
+    assertTrue(botSrc:find("BC%-MANDATORY Belote") ~= nil,
+               "AD.1a (BC-MANDATORY): R1 Hokm-on-flipped Mandatory-Belote bypass")
+    -- R2: same Belote bypass via beloteCandidate tracking
+    assertTrue(botSrc:find("local beloteCandidate = nil") ~= nil,
+               "AD.1b (BC-MANDATORY): R2 Hokm beloteCandidate tracking")
+end
+
+-- AD.2 (U-3): bidderHoldsBidcard wired into trump-J inference
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- The bidcardRank == "J" inference reads bidderHoldsBidcard.
+    assertTrue(botSrc:find("bidderHoldsBidcard%(contract%.bidder, S%.s%.bidCard%)") ~= nil,
+               "AD.2 (U-3): bidderHoldsBidcard wired into trump-J inference")
+end
+
+-- AD.3 (DEAD-2): PickGahwa floor cap removed
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickGahwa")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 2500)
+        -- Pin the rationale comment, not the (now-absent) code.
+        assertTrue(body:find("DEAD%-2") ~= nil,
+                   "AD.3 (DEAD-2): PickGahwa documents floor-cap removal rationale")
+    end
+end
+
+-- AD.4 (ismctsdiag): single-card-shortcut tagged for diagnostic clarity
+do
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find('BM%._lastShortCircuit = "single%-card"') ~= nil,
+               "AD.4a (BM-03): BotMaster tags single-card-shortcut path")
+    local slashSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Slash.lua"):read("*a")
+    assertTrue(slashSrc:find("had only 1 legal card") ~= nil,
+               "AD.4b (BM-03): Slash.lua differentiates single-card-shortcut message")
+end
+
+-- AD.5 (U-6): non-trump preference in released-from-must-ruff
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Pin the U-6 nonTrumpLegal preference block
+    assertTrue(botSrc:find("local nonTrumpLegal = {}") ~= nil,
+               "AD.5 (U-6): pickFollow non-trump preference fall-through")
+end
+
+-- AD.6 (M5): trick-8 bidder-team make-the-bid awareness
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local target = %(contract%.type == K%.BID_SUN%) and 65 or 81") ~= nil,
+               "AD.6 (M5): trick-8 winners branch reads make-the-bid target")
+end
+
+-- AD.7 (escalation observability): PickDouble has eltrace
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local fnStart = botSrc:find("function Bot%.PickDouble")
+    if fnStart then
+        local body = botSrc:sub(fnStart, fnStart + 8000)
+        assertTrue(body:find("local function eltrace") ~= nil,
+                   "AD.7a: PickDouble defines eltrace helper")
+        assertTrue(body:find("PickDouble eval: strength=") ~= nil,
+                   "AD.7b: PickDouble logs strength + threshold + jth")
+    end
+end
+
+-- AD.8: BOT_BEL_TH lowered 60 -> 45
+do
+    assertEq(K.BOT_BEL_TH, 45, "AD.8 (audit): K.BOT_BEL_TH = 45 (was 60)")
+end
+
+-- AD.9 (btrace fix): hand log uses POST-bidcard sunAces / sunMardoofa
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- The btrace format string uses sunAces / sunMardoofa (post-bidcard
+    -- recompute), not aceCount / mardoofaCount (pre-bidcard from line 1383).
+    assertTrue(botSrc:find('sunAces=%%d sunMardoofa=%%d') ~= nil,
+               "AD.9 (btrace fix): bidcalc trace uses sunAces/sunMardoofa (post-bidcard)")
 end
 
 -- =====================================================================

@@ -1448,8 +1448,15 @@ function Bot.PickBid(seat)
     local thSun    = jitter(TH_SUN_BASE - urgency, BID_JITTER)
 
     -- v0.11.8 bidcalc: log thresholds + base strength once per call.
-    btrace("hand=[%s] sun=%d aces=%d mardoofa=%d urgency=%d thSun=%d thHokmR1=%d thHokmR2=%d",
-           table.concat(hand, " "), sun, aceCount, mardoofaCount,
+    -- v0.11.19 audit (post-3-game forensic): use POST-bidcard sunAces
+    -- and sunMardoofa to match the `sun` value reported. Pre-fix the
+    -- log displayed PRE-bidcard counts but POST-bidcard sun, producing
+    -- impossible-looking trace lines like `sun=64 aces=1 mardoofa=0`
+    -- (where the 64 actually came from a 3-Ace + 1-mardoofa bonus
+    -- stack on the post-bidcard hand). The discrepancy made trace
+    -- lines unreliable for empirical calibration analysis.
+    btrace("hand=[%s] sun=%d sunAces=%d sunMardoofa=%d urgency=%d thSun=%d thHokmR1=%d thHokmR2=%d",
+           table.concat(hand, " "), sun, sunAces, sunMardoofa,
            urgency, thSun, thHokmR1, thHokmR2)
 
     -- v0.6.0 B-7: Bel-fear bias for Sun bidding (Common, video 25).
@@ -1659,6 +1666,25 @@ function Bot.PickBid(seat)
                 end
                 btrace("R1 Hokm-on-flipped consider: suit=%s strength=%d thHokmR1=%d belote=%s",
                        bidCardSuit, strength, thHokmR1, tostring(belote == bidCardSuit))
+                -- v0.11.19 BC-MANDATORY (post-v0.11.18 ultra-audit): if
+                -- the trump suit holds a Belote pair (K+Q in same hand),
+                -- decision-trees.md B-6 says "Mandatory Hokm with that
+                -- suit as trump" — the +20 multiplier-immune Belote bonus
+                -- is structural and shape-only. Bypass strength threshold
+                -- when shape is Mandatory-Belote. Trace evidence from
+                -- 3-game session: hands like [QH KS 9C TD JD] (Q+K... no
+                -- wait, that's not Belote — Belote = K+Q same suit).
+                -- Genuine example: hand has KH + QH and bidcard is one
+                -- of the H suit + count>=2 — `hokmMinShape` passes via
+                -- v0.11.16 K+Q escape clause; previously strength still
+                -- below thHokmR1 so it didn't fire. Now: if Belote suit
+                -- matches bidCardSuit, fire unconditionally (per
+                -- "Mandatory" verdict).
+                if belote == bidCardSuit then
+                    btrace("R1 Hokm fires (BC-MANDATORY Belote): %s strength=%d (Mandatory-Belote bypass)",
+                           bidCardSuit, strength)
+                    return K.BID_HOKM .. ":" .. bidCardSuit
+                end
                 if strength >= thHokmR1 then
                     btrace("R1 Hokm fires: %s strength=%d >= thHokmR1=%d",
                            bidCardSuit, strength, thHokmR1)
@@ -1716,6 +1742,10 @@ function Bot.PickBid(seat)
     -- standard suitStrengthAsTrump pipeline. Pre-v0.11.16 missing.
     local hokmHand = withBidcard(hand, S.s.bidCard)
     local bestSuit, bestScore = nil, 0
+    -- v0.11.19 BC-MANDATORY: track if Belote suit was found in any
+    -- bestSuit candidate; bypass strength gate later if so (Saudi
+    -- "Mandatory" rule per B-6).
+    local beloteCandidate = nil
     for _, suit in ipairs(K.SUITS) do
         if suit ~= bidCardSuit and hokmMinShape(hokmHand, suit) then
             local s = suitStrengthAsTrump(hokmHand, suit)
@@ -1723,6 +1753,7 @@ function Bot.PickBid(seat)
             -- v0.5.13: +20 → K.BOT_PICKBID_BELOTE_BONUS (mirrors K.MELD_BELOTE).
             if belote == suit then s = s + K.BOT_PICKBID_BELOTE_BONUS end
             if s > bestScore then bestSuit, bestScore = suit, s end
+            if belote == suit then beloteCandidate = suit end
         end
     end
     -- v0.5.8 patch B-5: 16-vs-26 failed-bid asymmetry. When BOTH Hokm
@@ -1753,6 +1784,17 @@ function Bot.PickBid(seat)
     else
         btrace("R2 Sun skipped: sunMinShape=%s sun=%d thSun=%d",
                tostring(sunMinShape(sunHand)), sun, thSun)
+    end
+    -- v0.11.19 BC-MANDATORY: Mandatory-Belote bypass for R2 Hokm.
+    -- If our Belote suit reached the bestSuit candidate set (passed
+    -- shape gate), fire Hokm-of-that-suit unconditionally — Saudi
+    -- B-6 says "Mandatory". Strength gate bypassed even if scoring
+    -- below thHokmR2 (the +20 multiplier-immune Belote bonus locks
+    -- the suit's structural value).
+    if beloteCandidate then
+        btrace("R2 Hokm fires (BC-MANDATORY Belote): %s bestScore=%d (Mandatory-Belote bypass)",
+               beloteCandidate, bestScore)
+        return K.BID_HOKM .. ":" .. beloteCandidate
     end
     if bestSuit and bestScore >= thHokmR2 then
         btrace("R2 Hokm fires: %s bestScore=%d >= thHokmR2=%d", bestSuit, bestScore, thHokmR2)
@@ -2476,6 +2518,30 @@ local function pickLead(legal, contract, seat)
                     elseif C.Rank(card) == "9" then trump9Seen = true end
                 end
             end
+            -- v0.11.19 audit U-3: bidcard public-knowledge inference.
+            -- The bidder receives the bidcard at HostDealRest; if the
+            -- bidcard is the J or 9 of trump and bidder is observed to
+            -- still hold it, treat that as "bidder has it" — so it's
+            -- NOT consumed from the opp's collective trump pool from
+            -- defenders' POV. For US (the seat reasoning), if WE are
+            -- the defender, the bidder still having J/9 trump means
+            -- opp trump strength is NOT exhausted; suppress the
+            -- "switch to side-Ace cashing" branch. Pre-fix the trump-
+            -- J/9 inference treated "card not played, not in our hand"
+            -- as "could be in any opp hand" — but the bidcard is
+            -- KNOWN to be in bidder's hand specifically.
+            if contract.bidder and contract.bidder ~= seat
+               and S.s.bidCard and bidderHoldsBidcard(contract.bidder, S.s.bidCard)
+               and C.Suit(S.s.bidCard) == contract.trump then
+                local bidcardRank = C.Rank(S.s.bidCard)
+                if bidcardRank == "J" then
+                    -- J of trump KNOWN to be in bidder's hand. Don't
+                    -- treat trump-J as exhausted; bidder will play it.
+                    trumpJSeen = false
+                elseif bidcardRank == "9" then
+                    trump9Seen = false
+                end
+            end
             if trumpJSeen and trump9Seen then
                 -- Both gone from pool. Cash a side-suit Ace if we
                 -- have one; otherwise fall through to highestTrump.
@@ -3181,6 +3247,26 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
         end
 
+        -- v0.11.19 audit U-6: prefer non-trump discard when partner
+        -- is winning in Hokm and we're released from must-ruff. Per
+        -- decision-trees.md Section 6, when pos-4-partner-winning-
+        -- void-in-led-suit in Hokm, legality permits both trump and
+        -- non-trump. lowestByRank ties at TrickRank=1 between trump-7
+        -- and non-trump-7 — iteration order arbitrarily picks one,
+        -- wasting trump 50% of the time. Non-trump preference
+        -- preserves trump for actual ruffing capacity later.
+        -- Belote-K/Q-of-trump preservation already handled above.
+        if contract.type == K.BID_HOKM and contract.trump then
+            local nonTrumpLegal = {}
+            for _, c in ipairs(legal) do
+                if not C.IsTrump(c, contract) then
+                    nonTrumpLegal[#nonTrumpLegal + 1] = c
+                end
+            end
+            if #nonTrumpLegal > 0 then
+                return lowestByRank(nonTrumpLegal, contract)
+            end
+        end
         -- Otherwise don't waste a high card.
         return lowestByRank(legal, contract)
     end
@@ -3481,6 +3567,34 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- behavior elsewhere remains "cheapest winner".
         local trickNum = #(S.s.tricks or {}) + 1
         if trickNum == 8 then
+            -- v0.11.19 audit M5: bidder-team make-the-bid awareness
+            -- on trick 8. Pre-fix highestByFaceValue picked maximum
+            -- per-trick face value, but if our team is the BIDDER and
+            -- the current trick win is BORDERLINE (we need this trick
+            -- + last-trick bonus to reach the make-threshold), maximize
+            -- trick-WINNING probability over face-value. highestByRank
+            -- picks the highest TrickRank — most over-trump-resistant
+            -- — even if it sacrifices a few face-value points.
+            -- Specifically: bidder team at 60-80 raw points without
+            -- this trick = trick 8 is a make-or-break swing.
+            if isBidderTeam and S.s.tricks then
+                local raw = 0
+                for _, t in ipairs(S.s.tricks) do
+                    if R.TeamOf(t.winner) == myTeam then
+                        for _, p in ipairs(t.plays or {}) do
+                            raw = raw + (C.PointValue(p.card, contract) or 0)
+                        end
+                    end
+                end
+                local target = (contract.type == K.BID_SUN) and 65 or 81
+                -- Make-or-break: 0 < (target - raw) <= ~30 (current
+                -- trick can swing make-fail boundary). Favor trick-rank
+                -- over face-value to lock the last trick.
+                local gap = target - raw
+                if gap > 0 and gap <= 30 then
+                    return highestByRank(winners, contract)
+                end
+            end
             return highestByFaceValue(winners, contract)
         end
         -- Default / pos 4 / no advanced: cheapest winner.
@@ -3806,6 +3920,18 @@ function Bot.PickDouble(seat)
     local contract = S.s.contract
     if not hand or not contract then return false, false end
 
+    -- v0.11.19 audit (escalation observability): mirror PickBid's btrace
+    -- pattern. Pre-fix the user reported 0% Bel rate across 33 rounds
+    -- with no diagnostic visibility — couldn't tell whether bots reached
+    -- threshold and were jitter-rejected, or strength was way off.
+    -- Reuses /baloot bidcalc toggle (WHEREDNGNDB.debugBidcalc).
+    local function eltrace(fmt, ...)
+        if not (WHEREDNGNDB and WHEREDNGNDB.debugBidcalc) then return end
+        local ok, msg = pcall(string.format, fmt, ...)
+        if not ok then return end
+        print(("|cff66ff77[bel s%d]|r %s"):format(seat or 0, msg))
+    end
+
     -- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate.
     -- Saudi rule: in Sun contracts, only the team at <100 cumulative
     -- score may Bel. Hokm has no such gate. R.CanBel is the
@@ -3813,6 +3939,7 @@ function Bot.PickDouble(seat)
     -- so a human player can't bypass via the wire).
     -- Sources: decision-trees.md Section 2 (Definite, video 11).
     if R.CanBel and not R.CanBel(R.TeamOf(seat), contract, S.s.cumulative) then
+        eltrace("PickDouble blocked: Sun Bel-100 gate (R.CanBel=false)")
         return false, false
     end
 
@@ -3906,12 +4033,22 @@ function Bot.PickDouble(seat)
     if th < K.BOT_BEL_TH - 16 then th = K.BOT_BEL_TH - 16 end
 
     local jth = jitter(th, BEL_JITTER)
-    if strength < jth then return false, false end
+    eltrace("PickDouble eval: strength=%d th=%d jth=%d (BOT_BEL_TH=%d)",
+            strength, th, jth, K.BOT_BEL_TH)
+    if strength < jth then
+        eltrace("PickDouble PASS: strength=%d < jth=%d", strength, jth)
+        return false, false
+    end
     -- Sun: open is moot (no Triple rung).
-    if contract.type == K.BID_SUN then return true, false end
+    if contract.type == K.BID_SUN then
+        eltrace("PickDouble FIRE (Sun, no open): strength=%d >= jth=%d", strength, jth)
+        return true, false
+    end
     -- Open if we have a comfortable buffer (would survive a Triple
     -- counter); else close to lock in the ×2.
     local wantOpen = strength >= jth + 20
+    eltrace("PickDouble FIRE (Hokm): strength=%d >= jth=%d wantOpen=%s",
+            strength, jth, tostring(wantOpen))
     return true, wantOpen
 end
 
@@ -4092,15 +4229,17 @@ function Bot.PickGahwa(seat)
     local strength = escalationStrength(seat, hand, contract)
     -- v0.6.0 H-7: capped at ±15 (combined urgency).
     local th = K.BOT_GAHWA_TH - combinedUrgency(R.TeamOf(seat))
-    -- v0.11.17-hotfix F3 (post-ship audit): floor cap mirrors
-    -- PickDouble (3870) and PickFour (4026). Without it, EV-2's
-    -- GAHWA_TH=120 + max combinedUrgency drop -15 + jitter -10 leaves
-    -- effective threshold at 95 — within reach of mid-strength Hokm
-    -- hands under near-clinch desperation. The -16 floor preserves
-    -- Gahwa's "rare-rung, near-certain commitment" property while
-    -- still allowing it to fire on top-tier hands (which now reach
-    -- ~140 strength post-EV-1).
-    if th < K.BOT_GAHWA_TH - 16 then th = K.BOT_GAHWA_TH - 16 end
+    -- v0.11.19 DEAD-2 (ultra-audit): floor cap removed. With combinedUrgency
+    -- already clamped at ±15 by line 1198, `th` range is [105, 135]. The
+    -- prior floor at K.BOT_GAHWA_TH-16=104 was unreachable (105 > 104
+    -- always). The PickDouble/PickFour floors fire because their pickers
+    -- have ADDITIONAL M3lm style adjustments (gahwaFailed/triples) that
+    -- can drop th past the urgency-cap floor; PickGahwa has no such
+    -- style adjustments, so the cap is the only constraint. Documenting
+    -- intent: minimum effective threshold = 105 - 10 jitter = 95.
+    -- Acceptable because Gahwa is bidder-side (we have all the info),
+    -- and combined-urgency >= 15 only fires when our team is near-loss
+    -- desperation (terminal swing OK).
     local yes = strength >= jitter(th, BEL_JITTER)
     return yes, false
 end

@@ -1,5 +1,108 @@
 # Changelog
 
+## v0.11.19 — agent-driven 3-game forensic + 9 fixes
+
+User played 3 games on v0.11.18-final (33 rounds total). A specialized
+forensic agent analyzed the trace data + SavedVariables against the
+actual bot code and surfaced 1 NEW bug + confirmed all the planned
+fixes. v0.11.19 implements all 9 (8 planned + 1 from agent).
+
+### Fixed (HIGH from prior deferred ledger)
+
+- **BC-MANDATORY (Belote shape→strength bridge).** Saudi rule B-6
+  marks K+Q-of-trump + count≥2 as MANDATORY Hokm-of-that-suit.
+  v0.11.16 added the shape-gate escape but the strength gate still
+  rejected when score < thHokmR1. Now: if `belote == bidCardSuit`
+  in R1 (or `belote == suit` in R2's bestSuit candidate set), Hokm
+  fires unconditionally. The +20 multiplier-immune Belote bonus
+  locks the suit's structural value.
+
+- **U-3 (bidderHoldsBidcard → trump-J inference).** Wired the helper
+  into `pickFollow`'s trump-J/9 exhaustion check (Bot.lua:2494). Pre-
+  fix the inference treated bidcard-of-trump as "could be in any opp
+  hand" — but the bidcard is PUBLIC knowledge held by the bidder.
+  Now: if bidcard is J or 9 of trump and bidder hasn't played it,
+  treat trump-strength as NOT exhausted; suppress side-Ace cashing.
+
+- **DEAD-2 (PickGahwa floor cap removed).** Pre-fix `if th <
+  K.BOT_GAHWA_TH - 16 then th = K.BOT_GAHWA_TH - 16 end` was
+  unreachable: combinedUrgency clamp ±15 leaves th in [105, 135],
+  always above floor 104. Removed; rationale documented inline.
+
+### Fixed (MED — visible play improvement)
+
+- **U-6 (non-trump preference in released-from-must-ruff).** Pre-fix
+  `lowestByRank(legal)` in pickFollow's partner-winning fall-through
+  picked arbitrarily between trump-7 and non-trump-7 (both TrickRank=1
+  in their respective rank tables). Now: in Hokm + partner-winning,
+  prefer lowest non-trump if available — preserves trump for actual
+  ruffing capacity. Fixed test E.3 (was pinning the wrong v0.5.11
+  fall-through behavior; updated to expect non-trump 9D over trump 7S).
+
+- **M5 (trick-8 make-the-bid awareness).** Pre-fix trick-8 winners
+  branch always picked `highestByFaceValue`. Now: when bidder team
+  AND we're in the make-or-break gap (raw < target, gap ≤ 30),
+  use `highestByRank` instead — maximizes trick-WINNING probability
+  at the cost of a few face-value points. Targets: Hokm=81, Sun=65.
+
+### Fixed (LOW)
+
+- **`/baloot ismctsdiag` "0 worlds" disambiguation (ultra-audit BM-03
+  follow-up).** Pre-fix users couldn't tell "0 worlds = single-card
+  shortcut (normal)" from "0 worlds = budget cut on iter 1 (perf
+  concern)". Now BotMaster tags `BM._lastShortCircuit` with
+  "single-card" / "no-legal-moves" / "legal-build-failed" / nil
+  (= entered world loop). Slash command surfaces the specific case.
+
+- **btrace arg correctness (NEW from agent forensic).** Pre-fix
+  the bidcalc trace logged `aceCount, mardoofaCount` from PRE-bidcard
+  but `sun` from POST-bidcard, producing impossible-looking lines
+  like `sun=64 aces=1 mardoofa=0`. Agent verified mathematically by
+  reverse-engineering Game 3 trace at 13:32:14. Now: log `sunAces,
+  sunMardoofa` (the post-bidcard recompute used for bonus stack).
+
+### Changed (calibration)
+
+- **`K.BOT_BEL_TH 60 → 45`.** Agent's mathematical walk-through of 5
+  defender hands from the 33-round dataset showed effective belStr
+  range 31-53 — 60 was structurally unreachable on most 5-card
+  defender hands. Combined with v0.11.17 EV-1 added bonuses + new
+  observability, target ~10-20% Bel rate per Hokm contract. Sub-
+  finding deferred: side-AKQ stopper bonus (+8 in sunStrength)
+  under-rewards 3 guaranteed tricks (~30 raw); future tuning.
+
+### Added (escalation observability)
+
+- **`PickDouble` eltrace** — mirrors PickBid btrace pattern. Toggled
+  via `/baloot bidcalc`. Logs strength, threshold, jth, fire/pass
+  decision. User-reported 0% Bel rate across 33 rounds had no
+  diagnostic visibility; now the next session will produce
+  `[bel sN] PickDouble PASS: strength=X < jth=Y` lines that surface
+  WHY defenders aren't reaching threshold.
+
+### Test coverage (Section AD added)
+
+9 pins covering each fix. 651/651 tests pass.
+
+### Forensic agent's other findings (deferred)
+
+The agent flagged 4 additional items not yet shipped:
+- Side-AKQ stopper bonus +8 under-rewards 3 guaranteed tricks
+  (formula calibration)
+- R1 over-fires 73% vs canonical Saudi 50-60% (R2 vs R1
+  threshold gap should widen for non-M3lm tiers)
+- Defender-team sweep-pursuit branch missing (Game 2 R7 had
+  defenders sweep 28/144 swing without active pursuit)
+- Need 80-120 rounds across mixed bot tiers for next-cycle
+  statistical-power audit
+
+### User-reported observation
+
+User noticed "couldn't Bel >2x in these rounds" — investigated and
+confirmed NOT a UI/state bug. PHASE_TRIPLE only fires after Bel.
+Across 33 rounds 0 Bels = 0 PHASE_TRIPLE = no Triple button visible.
+v0.11.19 BOT_BEL_TH drop should resolve this organically.
+
 ## v0.11.18-final — ultra-audit hotfix + comprehensive deferred report
 
 Final hotfix from the post-v0.11.18 ultra-audit (4 parallel agents, ~13

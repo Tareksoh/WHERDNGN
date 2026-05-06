@@ -938,9 +938,24 @@ function BM.PickPlay(seat)
         end
     end
     local legalOk = pcall(buildLegalSet)
-    if not legalOk then return _restore(nil) end
-    if #legal == 0 then return _restore(nil) end
-    if #legal == 1 then return _restore(legal[1]) end
+    if not legalOk then
+        BM._lastShortCircuit = "legal-build-failed"
+        return _restore(nil)
+    end
+    if #legal == 0 then
+        BM._lastShortCircuit = "no-legal-moves"
+        return _restore(nil)
+    end
+    if #legal == 1 then
+        -- v0.11.19 (ultra-audit BM-03 follow-up): tag single-card-
+        -- shortcut path so /baloot ismctsdiag distinguishes
+        -- "0 worlds because no rollout needed" from "0 worlds because
+        -- budget cut on iter 1". Pre-fix users couldn't tell which.
+        BM._lastShortCircuit = "single-card"
+        BM._lastWorldsCompleted = 0
+        return _restore(legal[1])
+    end
+    BM._lastShortCircuit = nil  -- enters world loop normally
 
     local unseen = buildUnseen(seat)
     local scores = {}
