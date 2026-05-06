@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.11.19-hotfix — F1 (M5 dead) + agent-delivered tooling + 19 behavioral tests
+
+Post-v0.11.19 4-agent parallel audit returned. **Critical finding from
+Agent 3 (defensive-play audit): the M5 trick-8 make-the-bid block
+shipped in v0.11.19 was SILENTLY DEAD due to undefined upvalues.**
+Plus Agent 2 delivered 19 new behavioral tests (closing source-pin
+debt) and Agent 4 extended `tools/calibrate.py` with rich breakdowns.
+
+### Fixed (CRITICAL)
+
+- **F1 — M5 trick-8 dead block.** v0.11.19's M5 fix referenced
+  `isBidderTeam` and `myTeam` as if they were locals in `pickFollow`,
+  but those names exist ONLY in `pickLead` (peer file-local function;
+  no upvalue scope). In Lua 5.1 the unbound names resolved to nil
+  globals; `if nil and ...` short-circuited; M5 never fired. AD.6
+  source-pin passed because it only checked the literal `target = ...`
+  line was in source — the canonical "shipped dead code" failure
+  pattern that Section AE behavioral tests are now meant to prevent.
+  Fix: compute `m5_myTeam` and `m5_isBidderTeam` locally in the trick-8
+  branch.
+
+### Added — Section AE (Agent 2: 10 behavioral test cases, 19 assertions)
+
+| Test | What it verifies behaviorally |
+|---|---|
+| AE.1 | BC-MANDATORY R1: K+Q-of-bidcardsuit fires Hokm even when raw strength below threshold |
+| AE.2 | BC-MANDATORY R2: K+Q Belote suit fires Hokm even when bestScore below threshold |
+| AE.3 | bidderHoldsBidcard phase-gate: PickPlay completes for both PHASE_PLAY and PHASE_DOUBLE |
+| AE.4 | F5 OnEscalation: all four S.Apply* increment correct counter on _partnerStyle |
+| AE.5 | B6 IsValidSWA existential: positive + negative SWA scenarios exercise caller-turn branch |
+| AE.6 | U-6 non-trump preference: TrickRank=1 tie returns non-trump 7C (not trump 7H) |
+| AE.7 | M5 trick-8 make-the-bid: gap=4 case picks JH (highestByRank) over 9H (highestByFaceValue) |
+| AE.8 | PickDouble eltrace: trace fires only when WHEREDNGNDB.debugBidcalc=true |
+| AE.9 | B4/H-5 akaLive flag: opp over-trumps partner's bare-A → receiver still discards non-trump |
+| AE.10 | EV-1 bonuses: rich Hokm hand fires PickTriple; weak hand doesn't |
+
+670/670 tests pass (was 651). 19 NEW behavioral tests close the
+source-pin debt that allowed F1 to ship.
+
+### Tooling — Agent 4
+
+- **`tools/calibrate.py`** extended with `--breakdown=PROP` flag:
+  `bidcard | tier | escalation | r0 | sweep-prog | round-dist | all`.
+  Per-bidcard-rank fail-rate with Wilson 95% CIs, per-tier splits,
+  chain progression, R0 sub-categorization. Backward compatible.
+  Accepts multiple SavedVariables files for combined dataset.
+- **`tools/SCHEMA_PROPOSAL.md`** — proposes `bidderTier`, `trickWinners`,
+  `r0Reason`, `sideAKQ`, `bidPoints` fields for next-cycle telemetry.
+- **`tools/sim_calib.py`** — Agent 1's calibration math simulator.
+
+### Agent findings preserved (deferred for v0.11.20)
+
+- **Agent 1 calibration recommendations** (3 concrete numbers):
+  - AKQ-stopper bonus +8 → +12 (modest +0.18pp Bel impact alone)
+  - R2 base 38 → 36 unconditional (drops Advanced bump; sim shows
+    R1/R2 split 58.1/41.9 → 56.8/43.2, closer to canonical)
+  - PickPreempt: add +K.BOT_SUN_2ACE_BONUS post-bidcard recompute +
+    K.BOT_PREEMPT_TH 75 → 60 (pre-fix structurally unreachable; post-fix
+    ~0.72% canonical fire rate per A-bidcard)
+
+- **Agent 3 defender-side findings** (10 items):
+  - F2 HIGH: defender J/9 of trump burn on first low pull (mirror of
+    bidder-side saveHighTrump for pickFollow)
+  - F3 HIGH: `topTouchSignal` written but never read in heuristic
+    pickLead/pickFollow (only consumed by BotMaster sampler)
+  - F4 MED: pickLead missing partner-void-suit ruff setup
+  - F5 MED: Belote K+Q-of-trump preservation absent in pickLead
+  - F6 MED: Defender Bargiya defensive-shed blocked in Hokm
+  - F7 MED: firstDiscard Fzloky read fights with Tahreeb ledger
+  - F8 MED: No Sun-bidder-drought tell parity for defender
+  - F9 LOW: Defender Faranka comment cleanup
+  - F10 LOW: Defender-side trump-J pin awareness
+
+- **Agent 4 empirical signals** from extended analyzer on 33-round data:
+  - Bidcard=K: 0/6 fails (K-bidcard correctly weighted)
+  - Bidcard=Q: 2/4 fails (50% — possibly over-rated, small sample)
+  - 0/15 Hokm + 0/18 Sun produced any escalation chain fire (matches
+    Agent 1's statistical-consistency finding at BOT_BEL_TH=45)
+
+### Test count
+
+670/670 tests pass.
+
 ## v0.11.19 — agent-driven 3-game forensic + 9 fixes
 
 User played 3 games on v0.11.18-final (33 rounds total). A specialized

@@ -8,8 +8,18 @@ insights from the v0.8.3 telemetry table (`WHEREDNGNDB.history`).
 USAGE
 -----
     python tools/calibrate.py <path/to/WHEREDNGN.lua>
+    python tools/calibrate.py file1.lua file2.lua file3.lua   # combined
     python tools/calibrate.py --paste            # paste from clipboard
     python tools/calibrate.py --json out.json    # dump parsed rows as JSON
+
+    # Targeted breakdowns (printed in addition to the default report):
+    python tools/calibrate.py --breakdown=bidcard      one.lua
+    python tools/calibrate.py --breakdown=tier         one.lua
+    python tools/calibrate.py --breakdown=escalation   one.lua
+    python tools/calibrate.py --breakdown=r0           one.lua
+    python tools/calibrate.py --breakdown=sweep-prog   one.lua
+    python tools/calibrate.py --breakdown=round-dist   one.lua
+    python tools/calibrate.py --breakdown=all          one.lua
 
 Where to find SavedVariables on Windows:
     World of Warcraft\\_retail_\\WTF\\Account\\<ID>\\SavedVariables\\WHEREDNGN.lua
@@ -25,6 +35,15 @@ WHAT THIS PRODUCES
   • Score-position urgency: how often the bot was in clinch / desperate
   • Sweep frequency
   • Calibration recommendations vs current K.* thresholds
+
+  Extended (v2 schema rows + --breakdown):
+  • Per-bidcard-rank make/fail (does bidcard=A vs bidcard=7 matter?)
+  • Per-tier make/fail (Advanced/M3lm/Fzloky/SaudiMaster bot bidders)
+  • Escalation chain progression (Hokm -> Bel -> Triple -> Four -> Gahwa)
+  • R0 sub-categorization (forced/qaid/ashkal)
+  • Round-1 vs Round-2 distribution with Wilson 95% CIs
+  • Sweep-progression placeholder (requires schema extension; see
+    SCHEMA_PROPOSAL.md)
 
 INTERPRETATION
 --------------
@@ -42,11 +61,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 # Pattern that matches a Lua-table key=value pair. Handles both bare
@@ -177,7 +197,102 @@ def parse_value(v: str) -> Any:
         return v
 
 
-def report(rows: list[dict[str, Any]]) -> None:
+# ---------------------------------------------------------------------
+# Top-level WHEREDNGNDB flag parser. The history rows themselves do not
+# carry `bidderTier`; we infer tier-at-dump-time from the global flags
+# (`saudiMasterBots`, `fzlokyBots`, `m3lmBots`, `advancedBots`). This is
+# a best-effort fallback — if the user toggled tiers MID-DUMP some rows
+# will be mis-tagged. See SCHEMA_PROPOSAL.md for the proposed per-row
+# fix.
+# ---------------------------------------------------------------------
+_TIER_FLAG_RE = re.compile(
+    r'\[\s*"(saudiMasterBots|fzlokyBots|m3lmBots|advancedBots)"\s*\]\s*=\s*'
+    r'(true|false)'
+)
+
+
+def parse_top_level_tier(text: str) -> Optional[str]:
+    """Return the highest active tier flag at top-level scope, or None."""
+    flags: dict[str, bool] = {}
+    for m in _TIER_FLAG_RE.finditer(text):
+        flags[m.group(1)] = (m.group(2) == "true")
+    # Strict-extension order: SaudiMaster > Fzloky > M3lm > Advanced.
+    # Mirrors Bot.IsAdvanced/IsM3lm/etc. which all return true if a higher
+    # tier is set (Bot.lua:70-101).
+    if flags.get("saudiMasterBots"): return "SaudiMaster"
+    if flags.get("fzlokyBots"):      return "Fzloky"
+    if flags.get("m3lmBots"):        return "M3lm"
+    if flags.get("advancedBots"):    return "Advanced"
+    if flags:  # all explicitly false
+        return "Basic"
+    return None
+
+
+# ---------------------------------------------------------------------
+# Stats helpers (stdlib only).
+# ---------------------------------------------------------------------
+def wilson_ci(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score 95% CI for a proportion. Returns (lo, hi) in [0, 1].
+
+    Better than normal-approx for small samples (which is the whole point —
+    33 rounds is small). Pure stdlib.
+    """
+    if total == 0:
+        return (0.0, 0.0)
+    p = successes / total
+    n = total
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    lo = (centre - margin) / denom
+    hi = (centre + margin) / denom
+    return (max(0.0, lo), min(1.0, hi))
+
+
+def fmt_pct_ci(n: int, total: int) -> str:
+    if total == 0:
+        return "n/a"
+    p = 100 * n / total
+    lo, hi = wilson_ci(n, total)
+    return f"{p:5.1f}%  [95% CI {100*lo:4.1f}-{100*hi:4.1f}%]"
+
+
+# bidcard rank parser. The schema stores e.g. "8H", "KH", "AS" (rank then
+# suit, single-char each except 10 -> "T" or "10"). Older rows might be
+# empty string if bidCard was nil. We strip suit and return rank only.
+_BIDCARD_RE = re.compile(r"^([A234567891TJQK]+)([SHDC])$")
+
+
+def parse_bidcard_rank(s: Any) -> Optional[str]:
+    if not isinstance(s, str) or not s:
+        return None
+    m = _BIDCARD_RE.match(s)
+    if not m:
+        return None
+    rank = m.group(1)
+    if rank == "10":
+        rank = "T"
+    return rank
+
+
+# ---------------------------------------------------------------------
+# Reporting.
+# ---------------------------------------------------------------------
+def report(rows: list[dict[str, Any]],
+           tier_hints: Optional[dict[str, str]] = None,
+           breakdowns: Optional[set[str]] = None) -> None:
+    """
+    breakdowns: subset of {bidcard, tier, escalation, r0, sweep-prog,
+                          round-dist, all}. Empty / None -> default report only.
+    tier_hints: optional file-name -> tier mapping (used for per-tier
+                inference when rows lack `bidderTier`). Currently only
+                used for the global-tier fallback.
+    """
+    breakdowns = breakdowns or set()
+    if "all" in breakdowns:
+        breakdowns = {"bidcard", "tier", "escalation", "r0",
+                      "sweep-prog", "round-dist"}
+
     if not rows:
         print("no telemetry rows found.")
         print()
@@ -325,35 +440,379 @@ def report(rows: list[dict[str, Any]]) -> None:
           f"(typically 5-12% in skilled play)")
     print()
 
+    # -----------------------------------------------------------------
+    # Extended sections (gated on --breakdown).
+    # -----------------------------------------------------------------
+    if "round-dist" in breakdowns:
+        _report_round_distribution(rows)
+    if "bidcard" in breakdowns:
+        _report_bidcard_breakdown(rows)
+    if "tier" in breakdowns:
+        _report_tier_breakdown(rows, tier_hints or {})
+    if "escalation" in breakdowns:
+        _report_escalation_chain(rows)
+    if "r0" in breakdowns:
+        _report_r0_breakdown(rows)
+    if "sweep-prog" in breakdowns:
+        _report_sweep_progression(rows)
+
     print("if any of these is dramatically off (especially fail-rate or"
           " Bel-rate), thresholds need tuning. send this output back"
           " for refit.")
 
 
+# ---------------------------------------------------------------------
+# Extended report sections.
+# ---------------------------------------------------------------------
+def _report_round_distribution(rows: list[dict[str, Any]]) -> None:
+    """R1 vs R2 contract-type distribution with Wilson 95% CIs.
+
+    Suggestion #6: 24/9 user split = R1 73% vs canonical 50-60%. Surface
+    confidence intervals so we can tell whether the tilt is real or
+    sample noise.
+    """
+    print("--- round-1 vs round-2 distribution (Wilson 95% CIs) ---")
+    total = len(rows)
+    r1 = [r for r in rows if r.get("bidRound") == 1]
+    r2 = [r for r in rows if r.get("bidRound") == 2]
+    r0 = [r for r in rows if r.get("bidRound") == 0]
+    print(f"  R1 contracts: {len(r1):3d}/{total}  {fmt_pct_ci(len(r1), total)}")
+    print(f"  R2 contracts: {len(r2):3d}/{total}  {fmt_pct_ci(len(r2), total)}")
+    if r0:
+        print(f"  R0 contracts: {len(r0):3d}/{total}  {fmt_pct_ci(len(r0), total)}")
+    print()
+    # Per-round contract type mix.
+    for label, rs in (("R1", r1), ("R2", r2)):
+        if not rs:
+            continue
+        types = Counter(r.get("type", "?") for r in rs)
+        line = ", ".join(
+            f"{t}={n}/{len(rs)} ({fmt_pct_ci(n, len(rs))})"
+            for t, n in types.most_common()
+        )
+        print(f"  {label} type-mix: {line}")
+    print("  (canonical R1 share for mixed-tier play: 50-60%; deviation")
+    print("   beyond CI may indicate over-aggressive R1 bidding.)")
+    print()
+
+
+def _report_bidcard_breakdown(rows: list[dict[str, Any]]) -> None:
+    """Per-bidcard-rank make/fail rate.
+
+    Bot.PickBid uses `withBidcard` weighting; rank should affect outcomes.
+    Useful for verifying that bidcard=A produces dramatically different
+    make rates than bidcard=7.
+    """
+    print("--- per-bidcard-rank breakdown ---")
+    have = [r for r in rows if parse_bidcard_rank(r.get("bidCard"))]
+    missing = len(rows) - len(have)
+    if missing:
+        print(f"  ({missing} rows have no parseable bidCard -- pre-v0.9.6 or")
+        print("   redeal/forced rounds. Excluded from this section.)")
+    if not have:
+        print("  no bidCard data available.")
+        print()
+        return
+
+    # Rank order for display: A high, then K Q J T 9 8 7. (Plain order; trump
+    # order J 9 A T K Q 8 7 isn't relevant to bidcard signaling.)
+    rank_order = {r: i for i, r in enumerate(["A", "K", "Q", "J", "T", "9", "8", "7"])}
+
+    by_rank: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"made": 0, "failed": 0, "na": 0,
+                 "hokm": 0, "sun": 0, "ashkal": 0,
+                 "bel": 0, "triple": 0, "four": 0, "gahwa": 0}
+    )
+    for r in have:
+        rank = parse_bidcard_rank(r.get("bidCard"))
+        if rank is None:
+            continue
+        s = by_rank[rank]
+        outcome = r.get("bidderMade")
+        if outcome == 1: s["made"] += 1
+        elif outcome == 0: s["failed"] += 1
+        else: s["na"] += 1
+        t = r.get("type", "")
+        if t == "HOKM": s["hokm"] += 1
+        elif t == "SUN": s["sun"] += 1
+        elif t == "ASHKAL": s["ashkal"] += 1
+        if r.get("doubled") == 1: s["bel"] += 1
+        if r.get("tripled") == 1: s["triple"] += 1
+        if r.get("foured") == 1: s["four"] += 1
+        if r.get("gahwa") == 1: s["gahwa"] += 1
+
+    print(f"  {'rank':4s} {'n':>4s} {'made':>4s} {'fail':>4s} {'fail%':>16s}"
+          f"  Hokm/Sun/Ashk  Bel/Trp/Four/Gah")
+    for rank in sorted(by_rank, key=lambda r: rank_order.get(r, 99)):
+        s = by_rank[rank]
+        n = s["made"] + s["failed"] + s["na"]
+        decisive = s["made"] + s["failed"]
+        fail_str = fmt_pct_ci(s["failed"], decisive) if decisive else "n/a"
+        type_str = f"{s['hokm']:2d}/{s['sun']:2d}/{s['ashkal']:2d}"
+        esc_str = f"{s['bel']:2d}/{s['triple']:2d}/{s['four']:2d}/{s['gahwa']:2d}"
+        print(f"  {rank:4s} {n:4d} {s['made']:4d} {s['failed']:4d} "
+              f"{fail_str:>16s}  {type_str:>13s}  {esc_str}")
+    print()
+
+
+def _report_tier_breakdown(rows: list[dict[str, Any]],
+                            tier_hints: dict[str, str]) -> None:
+    """Per-tier bidder fail-rate split.
+
+    The schema does NOT carry per-row `bidderTier`. We use two fallbacks:
+      1. Per-row `bidderTier` if present (proposed schema addition).
+      2. File-level top-level `saudiMasterBots`/etc. flag, applied to all
+         BOT bidders in that file.
+
+    Human bidders are reported separately under "human" tier label.
+    """
+    print("--- per-tier bidder breakdown ---")
+    print("  (tier source: per-row 'bidderTier' field if present;")
+    print("   else file-level flag at dump time. See SCHEMA_PROPOSAL.md.)")
+    print()
+
+    # Group by tier.
+    by_tier: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        is_bot = r.get("bidderIsBot")
+        if is_bot == 0:
+            by_tier["human"].append(r)
+            continue
+        if is_bot == 1:
+            tier = r.get("bidderTier")
+            if not tier:
+                tier = r.get("_inferredTier")  # injected by main()
+            if not tier:
+                tier = "bot(unknown-tier)"
+            by_tier[tier].append(r)
+        else:
+            by_tier["unknown"].append(r)
+
+    if not by_tier:
+        print("  no bidder data.")
+        print()
+        return
+
+    print(f"  {'tier':18s} {'n':>4s} {'made':>4s} {'fail':>4s} {'fail%':>20s}")
+    # Order by descending sample size, then alpha.
+    for tier in sorted(by_tier, key=lambda t: (-len(by_tier[t]), t)):
+        rs = by_tier[tier]
+        made = sum(1 for r in rs if r.get("bidderMade") == 1)
+        failed = sum(1 for r in rs if r.get("bidderMade") == 0)
+        decisive = made + failed
+        fail_str = fmt_pct_ci(failed, decisive) if decisive else "n/a"
+        print(f"  {tier:18s} {len(rs):4d} {made:4d} {failed:4d} {fail_str:>20s}")
+    print()
+    # Sanity gate: signal if SaudiMaster has notably worse fail rate
+    # than Advanced.
+    def _fail_rate(tier: str) -> Optional[float]:
+        rs = by_tier.get(tier, [])
+        if len(rs) < 5: return None
+        m = sum(1 for r in rs if r.get("bidderMade") == 1)
+        f = sum(1 for r in rs if r.get("bidderMade") == 0)
+        if m + f == 0: return None
+        return 100 * f / (m + f)
+    sm = _fail_rate("SaudiMaster")
+    adv = _fail_rate("Advanced")
+    if sm is not None and adv is not None and sm > adv + 10:
+        print("  >> CALIBRATION SIGNAL: SaudiMaster bot fail-rate is more")
+        print("     than 10pp HIGHER than Advanced -- tier ordering may be")
+        print("     inverted. Investigate BotMaster.PickPlay (ISMCTS).")
+        print()
+
+
+def _report_escalation_chain(rows: list[dict[str, Any]]) -> None:
+    """Of N Hokm contracts, how many had Bel? Of those, Triple? etc.
+
+    Bel/Triple/Four/Gahwa form a strict chain — Triple cannot fire without
+    Bel having fired first, etc. This breakdown shows the per-rung
+    progression rate.
+    """
+    print("--- escalation chain progression ---")
+    hokm = [r for r in rows if r.get("type") == "HOKM"]
+    sun = [r for r in rows if r.get("type") == "SUN"]
+
+    def _chain(rs: list[dict[str, Any]], label: str):
+        n = len(rs)
+        if n == 0:
+            print(f"  {label}: 0 contracts.")
+            return
+        bel = [r for r in rs if r.get("doubled") == 1]
+        trp = [r for r in bel if r.get("tripled") == 1]
+        four = [r for r in trp if r.get("foured") == 1]
+        gah = [r for r in four if r.get("gahwa") == 1]
+        # Per-rung breakdown — denominator is parent rung where applicable.
+        print(f"  {label}: {n} contracts")
+        print(f"    Bel    : {len(bel):3d}/{n}    ({fmt_pct_ci(len(bel), n)})")
+        if len(bel):
+            print(f"    Triple : {len(trp):3d}/{len(bel)} (of Bel)  ({fmt_pct_ci(len(trp), len(bel))})")
+        if len(trp):
+            print(f"    Four   : {len(four):3d}/{len(trp)} (of Trp)  ({fmt_pct_ci(len(four), len(trp))})")
+        if len(four):
+            print(f"    Gahwa  : {len(gah):3d}/{len(four)} (of Four) ({fmt_pct_ci(len(gah), len(four))})")
+        # Outcome of escalated rounds — was the escalation justified?
+        if bel:
+            bel_made = sum(1 for r in bel if r.get("bidderMade") == 1)
+            bel_failed = sum(1 for r in bel if r.get("bidderMade") == 0)
+            decisive = bel_made + bel_failed
+            if decisive:
+                print(f"    Bel-round bidder outcome: made={bel_made} "
+                      f"failed={bel_failed}  fail-rate={fmt_pct_ci(bel_failed, decisive)}")
+
+    _chain(hokm, "Hokm")
+    _chain(sun, "Sun")
+    if not hokm and not sun:
+        print("  (no Hokm or Sun contracts.)")
+    print()
+
+
+def _report_r0_breakdown(rows: list[dict[str, Any]]) -> None:
+    """R0 sub-categorization: forced, qaid (round-2 forced), Ashkal.
+
+    `bidRound=0` collapses three distinct paths in the current schema:
+      1. forced=1 + type=HOKM/SUN: dealer forced to bid on R2-all-pass.
+      2. type=ASHKAL: bidder declared Ashkal (cannot win 4 tricks).
+      3. forced=1 + type=ASHKAL: forced Ashkal (qaid-style mandatory).
+
+    With the current schema we can distinguish (1) vs (2/3) via the
+    `forced` flag + `type`. Adding a `r0Reason` field would fully
+    disambiguate (see SCHEMA_PROPOSAL.md).
+    """
+    print("--- R0 (forced/qaid/ashkal) sub-categorization ---")
+    r0 = [r for r in rows if r.get("bidRound") == 0]
+    if not r0:
+        print("  no R0 rounds in dataset.")
+        print()
+        return
+    print(f"  total R0: {len(r0)}/{len(rows)}  ({100*len(r0)/len(rows):.1f}%)")
+
+    forced_hokm = [r for r in r0 if r.get("forced") == 1 and r.get("type") == "HOKM"]
+    forced_sun = [r for r in r0 if r.get("forced") == 1 and r.get("type") == "SUN"]
+    ashkal = [r for r in r0 if r.get("type") == "ASHKAL"]
+    other = [r for r in r0 if r not in forced_hokm and r not in forced_sun
+             and r not in ashkal]
+
+    def _line(label: str, rs: list[dict[str, Any]]):
+        if not rs: return
+        made = sum(1 for r in rs if r.get("bidderMade") == 1)
+        failed = sum(1 for r in rs if r.get("bidderMade") == 0)
+        n = len(rs)
+        decisive = made + failed
+        fail = fmt_pct_ci(failed, decisive) if decisive else "n/a"
+        print(f"    {label:18s}  n={n:3d}  made={made:3d} failed={failed:3d}  fail%={fail}")
+
+    _line("forced Hokm",  forced_hokm)
+    _line("forced Sun",   forced_sun)
+    _line("Ashkal",       ashkal)
+    _line("other R0",     other)
+    print()
+
+
+def _report_sweep_progression(rows: list[dict[str, Any]]) -> None:
+    """Sweep / Al-Kaboot pursuit tracking (REQUIRES SCHEMA EXTENSION).
+
+    Currently the row only reports the FINAL sweep outcome (`sweep="A"` /
+    `"B"` / `""`). To know whether the bidder team was on track at trick 3
+    we need a per-trick winner array. See SCHEMA_PROPOSAL.md.
+
+    For now we report only the final-outcome stats and flag the gap.
+    """
+    print("--- sweep progression (final outcome only -- see SCHEMA_PROPOSAL.md) ---")
+    total = len(rows)
+    a_sweep = sum(1 for r in rows if r.get("sweep") == "A")
+    b_sweep = sum(1 for r in rows if r.get("sweep") == "B")
+    no_sweep = total - a_sweep - b_sweep
+
+    print(f"  team-A sweep: {a_sweep:3d}/{total}  {fmt_pct_ci(a_sweep, total)}")
+    print(f"  team-B sweep: {b_sweep:3d}/{total}  {fmt_pct_ci(b_sweep, total)}")
+    print(f"  no sweep    : {no_sweep:3d}/{total}  {fmt_pct_ci(no_sweep, total)}")
+
+    # Per-bidder-team sweep (was bidder's team the one that swept?).
+    bid_team_sweep = 0
+    bid_team_swept_against = 0
+    for r in rows:
+        b = r.get("bidder")
+        sw = r.get("sweep", "")
+        if not b or not sw: continue
+        bid_team = "A" if b in (1, 3) else "B"
+        if sw == bid_team:
+            bid_team_sweep += 1
+        else:
+            bid_team_swept_against += 1
+    swept_total = bid_team_sweep + bid_team_swept_against
+    if swept_total:
+        print(f"  of {swept_total} sweep rounds: bidder swept {bid_team_sweep}, "
+              f"got swept {bid_team_swept_against}  (Al-Kaboot signal)")
+    print()
+    print("  (Per-trick progression requires `tricksWonByTeam` field in the")
+    print("   row schema -- see SCHEMA_PROPOSAL.md item #3.)")
+    print()
+
+
+# ---------------------------------------------------------------------
+# Main.
+# ---------------------------------------------------------------------
 def main() -> int:
     p = argparse.ArgumentParser(description="WHEREDNGN calibration analyzer.")
-    p.add_argument("path", nargs="?",
-                   help="path to SavedVariables/WHEREDNGN.lua")
+    p.add_argument("paths", nargs="*",
+                   help="path(s) to SavedVariables/WHEREDNGN.lua "
+                        "(multiple files combine into one dataset)")
     p.add_argument("--json", metavar="OUT",
                    help="dump parsed rows as JSON")
     p.add_argument("--paste", action="store_true",
                    help="read Lua content from stdin (paste)")
+    p.add_argument("--breakdown", default="",
+                   help="comma-separated subset of "
+                        "{bidcard,tier,escalation,r0,sweep-prog,round-dist,all}")
     args = p.parse_args()
 
+    breakdowns: set[str] = set()
+    if args.breakdown:
+        for tok in args.breakdown.split(","):
+            tok = tok.strip()
+            if tok:
+                breakdowns.add(tok)
+
+    rows: list[dict[str, Any]] = []
     if args.paste:
         text = sys.stdin.read()
-    elif args.path:
-        text = Path(args.path).read_text(encoding="utf-8", errors="replace")
+        new_rows = parse_lua_table_block(text)
+        tier = parse_top_level_tier(text)
+        if tier:
+            for r in new_rows:
+                if r.get("bidderIsBot") == 1 and not r.get("bidderTier"):
+                    r["_inferredTier"] = tier
+        rows.extend(new_rows)
+    elif args.paths:
+        for path in args.paths:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+            new_rows = parse_lua_table_block(text)
+            tier = parse_top_level_tier(text)
+            if tier:
+                for r in new_rows:
+                    if r.get("bidderIsBot") == 1 and not r.get("bidderTier"):
+                        r["_inferredTier"] = tier
+                    r["_sourceFile"] = Path(path).name
+            rows.extend(new_rows)
+            print(f"# loaded {len(new_rows)} rows from {path}"
+                  f"{' (tier='+tier+')' if tier else ''}",
+                  file=sys.stderr)
     else:
         p.print_help()
         return 2
 
-    rows = parse_lua_table_block(text)
     if args.json:
-        Path(args.json).write_text(json.dumps(rows, indent=2))
-        print(f"wrote {len(rows)} rows to {args.json}")
+        # Strip private `_inferredTier`/`_sourceFile` so JSON consumers
+        # see only canonical fields plus the (also canonical) bidderTier
+        # if it was set.
+        clean = []
+        for r in rows:
+            d = {k: v for k, v in r.items() if not k.startswith("_")}
+            clean.append(d)
+        Path(args.json).write_text(json.dumps(clean, indent=2))
+        print(f"wrote {len(clean)} rows to {args.json}")
     else:
-        report(rows)
+        report(rows, breakdowns=breakdowns)
     return 0
 
 

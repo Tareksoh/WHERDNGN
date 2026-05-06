@@ -3577,10 +3577,21 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- — even if it sacrifices a few face-value points.
             -- Specifically: bidder team at 60-80 raw points without
             -- this trick = trick 8 is a make-or-break swing.
-            if isBidderTeam and S.s.tricks then
+            -- v0.11.19-hotfix F1 (post-ship audit Agent 3): the v0.11.19
+            -- M5 ship referenced `isBidderTeam` and `myTeam` as if they
+            -- were locals in pickFollow, but those names exist only in
+            -- pickLead. In Lua 5.1 the unbound names resolved to nil
+            -- globals; `if nil and ...` short-circuited; M5 never
+            -- fired. AD.6 source-pin passed because it only checked
+            -- the literal `target = ...` line was in source. Now
+            -- compute these locally inside pickFollow.
+            local m5_myTeam = R.TeamOf(seat)
+            local m5_isBidderTeam = (contract.bidder
+                and m5_myTeam == R.TeamOf(contract.bidder)) or false
+            if m5_isBidderTeam and S.s.tricks then
                 local raw = 0
                 for _, t in ipairs(S.s.tricks) do
-                    if R.TeamOf(t.winner) == myTeam then
+                    if R.TeamOf(t.winner) == m5_myTeam then
                         for _, p in ipairs(t.plays or {}) do
                             raw = raw + (C.PointValue(p.card, contract) or 0)
                         end

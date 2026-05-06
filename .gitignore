@@ -16,3 +16,4 @@ cards/__pycache__/
 
 # Whisper audio cache (large binaries, regeneratable)
 docs/strategy/_transcripts/whisper_audio/
+tools/__pycache__/
