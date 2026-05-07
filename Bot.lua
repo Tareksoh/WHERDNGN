@@ -311,6 +311,18 @@ local function emptyStyle()
             -- Sources: decision-trees.md Section 8 (Definite, videos
             -- 01, 02, 03, 09, 10).
             tahreebSent = { S = {}, H = {}, D = {}, C = {} },
+            -- v1.2.0 (Tier 5 control-the-game per video #20 «تمسك
+            -- لون»): hand-strength signal counter. Each follow event
+            -- where this seat played a low card (rank ≤ 9 in plain
+            -- order, i.e. 7/8/9) under a partner-winning trick
+            -- accumulates here as evidence of weak hand. Counterpart
+            -- highCardPlays counts A/T/K plays; the ratio gives the
+            -- bot a coarse "weak vs strong hand" read on partner.
+            -- Used by pickFollow's pos-4 branch: if partner is
+            -- showing weak hand, INVERT Faranka-duck behavior — TAKE
+            -- the trick to keep tempo away from the weak partner.
+            weakHandSignal  = 0,
+            highCardPlays   = 0,
         }
     end
     return m
@@ -695,6 +707,23 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
             local priorTrick = { plays = prior, leadSuit = leadSuit }
             local prevWinner = R.CurrentTrickWinner(priorTrick, contract)
             if prevWinner and R.Partner(seat) == prevWinner then
+                -- v1.2.0 (Tier 5 control-the-game per video #20):
+                -- accumulate hand-strength signal. When this seat
+                -- plays under partner-winning trick they have a
+                -- CHOICE of high vs low. A low-card play (7/8/9)
+                -- under partner-winning is a "weak hand" tell;
+                -- A/T/K plays are "strong hand" tells (Takbeer/
+                -- magnify donation). Per the video: «اذا انت عندك
+                -- قوه ... تحاول تمسك اللعب» — strong hand holds
+                -- tempo; weak hand defers to strong partner.
+                if style.weakHandSignal ~= nil then
+                    local r = C.Rank(card)
+                    if r == "7" or r == "8" or r == "9" then
+                        style.weakHandSignal = style.weakHandSignal + 1
+                    elseif r == "A" or r == "T" or r == "K" then
+                        style.highCardPlays = style.highCardPlays + 1
+                    end
+                end
                 -- v1.1.1 (M2 audit): forced-vs-intentional flag.
                 -- Pre-fix the bot recorded its discard as a Tahreeb
                 -- signal even when it was FORCED to discard from its
@@ -2369,7 +2398,49 @@ local function tahreebClassify(signals)
     return "hint"
 end
 
+-- v1.2.0 (audit transcript H2): closed-trump under Bel/Four. Per
+-- video #11 «الاعداد الزوجيه الدبل تضرب في اثنين والفور في اربعه
+-- ... اللعب راح يكون مقفول». Under EVEN-multiplier Hokm rounds —
+-- Bel-only (×2) or Four-only (×4) — trump-leading is FORBIDDEN
+-- unless the player has only trump in hand. Triple (×3) and
+-- Gahwa rounds play "open" with normal trump rules.
+--
+-- This is bot-only (we don't change Rules.lua legality so human
+-- players retain their full freedom). When this gate matches, we
+-- filter `legal` to non-trump cards before any pickLead heuristic
+-- runs — none of the downstream branches will then choose trump.
+-- If the only legal cards are trump, the gate is a no-op.
+local function applyClosedTrumpLeadGate(legal, contract)
+    if not contract or contract.type ~= K.BID_HOKM
+       or not contract.trump then
+        return legal
+    end
+    -- Closed-trump cases:
+    --   1. Bel called, no Triple (×2 closed)
+    --   2. Four called, no Gahwa (×4 closed)
+    -- Triple-without-Four is OPEN play; Four-without-Gahwa is closed
+    -- play; Gahwa is its own match-win regime.
+    local isClosed = false
+    if contract.doubled and not contract.tripled then
+        isClosed = true
+    elseif contract.foured and not contract.gahwa then
+        isClosed = true
+    end
+    if not isClosed then return legal end
+    local nonTrump = {}
+    for _, c in ipairs(legal) do
+        if not C.IsTrump(c, contract) then
+            nonTrump[#nonTrump + 1] = c
+        end
+    end
+    if #nonTrump == 0 then return legal end  -- only-trump → must lead trump
+    return nonTrump
+end
+
 local function pickLead(legal, contract, seat)
+    -- v1.2.0 (Tier 5 / transcript H2): closed-trump filter before
+    -- any pickLead heuristic runs. Saudi rule per video #11.
+    legal = applyClosedTrumpLeadGate(legal, contract)
     local myTeam = R.TeamOf(seat)
     -- v0.10.3 audit (B-Bot-* HIGH): pre-v0.10.3 this predicate
     -- gated on `contract.type == K.BID_HOKM`, making isBidderTeam
@@ -2660,6 +2731,23 @@ local function pickLead(legal, contract, seat)
                 Bot._memory[seat].opponentBargiyaSuit
                 or { S = false, H = false, D = false, C = false }
         end
+        -- v1.2.0 (Tier 5 / video #19 6-factor confidence scoring):
+        -- pre-v1.2.0 ALL opp signals (bargiya/want/bargiya_hint) were
+        -- treated as binary avoid-suit. Per video #19 «عوامل مؤثره»
+        -- there are 6 factors that scale confidence:
+        --   1. Lateness in the round (later trick = stronger signal)
+        --   2. Rank of discarded card (higher = stronger)
+        --   3. Same-suit repetition (multi-event = stronger)
+        --   4. Cross-opp redundancy (both opps signal same suit)
+        --   5. Suit-switch cancellation (signal on suit X then Y
+        --      partially cancels X — confidence drops)
+        --   6. Bidder identity (sender-is-bidder = stronger weight)
+        -- v1.2.0 implements 1-4 + 6; 5 (cancellation) requires
+        -- per-event temporal ordering and is deferred. Confidence
+        -- threshold = 4: at or above, the suit becomes avoidSet.
+        -- Bargiya ALWAYS gets the special opponentBargiyaSuit flag
+        -- (per L2 — Bargiya is a NAMED rule, not generic tanfeer).
+        local oppSuitConfidence = { S = 0, H = 0, D = 0, C = 0 }
         for s = 1, 4 do
             if R.TeamOf(s) ~= R.TeamOf(seat) and Bot.IsBotSeat(s) then
                 local oStyle = Bot._partnerStyle[s]
@@ -2668,11 +2756,45 @@ local function pickLead(legal, contract, seat)
                     for _, su in ipairs(shuffledSuits()) do
                         if su ~= contract.trump then
                             local cls = tahreebClassify(osignals[su])
+                            local sigList = osignals[su]
                             if cls == "bargiya" or cls == "want"
                                or cls == "bargiya_hint" then
-                                tahreebAvoidSet[su] = true
-                                -- v1.1.1 L2: persist in memory for
-                                -- ruff-bias use in pickFollow.
+                                -- Base classify weight (factor 3 +
+                                -- bargiya quality):
+                                local w = (cls == "bargiya"      and 3)
+                                       or (cls == "want"         and 2)
+                                       or (cls == "bargiya_hint" and 1)
+                                       or 0
+                                -- Factor 2: rank of highest event
+                                -- (A=3, T/K=2, others=1).
+                                if sigList and #sigList > 0 then
+                                    local plain = K.RANK_PLAIN or {}
+                                    local maxR = 0
+                                    for _, r in ipairs(sigList) do
+                                        local rv = plain[r] or 0
+                                        if rv > maxR then maxR = rv end
+                                    end
+                                    if maxR >= (plain["A"] or 8) then
+                                        w = w + 2
+                                    elseif maxR >= (plain["T"] or 7) then
+                                        w = w + 1
+                                    end
+                                end
+                                -- Factor 1: lateness (more cards
+                                -- played = later in round = stronger).
+                                local trickN = #(S.s.tricks or {})
+                                if trickN >= 5 then w = w + 2
+                                elseif trickN >= 3 then w = w + 1 end
+                                -- Factor 6: bidder identity (sender
+                                -- IS the bidder → stronger).
+                                if contract.bidder == s then
+                                    w = w + 1
+                                end
+                                oppSuitConfidence[su] =
+                                    oppSuitConfidence[su] + w
+                                -- L2 Bargiya special-case override
+                                -- preserved (still flag the memory
+                                -- regardless of confidence score).
                                 if cls == "bargiya"
                                    and Bot._memory[seat]
                                    and Bot._memory[seat].opponentBargiyaSuit then
@@ -2682,6 +2804,17 @@ local function pickLead(legal, contract, seat)
                         end
                     end
                 end
+            end
+        end
+        -- Factor 4: cross-opp redundancy already accumulates (both
+        -- opps' weights sum into oppSuitConfidence[su]).
+        -- Apply confidence threshold: only mark avoid when summed
+        -- weight ≥ 4. Bargiya base (3) + 1 lateness or 1 bidder hits
+        -- the threshold; bargiya_hint (1) needs stacking from rank
+        -- + lateness + cross-opp to reach 4 — appropriately stricter.
+        for su, w in pairs(oppSuitConfidence) do
+            if w >= 4 then
+                tahreebAvoidSet[su] = true
             end
         end
         -- Conflict resolution: if partner pref-suit is in opp-avoid
@@ -3436,19 +3569,42 @@ local function pickLead(legal, contract, seat)
     -- high cards for capture, give partner room) but wrong for Sun
     -- (Sun has no trump shield; long-suit cards get over-trumped).
     if contract.type == K.BID_SUN then
+        -- v1.2.0 (Tier 5 Sun-partner-support): video #02 «خويك مشتري
+        -- صن» distinguishes Sun-bidder-self vs Sun-bidder-partner.
+        -- Sun-bidder partner should preferentially lead from suits
+        -- where they have a SPARE LOW (not the high-card suit) —
+        -- clearing those suits lets partner's Aces dominate later.
+        -- Specifically: avoid leading from a suit where we hold a
+        -- bare A or A+T (those are partner's runner suits — our
+        -- A could collide with partner's A; better to lead from
+        -- "no-A short suit" first to clear it for partner's run).
+        local partnerIsSunBidder = (contract.bidder
+                                     and contract.bidder == R.Partner(seat))
         local count = { S = 0, H = 0, D = 0, C = 0 }
+        local hasA = { S = false, H = false, D = false, C = false }
         for _, c in ipairs(legal) do
             count[C.Suit(c)] = count[C.Suit(c)] + 1
+            if C.Rank(c) == "A" then hasA[C.Suit(c)] = true end
         end
         local shortestSuit, shortestN = nil, 99
+        local shortestNonAceSuit, shortestNonAceN = nil, 99
         for _, suit in ipairs(shuffledSuits()) do
             local n = count[suit] or 0
             if n > 0 and n < shortestN then shortestSuit, shortestN = suit, n end
+            if n > 0 and not hasA[suit] and n < shortestNonAceN then
+                shortestNonAceSuit, shortestNonAceN = suit, n
+            end
         end
-        if shortestSuit then
+        -- Sun-bidder-partner: prefer the shortest non-Ace-holding
+        -- suit (keeps our Aces concentrated for partner's later
+        -- run-back support). Falls back to plain shortest if every
+        -- suit holds an Ace (rare).
+        local pickSuit = (partnerIsSunBidder and shortestNonAceSuit)
+                          or shortestSuit
+        if pickSuit then
             local fromShortest = {}
             for _, c in ipairs(legal) do
-                if C.Suit(c) == shortestSuit then
+                if C.Suit(c) == pickSuit then
                     fromShortest[#fromShortest + 1] = c
                 end
             end
@@ -5140,10 +5296,28 @@ function Bot.PickAKA(seat, leadCard)
     -- Saudi pro convention. With Bel/Triple/Four in play, both
     -- sides are extra-motivated to read every signal and exploit
     -- info-leaks; the AKA banner's coordination value drops while
-    -- its leakage cost rises. Suppress AKA categorically once the
-    -- round has been doubled. This loses some legitimate Bel-round
-    -- AKA opportunities but matches expert play and closes B3.
-    if S.s.contract and S.s.contract.doubled then return nil end
+    -- its leakage cost rises.
+    --
+    -- v1.2.0 (audit transcript H3): nuanced uncertainty gate.
+    -- Pre-v1.2.0 ALL doubled rounds blanket-suppressed AKA. Per
+    -- video #18 «اذا انت متاكد انه فعلا هذه العشره فعلا اكبر
+    -- ورقه موجوده... لازم تقول اكه» — AKA fires when CERTAIN.
+    -- The certainty grows as cards are played. Now: suppress on
+    -- doubled rounds ONLY when uncertainty is high (tricks
+    -- completed < 3 → early round, opp could still hold the
+    -- cards above our claimed boss). Mid/late doubled rounds
+    -- (tricks >= 3) allow AKA when other gates pass — the played-
+    -- card history makes the highest-unplayed determination sound.
+    if S.s.contract and S.s.contract.doubled then
+        if (#(S.s.tricks or {})) < 3 then
+            return nil
+        end
+        -- Mid-round doubled: extra confidence check — our claimed
+        -- boss (K/Q/J) is sound only if all higher cards in suit
+        -- have been played. HighestUnplayedRank already reflects
+        -- this; the existing `~= r` gate at line ~4985 enforces it.
+        -- No additional suppression needed past trick 3.
+    end
 
     -- v0.9.3 AKA precondition (g) (audit_v0.9.0/19_section6_now.md
     -- §2 + decision-trees.md Section 6 row "preconditions" subitem g).

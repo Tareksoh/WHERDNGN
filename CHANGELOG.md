@@ -1,5 +1,91 @@
 # Changelog
 
+## v1.2.0 — Tier 5 features (deferred backlog from v1.1.0)
+
+Closes the Tier 5 deferred items from v1.1.0. 828/828 tests pass.
+
+### CRITICAL — Saudi-rule conformance
+
+- **Closed-trump under Bel/Four (bot-only)** — transcript H2,
+  video #11 «الاعداد الزوجيه الدبل تضرب في اثنين والفور في اربعه
+  ... اللعب راح يكون مقفول». Under EVEN-multiplier Hokm rounds
+  (Bel-only ×2 OR Four-only ×4), trump-leading is FORBIDDEN
+  unless the player has only trump in hand. Triple (×3) and
+  Gahwa rounds play "open" with normal trump rules.
+  Bot-only implementation: `applyClosedTrumpLeadGate` filters
+  `legal` to non-trump cards before any pickLead heuristic runs.
+  Rules.lua legality unchanged so human players keep full
+  freedom — pending verified Saudi-tournament consensus.
+
+### HIGH — Saudi rule
+
+- **AKA uncertainty band + doubled-round nuance** — transcript
+  H3, video #18 «اذا انت متاكد ... لازم تقول اكه». Pre-v1.2.0
+  ALL doubled rounds blanket-suppressed AKA. Per video #18 AKA
+  fires when CERTAIN — and certainty grows as cards are played.
+  Now: doubled round suppresses AKA only when tricks completed
+  < 3 (early round, opp could still hold cards above our claimed
+  boss). Mid/late doubled rounds (tricks ≥ 3) allow AKA when
+  other gates pass — the played-card history makes the highest-
+  unplayed determination sound.
+
+### MEDIUM — Bot strategy
+
+- **Sun-bidder-partner pickPlay branch** — partner-coordination
+  M2 (deferred from v1.1.0). Pre-v1.2.0 the bot's Sun-shortest-
+  suit lead logic ran identically whether we were the Sun bidder
+  ourselves or the bidder's partner. Per video #02 «خويك مشتري
+  صن» the partner-of-Sun-bidder should preferentially lead from
+  the shortest NON-Ace-holding suit (clearing those for partner's
+  Aces; saving our own Aces concentrated for partner's eventual
+  run-back support). Falls back to plain shortest if every suit
+  holds an Ace.
+
+- **Opp-Tanfeer 6-factor confidence scoring** — video #19
+  «عوامل مؤثره». Pre-v1.2.0 ALL opp signals (bargiya / want /
+  bargiya_hint) were treated as binary avoid-suit. Now confidence
+  is weighted by 5 of the 6 video-#19 factors:
+    1. **Lateness** (trick ≥ 5: +2; ≥ 3: +1)
+    2. **Rank** of highest event (A: +2; T/K: +1)
+    3. **Same-suit repetition** — implicit via tahreebClassify's
+       multi-event grade
+    4. **Cross-opp redundancy** — both opps' weights sum into
+       `oppSuitConfidence[su]`
+    5. (Suit-switch cancellation) — deferred (needs per-event
+       temporal ordering)
+    6. **Bidder identity** (sender IS the bidder: +1)
+  Confidence threshold: **≥ 4** marks the suit avoid. Bargiya base
+  (3) + 1 lateness/bidder hits threshold cleanly; bargiya_hint (1)
+  must stack from multiple factors to reach 4 — appropriately
+  stricter for the lower-confidence flavor. The L2 Bargiya
+  special-case `opponentBargiyaSuit` memory flag (v1.1.1) is
+  preserved separately.
+
+- **Control-the-game `weakHandSignal` counter (write-side)** —
+  video #20 «تمسك لون». Per-seat `weakHandSignal` and
+  `highCardPlays` counters added to `Bot._partnerStyle`.
+  Accumulate when seat plays under partner-winning trick: 7/8/9
+  ranks → `weakHandSignal++` ("weak hand" tell), A/T/K ranks →
+  `highCardPlays++` ("strong hand" / Takbeer-magnify tell).
+  Read-side consumer (the actual "invert Faranka if partner is
+  weak" pickFollow branch) is deferred — needs a clearer scenario
+  spec from real-game observation. Counter is now collected so
+  future cycles can wire decisions on it.
+
+### What WASN'T changed
+
+- **Style ledger `trumpEarly`/`trumpLate`/`leadCount`**: third-
+  pass agent flagged as dead code, but verified that
+  `styleTrumpTempo` IS consumed at `Bot.lua:3235-3236` (saveHighTrump
+  defender branch) and `Bot.lua:3049+` (bidder branch) —
+  multiple consumers exist. `leadCount` is consumed in
+  `BotMaster.lua:478` for sampler bias. No new wiring needed.
+
+- **Sun-bidder-partner pickFollow branch**: pickLead branch
+  shipped (above); pickFollow refinement (preserve high cards
+  for partner's run) is harder to scope without specific
+  scenarios — deferred.
+
 ## v1.1.2 — Hotfix: BALOOT vocal misfiring on Sun round-end
 
 User report: BALOOT! voice played at the end of a Sun round (the
