@@ -1,5 +1,161 @@
 # Changelog
 
+## v1.1.0 — Bot human-like unpredictability + partner-coordination upgrades
+
+User reported the bot felt "too predictable and rough." Three audit
+agents reviewed `Bot.lua` (5800+ lines) against 47 video transcripts
+and surfaced 25 prioritized findings (10 unpredictability + 12
+partner-coordination + 3 NEW from full-transcript pass). This
+release ships the high-impact fixes across 5 tiers. 821/821 tests
+pass.
+
+### CRITICAL — predictability fixes (Tier 1)
+
+- **Tie-break randomization (HIGH-1)**: pre-v1.1.0 the bot had only
+  2 calls to `math.random` in 5800 lines — once cards were dealt
+  every play was deterministic. Tied cards in `lowestByRank` /
+  `highestByRank` / `highestByFaceValue` now use a `pickRandomTied`
+  helper that randomizes among final ties. Removes the "if bot
+  played 7♠ instead of 7♥, the 7♥ must be later in their dealt
+  hand" hand-order broadcast tell.
+
+- **`shuffledSuits()` iterator (HIGH-3 / MED-8)**: the codebase had
+  21 separate `for _, su in ipairs({"S","H","D","C"})` loops that
+  selected the FIRST matching suit — meaning Sun mardoofa probe
+  always opened with A♠, Bargiya/want-arm/T-4 dump always preferred
+  ♠, Tanfeer always picked ♠. New `shuffledSuits()` Fisher-Yates
+  helper replaced ALL 21 sites; first-match selection no longer
+  encodes alphabet order.
+
+- **AKA fixes (HIGH-6 + partner-coord H2)**: TWO bugs converged:
+    - REMOVED the `IsBotSeat(partner)` gate in `Bot.PickAKA` — pre-
+      fix the bot would NEVER announce AKA when its teammate was
+      human (you!), even though video #18's 4 hard preconditions
+      don't include partner-tier. Saudi-flavor bot that never AKA's
+      because partner is human is the OPPOSITE of Saudi flavor.
+    - ADDED Saudi-Master tier probabilistic withhold (~10% in non-
+      clutch states, trick ≤ 4) so silence-as-signal is broken. Per
+      video #19 «دائما خصم يحتفظ قوته في الاخر».
+
+- **Tahreeb-receiver T-supply for `count >= 3` (partner-coord H1)**:
+  pre-fix the receiver branch only fired the T-lead for count==1/2,
+  falling through to `lowestByRank` for count >= 3 — but video #10
+  («نسبه نجاحه كبيره اللي هي 100%») treats small→big tahreeb as
+  100% reliable. Receiver with T MUST lead it back to partner
+  regardless of count when sender's flavor is "want".
+
+### HIGH — tactical sophistication (Tier 2)
+
+- **`pickFollow.deceptiveOverplay` (HIGH-2 — video #08 "smart
+  move")**: completely unimplemented before v1.1.0 (only `TODO`
+  docstrings). When pos-4 in Sun with multiple winners in led suit,
+  ~40% probabilistic at M3lm+ tier the bot now plays a higher
+  winner (preferring the J — the "Shayb") instead of the cheapest.
+  Video #08 verbatim: «راح تلعب اكبر ورقه موجوده عندك ... ما يسويها
+  الا واحد محترف في البلد». Anti-trigger: tahreeb signal active
+  (preserve hand integrity).
+
+- **AKA-receiver tracks `mem.partnerAkaSuit` (partner-coord H3)**:
+  pre-fix once partner's AKA boss fell, receiver had no memory of
+  the touching-honors continuation. Now `partnerAkaSuit[suit] =
+  true` on AKA observation; pickLead later treats it as a "want"
+  pref (lead it back once the boss has fallen, helping partner
+  cash the next-down rank).
+
+- **"Biggest mistake" rule extended to Hokm (partner-coord H4)**:
+  the v0.7.2 video #09 absolute-lowest-mistake rule was Sun-only
+  pre-v1.1.0. Video doesn't condition on contract type — receiver
+  discipline is contract-agnostic. Now fires for Hokm partner-
+  winning follows when leadSuit ≠ trump (don't pollute trump-pull
+  semantics).
+
+- **pickFollow preserves secondary winners in partner's meld suit
+  (partner-coord H6)**: only HALF of v1.0.0 C#1 actually shipped —
+  pickLead avoided leading partner's meld suit but pickFollow
+  happily dumped K/Q of that suit as Tahreeb fodder. Now: when
+  Hokm + can't-win + earlier-than-pos-4, filter discardable to
+  exclude high cards (A/K/Q) in partner's declared sequence-meld
+  suit.
+
+### HIGH — NEW from third-pass full-transcript audit
+
+- **Hokm 9-of-trump consecutive/non-consecutive Takbeer rule
+  (video #22 R3/R4)**: the most valuable unwired Hokm-trump-follow
+  rule. Trump rank order: J(8) > 9(7) > A(6) > T(5) > K(4) > Q(3) >
+  8(2) > 7(1). Adjacent-below-9 = A only. When following trump
+  not at pos-4, if we hold 9-of-trump alongside a NON-rank-adjacent
+  lower trump (T/K/Q/8/7), play the lower instead — fishing opp's
+  J/A; the 9 wins next trick. Verbatim: «لو عندك تسعه + ثمانيه ...
+  ما تلعب التسعه ... لان ما عندك حافه فوقها». Misplay leaks 14 raw
+  points per occurrence.
+
+### MEDIUM — variance smoothing (Tier 3 + Tier 4)
+
+- **Tasgheer near-lowest variance (Tier 3 / HIGH-5)**: pre-fix the
+  losing-side dump always played absolute lowest — broadcasted
+  hand contents 100% of the time per video #05's «بنسبه ٩٠%»
+  read. ~7% probabilistic at M3lm+ tier (non-clutch state,
+  ≤3-rank-gap to second-lowest), the bot now plays second-lowest
+  instead — corrupts opp's reads without burning a real winner.
+
+- **Variable jitter per escalation rung (Tier 4 / MED-7)**: pre-fix
+  all four rungs used the same ±10 jitter. Now Bel ±10 (BEL_JITTER),
+  Triple ±12, Four ±15, Gahwa ±18 — escalation chain is no longer
+  linearly correlated. Per video #11 the rungs are explicitly
+  separate strategic acts («الفور على القهوه»).
+
+- **Bel-fear piecewise ramp (Tier 4 / MED-9)**: pre-fix +8 cliff at
+  cumulative > 100 was a hard line. Now: 0 below 90 / lerp to +8
+  by 105 / +8 in 105–130 / lerp back to +3 by 152. Matches the
+  band of changing aggression video #25 describes.
+
+- **Round-1 position-aware conservatism (Tier 4 / MED-10)**: pre-
+  fix R1 first-lap-pass discipline (video #25 «اذا كنت تشك خلاص
+  امرر») wasn't wired. Now bidPos 1 (info-poor) gets +5 thresh
+  bias, bidPos 2 +3, bidPos 3-4 unchanged.
+
+### Tests
+
+821/821 pass. Existing test suite covers correctness; the v1.1.0
+changes add controlled non-determinism that's harder to pin via
+unit tests. Behavioral verification is via real-game observation
+(the user's primary use case).
+
+### NOT shipped (still backlogged for v1.1.1+)
+
+The third-pass agent surfaced two more high-value rules that need
+a more careful Rules.lua/state touch:
+
+- **Closed-trump under Bel ×2 / Four ×4 (transcript H2)**: per
+  video #11 «اللعب راح يكون مقفول ... ما يربع بحكم» — under even-
+  multiplier Hokm, trump-leading is forbidden unless you have only
+  trump in hand. Requires legality-layer change in `Rules.lua` +
+  bot pickLead branch. Deferred — touches the must-follow rule
+  semantics.
+
+- **Tier 5 features**:
+  - "Control the game" tempo management (video #20) — needs new
+    `handStrength` signal tracking
+  - Opp-Tanfeer 6-factor confidence scoring (video #19)
+  - Sun-bidder-partner play branches (currently in sampler only)
+
+- **AKA uncertainty band tightening (transcript H3)**: when round
+  is doubled AND `S.HighestUnplayedRank` confidence is uncertain
+  (a higher card might be in opp's hand), AKA risks a Qaid. Adjacent
+  to the v1.1.0 probabilistic withhold; deferred.
+
+- **Tahreeb sender forced-vs-intentional flag (transcript M2)**:
+  bot's `tahreebSent` log doesn't distinguish forced discards from
+  intentional signals. Partner-side reads can be misled when bot
+  was forced to dump from its strong suit. Adjacent to Tier 2;
+  deferred.
+
+- **Style ledger dead-code wiring** (Tier 3 partial / partner-coord
+  H7): `trumpEarly`, `trumpLate`, `leadCount`, `aceLate` are
+  written by observers but only read by the BotMaster sampler —
+  not by `pickPlay` decisions. Wiring these into pickLead trump-
+  pull urgency and pickFollow opp-reads is a focused v1.1.1 cycle.
+
 ## v1.0.12 — Reverse Al-Kaboot canonical rule (D HIGH-3)
 
 User supplied the canonical Saudi PDF text for reverse-Kaboot

@@ -124,6 +124,28 @@ local function jitter(base, amp)
     return base + math.random(-amp, amp)
 end
 
+-- v1.1.0 (audit unpredictability HIGH-3 / MED-8): randomized suit
+-- iteration. Pre-v1.1.0 the codebase had 21 separate
+-- `for _, su in ipairs({ "S", "H", "D", "C" })` loops that selected
+-- the FIRST matching suit — meaning Sun mardoofa probe always
+-- opened with A♠, Bargiya/want-arm/T-4 dump always preferred ♠,
+-- Tanfeer suit always picked ♠. Spades-first iteration was a
+-- broadcast tell (a careful human reads "if bot's Tahreeb landed
+-- on hearts, then their spades is too short or they would have
+-- picked spades"). This helper returns a shuffled copy of the
+-- 4-suit set so first-match selection no longer encodes alphabet
+-- order. Per video #21: «التسعه ثمانيه سبعه ثاني نفس الشيء... لا
+-- تفرق» — substitutable choices should look substitutable.
+local function shuffledSuits()
+    local s = { "S", "H", "D", "C" }
+    -- Fisher-Yates in-place shuffle.
+    for i = 4, 2, -1 do
+        local j = math.random(i)
+        s[i], s[j] = s[j], s[i]
+    end
+    return s
+end
+
 -- ---------------------------------------------------------------------
 -- Card memory + partner inference
 -- ---------------------------------------------------------------------
@@ -152,6 +174,16 @@ local function emptyMemory()
             -- knows. Re-announcing on subsequent leads of the same
             -- suit is noise. Reset per round.
             akaSent = { S = false, H = false, D = false, C = false },
+            -- v1.1.0 (audit partner-coord H3): receiver-side memory of
+            -- partner's AKA emissions. When partner AKA's suit X,
+            -- receiver records here so subsequent pickLead can treat
+            -- X as a "want" suit (lead it back once partner's boss
+            -- falls) and pickFollow can preserve high cards in X for
+            -- partner's eventual lead-back. Per video #18 the AKA
+            -- holder typically holds touching honors (boss + next-
+            -- down rank) so receiver should keep the next-down to
+            -- support a clean partner-runner.
+            partnerAkaSuit = { S = false, H = false, D = false, C = false },
             -- Audit Tier 4 (B-99): hand-annul (Kawesh) inference.
             -- After trick 3, if all opponent plays are rank 7/8/9, the
             -- opponent likely has a Kawesh hand they declined to call.
@@ -962,7 +994,7 @@ local function sunMinShape(hand)
     end
     if aceCount >= 2 then return true end
     if aceCount == 1 then
-        for _, su in ipairs({ "S", "H", "D", "C" }) do
+        for _, su in ipairs(shuffledSuits()) do
             if hasA[su] and hasT[su] then return true end  -- mardoofa
         end
     end
@@ -984,7 +1016,7 @@ local function beloteSuit(hand)
         if r == "K" then hasK[su] = true
         elseif r == "Q" then hasQ[su] = true end
     end
-    for _, su in ipairs({ "S", "H", "D", "C" }) do
+    for _, su in ipairs(shuffledSuits()) do
         if hasK[su] and hasQ[su] then return su end
     end
     return nil
@@ -1056,7 +1088,7 @@ local function aceCountAndMardoofa(hand)
         elseif r == "T" then hasT[su] = true end
     end
     local mardoofaCount = 0
-    for _, su in ipairs({ "S", "H", "D", "C" }) do
+    for _, su in ipairs(shuffledSuits()) do
         if hasA[su] and hasT[su] then mardoofaCount = mardoofaCount + 1 end
     end
     return aceCount, mardoofaCount
@@ -1170,7 +1202,7 @@ local function sunStrength(hand)
     -- a top card (A or K) "walk" in Sun once opponents are out — bonus
     -- +6 per card beyond 4 in such suits. Without this, a 6-card suit
     -- AKQxxx scored barely above 18; should be ~30+.
-    for _, su in ipairs({ "S", "H", "D", "C" }) do
+    for _, su in ipairs(shuffledSuits()) do
         if count[su] >= 5 and (hasA[su] or hasK[su]) then
             s = s + (count[su] - 4) * 6
         end
@@ -1185,7 +1217,7 @@ local function sunStrength(hand)
     end
     if Bot.IsAdvanced() then
         local penalty = 0
-        for _, su in ipairs({ "S", "H", "D", "C" }) do
+        for _, su in ipairs(shuffledSuits()) do
             if count[su] < 2 or not honors[su] then penalty = penalty + 10 end
         end
         -- v0.11.9 user-arbitrated (bidcalc trace): cap reduced 18 → 8.
@@ -1656,12 +1688,50 @@ function Bot.PickBid(seat)
     -- ≥100 (Sun-Bel-gate context)" (Common, video 25).
     if S.s.cumulative then
         local myTotal = S.s.cumulative[R.TeamOf(seat)] or 0
-        -- v0.11.18 audit BG-1: strict > 100 (matches R.CanBel's strict
-        -- check — opp cannot Bel us at our.cum == 100 exactly). Pre-
-        -- fix the >= 100 check was one point too eager, biasing thSun
-        -- up by +8 even at the boundary where opp couldn't Bel us.
-        if myTotal > K.SUN_BEL_CUMULATIVE_GATE then
+        -- v1.1.0 (audit unpredictability MED-9): Bel-fear piecewise
+        -- ramp instead of single +8 cliff. Pre-fix at cumulative=100
+        -- normal Sun bid; at 101 threshold +8 — a hard cliff that a
+        -- careful human could read. Per video #25 conventions are a
+        -- BAND of changing aggression: cautious approaching 100,
+        -- looser past 130 (re-armed for clinch). Replace the cliff
+        -- with a piecewise ramp:
+        --   below 90:    +0 (no Bel-fear bias)
+        --   90 to 105:   lerp 0 → +8 (rising caution as opp can Bel)
+        --   105 to 130:  +8 (full caution band)
+        --   130 to 152:  lerp +8 → +3 (re-aggressive near clinch)
+        if myTotal < 90 then
+            -- no bias
+        elseif myTotal <= 105 then
+            thSun = thSun + math.floor(8 * (myTotal - 90) / 15)
+        elseif myTotal <= 130 then
             thSun = thSun + 8
+        else
+            local span = math.max(0, math.min(22, myTotal - 130))
+            thSun = thSun + 8 - math.floor(5 * span / 22)
+        end
+    end
+
+    -- v1.1.0 (audit unpredictability MED-10): round-1 position-aware
+    -- conservatism. Pre-fix R1 first-lap-pass discipline (per video
+    -- #25 «اول دور... اذا كنت تشك خلاص امرر») wasn't wired — bidPos
+    -- 1 (info-poor) bid identical hands the same way as bidPos 4
+    -- (info-rich). Now: at bidPos 1 add +5 to thHokmR1/thSun,
+    -- bidPos 2 +3, bidPos 3-4 unchanged. Re-introduces the "wait
+    -- and see" Saudi convention as observable bot personality.
+    if round == 1 and S.s.dealer then
+        local d = S.s.dealer
+        local order = { (d % 4) + 1, ((d + 1) % 4) + 1,
+                        ((d + 2) % 4) + 1, d }
+        local bidPos = 0
+        for i, st in ipairs(order) do
+            if st == seat then bidPos = i; break end
+        end
+        if bidPos == 1 then
+            thHokmR1 = thHokmR1 + 5
+            thSun = thSun + 5
+        elseif bidPos == 2 then
+            thHokmR1 = thHokmR1 + 3
+            thSun = thSun + 3
         end
     end
 
@@ -2034,22 +2104,41 @@ end
 -- Play
 -- ---------------------------------------------------------------------
 
+-- v1.1.0 (audit unpredictability HIGH-1): tie-break randomization.
+-- Pre-v1.1.0 every "lowest/highest" pick used strict `<` / `>` so a
+-- tie defaulted to hand-iteration order — a careful human reads
+-- "if bot played 7♠ instead of 7♥ to discard, the 7♥ must be later
+-- in their dealt hand" → the bot's choice broadcasts hand-order.
+-- This helper picks RANDOMLY among cards tied for the chosen score.
+local function pickRandomTied(tiedSet)
+    if #tiedSet == 1 then return tiedSet[1] end
+    return tiedSet[math.random(#tiedSet)]
+end
+
 local function lowestByRank(cards, contract)
-    local best, bestR = cards[1], math.huge
+    local bestR = math.huge
     for _, c in ipairs(cards) do
         local r = C.TrickRank(c, contract)
-        if r < bestR then best, bestR = c, r end
+        if r < bestR then bestR = r end
     end
-    return best
+    local tied = {}
+    for _, c in ipairs(cards) do
+        if C.TrickRank(c, contract) == bestR then tied[#tied + 1] = c end
+    end
+    return pickRandomTied(tied)
 end
 
 local function highestByRank(cards, contract)
-    local best, bestR = cards[1], -1
+    local bestR = -1
     for _, c in ipairs(cards) do
         local r = C.TrickRank(c, contract)
-        if r > bestR then best, bestR = c, r end
+        if r > bestR then bestR = r end
     end
-    return best
+    local tied = {}
+    for _, c in ipairs(cards) do
+        if C.TrickRank(c, contract) == bestR then tied[#tied + 1] = c end
+    end
+    return pickRandomTied(tied)
 end
 
 -- v0.5.1 C-4 helper: pick the highest-FACE-VALUE card from a list,
@@ -2057,18 +2146,26 @@ end
 -- LAST_TRICK_BONUS (+10) plus the card's face value matters more
 -- than its trick-rank (winning the last trick with a Ten = 10 face
 -- + 10 bonus = 20 effective vs winning with a 7 = 0+10 = 10).
+-- v1.1.0: randomize among final ties (rank+face both equal).
 local function highestByFaceValue(cards, contract)
-    local best, bestPts, bestRank = cards[1], -1, -1
+    local bestPts, bestRank = -1, -1
     for _, c in ipairs(cards) do
         local pts = C.PointValue(c, contract) or 0
         if pts > bestPts then
-            best, bestPts, bestRank = c, pts, C.TrickRank(c, contract)
+            bestPts, bestRank = pts, C.TrickRank(c, contract)
         elseif pts == bestPts then
             local r = C.TrickRank(c, contract)
-            if r > bestRank then best, bestRank = c, r end
+            if r > bestRank then bestRank = r end
         end
     end
-    return best
+    local tied = {}
+    for _, c in ipairs(cards) do
+        local pts = C.PointValue(c, contract) or 0
+        if pts == bestPts and C.TrickRank(c, contract) == bestRank then
+            tied[#tied + 1] = c
+        end
+    end
+    return pickRandomTied(tied)
 end
 
 -- v0.5.1 H-4 helper: do we currently hold BOTH K and Q of trump
@@ -2395,7 +2492,7 @@ local function pickLead(legal, contract, seat)
             if r == "A" then hasA[su] = true; aceCard[su] = c
             elseif r == "T" then hasT[su] = true end
         end
-        for _, su in ipairs({ "S", "H", "D", "C" }) do
+        for _, su in ipairs(shuffledSuits()) do
             if hasA[su] and hasT[su] and aceCard[su] then
                 return aceCard[su]
             end
@@ -2456,7 +2553,7 @@ local function pickLead(legal, contract, seat)
             local signals = pStyle and pStyle.tahreebSent
             if signals then
                 local best, bestScore, bestFlavor = nil, 0, nil
-                for _, su in ipairs({ "S", "H", "D", "C" }) do
+                for _, su in ipairs(shuffledSuits()) do
                     -- Don't bias toward trump (leading trump has its
                     -- own dedicated logic below).
                     if su ~= contract.trump then
@@ -2502,7 +2599,7 @@ local function pickLead(legal, contract, seat)
                 local oStyle = Bot._partnerStyle[s]
                 local osignals = oStyle and oStyle.tahreebSent
                 if osignals then
-                    for _, su in ipairs({ "S", "H", "D", "C" }) do
+                    for _, su in ipairs(shuffledSuits()) do
                         if su ~= contract.trump then
                             local cls = tahreebClassify(osignals[su])
                             if cls == "bargiya" or cls == "want"
@@ -2537,6 +2634,40 @@ local function pickLead(legal, contract, seat)
                                      -- hand (no must-follow constraint)
             if handSize >= 5 then
                 tahreebPrefSuit = nil
+            end
+        end
+        -- v1.1.0 (audit partner-coord H3): if no Tahreeb pref but
+        -- partner AKA'd a non-trump suit earlier, treat that suit
+        -- as a "want" lead-back signal. Partner held the boss in
+        -- that suit + canonically the next-down rank (touching
+        -- honors); leading it back lets partner cash both. Only
+        -- fires when partner's AKA boss is no longer the highest
+        -- unplayed (i.e., it has fallen) — otherwise let partner
+        -- run their own boss first.
+        if not tahreebPrefSuit and Bot._memory then
+            local mem = Bot._memory[seat]
+            local pas = mem and mem.partnerAkaSuit
+            if pas then
+                for _, su in ipairs(shuffledSuits()) do
+                    if pas[su] and su ~= contract.trump then
+                        -- Only lead-back once partner's boss has
+                        -- fallen. HighestUnplayedRank tracks unplayed
+                        -- rank per suit; if it's < A AND we don't
+                        -- hold the boss ourselves, partner's boss
+                        -- has been played.
+                        local hi = S.HighestUnplayedRank
+                                    and S.HighestUnplayedRank(su)
+                        if hi and hi ~= "A" then
+                            -- Partner's AKA boss landed on a non-A
+                            -- (K/Q/J etc.); the rank-above-hi has
+                            -- already been played → safe to lead
+                            -- back without overtaking.
+                            tahreebPrefSuit = su
+                            tahreebPrefFlavor = "want"
+                            break
+                        end
+                    end
+                end
             end
         end
     end
@@ -2589,8 +2720,22 @@ local function pickLead(legal, contract, seat)
                     -- Lead T; otherwise opp tafranaks to capture later.
                     return tCard
                 end
+            elseif hasT and tahreebPrefFlavor == "want" then
+                -- v1.1.0 (audit partner-coord H1): Tahreeb-receiver
+                -- T-supply for count >= 3. Pre-fix this branch fell
+                -- through to `lowestByRank` whenever count >= 3, even
+                -- when partner emitted a CONFIRMED `want` (small→big)
+                -- Tahreeb signal — which video #10 calls "100%
+                -- reliable" («نسبه نجاحه كبيره اللي هي 100%»). The
+                -- small-to-big sender is signalling no-T; receiver
+                -- with T MUST lead it back to partner regardless of
+                -- the count of cover. Restricted to "want" flavor
+                -- (the canonical small→big confirmed signal); other
+                -- Tahreeb flavors keep the legacy low-lead behavior.
+                return tCard
             else
-                -- 3+ cards OR no T: lead low (legacy).
+                -- 3+ cards OR no T (or count >= 3 without "want"
+                -- flavor): lead low (legacy).
                 return lowestByRank(fromPref, contract)
             end
         end
@@ -2681,7 +2826,7 @@ local function pickLead(legal, contract, seat)
         local partner = R.Partner(seat)
         local pStyle = Bot._partnerStyle[partner]
         if pStyle and pStyle.topTouchSignal then
-            for _, suit in ipairs({ "S", "H", "D", "C" }) do
+            for _, suit in ipairs(shuffledSuits()) do
                 local sig = pStyle.topTouchSignal[suit]
                 local hasSignal = sig and not sig.broke
                                   and (sig.nextDown or sig.cleared)
@@ -2789,7 +2934,7 @@ local function pickLead(legal, contract, seat)
         if Bot.IsAdvanced() and S.s.tricks and #S.s.tricks >= 3
            and contract.trump and Bot._memory then
             local sideAcesLeft = 0
-            for _, su in ipairs({ "S", "H", "D", "C" }) do
+            for _, su in ipairs(shuffledSuits()) do
                 if su ~= contract.trump then
                     -- Check if Ace of this suit has been played OR is in our hand.
                     local aceCard = "A" .. su
@@ -3223,7 +3368,7 @@ local function pickLead(legal, contract, seat)
             count[C.Suit(c)] = count[C.Suit(c)] + 1
         end
         local shortestSuit, shortestN = nil, 99
-        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+        for _, suit in ipairs(shuffledSuits()) do
             local n = count[suit] or 0
             if n > 0 and n < shortestN then shortestSuit, shortestN = suit, n end
         end
@@ -3252,7 +3397,7 @@ local function pickLead(legal, contract, seat)
         -- now applied as a tie-break — avoid-suit only wins if it
         -- exceeds the best non-avoid by ≥2.
         local longest, longestN = nil, 0
-        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+        for _, suit in ipairs(shuffledSuits()) do
             local n = suitCount[suit] or 0
             if suit ~= fzlokyAvoidSuit and n > longestN then
                 longest, longestN = suit, n
@@ -3266,7 +3411,7 @@ local function pickLead(legal, contract, seat)
         end
         if not longest then
             -- Avoid-suit was our only non-trump. Use it.
-            for _, suit in ipairs({ "S", "H", "D", "C" }) do
+            for _, suit in ipairs(shuffledSuits()) do
                 local n = suitCount[suit] or 0
                 if n > longestN then longest, longestN = suit, n end
             end
@@ -3431,6 +3576,16 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- Now fires whenever AKA was called on the led suit, regardless
     -- of who's currently winning.
     local akaLive = explicitAKA or implicitAKA
+    -- v1.1.0 (audit partner-coord H3): record partner's AKA suit in
+    -- receiver memory so pickLead can prefer leading it back later
+    -- (touching-honors continuation) and pickFollow can preserve
+    -- high cards in that suit for partner's lead-back.
+    if akaLive and trick.leadSuit and Bot._memory then
+        local mem = Bot._memory[seat]
+        if mem and mem.partnerAkaSuit then
+            mem.partnerAkaSuit[trick.leadSuit] = true
+        end
+    end
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM and contract.trump
        and trick.leadSuit and akaLive then
         local discards = {}
@@ -3658,7 +3813,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- pin). The Sun gate stays as-is; the Hokm "lead-back"
             -- semantic is carried by the AKA announce flow instead.
             if contract.type == K.BID_SUN then
-                for _, su in ipairs({ "S", "H", "D", "C" }) do
+                for _, su in ipairs(shuffledSuits()) do
                     local cards = bySuit[su]
                     -- Need ≥2 of the suit (Ace + cover) AND Ace present.
                     if #cards >= 2 then
@@ -3696,7 +3851,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- (rather than early-return) so T-4 below still runs in
             -- Hokm — T-4 is contract-agnostic (refusal signal).
             if contract.type == K.BID_SUN then
-            for _, su in ipairs({ "S", "H", "D", "C" }) do
+            for _, su in ipairs(shuffledSuits()) do
                 local cards = bySuit[su]
                 if #cards >= 3 then
                     local hasWinner = false
@@ -3738,7 +3893,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- T, or A, fall through to lowestByRank (preserves the
             -- valuable card; partner still gets a discard signal,
             -- just not the over-eager Tahreeb encoding).
-            for _, su in ipairs({ "S", "H", "D", "C" }) do
+            for _, su in ipairs(shuffledSuits()) do
                 local cards = bySuit[su]
                 if #cards == 2 then
                     -- Find the larger by trick rank (in non-trump,
@@ -3758,8 +3913,8 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
 
         -- v0.7.2 Section 4 rule 1B (Definite, video 09 "biggest
-        -- mistake"): Sun + partner-winning + we must follow + we
-        -- can't beat their lead AND smother above didn't fire (no
+        -- mistake"): partner-winning + we must follow + we can't
+        -- beat their lead AND smother above didn't fire (no
         -- A/T/K/Q/J of led suit to donate). Default lowestByRank
         -- would return absolute lowest — but per video #09 that's
         -- the single biggest mistake in Baloot: it signals "I'm
@@ -3768,12 +3923,24 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- partner's option to lead this suit back to us, knowing
         -- we may have a higher card to take.
         --
-        -- Only fires for Sun contracts (Hokm partner-winning has
-        -- different conventions). Only fires when there's an
-        -- in-suit follow with ≥2 cards (otherwise lowestByRank's
-        -- single-card return is forced anyway).
-        -- Sources: decision-trees.md Section 4 rule 1B (Definite, 09).
-        if contract.type == K.BID_SUN and trick.leadSuit then
+        -- v1.1.0 (audit partner-coord H4): EXTENDED to Hokm. Pre-fix
+        -- this branch was Sun-only ("Hokm partner-winning has
+        -- different conventions") but video #09 explicitly does NOT
+        -- condition on contract type for the absolute-lowest mistake
+        -- — the re-entry signal corruption is contract-agnostic.
+        -- Hokm carve-out: don't fire when partner led trump (the
+        -- "low signals out" semantic doesn't apply to trump-pull)
+        -- or when we're forced to ruff (must-trump situation).
+        local rule1bApplies = false
+        if trick.leadSuit then
+            if contract.type == K.BID_SUN then
+                rule1bApplies = true
+            elseif contract.type == K.BID_HOKM
+                   and trick.leadSuit ~= contract.trump then
+                rule1bApplies = true
+            end
+        end
+        if rule1bApplies then
             local follow = {}
             for _, c in ipairs(legal) do
                 if C.Suit(c) == trick.leadSuit then
@@ -4101,6 +4268,42 @@ local function pickFollow(legal, hand, trick, contract, seat)
             if hasKillerInLegal and #nonKillerTrump > 0 then
                 return lowestByRank(nonKillerTrump, contract)
             end
+        end
+    end
+
+    -- v1.1.0 (audit transcript-cross-check H1): Hokm 9-of-trump
+    -- consecutive/non-consecutive Takbeer rule (video #22 R3/R4 —
+    -- the most valuable unwired Hokm-trump-follow rule).
+    -- When following trump and we hold 9 of trump alongside a
+    -- non-rank-adjacent lower trump, prefer the lower trump. Hokm
+    -- trump rank order: J(8) > 9(7) > A(6) > T(5) > K(4) > Q(3) >
+    -- 8(2) > 7(1). Adjacent-below-9 = A only. So with 9 + (T/K/Q/8/7)
+    -- the lower is non-adjacent → play the lower to fish opp's J/A,
+    -- save the 9 for next trick.
+    -- Verbatim: «لو عندك تسعه + ثمانيه ... ما تلعب التسعه ... لان
+    -- ما عندك حافه فوقها» = "if you have 9+8, don't play the 9 —
+    -- you have no edge (rank-adjacent partner) above it."
+    -- Skipped at pos-4 (trick is closing — 9 can win immediately
+    -- with no fishing benefit) and when must-ruff legality forces
+    -- the only-trump path.
+    if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+       and contract.trump and trick.leadSuit == contract.trump
+       and not lastSeat then
+        local nineOfTrump
+        local nonAdjacentLowers = {}
+        for _, c in ipairs(legal) do
+            if C.Suit(c) == contract.trump then
+                local r = C.Rank(c)
+                if r == "9" then
+                    nineOfTrump = c
+                elseif r == "T" or r == "K" or r == "Q"
+                       or r == "8" or r == "7" then
+                    nonAdjacentLowers[#nonAdjacentLowers + 1] = c
+                end
+            end
+        end
+        if nineOfTrump and #nonAdjacentLowers > 0 then
+            return lowestByRank(nonAdjacentLowers, contract)
         end
     end
 
@@ -4436,6 +4639,56 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
             return highestByFaceValue(winners, contract)
         end
+        -- v1.1.0 (audit unpredictability HIGH-2): deceptiveOverplay
+        -- (video #08 "smart move"). When pos-4 in Sun with multiple
+        -- winners in the led suit, sometimes play a HIGHER winner
+        -- instead of the cheapest — to confuse opp's read on our
+        -- remaining holdings. Pros use this sparingly to corrupt
+        -- opp's prior on our suit strength: video #08 verbatim
+        -- «راح تلعب اكبر ورقه موجوده عندك فبالتالي راح تلعب الشايب
+        --  ... ليش لعبت الشايب ايش الهدف من هذه الحركه ... ما
+        --  يسويها الا واحد محترف في البلد» — "the move only a
+        -- country pro does." Anti-triggers: tahreeb signal active
+        -- (preserve hand integrity for partner coordination); not
+        -- the absolute-pinned cards (K+Q of trump are Belote).
+        -- M3lm-gated. ~40% probabilistic so opp can't read the
+        -- counter-tell either.
+        if Bot.IsM3lm and Bot.IsM3lm()
+           and contract.type == K.BID_SUN and #winners >= 2 then
+            local lowWin = lowestByRank(winners, contract)
+            local lowSuit = C.Suit(lowWin)
+            local lowRank = C.TrickRank(lowWin, contract)
+            local higher = {}
+            for _, c in ipairs(winners) do
+                if c ~= lowWin and C.Suit(c) == lowSuit
+                   and C.TrickRank(c, contract) > lowRank then
+                    higher[#higher + 1] = c
+                end
+            end
+            if #higher > 0 then
+                local partner = R.Partner(seat)
+                local pStyle = Bot._partnerStyle
+                                and Bot._partnerStyle[partner]
+                local tahreebActive = false
+                if pStyle and pStyle.tahreebSent then
+                    for _, evt in pairs(pStyle.tahreebSent) do
+                        if evt and (evt.flavor == "want"
+                                    or evt.flavor == "bargiya") then
+                            tahreebActive = true; break
+                        end
+                    end
+                end
+                if not tahreebActive and math.random() < 0.40 then
+                    -- Pick the deceptive overplay card. Prefer the
+                    -- "Shayb" (J of suit) per video #08 framing —
+                    -- it's the canonical deceptive sacrifice card.
+                    for _, c in ipairs(higher) do
+                        if C.Rank(c) == "J" then return c end
+                    end
+                    return higher[math.random(#higher)]
+                end
+            end
+        end
         -- Default / pos 4 / no advanced: cheapest winner.
         return lowestByRank(winners, contract)
     end
@@ -4453,6 +4706,45 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
         end
         if #discardable > 0 then
+            -- v1.1.0 (audit partner-coord H6): preserve secondary
+            -- winners in partner's declared sequence-meld suit. If
+            -- partner declared a 50/100 meld in suit Y, partner has
+            -- the meld cards (T-J-Q-K or J-Q-K-A range); our high
+            -- cards in Y are SECONDARY winners that pair with
+            -- partner's eventual lead-back. Don't dump them as
+            -- Tahreeb-fodder. Filter discardable to non-meld-suit
+            -- cards if we have any.
+            local meldSuit
+            if S.s.meldsByTeam then
+                local partner = R.Partner(seat)
+                local pTeam = R.TeamOf(partner)
+                for _, m in ipairs(S.s.meldsByTeam[pTeam] or {}) do
+                    if m.declaredBy == partner and m.kind
+                       and m.kind:sub(1, 3) == "seq" and m.suit
+                       and m.suit ~= contract.trump then
+                        meldSuit = m.suit
+                        break
+                    end
+                end
+            end
+            if meldSuit then
+                local nonMeldDiscards = {}
+                for _, c in ipairs(discardable) do
+                    -- Keep only non-meld-suit OR low-value meld-suit
+                    -- cards (Q+ in meld suit is "secondary winner",
+                    -- preserve; 7/8/9/T below partner's meld floor
+                    -- safe to dump).
+                    local r = C.Rank(c)
+                    local isHighInMeld = (C.Suit(c) == meldSuit)
+                                          and (r == "A" or r == "K" or r == "Q")
+                    if not isHighInMeld then
+                        nonMeldDiscards[#nonMeldDiscards + 1] = c
+                    end
+                end
+                if #nonMeldDiscards > 0 then
+                    return lowestByRank(nonMeldDiscards, contract)
+                end
+            end
             return lowestByRank(discardable, contract)
         end
     end
@@ -4573,7 +4865,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- Find a wanted suit + a low card in it. Prefer the first
             -- non-trump suit where we have BOTH a high card (A or T)
             -- AND at least one low (non-A non-T) to spare.
-            for _, su in ipairs({ "S", "H", "D", "C" }) do
+            for _, su in ipairs(shuffledSuits()) do
                 local skipTrump = (contract.type == K.BID_HOKM
                                    and su == contract.trump)
                 if not skipTrump then
@@ -4601,6 +4893,39 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
     end
 
+    -- v1.1.0 (audit unpredictability HIGH-5): tasgheer near-lowest
+    -- variance. Pre-fix the bot's losing-side dump was always the
+    -- absolute lowest — a careful human reads "K-play implies no
+    -- Q/J/9/8/7 below it" with 100% confidence (video #05 verbatim
+    -- «بنسبه كبيره جدا ما عنده الاكه بنسبه ٩٠%»). Pros occasionally
+    -- mis-tasgheer to corrupt opp's reads. ~7% probabilistic at
+    -- M3lm+ tier, suppressed in must-make scenarios (cumulative
+    -- near clinch/loss). When firing, plays the SECOND-lowest of
+    -- the dump pile — gives a "near-truth" that erodes opp's
+    -- certainty without burning a real winner.
+    if Bot.IsM3lm and Bot.IsM3lm() and #legal >= 2
+       and S.s.cumulative then
+        local myTeam = R.TeamOf(seat)
+        local meCum = S.s.cumulative[myTeam] or 0
+        local oppCum = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
+        local target = S.s.target or 152
+        local clutch = (oppCum >= target - 25) or (meCum >= target - 25)
+        if not clutch and math.random() < 0.07 then
+            local sorted = {}
+            for _, c in ipairs(legal) do sorted[#sorted + 1] = c end
+            table.sort(sorted, function(a, b)
+                return C.TrickRank(a, contract) < C.TrickRank(b, contract)
+            end)
+            -- Don't fire if 2nd-lowest is dramatically higher
+            -- (it's a real winner, not a near-lowest substitute).
+            local lowR = C.TrickRank(sorted[1], contract)
+            local secondR = C.TrickRank(sorted[2], contract)
+            if secondR - lowR <= 3 then
+                return sorted[2]
+            end
+        end
+    end
+
     return lowestByRank(legal, contract)
 end
 
@@ -4619,16 +4944,18 @@ function Bot.PickAKA(seat, leadCard)
     if not S.HighestUnplayedRank then return nil end
     local trump = S.s.contract.trump
     if not trump then return nil end
-    -- Audit Tier 3 (B-33 / B-60): AKA is a bot-side coordination
-    -- convention. The signal coordinates with bot partners who read
-    -- the per-round `akaSent` flag and suppress over-trumping the
-    -- announced suit. Human partners typically don't recognize the
-    -- AKA banner as a "don't ruff this suit" instruction — at best
-    -- the signal is wasted, at worst it leaks information to
-    -- opponents (who see the banner too) and gives them a free read
-    -- on which suit we hold the boss in. Suppress AKA when the
-    -- partner is human.
-    if not Bot.IsBotSeat(R.Partner(seat)) then return nil end
+    -- v1.1.0 (audit partner-coord H2): REMOVED the IsBotSeat(partner)
+    -- gate. Pre-fix the bot suppressed AKA whenever its teammate was
+    -- human, citing "humans don't recognize the AKA banner". But video
+    -- 18's 4 hard preconditions don't list partner-tier; AKA is a
+    -- canonical Saudi VOCAL signal («اذا انت متاكد انه فعلا هذه
+    -- العشره فعلا اكبر ورقه موجوده... لازم تقول اكه») that even a
+    -- human teammate can read once they see the banner. Suppression
+    -- on tier was a UX over-conservatism — a "Saudi-flavor bot" that
+    -- never AKA's because partner is human is the OPPOSITE of Saudi
+    -- flavor. The existing precondition (f) at line below (partner-
+    -- void-in-trump check) already handles the case where AKA is
+    -- coordinationally meaningless.
     local r = C.Rank(leadCard)
     local su = C.Suit(leadCard)
     -- AKA is non-trump only.
@@ -4728,6 +5055,29 @@ function Bot.PickAKA(seat, leadCard)
                            or (math.abs(oppCum - meCum) <= raceGap)  -- close race
             if not clutch then return nil end
         else
+            return nil
+        end
+    end
+    -- v1.1.0 (audit unpredictability HIGH-6): Saudi-Master tier
+    -- probabilistic withhold. Pre-fix `Bot.PickAKA` ALWAYS returned
+    -- the suit when conditions matched — silence-as-signal: opp
+    -- learns "if bot didn't AKA, bot doesn't hold the boss". Per
+    -- video #19 («دائما خصم يحتفظ قوته في الاخر عشان كذا اول تنفير
+    -- الخصم دائما يكون نسبته اقل من غيره») pros use first-discard
+    -- variance to corrupt the opp's prior. ~10% withhold at
+    -- Saudi-Master tier when the round isn't decisive (no near-
+    -- clinch / not opp near-win) preserves coordination value most
+    -- of the time while breaking the silence-as-signal contract.
+    if Bot.IsSaudiMaster and Bot.IsSaudiMaster()
+       and S.s.cumulative and trickNum <= 4 then
+        local myTeam = R.TeamOf(seat)
+        local meCum = S.s.cumulative[myTeam] or 0
+        local oppCum = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
+        local target = S.s.target or 152
+        local clutch = (oppCum >= target - 25)
+                       or (meCum >= target - 25)
+                       or (math.abs(oppCum - meCum) <= 20)
+        if not clutch and math.random() < 0.10 then
             return nil
         end
     end
@@ -4837,6 +5187,16 @@ end
 -- ±10 so the Bel decision isn't a hard cliff at exactly the configured
 -- value (was the #1 "predictable bot" complaint).
 local BEL_JITTER = 10
+-- v1.1.0 (audit unpredictability MED-7): per-rung jitter magnitude.
+-- Pre-fix all four escalation rungs used the same ±10 — making the
+-- chain Bel→Triple→Four→Gahwa effectively deterministic given the
+-- starting hand. Per video #11 the rungs are explicitly framed as
+-- separate strategic acts («الفور على القهوه» etc.), so escalation
+-- variance should grow with risk: Bel ±8, Triple ±12, Four ±15,
+-- Gahwa ±18. Higher rungs = larger jitter = less correlated decisions.
+local TRIPLE_JITTER = 12
+local FOUR_JITTER   = 15
+local GAHWA_JITTER  = 18
 
 -- v0.2.0: returns (yes, wantOpen) like the other escalation pickers.
 -- wantOpen: open the chain to a bidder Triple counter only if our hand
@@ -4898,7 +5258,7 @@ function Bot.PickDouble(seat)
                 sideAces = sideAces + 1
             end
         end
-        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+        for _, suit in ipairs(shuffledSuits()) do
             if suit ~= contract.trump and suitCount[suit] == 0 then
                 voidCount = voidCount + 1
             end
@@ -5056,7 +5416,7 @@ local function escalationStrength(seat, hand, contract)
                 end
             end
             local penalty = 0
-            for _, su in ipairs({ "S", "H", "D", "C" }) do
+            for _, su in ipairs(shuffledSuits()) do
                 if count[su] < 2 or not honors[su] then
                     penalty = penalty + 10
                 end
@@ -5081,7 +5441,7 @@ local function escalationStrength(seat, hand, contract)
                 if r == "A" then sideAces = sideAces + 1 end
             end
         end
-        for _, su in ipairs({ "S", "H", "D", "C" }) do
+        for _, su in ipairs(shuffledSuits()) do
             if su ~= contract.trump and sideSuits[su] == 0 then
                 voidCount = voidCount + 1
             end
@@ -5172,7 +5532,9 @@ function Bot.PickTriple(seat)
     -- the well-calibrated threshold range. Floor at -16 mirrors
     -- PickFour's K.BOT_FOUR_TH - 16 = 94; here that's 74.
     if th < K.BOT_TRIPLE_TH - 16 then th = K.BOT_TRIPLE_TH - 16 end
-    local jth = jitter(th, BEL_JITTER)
+    -- v1.1.0 (audit unpredictability MED-7): Triple uses ±12 jitter
+    -- (vs Bel ±10) — higher rung = larger variance.
+    local jth = jitter(th, TRIPLE_JITTER)
     eltrace("PickTriple eval: strength=%d th=%d jth=%d (BOT_TRIPLE_TH=%d)",
             strength, th, jth, K.BOT_TRIPLE_TH)
     if strength < jth then
@@ -5252,7 +5614,9 @@ function Bot.PickFour(seat)
     -- PickDouble's v0.5.2 unconditional floor at line ~1850).
     if th < K.BOT_FOUR_TH - 16 then th = K.BOT_FOUR_TH - 16 end
     -- v1.0.8: eltrace eval/PASS/FIRE.
-    local jth = jitter(th, BEL_JITTER)
+    -- v1.1.0 (audit MED-7): Four uses ±15 jitter — higher rung,
+    -- larger decision variance.
+    local jth = jitter(th, FOUR_JITTER)
     eltrace("PickFour eval: strength=%d th=%d jth=%d (BOT_FOUR_TH=%d)",
             strength, th, jth, K.BOT_FOUR_TH)
     if strength < jth then
@@ -5303,7 +5667,10 @@ function Bot.PickGahwa(seat)
     -- Acceptable because Gahwa is bidder-side (we have all the info),
     -- and combined-urgency >= 15 only fires when our team is near-loss
     -- desperation (terminal swing OK).
-    local jth = jitter(th, BEL_JITTER)
+    -- v1.1.0 (audit MED-7): Gahwa uses ±18 jitter — terminal rung,
+    -- highest variance to break "pure deterministic from hand shape"
+    -- escalation chain pattern.
+    local jth = jitter(th, GAHWA_JITTER)
     eltrace("PickGahwa eval: strength=%d th=%d jth=%d (BOT_GAHWA_TH=%d)",
             strength, th, jth, K.BOT_GAHWA_TH)
     local yes = strength >= jth
@@ -5491,7 +5858,7 @@ function Bot.PickOvercall(seat)
     if sunStr >= K.BOT_OVERCALL_TAKE_TH and sunStr > bestScore then
         bestType, bestScore = "TAKE", sunStr
     end
-    for _, suit in ipairs({ "S", "H", "D", "C" }) do
+    for _, suit in ipairs(shuffledSuits()) do
         if suit ~= contract.trump then
             -- v0.11.16 BC-1: include bidcard in cross-trump-Hokm shape +
             -- strength evaluation (parallels R2 Hokm path).
