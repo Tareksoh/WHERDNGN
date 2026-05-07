@@ -375,7 +375,25 @@ local function bestMeld(list, contract)
     return best
 end
 
-function R.CompareMelds(meldsA, meldsB, contract)
+-- v1.0.9 C#2: expose meld-rank computation for Bot.PickMelds Qaid
+-- protection (skip declaring melds that lose to already-declared opp
+-- melds). The internal `meldRank` orders melds the same way
+-- `R.CompareMelds` does (carrés > sequences; sequences ordered by
+-- length then top card; tie-breakers as documented).
+function R.MeldRank(m, contract)
+    return meldRank(m, contract)
+end
+
+-- v1.0.9 (PDF Rule 2): tied-meld dealer-right priority. PDF text:
+-- «في حال تساوى مشروعان متشابهان في القيمة فأفضلية النزول لمن على
+-- يمين الموزع» — "If two equal-value melds tie, declaration priority
+-- goes to the player on the dealer's right." Pre-v1.0.9 ties returned
+-- "tie" → both teams scored 0 melds. Now: walk seats starting at
+-- NextSeat(dealer) and the first seat with a declared meld of the
+-- tied rank takes the win. Optional `dealerSeat` param preserves
+-- back-compat for callers that don't have dealer context (they get
+-- the original "tie" behavior).
+function R.CompareMelds(meldsA, meldsB, contract, dealerSeat)
     local bA = bestMeld(meldsA or {}, contract)
     local bB = bestMeld(meldsB or {}, contract)
     if not bA and not bB then return "tie" end
@@ -384,7 +402,26 @@ function R.CompareMelds(meldsA, meldsB, contract)
     local rA, rB = meldRank(bA, contract), meldRank(bB, contract)
     if rA > rB then return "A"
     elseif rB > rA then return "B"
-    else return "tie" end
+    else
+        -- Tied rank — apply PDF dealer-right tiebreaker if dealer
+        -- known. Walk seats starting from right-of-dealer; first
+        -- seat declaring a top-rank meld wins for its team.
+        if dealerSeat then
+            local seat = (dealerSeat % 4) + 1  -- right of dealer
+            for _ = 1, 4 do
+                local team = R.TeamOf(seat)
+                local lookList = (team == "A") and meldsA or meldsB
+                for _, m in ipairs(lookList or {}) do
+                    if m.declaredBy == seat
+                       and meldRank(m, contract) == rA then
+                        return team
+                    end
+                end
+                seat = (seat % 4) + 1
+            end
+        end
+        return "tie"
+    end
 end
 
 -- SWA (سوا) claim validation. The caller asserts they personally
@@ -788,7 +825,10 @@ function R.GameEndWinner(cumA, cumB, target, result)
     return "B"
 end
 
-function R.ScoreRound(tricks, contract, meldsByTeam)
+-- v1.0.9 (PDF Rule 2): added optional `dealerSeat` for tied-meld
+-- dealer-right tiebreaker. Back-compat: nil dealer means CompareMelds
+-- falls back to "tie" → both teams 0 melds (legacy behavior).
+function R.ScoreRound(tricks, contract, meldsByTeam, dealerSeat)
     local teamPoints = { A = 0, B = 0 }
     local trickCount = { A = 0, B = 0 }
     local lastTrickTeam
@@ -932,7 +972,8 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     -- threshold incorrectly.
     local beloteA = (belote == "A") and K.MELD_BELOTE or 0
     local beloteB = (belote == "B") and K.MELD_BELOTE or 0
-    local meldVerdict = R.CompareMelds(meldsByTeam.A, meldsByTeam.B, contract)
+    local meldVerdict = R.CompareMelds(meldsByTeam.A, meldsByTeam.B,
+                                        contract, dealerSeat)
     local effMeldA = (meldVerdict == "A") and meldA or 0
     local effMeldB = (meldVerdict == "B") and meldB or 0
     local bidderTotal = teamPoints[bidderTeam] +
@@ -1039,7 +1080,8 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         -- by best-meld comparison (now contract-aware so trump-suit
         -- sequences beat non-trump on equal length+top).
         cardA, cardB = teamPoints.A, teamPoints.B
-        local outcome = R.CompareMelds(meldsByTeam.A, meldsByTeam.B, contract)
+        local outcome = R.CompareMelds(meldsByTeam.A, meldsByTeam.B,
+                                        contract, dealerSeat)
         if outcome == "A" then meldPoints.A = meldA
         elseif outcome == "B" then meldPoints.B = meldB end
     end
@@ -1074,22 +1116,53 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
     --
     -- v0.10.0 R2 defensive normalization preserved: Sun has NO
     -- Triple/Four/Gahwa rungs; stale flags on Sun collapse to Sun-Bel.
-    local mult = K.MULT_BASE
+    -- v1.0.9 (D HIGH-1) PDF §5-6 fix: melds DO NOT cascade past Bel.
+    -- PDF: «لا تضاعف المشاريع في حالة الثري والفور في الحكم» —
+    -- "Melds DO NOT multiply in Triple (×3) or Four (×4) in Hokm."
+    -- PDF §5-5 confirms melds DO multiply at Bel level: «تتضاعف
+    -- نتيجة المشاريع في حال الدبل بالصن والحكم». So the cap is at
+    -- the Bel multiplier; Triple/Four/Gahwa keep cards cascading
+    -- but melds frozen at Bel level.
+    --
+    -- Pre-v1.0.9 (user-arbitrated v0.11.10): cards and melds both
+    -- got the full cascade multiplier — contradicted PDF §5-6.
+    -- v1.0.9 user re-arbitrated to follow PDF after seeing the
+    -- official text.
+    --
+    -- cardMult = full cascade per the existing code path
+    -- meldMult = capped at Bel level (×2 in Hokm, Sun×2 in Sun-no-bel,
+    --            Sun×2×2 = ×4 in Sun-Bel)
+    -- Belote (+20 K+Q-of-trump): independent post-everything,
+    --                             multiplier-immune as before.
+    local cardMult = K.MULT_BASE
+    local meldMult = K.MULT_BASE
     if contract.type == K.BID_SUN then
-        mult = mult * K.MULT_SUN
-        if contract.doubled then mult = mult * K.MULT_BEL end
+        cardMult = cardMult * K.MULT_SUN
+        meldMult = meldMult * K.MULT_SUN
+        if contract.doubled then
+            cardMult = cardMult * K.MULT_BEL
+            meldMult = meldMult * K.MULT_BEL
+        end
         -- intentionally ignore tripled/foured/gahwa on Sun (R2)
     else
-        if     contract.gahwa   then mult = mult * K.MULT_FOUR
-        elseif contract.foured  then mult = mult * K.MULT_FOUR
-        elseif contract.tripled then mult = mult * K.MULT_TRIPLE
-        elseif contract.doubled then mult = mult * K.MULT_BEL end
+        -- Hokm: cards cascade through all rungs.
+        if     contract.gahwa   then cardMult = cardMult * K.MULT_FOUR
+        elseif contract.foured  then cardMult = cardMult * K.MULT_FOUR
+        elseif contract.tripled then cardMult = cardMult * K.MULT_TRIPLE
+        elseif contract.doubled then cardMult = cardMult * K.MULT_BEL end
+        -- Hokm melds: ×1 base, ×2 ONCE escalation reaches Bel; stays
+        -- at ×2 for Triple/Four/Gahwa (PDF §5-6 cap).
+        if contract.doubled or contract.tripled
+           or contract.foured or contract.gahwa then
+            meldMult = meldMult * K.MULT_BEL
+        end
     end
 
-    -- Cards and melds: both get full multiplier.
-    -- Belote: post-everything, fully immune (only meld type that's mult-immune).
-    local rawA = (cardA + (meldPoints.A or 0)) * mult
-    local rawB = (cardB + (meldPoints.B or 0)) * mult
+    -- Cards get full cascade; melds get the Bel-capped multiplier.
+    -- Belote: post-everything, fully immune (only meld type that's
+    -- multiplier-immune).
+    local rawA = (cardA * cardMult) + ((meldPoints.A or 0) * meldMult)
+    local rawB = (cardB * cardMult) + ((meldPoints.B or 0) * meldMult)
 
     -- Belote: independent +20 raw, applied AFTER the multiplier.
     -- Pagat: "Baloot always 2 points unaffected" — Bel/Triple/Four/Sun multipliers
@@ -1145,7 +1218,12 @@ function R.ScoreRound(tricks, contract, meldsByTeam)
         bidderMade    = bidderMade,
         sweep         = sweepTeam,
         belote        = belote,
-        multiplier    = mult,
+        -- v1.0.9 (D HIGH-1): split into cardMult / meldMult per PDF
+        -- §5-6. Legacy `multiplier` field aliases cardMult (consumer
+        -- tests assert this is the contract multiplier for cards).
+        multiplier    = cardMult,
+        cardMultiplier = cardMult,
+        meldMultiplier = meldMult,
         gahwaWonGame  = gahwaWonGame,
         gahwaWinner   = gahwaWinner,
         raw           = { A = rawA, B = rawB },

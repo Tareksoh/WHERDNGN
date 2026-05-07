@@ -1768,7 +1768,13 @@ function S.MeldVerdict()
     if not s.contract then return nil end
     if not s.tricks or #s.tricks < 1 then return nil end
     if not R or not R.CompareMelds then return nil end
-    return R.CompareMelds(s.meldsByTeam.A, s.meldsByTeam.B, s.contract)
+    -- v1.0.9 audit MED-1: pass dealer so the tied-rank UI verdict
+    -- matches R.ScoreRound's PDF Rule 2 (dealer-right priority)
+    -- resolution. Pre-fix the UI's live meld-strip styling could
+    -- show "tie/no strip" while final scoring awarded melds to the
+    -- dealer-right team — a momentary visual lie at round-end.
+    return R.CompareMelds(s.meldsByTeam.A, s.meldsByTeam.B,
+                           s.contract, s.dealer)
 end
 
 function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
@@ -2341,7 +2347,11 @@ end
 function S.HostScoreRoundResult()
     if not s.isHost then return end
     if not s.contract then return end
-    local result = R.ScoreRound(s.tricks, s.contract, s.meldsByTeam)
+    -- v1.0.9 (PDF Rule 2): pass dealer for tied-meld dealer-right
+    -- priority. PDF: «أفضلية النزول لمن على يمين الموزع» — when
+    -- two equal-rank melds tie, the team containing the player on
+    -- dealer's right takes the win.
+    local result = R.ScoreRound(s.tricks, s.contract, s.meldsByTeam, s.dealer)
     return result
 end
 

@@ -2459,14 +2459,31 @@ function N.HostResolveTakweesh(callerSeat)
     local winnerTeam = foundIllegal and callerTeam or oppTeam
 
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-    -- v0.11.10 revert to canonical: cards + melds × full mult (Sun×2
-    -- + escalation). v0.11.6 split was wrong per user-arbitrated rule.
-    local mult = K.MULT_BASE
-    if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-    if     c.gahwa   then mult = mult * K.MULT_FOUR
-    elseif c.foured  then mult = mult * K.MULT_FOUR
-    elseif c.tripled then mult = mult * K.MULT_TRIPLE
-    elseif c.doubled then mult = mult * K.MULT_BEL end
+    -- v1.0.9 D HIGH-1 (PDF §5-6 cap-at-Bel for melds): split multiplier
+    -- into card vs meld so the Qaid path matches R.ScoreRound's
+    -- canonical form. Cards cascade through Triple/Four/Gahwa; melds
+    -- only ever multiply by Bel (×2). Sun has its own ×2 baseline on
+    -- both. Pre-v1.0.9 used a single `mult = full cascade` and applied
+    -- it to (cards + melds) — over-multiplied non-offender melds by
+    -- ×3/×4 instead of ×2 on Triple/Four/Gahwa Qaid resolutions.
+    local cardMult = K.MULT_BASE
+    local meldMult = K.MULT_BASE
+    if c.type == K.BID_SUN then
+        cardMult = cardMult * K.MULT_SUN
+        meldMult = meldMult * K.MULT_SUN
+        if c.doubled then
+            cardMult = cardMult * K.MULT_BEL
+            meldMult = meldMult * K.MULT_BEL
+        end
+    else
+        if     c.gahwa   then cardMult = cardMult * K.MULT_FOUR
+        elseif c.foured  then cardMult = cardMult * K.MULT_FOUR
+        elseif c.tripled then cardMult = cardMult * K.MULT_TRIPLE
+        elseif c.doubled then cardMult = cardMult * K.MULT_BEL end
+        if c.doubled or c.tripled or c.foured or c.gahwa then
+            meldMult = meldMult * K.MULT_BEL
+        end
+    end
 
     local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
     local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
@@ -2525,10 +2542,10 @@ function N.HostResolveTakweesh(callerSeat)
         end
     end
 
-    -- v0.11.10 revert to canonical: cards + melds × full mult.
-    -- Belote alone is multiplier-immune (added post-mult).
-    local rawA = (cardA + mpA) * mult
-    local rawB = (cardB + mpB) * mult
+    -- v1.0.9 D HIGH-1: cards × cardMult, melds × meldMult (cap at Bel
+    -- per PDF §5-6). Belote alone is multiplier-immune (added post-mult).
+    local rawA = (cardA * cardMult) + (mpA * meldMult)
+    local rawB = (cardB * cardMult) + (mpB * meldMult)
     if belote == "A" then rawA = rawA + K.MELD_BELOTE
     elseif belote == "B" then rawB = rawB + K.MELD_BELOTE end
 
@@ -3316,13 +3333,32 @@ function N.HostResolveSWA(callerSeat, callerHand)
         -- WITH THEM — does NOT transfer to opp. Opp only adds
         -- THEIR OWN melds × mult. Belote independent.
         local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
-        -- v0.11.10 revert to canonical: cards + melds × full mult.
-        mult = K.MULT_BASE
-        if c.type == K.BID_SUN then mult = mult * K.MULT_SUN end
-        if     c.gahwa   then mult = mult * K.MULT_FOUR
-        elseif c.foured  then mult = mult * K.MULT_FOUR
-        elseif c.tripled then mult = mult * K.MULT_TRIPLE
-        elseif c.doubled then mult = mult * K.MULT_BEL end
+        -- v1.0.9 D HIGH-1 (PDF §5-6 cap-at-Bel): split multiplier into
+        -- cardMult (cascades) vs meldMult (capped at Bel). Pre-v1.0.9
+        -- a single full-cascade `mult` over-multiplied non-offender
+        -- melds by ×3/×4 on Triple/Four/Gahwa Qaid resolutions.
+        local cardMult = K.MULT_BASE
+        local meldMult = K.MULT_BASE
+        if c.type == K.BID_SUN then
+            cardMult = cardMult * K.MULT_SUN
+            meldMult = meldMult * K.MULT_SUN
+            if c.doubled then
+                cardMult = cardMult * K.MULT_BEL
+                meldMult = meldMult * K.MULT_BEL
+            end
+        else
+            if     c.gahwa   then cardMult = cardMult * K.MULT_FOUR
+            elseif c.foured  then cardMult = cardMult * K.MULT_FOUR
+            elseif c.tripled then cardMult = cardMult * K.MULT_TRIPLE
+            elseif c.doubled then cardMult = cardMult * K.MULT_BEL end
+            if c.doubled or c.tripled or c.foured or c.gahwa then
+                meldMult = meldMult * K.MULT_BEL
+            end
+        end
+        -- Legacy alias for the outer-scope telemetry (`multiplier`
+        -- field at line ~3498). Older consumers expect the contract-
+        -- rung multiplier (= cards' multiplier).
+        mult = cardMult
         local meldA = R.SumMeldValue(S.s.meldsByTeam.A)
         local meldB = R.SumMeldValue(S.s.meldsByTeam.B)
         cardA = (oppOfCaller == "A") and handTotal or 0
@@ -3365,10 +3401,10 @@ function N.HostResolveSWA(callerSeat, callerHand)
                 end
             end
         end
-        -- v0.11.10 revert to canonical: cards + melds × full mult.
-        -- Belote alone is multiplier-immune (added post-mult).
-        local rawA = (cardA + mpA) * mult
-        local rawB = (cardB + mpB) * mult
+        -- v1.0.9 D HIGH-1: cards × cardMult, melds × meldMult (cap at
+        -- Bel per PDF §5-6). Belote alone is multiplier-immune.
+        local rawA = (cardA * cardMult) + (mpA * meldMult)
+        local rawB = (cardB * cardMult) + (mpB * meldMult)
         if beloteOwner == "A" then rawA = rawA + K.MELD_BELOTE
         elseif beloteOwner == "B" then rawB = rawB + K.MELD_BELOTE end
         -- v0.5.21 scoring-inconsistency fix: same div10 alignment
@@ -3426,7 +3462,8 @@ function N.HostResolveSWA(callerSeat, callerHand)
             end
         end
 
-        result = R.ScoreRound(synth, c, S.s.meldsByTeam)
+        -- v1.0.9 (PDF Rule 2): pass dealer for tied-meld priority.
+        result = R.ScoreRound(synth, c, S.s.meldsByTeam, S.s.dealer)
         addA = result.final.A
         addB = result.final.B
         sweepTeam = result.sweep

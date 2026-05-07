@@ -921,7 +921,9 @@ local function rolloutValue(seat, card, world, contract)
                 table.insert(meldsByTeam[team], meld)
             end
         end
-        result = R.ScoreRound(simTricks, contract, meldsByTeam)
+        -- v1.0.9 (PDF Rule 2): pass dealer for tied-meld priority
+        -- in rollouts so simulated scoring matches live scoring.
+        result = R.ScoreRound(simTricks, contract, meldsByTeam, S.s.dealer)
     end)
 
     -- ALWAYS restore state, even on rollout error.

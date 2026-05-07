@@ -990,6 +990,48 @@ local function beloteSuit(hand)
     return nil
 end
 
+-- v1.0.9 A#2 (swarm finding): BC-MANDATORY-Belote bypass tightening.
+-- Pre-v1.0.9 the BC-MANDATORY bypass fired whenever the Belote suit
+-- merely passed `hokmMinShape` (which admits K+Q+count==2 via the
+-- v0.11.16 escape clause). That over-counted weak K+Q-only hands as
+-- "Mandatory Belote" — yielding sub-threshold Hokm bids that
+-- routinely failed in real games. Saudi convention treats Belote as
+-- "Mandatory" only when the hand has STRUCTURAL backing beyond the
+-- bare K+Q pair: either a canonical 4-card trump sequence containing
+-- the K+Q (T-J-Q-K or J-Q-K-A — both score as 50 raw per
+-- K.MELD_SEQ4, plus the +20 Belote bonus), OR K+Q + count>=3 + a
+-- side Ace (so the side Ace stables the hand even without a 4th
+-- trump). Below those thresholds the bypass falls through to the
+-- standard strength gate, preserving the +20 Belote bonus
+-- contribution to the strength score (no loss of Belote awareness,
+-- just gating it correctly).
+--
+-- Returns true if `suit` (with `hand` evaluated as the post-bidcard
+-- hypothesis hand) qualifies for the BC-MANDATORY bypass.
+local function beloteBypassQualifies(hand, suit)
+    if not suit then return false end
+    local has = { ["T"] = false, ["J"] = false, ["Q"] = false,
+                  ["K"] = false, ["A"] = false }
+    local count = 0
+    local hasSideAce = false
+    for _, c in ipairs(hand) do
+        local r, su = C.Rank(c), C.Suit(c)
+        if su == suit then
+            count = count + 1
+            if has[r] ~= nil then has[r] = true end
+        elseif r == "A" then
+            hasSideAce = true
+        end
+    end
+    -- Canonical 4-card trump sequence T-J-Q-K (top anchored at K).
+    if has["T"] and has["J"] and has["Q"] and has["K"] then return true end
+    -- Canonical 4-card trump sequence J-Q-K-A (top anchored at A).
+    if has["J"] and has["Q"] and has["K"] and has["A"] then return true end
+    -- K+Q + count>=3 + side Ace stabilization.
+    if has["K"] and has["Q"] and count >= 3 and hasSideAce then return true end
+    return false
+end
+
 -- v0.5.8 patches S-3/S-4/S-8 helper: count Aces and detect mardoofa
 -- (A+T pair in same suit). Returns aceCount, mardoofaCount.
 --
@@ -1805,19 +1847,24 @@ function Bot.PickBid(seat)
                 -- decision-trees.md B-6 says "Mandatory Hokm with that
                 -- suit as trump" — the +20 multiplier-immune Belote bonus
                 -- is structural and shape-only. Bypass strength threshold
-                -- when shape is Mandatory-Belote. Trace evidence from
-                -- 3-game session: hands like [QH KS 9C TD JD] (Q+K... no
-                -- wait, that's not Belote — Belote = K+Q same suit).
-                -- Genuine example: hand has KH + QH and bidcard is one
-                -- of the H suit + count>=2 — `hokmMinShape` passes via
-                -- v0.11.16 K+Q escape clause; previously strength still
-                -- below thHokmR1 so it didn't fire. Now: if Belote suit
-                -- matches bidCardSuit, fire unconditionally (per
-                -- "Mandatory" verdict).
-                if belote == bidCardSuit then
+                -- when shape is Mandatory-Belote.
+                --
+                -- v1.0.9 A#2 tightening (swarm): bypass now requires
+                -- structural support beyond the bare K+Q (canonical
+                -- 100-meld OR K+Q+count>=3+sideAce). See
+                -- `beloteBypassQualifies` for the exact gate. Pre-v1.0.9
+                -- the bypass over-fired on K+Q+count==2 hands which
+                -- routinely failed contracts; the +20 Belote bonus still
+                -- contributes to `strength` so the standard threshold
+                -- gate retains Belote awareness.
+                if belote == bidCardSuit
+                   and beloteBypassQualifies(hypHand, bidCardSuit) then
                     btrace("R1 Hokm fires (BC-MANDATORY Belote): %s strength=%d (Mandatory-Belote bypass)",
                            bidCardSuit, strength)
                     return K.BID_HOKM .. ":" .. bidCardSuit
+                elseif belote == bidCardSuit then
+                    btrace("R1 BC-MANDATORY Belote skipped: %s shape lacks 4-card trump-seq or K+Q+count>=3+sideAce",
+                           bidCardSuit)
                 end
                 if strength >= thHokmR1 then
                     btrace("R1 Hokm fires: %s strength=%d >= thHokmR1=%d",
@@ -1921,14 +1968,23 @@ function Bot.PickBid(seat)
     end
     -- v0.11.19 BC-MANDATORY: Mandatory-Belote bypass for R2 Hokm.
     -- If our Belote suit reached the bestSuit candidate set (passed
-    -- shape gate), fire Hokm-of-that-suit unconditionally — Saudi
-    -- B-6 says "Mandatory". Strength gate bypassed even if scoring
-    -- below thHokmR2 (the +20 multiplier-immune Belote bonus locks
-    -- the suit's structural value).
-    if beloteCandidate then
+    -- shape gate) AND has structural support per `beloteBypassQualifies`
+    -- (canonical 100-meld OR K+Q+count>=3+sideAce), fire Hokm-of-that-
+    -- suit unconditionally — Saudi B-6 "Mandatory".
+    --
+    -- v1.0.9 A#2 tightening (swarm): pre-v1.0.9 fired on bare K+Q
+    -- regardless of supporting shape; over-fired and routinely failed
+    -- weak K+Q-only contracts. Tightening preserves Belote bonus in
+    -- the strength score (so threshold gate still favors Belote
+    -- candidates) but only auto-fires when truly Mandatory.
+    if beloteCandidate
+       and beloteBypassQualifies(hokmHand, beloteCandidate) then
         btrace("R2 Hokm fires (BC-MANDATORY Belote): %s bestScore=%d (Mandatory-Belote bypass)",
                beloteCandidate, bestScore)
         return K.BID_HOKM .. ":" .. beloteCandidate
+    elseif beloteCandidate then
+        btrace("R2 BC-MANDATORY Belote skipped: %s shape lacks 4-card trump-seq or K+Q+count>=3+sideAce",
+               beloteCandidate)
     end
     if bestSuit and bestScore >= thHokmR2 then
         btrace("R2 Hokm fires: %s bestScore=%d >= thHokmR2=%d", bestSuit, bestScore, thHokmR2)
@@ -4196,20 +4252,53 @@ local function pickFollow(legal, hand, trick, contract, seat)
             local m5_oppTeam = (m5_myTeam == "A") and "B" or "A"
             local m5_isBidderTeam = (contract.bidder
                 and m5_myTeam == R.TeamOf(contract.bidder)) or false
-            -- v1.0.6 (N3): M5 meld-aware target. Both mirrors below
-            -- compute `gap = target - raw` to detect make-or-break.
-            -- Pre-fix used the bare 81/65 constants — but R.ScoreRound
-            -- adds melds to team totals. If opp declared a 100-pt
-            -- carré, bidder's REAL make-threshold is 81+100=181 (M5
-            -- fires highestByRank on a doomed contract). If WE
-            -- declared a 50-pt seq4, real make is 81-50=31 (M5's
-            -- 0<gap<=30 band misfires on real raw 30<x<50). Adjust
-            -- target by net meld delta. R.SumMeldValue already
-            -- handles the canonical meld-team scoring.
-            local m5_meldA = (R.SumMeldValue and S.s.meldsByTeam
-                              and R.SumMeldValue(S.s.meldsByTeam.A)) or 0
-            local m5_meldB = (R.SumMeldValue and S.s.meldsByTeam
-                              and R.SumMeldValue(S.s.meldsByTeam.B)) or 0
+            -- v1.0.6 (N3): M5 meld-aware target.
+            -- v1.0.9 (A#1 hotfix): two corrections to v1.0.6 N3:
+            --   (a) ALGEBRA: the bidder-makes inequality is
+            --       `(myMeld + ourTrickRaw) > (oppMeld + oppTrickRaw)`.
+            --       With ourTrickRaw + oppTrickRaw = handTotal (constant),
+            --       this solves to `ourTrickRaw > baseTarget +
+            --       (oppMeld - myMeld) / 2`. v1.0.6 used the full
+            --       (oppMeld - myMeld) without dividing by 2 — off
+            --       by 2x.
+            --   (b) WINNER-TAKES-ALL: R.CompareMelds (Rules.lua) gives
+            --       ALL meld points to the comparison-WINNER. We must
+            --       consult CompareMelds to know which team actually
+            --       gets the meld bonus before computing the threshold
+            --       delta. Pre-fix code assumed both teams kept their
+            --       own melds — wrong.
+            -- Belote (+20 K+Q-of-trump same-seat) is awarded
+            -- INDEPENDENTLY of the meld comparison (Rules.lua:824-839),
+            -- so it doesn't go through CompareMelds. We treat Belote
+            -- separately: include it in whichever team holds it.
+            local m5_meldA_raw = (R.SumMeldValue and S.s.meldsByTeam
+                                   and R.SumMeldValue(S.s.meldsByTeam.A)) or 0
+            local m5_meldB_raw = (R.SumMeldValue and S.s.meldsByTeam
+                                   and R.SumMeldValue(S.s.meldsByTeam.B)) or 0
+            -- Apply CompareMelds: only the winning team gets meld
+            -- points (the loser's are zeroed). If CompareMelds returns
+            -- nil/0/no-winner, both teams keep their declared values
+            -- (defensive — shouldn't happen with well-formed input).
+            -- v1.0.9 audit MED-2: pass S.s.dealer so the tied-rank
+            -- branch resolves via PDF Rule 2 (dealer-right priority)
+            -- the same way R.ScoreRound does at round-end. Pre-fix
+            -- M5 saw "tie" → kept both teams' melds while ScoreRound
+            -- resolved to one team — mis-estimating the M5 target by
+            -- up to (oppMeld)/2 in tied scenarios.
+            local meldWinner = (R.CompareMelds and S.s.meldsByTeam
+                                and R.CompareMelds(
+                                    S.s.meldsByTeam.A or {},
+                                    S.s.meldsByTeam.B or {},
+                                    contract or {},
+                                    S.s.dealer))
+                               or nil
+            local m5_meldA = m5_meldA_raw
+            local m5_meldB = m5_meldB_raw
+            if meldWinner == "A" then
+                m5_meldB = 0
+            elseif meldWinner == "B" then
+                m5_meldA = 0
+            end
             local m5_myMeld  = (m5_myTeam == "A") and m5_meldA or m5_meldB
             local m5_oppMeld = (m5_oppTeam == "A") and m5_meldA or m5_meldB
             if m5_isBidderTeam and S.s.tricks then
@@ -4222,13 +4311,12 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 local baseTarget = (contract.type == K.BID_SUN) and 65 or 81
-                -- v1.0.6 (N3): meld-aware target. We need
-                -- (myMeld + ourTrickRaw) > (oppMeld + oppTrickRaw),
-                -- which simplifies (after summing all 130/162 raw on
-                -- the trick side) to ourTrickRaw > baseTarget +
-                -- oppMeld - myMeld. So adjusted target is
-                -- baseTarget + oppMeld - myMeld.
-                local target = baseTarget + m5_oppMeld - m5_myMeld
+                -- v1.0.9 (A#1) algebra fix: divide meld delta by 2.
+                -- The full inequality solves to ourTrickRaw > baseTarget
+                -- + (oppMeld - myMeld) / 2. Floor-divide for integer
+                -- target since the LHS is integer trick-raw.
+                local target = baseTarget
+                                + math.floor((m5_oppMeld - m5_myMeld) / 2)
                 -- Make-or-break: 0 < (target - raw) <= ~30 (current
                 -- trick can swing make-fail boundary). Favor trick-rank
                 -- over face-value to lock the last trick.
@@ -4261,11 +4349,15 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 local baseTarget = (contract.type == K.BID_SUN) and 65 or 81
-                -- defender needs raw >= baseTarget + oppMeld - myMeld
+                -- v1.0.9 (A#1): divide meld delta by 2; CompareMelds
+                -- winner-takes-all already applied above. Defender
+                -- needs raw >= baseTarget + (oppMeld - myMeld)/2 to
+                -- overcome bidder's meld+base advantage.
                 -- (mirror of bidder formula; we're the "defender" team
                 -- so opp is the bidder team — meld accounting flips
                 -- accordingly via m5_oppMeld and m5_myMeld).
-                local defenderTarget = baseTarget + m5_oppMeld - m5_myMeld
+                local defenderTarget = baseTarget
+                                       + math.floor((m5_oppMeld - m5_myMeld) / 2)
                 local gap = defenderTarget - raw
                 if gap > 0 and gap <= 30 then
                     return highestByRank(winners, contract)
@@ -4618,7 +4710,54 @@ function Bot.PickMelds(seat)
     -- first card of trick 2. Mirrors the gate in S.GetMeldsForLocal
     -- so bots can't bypass it via the bot-auto-meld loop in Net.lua.
     if (#(S.s.tricks or {})) >= 1 then return {} end
-    return R.DetectMelds(hand, S.s.contract)
+    local contract = S.s.contract
+    local all = R.DetectMelds(hand, contract)
+
+    -- v1.0.9 C#2 (swarm finding): Qaid-protection meld filter. Saudi
+    -- meld scoring is winner-takes-all per `R.CompareMelds` — only
+    -- the team with the higher-ranked best meld scores; the loser
+    -- team's declared melds drop to 0. If opps have already declared
+    -- (we're not the first player in trick 1) and their best meld
+    -- already beats our team's current best AND would beat each of
+    -- our candidates, declaring our melds reveals 3-4 cards for 0
+    -- expected score benefit. Filter to candidates that either
+    --   (a) flip the outcome (candidate beats opp's best), OR
+    --   (b) ride a partner's already-winning declaration (so our
+    --       meld adds to the SUM that scores when our team wins).
+    -- If R.MeldRank isn't available (very old back-port), fall
+    -- through to the unfiltered candidate set.
+    if R.MeldRank and S.s.meldsByTeam then
+        local team = R.TeamOf(seat)
+        local oppTeam = (team == "A") and "B" or "A"
+        local oppMelds = S.s.meldsByTeam[oppTeam] or {}
+        local teamMelds = S.s.meldsByTeam[team] or {}
+        if #oppMelds > 0 then
+            local oppBestRank = -math.huge
+            for _, m in ipairs(oppMelds) do
+                local r = R.MeldRank(m, contract)
+                if r > oppBestRank then oppBestRank = r end
+            end
+            local teamBestRank = -math.huge
+            for _, m in ipairs(teamMelds) do
+                local r = R.MeldRank(m, contract)
+                if r > teamBestRank then teamBestRank = r end
+            end
+            -- If partner already has a winning meld, every candidate
+            -- adds to our team's SUM (no filter needed).
+            if teamBestRank > oppBestRank then
+                return all
+            end
+            -- Otherwise keep only candidates that would beat opp.
+            local kept = {}
+            for _, m in ipairs(all) do
+                if R.MeldRank(m, contract) > oppBestRank then
+                    kept[#kept + 1] = m
+                end
+            end
+            return kept
+        end
+    end
+    return all
 end
 
 -- Smarter Bel — gated by hand strength so a weak defender doesn't bel

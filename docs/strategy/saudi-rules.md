@@ -201,20 +201,33 @@ Decoded as raw values (with /10 final divisor and Sun×2 mult applied):
 - Carré-A in Hokm: emits as `K.MELD_CARRE_OTHER` (100 raw) → 10 nq
   via X5 path
 
-**Multiplier rule (canonical, v0.11.10):**
-- **All melds** (sequence, carré-other, carré-A) scale with the FULL
-  contract multiplier (Sun ×2 + escalation Bel/Triple/Four/Gahwa).
-- **Belote** (K+Q of trump) alone is multiplier-immune (added
-  post-mult; +20 raw → +2 nq always).
+**Multiplier rule (canonical, v1.0.9 PDF §5-6 cap-at-Bel):**
+- **Cards** scale with the FULL contract cascade (Sun ×2 +
+  Bel/Triple/Four/Gahwa, all stacking).
+- **Melds** (sequence, carré-other, carré-A) scale with Sun ×2 + Bel
+  ×2 ONLY — Triple/Four/Gahwa do NOT cascade onto melds. PDF §5-6:
+  «لا تضاعف المشاريع في حالة الثري والفور» — "melds do not multiply
+  in the case of Triple and Four". Belote (K+Q of trump) is fully
+  multiplier-immune (added post-mult; +20 raw → +2 nq always).
+- **Sun + Bel**: cards ×4, melds ×4 (Sun×2 × Bel×2 stacks for both).
+- **Hokm + Triple**: cards ×3, melds ×2 (cap).
+- **Hokm + Four / Gahwa**: cards ×4, melds ×2 (cap).
+
+The split is exposed on `R.ScoreRound`'s result struct as
+`cardMultiplier` and `meldMultiplier`. Legacy `multiplier` field
+aliases `cardMultiplier` for back-compat.
 
 Cross-confirmed against video #43 explicit walkthrough at lines
 152-158: "بالنسبه للمشاريع في السن برضو راح تحولها لنقاط تقسم على
 خمسه" — "regarding melds in Sun, you also convert them by dividing
-by 5" — which is mathematically equivalent to "× Sun×2 ÷ 10".
+by 5" — which is mathematically equivalent to "× Sun×2 ÷ 10". The
+Sun×2 absolutely does apply to melds; the v1.0.9 PDF cross-check
+clarified that the ESCALATION rungs (Triple/Four/Gahwa) are the
+ones that cap on melds, not the contract-type multiplier.
 
-Implementation: `Rules.lua` R.ScoreRound + `Net.lua` HostResolveTakweesh
-+ HostResolveSWA all use `(cards + melds) × mult` (single multiplier
-applied to the sum). v0.11.6's split is fully reverted.
+Implementation: `Rules.lua` R.ScoreRound + `Net.lua`
+HostResolveTakweesh + HostResolveSWA all use the cardMult/meldMult
+split per v1.0.9 D HIGH-1.
 
 Implementation history (for posterity):
 - v0.4.x: 200 raw + Sun×2 (correct, but undocumented as canonical)
@@ -222,6 +235,11 @@ Implementation history (for posterity):
 - v0.11.6: 400 + melds Sun-immune (wrong; produced 40 nq for Carré-A
   but broke sere/quarte/quinte to 2/5/10 instead of 4/10/20)
 - v0.11.10: full revert to v0.4.x state (200 raw, full Sun×2 mult).
+  Cards AND melds × full cascade including Triple/Four/Gahwa.
+- v1.0.9 (PDF cross-check): full-cascade kept for cards but melds
+  cap at Bel per PDF §5-6. v0.11.10's Triple/Four/Gahwa cascade on
+  melds was over-multiplying — corrected. User arbitration: "option
+  A i was wrong" — agreed with PDF reading. See CHANGELOG v1.0.9.
   User-stated authoritative rule.
 
 **Q3b: Carré-A in Hokm.** ✅ **RESOLVED v0.10.0 (X5).** Pre-v0.10.0

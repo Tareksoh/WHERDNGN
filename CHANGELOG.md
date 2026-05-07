@@ -1,5 +1,165 @@
 # Changelog
 
+## v1.0.9 — PDF cross-check fixes + 4-agent swarm closure
+
+This release closes the critical findings from the four-agent swarm
+(A=Saudi-pro convention, B=human-reading skills, C=partner-coordination,
+D=BalootGCC official PDF rules cross-check) plus the two A-class bot-
+strategy items the user explicitly green-lit. 760/760 tests pass.
+
+### CRITICAL — actual scoring bugs
+
+- **A#1: M5 algebra error reverted to canonical formula (Bot.lua
+  trick-8 winners block).** v1.0.6's N3 introduced two compounding
+  errors in defender M5 target estimation: (a) algebra was off by
+  2× (used `oppMeld - myMeld` where the canonical R.ScoreRound
+  formula is `(oppMeld - myMeld) / 2`), and (b) didn't consult
+  `R.CompareMelds` winner-takes-all. With opp's 100-meld declared,
+  the bot computed the wrong threshold by ~5 raw, mis-firing M5
+  swings on doomed contracts. Now uses the canonical formula AND
+  consults CompareMelds for winner-takes-all attribution.
+
+- **D HIGH-1: Multiplier semantics split for cards vs melds
+  (Rules.lua R.ScoreRound).** PDF §5-5 / §5-6 cross-check vs
+  v0.11.10 user arbitration: melds DO NOT cascade past Bel.
+  Pre-v1.0.9 a Triple/Four/Gahwa contract multiplied BOTH cards AND
+  melds by Bel×Triple/Four/Gahwa (cascading multiplier). Per PDF
+  §5-6 melds only ever multiply by Bel (×2), regardless of what
+  rung the contract reached — the higher rungs only multiply
+  CARDS. User re-arbitrated: "option A i was wrong" — agreed with
+  PDF reading. Now the result struct exposes `cardMultiplier` and
+  `meldMultiplier` separately; legacy `multiplier = cardMult` for
+  back-compat with consumers that haven't been updated.
+
+### HIGH — Saudi rule conformance
+
+- **Rule 2 (PDF §): tied-meld dealer-right priority
+  (Rules.lua R.CompareMelds + R.ScoreRound).** PDF text:
+  «في حال تساوى مشروعان متشابهان في القيمة فأفضلية النزول لمن
+  على يمين الموزع» — "if two equal-value melds tie, declaration
+  priority goes to the player on the dealer's right." Pre-v1.0.9
+  ties returned "tie" → both teams scored 0 melds. Now: walk seats
+  starting at NextSeat(dealer); the first seat declaring a top-rank
+  meld takes the win for its team. Optional `dealerSeat` parameter
+  preserves back-compat for callers without dealer context.
+  Updated 3 callers (State.lua, Net.lua, BotMaster.lua) to pass
+  the dealer.
+
+### MEDIUM — Bot strategy tightening
+
+- **A#2: BC-MANDATORY-Belote bypass tighten (Bot.lua PickBid).**
+  Pre-v1.0.9 the BC-MANDATORY bypass fired whenever the Belote
+  suit merely passed `hokmMinShape` (which admits K+Q+count==2 via
+  the v0.11.16 escape clause). Over-fired on weak K+Q-only hands
+  → routinely-failing Hokm contracts. Tightened: bypass now
+  requires structural support — canonical 100-meld in trump suit
+  (T-J-Q-K or J-Q-K-A) OR K+Q+count>=3+sideAce. Belote +20 bonus
+  still contributes to the strength score (so the standard
+  threshold gate retains Belote awareness), but only auto-fires
+  when Mandatory-Belote is structurally backed.
+
+- **C#2: PickMelds Qaid-protection meld filter (Bot.lua
+  PickMelds).** Saudi meld scoring is winner-takes-all
+  (R.CompareMelds). If opps have already declared a higher-rank
+  meld AND partner has no winning declaration, our team's
+  declarations all drop to 0 anyway — declaring losing melds is
+  pure information cost (revealing 3-4 cards) for 0 expected
+  score benefit. Filter to candidates that either flip the outcome
+  (candidate beats opp's best) OR ride a partner's already-winning
+  declaration. Exposes `R.MeldRank` for external rank queries.
+
+### Ultra-audit pass-2 fixes (post-staging swarm)
+
+A 4-agent ultra-audit (Saudi-pro / code-effect / test-quality /
+PDF-conformance) of the v1.0.9 staged diff surfaced four follow-on
+fixes BEFORE shipping:
+
+- **Net.lua Qaid handlers cardMult/meldMult split (CRITICAL)**:
+  `HostResolveTakweesh` (line ~2462) and `HostResolveSWA` invalid-SWA
+  branch (line ~3337) BOTH still applied a single full-cascade `mult`
+  to (cards + melds). With D HIGH-1 in `Rules.lua` but unchanged in
+  `Net.lua`, a Triple/Four/Gahwa Qaid resolution would over-multiply
+  the non-offender's melds by ×3/×4 instead of ×2 — directly
+  contradicting the PDF §5-6 fix one file over. Now both Qaid paths
+  use the same `cardMult`/`meldMult` split. Legacy `mult = cardMult`
+  alias kept for the outer-scope telemetry field.
+
+- **Bot.lua M5 CompareMelds passes dealer**: M5's winner-takes-all
+  zeroing now passes `S.s.dealer` so tied-rank scenarios resolve
+  the same way `R.ScoreRound` does (PDF Rule 2 dealer-right
+  priority). Pre-fix M5 would see "tie" → keep both teams' melds
+  while ScoreRound resolved to one team — mis-estimating M5 target
+  by up to (oppMeld)/2 in tied scenarios.
+
+- **State.lua S.MeldVerdict passes dealer**: UI's live meld-verdict
+  strip now consults dealer for tied-rank resolution, eliminating
+  the momentary visual lie where the strip showed "tie/no strip"
+  while final scoring awarded melds to the dealer-right team.
+
+- **docs/strategy/saudi-rules.md**: rewrote the Q3/Q5 multiplier
+  section to reflect the v1.0.9 PDF §5-6 cap-at-Bel rule. Per
+  CLAUDE.md ("If a strategy doc and Rules.lua disagree, Rules.lua
+  is authoritative for legality"), the doc was contradicting v1.0.9
+  code with the v0.11.10 full-cascade reading.
+
+- **A#2 comment cleanup**: re-labeled "canonical 100-meld" →
+  "canonical 4-card trump-sequence" since T-J-Q-K and J-Q-K-A score
+  as `K.MELD_SEQ4 = 50` raw, not 100. The gate logic was correct;
+  comments and chat traces were misleading.
+
+### Tests
+
+- **AE.1 / AE.2 updated** for A#2 tightening — pre-v1.0.9 hands
+  pinned the loose-bypass behavior; updated to use hands that
+  satisfy the new gate (K+Q+count>=3+sideAce).
+- **AE.1c (NEW)**: K+Q+count>=3 NO sideAce blocks BC-MANDATORY → PASS.
+- **AE.2c (NEW)**: K+Q+count>=3+sideAce R2 fires Hokm.
+- **AJ.1b / AJ.2b / AK.6 updated** for A#1 algebra (added
+  `math.floor((m5_oppMeld - m5_myMeld) / 2)` and `baseTarget`).
+- **AJ.2c (NEW)**: A#1 source-pin verifying CompareMelds is
+  consulted for winner-takes-all.
+- **Section AL (NEW)**: v1.0.9 swarm-finding behavioral coverage.
+  AL.1 (C#2 skip), AL.2 (C#2 ride partner), AL.3 (no info), AL.4
+  (A#2 4-card trump sequence).
+- **K2 section (NEW, test_rules.lua)**: 8 tests for the D HIGH-1
+  cardMult/meldMult split. Hokm bare/Bel/Triple/Four/Gahwa, Sun
+  bare/Bel, plus a behavioral test asserting `raw.A` reflects the
+  cap (250×3 + 100×2 = 950 NOT 1050 full-cascade).
+- **F.dealer-right (NEW, test_rules.lua)**: 4 tests for PDF Rule 2
+  tied-meld dealer-right priority. dealer=4→A, dealer=1→B,
+  walk-skip case, back-compat fallback (no dealerSeat → "tie").
+
+### What WASN'T changed (this release)
+
+The user's PDF cross-check covered four rules. Three are already
+canonical in the code (verified), one needs a bigger feature:
+
+- **Rule 1 (Belote announcement requirement)** — D HIGH-2: NOT
+  implemented. PDF says the Belote holder must announce on the
+  second card or it doesn't count (unless covered by a sequence
+  meld). Currently auto-detected retroactively in R.ScoreRound.
+  Needs MSG_BELOTE wire + S.s.beloteAnnounced flag + UI button +
+  R.ScoreRound gate. Deferred — substantial scope, requires user
+  green-light on UX details.
+- **Rule 3 (Kaboot + opp's declared melds)**: VERIFIED
+  IMPLEMENTED. Sweeper gets bonus + own declared melds; swept
+  side's melds drop to 0. Matches PDF "the kabooter team gets X
+  points + the مكبِّت's declared melds" reading (active participle
+  = sweeping team).
+- **Rule 4 (Bel-Triple-Four-Gahwa is bidder-vs-Beler-only)**:
+  VERIFIED PARTIAL. Net.lua seat gates: Bel→NextSeat(bidder),
+  Triple→bidder, Four→NextSeat(bidder), Gahwa→bidder. The Beler
+  seat is HARDCODED to NextSeat(bidder); chain is locked to
+  bidder↔Beler-only because Beler-seat is fixed. Caveat: PDF text
+  «المدبل» = "the doubler" (the defender who actually Bel'd) does
+  not specify which of the two defenders. Saudi-pro convention
+  allows EITHER defender to Bel first; current addon restricts to
+  NextSeat(bidder) only — PrevSeat(bidder) cannot Bel. Stricter-
+  than-necessary gate (not a leak); the partner of the Beler is
+  correctly excluded. Future enhancement: add `contract.doublerSeat`
+  tracking + open Bel-eligibility to both defenders. Deferred
+  (UI/wire/AFK touch points; not a v1.0.9 critical gap).
+
 ## v1.0.8 — Triple/Four/Gahwa eltrace observability
 
 User-requested: the existing `[bel sN] PickDouble eval/PASS/FIRE`

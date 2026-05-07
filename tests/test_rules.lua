@@ -414,6 +414,53 @@ assertEq(
         hokm("H")),
     "A", "Carre beats seq5 (rule: carre tier > sequence tier)")
 
+-- v1.0.9 PDF Rule 2 (tied-meld dealer-right priority).
+-- «في حال تساوى مشروعان متشابهان في القيمة فأفضلية النزول لمن على
+-- يمين الموزع» — "If two equal-value melds tie, declaration priority
+-- goes to the player on the dealer's right."
+-- Walk: starts at NextSeat(dealer) and proceeds clockwise (1→2→3→4
+-- modulo 4) — the first seat with a tied-rank declaration wins.
+do
+    -- Two equal-rank seq3s in different suits. With dealerSeat=4,
+    -- right-of-dealer is seat 1 (team A). A's meld declared by seat 1
+    -- → A wins.
+    local a = { { kind="seq3", value=20, len=3, top="9", suit="S",
+                  declaredBy=1 } }
+    local b = { { kind="seq3", value=20, len=3, top="9", suit="D",
+                  declaredBy=2 } }
+    assertEq(R.CompareMelds(a, b, hokm("H"), 4), "A",
+             "F.dealer-right: dealer=4 → seat 1 (right of dealer, team A) wins tied rank")
+end
+do
+    -- Same setup but dealerSeat=1, right-of-dealer is seat 2 (team B).
+    local a = { { kind="seq3", value=20, len=3, top="9", suit="S",
+                  declaredBy=1 } }
+    local b = { { kind="seq3", value=20, len=3, top="9", suit="D",
+                  declaredBy=2 } }
+    assertEq(R.CompareMelds(a, b, hokm("H"), 1), "B",
+             "F.dealer-right: dealer=1 → seat 2 (right of dealer, team B) wins tied rank")
+end
+do
+    -- Walk-skip case: dealer=4, right-of-dealer is seat 1, but seat 1
+    -- has no declaration. Walk continues 1→2 (team B has the meld).
+    -- Seat 2 declared → B wins.
+    local a = { { kind="seq3", value=20, len=3, top="9", suit="S",
+                  declaredBy=3 } }   -- A meld declared by seat 3 (NOT NextSeat(dealer))
+    local b = { { kind="seq3", value=20, len=3, top="9", suit="D",
+                  declaredBy=2 } }   -- B meld declared by seat 2 (NextSeat(dealer)=1's NextSeat)
+    assertEq(R.CompareMelds(a, b, hokm("H"), 4), "B",
+             "F.dealer-right walk: dealer=4, seat 1 has no decl → seat 2 (B) wins")
+end
+do
+    -- Back-compat: no dealerSeat → tie returned (legacy behavior).
+    local a = { { kind="seq3", value=20, len=3, top="9", suit="S",
+                  declaredBy=1 } }
+    local b = { { kind="seq3", value=20, len=3, top="9", suit="D",
+                  declaredBy=2 } }
+    assertEq(R.CompareMelds(a, b, hokm("H")), "tie",
+             "F.dealer-right back-compat: no dealerSeat → 'tie' (legacy)")
+end
+
 -- =====================================================================
 -- G. ScoreRound — non-escalation outcomes
 -- =====================================================================
@@ -796,6 +843,108 @@ do
     local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
     assertEq(res.multiplier, K.MULT_SUN * K.MULT_BEL,
              "Sun × stale-Four flags = Sun × Bel = 4 (rungs collapse)")
+end
+
+-- =====================================================================
+-- K2. v1.0.9 D HIGH-1 — cardMult / meldMult split (PDF §5-6 cap-at-Bel)
+-- =====================================================================
+-- PDF §5-6: melds DO NOT cascade past Bel. Triple/Four/Gahwa multiply
+-- only the CARDS; melds stay at Bel-cap (×2). Sun has its own ×2 that
+-- applies to both (and Sun+Bel = ×4 for both).
+section("K2. v1.0.9 cardMult/meldMult split (PDF §5-6)")
+
+do
+    -- Bare Hokm: cards ×1, melds ×1.
+    local res = R.ScoreRound(sweptTricks(1), hokm("H"), { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_BASE,
+             "Hokm bare: cardMultiplier = 1")
+    assertEq(res.meldMultiplier, K.MULT_BASE,
+             "Hokm bare: meldMultiplier = 1")
+    assertEq(res.multiplier, res.cardMultiplier,
+             "Legacy res.multiplier = cardMultiplier (alias)")
+end
+do
+    -- Hokm + Bel: cards ×2, melds ×2.
+    local c = hokm("H", 1, { doubled = true })
+    local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_BEL,
+             "Hokm+Bel: cardMultiplier = 2")
+    assertEq(res.meldMultiplier, K.MULT_BEL,
+             "Hokm+Bel: meldMultiplier = 2 (cap-at-Bel)")
+end
+do
+    -- Hokm + Triple: cards ×3, melds STILL ×2 (PDF §5-6 cap).
+    local c = hokm("H", 1, { doubled = true, tripled = true })
+    local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_TRIPLE,
+             "Hokm+Triple: cardMultiplier = 3")
+    assertEq(res.meldMultiplier, K.MULT_BEL,
+             "Hokm+Triple: meldMultiplier = 2 (cap-at-Bel, melds don't cascade)")
+end
+do
+    -- Hokm + Four: cards ×4, melds STILL ×2.
+    local c = hokm("H", 1, { doubled = true, tripled = true, foured = true })
+    local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_FOUR,
+             "Hokm+Four: cardMultiplier = 4")
+    assertEq(res.meldMultiplier, K.MULT_BEL,
+             "Hokm+Four: meldMultiplier = 2 (cap-at-Bel)")
+end
+do
+    -- Hokm + Gahwa: cards ×4 (gahwa = MULT_FOUR), melds STILL ×2.
+    local c = hokm("H", 1, { doubled = true, tripled = true,
+                              foured = true, gahwa = true })
+    local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_FOUR,
+             "Hokm+Gahwa: cardMultiplier = 4")
+    assertEq(res.meldMultiplier, K.MULT_BEL,
+             "Hokm+Gahwa: meldMultiplier = 2 (cap-at-Bel)")
+end
+do
+    -- Sun bare: cards ×2, melds ×2 (Sun base ×2 applies to both).
+    local res = R.ScoreRound(sweptTricks(1), sun(1), { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_SUN,
+             "Sun bare: cardMultiplier = 2")
+    assertEq(res.meldMultiplier, K.MULT_SUN,
+             "Sun bare: meldMultiplier = 2 (Sun applies to melds equally)")
+end
+do
+    -- Sun + Bel: cards ×4, melds ×4 (Sun ×2 × Bel ×2 = ×4 for both).
+    local c = sun(1, { doubled = true })
+    local res = R.ScoreRound(sweptTricks(1), c, { A = {}, B = {} })
+    assertEq(res.cardMultiplier, K.MULT_SUN * K.MULT_BEL,
+             "Sun+Bel: cardMultiplier = 4")
+    assertEq(res.meldMultiplier, K.MULT_SUN * K.MULT_BEL,
+             "Sun+Bel: meldMultiplier = 4 (Sun×Bel applies to both)")
+end
+
+-- Behavioral: a Hokm-Triple round with team A holding a 100-meld
+-- should produce raw.A that includes meldA × meldMult (=2) NOT × 3.
+do
+    local c = hokm("H", 1, { doubled = true, tripled = true })
+    -- Construct a meld for team A: 100 raw (carre-other in K).
+    local meldsByTeam = {
+        A = {
+            { kind = "carre", value = K.MELD_CARRE_OTHER, top = "K", len = 4,
+              cards = { "KS", "KH", "KD", "KC" }, declaredBy = 1 },
+        },
+        B = {},
+    }
+    -- Bidder team A wins all 8 (Al-Kaboot path is OK; the meld
+    -- attribution still applies). Forward AK pays K.AL_KABOOT_HOKM=250.
+    local res = R.ScoreRound(sweptTricks(1), c, meldsByTeam)
+    -- Card raw = 250 (Al-Kaboot bonus) × cardMult (=3 Triple) = 750.
+    -- Meld raw = 100 (carre-K) × meldMult (=2 Bel cap) = 200.
+    -- Total raw.A = 750 + 200 = 950.
+    -- Pre-v1.0.9 (full cascade): meld would multiply by ×3 = 300,
+    -- giving total 1050. The 100-raw delta is the regression we pin.
+    assertEq(res.cardMultiplier, K.MULT_TRIPLE,
+             "K2-behavioral Hokm+Triple: card mult ×3")
+    assertEq(res.meldMultiplier, K.MULT_BEL,
+             "K2-behavioral Hokm+Triple: meld mult ×2 (cap)")
+    assertEq(res.raw.A, K.AL_KABOOT_HOKM * K.MULT_TRIPLE
+                       + K.MELD_CARRE_OTHER * K.MULT_BEL,
+             "K2-behavioral: raw.A = 250×3 + 100×2 = 950 (NOT 1050 full-cascade)")
 end
 
 -- =====================================================================

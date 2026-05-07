@@ -2533,7 +2533,7 @@ do
     if fnStart then
         -- Function spans roughly 9000 chars; scan the next 12k for the
         -- v0.11.7 encodedHand stash + computation.
-        local body = netSrc:sub(fnStart, fnStart + 12000)
+        local body = netSrc:sub(fnStart, fnStart + 16000)
         assertTrue(body:find("encodedHand%s*=%s*callerEncodedHand") ~= nil,
                    "Q.2a (v0.11.7): HostResolveSWA stashes encodedHand on swaResult")
         assertTrue(body:find("local callerEncodedHand") ~= nil,
@@ -2834,7 +2834,7 @@ do
     local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
     local fnStart = netSrc:find("function N%.HostResolveSWA")
     if fnStart then
-        local body = netSrc:sub(fnStart, fnStart + 12000)
+        local body = netSrc:sub(fnStart, fnStart + 16000)
         assertTrue(body:find("breakdown%s*=%s*breakdown") ~= nil,
                    "U.11a (SU-Ultra-01): HostResolveSWA stashes breakdown on swaResult")
         assertTrue(body:find("local breakdown") ~= nil,
@@ -3643,14 +3643,46 @@ local function snapshotS(fields)
     end
 end
 
--- AE.1 (AD.1 / BC-MANDATORY behavioral): K+Q-of-bidcardsuit fires Hokm
--- on R1 even when raw strength is below thHokmR1.
--- Hand: KS QS 7H 8C 9D + bidcard 7S. count S=2 (K+Q from hand). Belote
--- escape clause in hokmMinShape passes. suitStrengthAsTrump = K(4)+Q(3)
--- +7S(2) = 9. Belote bonus +20 = 29. thHokmR1 base 42, jitter ±6 →
--- min 36. 29 < 36 always — without BC-MANDATORY this would PASS.
--- With BC-MANDATORY bypass (Saudi rule B-6 "Mandatory Hokm with that
--- suit as trump"), fires HOKM:S unconditionally.
+-- AE.1 (AD.1 / BC-MANDATORY behavioral, v1.0.9 A#2 tightened):
+-- K+Q-of-bidcardsuit fires Hokm on R1 even when raw strength is below
+-- thHokmR1, but ONLY when the bypass-qualifying gate is satisfied
+-- (canonical 100-meld OR K+Q+count>=3+sideAce).
+-- Hand: KS QS 7H 8C AD + bidcard 7S. hypHand = KS+QS+7H+8C+AD+7S.
+-- Spades count post-bidcard = 3 (K+Q+7S). Side Ace = AD ✓.
+-- A#2 bypass-qualifies on K+Q+count>=3+sideAce branch.
+-- suitStrengthAsTrump = K(4)+Q(3)+7S(2)+count_bonus(5) = 14. Belote
+-- bonus +20 = 34. thHokmR1 base 42, jitter ±6 → min 36. 34 < 36
+-- always — without BC-MANDATORY this would PASS. With BC-MANDATORY
+-- bypass (qualified per A#2 tightening), fires HOKM:S.
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    S.s.bidRound = 1
+    S.s.bidCard  = "7S"
+    S.s.dealer   = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = {}
+    S.s.hostHands = {}
+    S.s.hostHands[1] = { "KS", "QS", "7H", "8C", "AD" }
+    if Bot and Bot.PickBid then
+        local result = Bot.PickBid(1)
+        assertEq(result, K.BID_HOKM .. ":S",
+                 "AE.1 (AD.1 BC-MANDATORY, A#2 qualified): K+Q+count>=3+sideAce fires Hokm-S on R1")
+    end
+    restore()
+end
+
+-- AE.1c (v1.0.9 A#2 tightening behavioral): K+Q-of-bidcardsuit WITHOUT
+-- side Ace must NOT fire BC-MANDATORY bypass on R1. Falls through to
+-- standard strength gate (which fails for sub-threshold hands).
+-- Hand: KS QS 7H 8C 9D + bidcard 7S. hypHand has K+Q+7S in spades
+-- (count=3) but NO side Ace. A#2 K+Q+count>=3+sideAce branch fails;
+-- canonical 100-meld branch also fails (no T or A). Bypass blocks.
+-- Strength = 34 < thHokmR1 min 36 → BID_PASS.
+-- This is the case pre-A#2 over-fired: bypass triggered on bare K+Q
+-- with no structural support, yielding weak Hokm contracts that
+-- routinely failed.
 do
     local restore = snapshotS({
         "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
@@ -3664,20 +3696,22 @@ do
     S.s.hostHands[1] = { "KS", "QS", "7H", "8C", "9D" }
     if Bot and Bot.PickBid then
         local result = Bot.PickBid(1)
-        assertEq(result, K.BID_HOKM .. ":S",
-                 "AE.1 (AD.1 BC-MANDATORY): K+Q-of-bidcardsuit fires Hokm-S unconditionally on R1")
+        assertEq(result, K.BID_PASS,
+                 "AE.1c (A#2 tightening): K+Q+count>=3 NO sideAce blocks BC-MANDATORY → PASS")
     end
     restore()
 end
 
--- AE.2 (AD.1 BC-MANDATORY R2 behavioral): K+Q-of-non-bidcard suit fires
--- Hokm on R2 even when raw strength is below thHokmR2.
--- Hand: KH QH 7C 8C 9D + bidcard 7S. R2: bidCardSuit=S excluded as
--- candidate trump. For trump=H: count=2 (K+Q from hand). hokmMinShape
--- via Belote escape passes. suitStrengthAsTrump = K(4)+Q(3) = 7.
--- + sideSuitAceBonus = 0 (basic mode) + Belote +20 = 27. thHokmR2 base
--- 36, jitter ±6 → min 30. 27 < 30 — without BC-MANDATORY would PASS.
--- With BC-MANDATORY (R2 path, beloteCandidate tracking), fires HOKM:H.
+-- AE.2 (AD.1 BC-MANDATORY R2 behavioral, v1.0.9 A#2 tightened):
+-- K+Q-of-non-bidcard suit must fail the BC-MANDATORY bypass when the
+-- shape is K+Q+count==2 (no structural support). Pre-A#2 the loose
+-- bypass fired on this hand, yielding weak Hokm contracts.
+-- Hand: KH QH 8C 9D 7C + bidcard 7S. R2: bidCardSuit=S excluded.
+-- For trump=H: count=2 (K+Q only). hokmMinShape K+Q escape passes
+-- (count>=2). beloteCandidate set. A#2 condition K+Q+count>=3+sideAce
+-- fails (count=2); canonical 100-meld fails (no T/J/A). Bypass blocks.
+-- Strength = K(4)+Q(3) + 0 + 20 = 27. thHokmR2 base 36, jitter ±6 →
+-- min 30. 27 < 30 — strength gate fails → BID_PASS.
 do
     local restore = snapshotS({
         "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
@@ -3688,13 +3722,39 @@ do
     S.s.cumulative = { A = 0, B = 0 }
     S.s.bids = { [1] = K.BID_PASS, [2] = K.BID_PASS,
                  [3] = K.BID_PASS, [4] = K.BID_PASS }
-    S.s.bids[1] = nil  -- seat 1 hasn't bid yet (we're picking for them)
+    S.s.bids[1] = nil
     S.s.hostHands = {}
-    S.s.hostHands[1] = { "KH", "QH", "7C", "8C", "9D" }
+    S.s.hostHands[1] = { "KH", "QH", "8C", "9D", "7C" }
+    if Bot and Bot.PickBid then
+        local result = Bot.PickBid(1)
+        assertEq(result, K.BID_PASS,
+                 "AE.2 (A#2 tightening): K+Q+count==2 R2 blocks BC-MANDATORY → PASS")
+    end
+    restore()
+end
+
+-- AE.2c (v1.0.9 A#2 tightening behavioral): K+Q+count>=3+sideAce in
+-- non-bidcard suit DOES fire Hokm on R2 — bypass-qualified path.
+-- Hand: KH QH 7H 8C AD + bidcard 7S. For H trump: count=3 (K+Q+7H),
+-- side Ace = AD. A#2 K+Q+count>=3+sideAce branch qualifies.
+-- Result: HOKM:H (whether via threshold-pass or qualified bypass).
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    S.s.bidRound = 2
+    S.s.bidCard  = "7S"
+    S.s.dealer   = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = { [1] = K.BID_PASS, [2] = K.BID_PASS,
+                 [3] = K.BID_PASS, [4] = K.BID_PASS }
+    S.s.bids[1] = nil
+    S.s.hostHands = {}
+    S.s.hostHands[1] = { "KH", "QH", "7H", "8C", "AD" }
     if Bot and Bot.PickBid then
         local result = Bot.PickBid(1)
         assertEq(result, K.BID_HOKM .. ":H",
-                 "AE.2 (AD.1 BC-MANDATORY R2): K+Q-Belote suit fires Hokm-H even below thHokmR2")
+                 "AE.2c (A#2 qualified): K+Q+count>=3+sideAce R2 fires Hokm-H")
     end
     restore()
 end
@@ -4921,9 +4981,12 @@ do
     -- without the defender +1.
     assertTrue(botSrc:find("local baseTarget = %(contract%.type == K%.BID_SUN%) and 65 or 81") ~= nil,
                "AJ.1a (N6): bidder M5 reads baseTarget = 65/81 (no +1)")
-    -- Defender mirror also uses baseTarget (was target+1 pre-fix).
-    assertTrue(botSrc:find("local defenderTarget = baseTarget %+ m5_oppMeld %- m5_myMeld") ~= nil,
-               "AJ.1b (N6 + N3): defender M5 uses baseTarget + meld delta (no +1 off-by-one)")
+    -- v1.0.9 (A#1 algebra fix): defender mirror divides meld delta by 2
+    -- and applies CompareMelds winner-takes-all upstream. Pin checks
+    -- both attributes.
+    assertTrue(botSrc:find("local defenderTarget = baseTarget") ~= nil
+               and botSrc:find("math%.floor%(%(m5_oppMeld %- m5_myMeld%) / 2%)") ~= nil,
+               "AJ.1b (N6 + N3 + A#1): defender M5 uses baseTarget + (oppMeld-myMeld)/2 (algebra fix)")
 end
 
 -- AJ.2 (N3 M5 meld-aware target behavioral): both mirrors compute
@@ -4933,8 +4996,13 @@ do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     assertTrue(botSrc:find("R%.SumMeldValue and S%.s%.meldsByTeam") ~= nil,
                "AJ.2a (N3): M5 reads R.SumMeldValue per team")
-    assertTrue(botSrc:find("local target = baseTarget %+ m5_oppMeld %- m5_myMeld") ~= nil,
-               "AJ.2b (N3): bidder M5 target = baseTarget + oppMeld - myMeld")
+    -- v1.0.9 (A#1): algebra-fixed; meld delta divided by 2 + CompareMelds
+    -- winner-takes-all applied. Both bidder and defender mirrors.
+    assertTrue(botSrc:find("local target = baseTarget") ~= nil
+               and botSrc:find("math%.floor%(%(m5_oppMeld %- m5_myMeld%) / 2%)") ~= nil,
+               "AJ.2b (N3 + A#1 algebra fix): bidder M5 target = baseTarget + (oppMeld-myMeld)/2")
+    assertTrue(botSrc:find("R%.CompareMelds") ~= nil,
+               "AJ.2c (A#1 winner-takes-all): M5 consults CompareMelds before computing target")
 end
 
 -- AJ.3 (N1 urgency-swing × meld-pin guard): partner-meld-known card
@@ -5435,11 +5503,12 @@ end
 -- of the gap=0-skip is implicit.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    -- Verify the M5 defender block uses `defenderTarget = baseTarget
-    -- + m5_oppMeld - m5_myMeld` (no +1).
-    local m = botSrc:find("local defenderTarget = baseTarget %+ m5_oppMeld %- m5_myMeld")
-    assertTrue(m ~= nil,
-               "AK.6 (N6 behavioral pin): defender M5 uses baseTarget without +1 off-by-one")
+    -- v1.0.9 (A#1): algebra fix divides meld delta by 2.
+    -- Verify the M5 defender block uses the corrected formula.
+    local m = botSrc:find("local defenderTarget = baseTarget")
+    local m2 = botSrc:find("math%.floor%(%(m5_oppMeld %- m5_myMeld%) / 2%)")
+    assertTrue(m ~= nil and m2 ~= nil,
+               "AK.6 (N6+A#1): defender M5 uses baseTarget + (oppMeld-myMeld)/2 with no +1")
 end
 
 -- AK.7 (cluster 7 sample conversion: AH.3 FLOOR-3 behavioral).
@@ -5484,6 +5553,144 @@ do
     end
     Bot._partnerStyle = nil
     WHEREDNGNDB = prevDB
+    restore()
+end
+
+-- =====================================================================
+-- Section AL: v1.0.9 swarm-finding behavioral coverage
+-- =====================================================================
+print("")
+print("=== Section AL: v1.0.9 swarm findings (A#2 + C#2 behavioral) ===")
+
+-- AL.1 (C#2 behavioral): PickMelds skips when opp's declared meld
+-- already beats every candidate AND partner has no winning declaration.
+-- Saudi rule: meld scoring is winner-takes-all (R.CompareMelds). If
+-- our team is doomed to lose comparison, declaring our weaker meld
+-- just reveals 3-4 cards for 0 expected score. Filter expected.
+do
+    local restore = snapshotS({
+        "phase", "contract", "tricks", "hostHands", "meldsByTeam",
+    })
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = {
+        type = K.BID_HOKM, trump = "S", bidder = 2,
+        doubled = false, tripled = false, foured = false, gahwa = false,
+    }
+    S.s.tricks = {}  -- trick 1 not yet closed
+    -- Opp declared a 100-meld in non-trump diamonds (best=K).
+    S.s.meldsByTeam = {
+        A = {},
+        B = {
+            { kind = "sequence", suit = "D", top = "K", len = 4,
+              cards = { "TD", "JD", "QD", "KD" },
+              declaredBy = 2, value = 100 },
+        },
+    }
+    -- Our hand: a 50-meld in clubs (sequence Q-K-A clubs). Lower-rank
+    -- than opp's 100-meld → CompareMelds would favor opp (B). C#2
+    -- filter must skip our 50.
+    S.s.hostHands = {
+        [1] = { "QC", "KC", "AC", "8H", "9H" },  -- 3-card 50-meld in C
+    }
+    if Bot and Bot.PickMelds then
+        local melds = Bot.PickMelds(1)
+        assertEq(#melds, 0,
+                 "AL.1 (C#2): PickMelds skips weaker meld when opp's higher-rank meld already declared")
+    end
+    restore()
+end
+
+-- AL.2 (C#2 behavioral): PickMelds DECLARES when partner's already-
+-- winning meld means our team will collect SUM. Even if our individual
+-- meld is weaker than opp's best, partner's higher meld means our
+-- weaker one ADDS to the team total once we win the comparison.
+do
+    local restore = snapshotS({
+        "phase", "contract", "tricks", "hostHands", "meldsByTeam",
+    })
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = {
+        type = K.BID_HOKM, trump = "S", bidder = 2,
+        doubled = false, tripled = false, foured = false, gahwa = false,
+    }
+    S.s.tricks = {}
+    -- Opp declared a 50-meld; partner declared a 100-meld (already
+    -- winning). Our additional 50 ADDS to team total when we win.
+    S.s.meldsByTeam = {
+        A = {
+            { kind = "sequence", suit = "D", top = "K", len = 4,
+              cards = { "TD", "JD", "QD", "KD" },
+              declaredBy = 3, value = 100 },
+        },
+        B = {
+            { kind = "sequence", suit = "H", top = "K", len = 3,
+              cards = { "QH", "KH", "AH" },
+              declaredBy = 2, value = 50 },
+        },
+    }
+    -- Our hand (seat 1, team A): own 50-meld in clubs. Partner's
+    -- 100-meld already wins for team A → our 50 should be declared
+    -- to add to team total.
+    S.s.hostHands = {
+        [1] = { "QC", "KC", "AC", "8H", "9H" },
+    }
+    if Bot and Bot.PickMelds then
+        local melds = Bot.PickMelds(1)
+        local count = #melds
+        assertTrue(count >= 1,
+                   "AL.2 (C#2): PickMelds keeps weaker meld when partner's higher meld already winning")
+    end
+    restore()
+end
+
+-- AL.3 (C#2 behavioral): PickMelds returns ALL candidates when no
+-- prior declarations visible (early in trick 1, no info yet).
+do
+    local restore = snapshotS({
+        "phase", "contract", "tricks", "hostHands", "meldsByTeam",
+    })
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = {
+        type = K.BID_HOKM, trump = "S", bidder = 2,
+        doubled = false, tripled = false, foured = false, gahwa = false,
+    }
+    S.s.tricks = {}
+    S.s.meldsByTeam = { A = {}, B = {} }
+    -- Hand has a 100-meld (T-J-Q-K spades = trump sequence) — strongly
+    -- worth declaring even with no info, since we're first.
+    S.s.hostHands = { [1] = { "TS", "JS", "QS", "KS", "8H" } }
+    if Bot and Bot.PickMelds then
+        local melds = Bot.PickMelds(1)
+        assertTrue(#melds >= 1,
+                   "AL.3 (C#2): PickMelds returns candidates when no prior declarations visible")
+    end
+    restore()
+end
+
+-- AL.4 (A#2 helper-direct): beloteBypassQualifies recognises canonical
+-- 100-meld T-J-Q-K and J-Q-K-A patterns. We can't access the local
+-- helper directly, but we can verify the BEHAVIOR through PickBid:
+-- a hand with T-J-Q-K of bidcardsuit should fire BC-MANDATORY even
+-- without side Ace.
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    S.s.bidRound = 1
+    S.s.bidCard  = "TS"  -- bidcard contributes to T-J-Q-K of S
+    S.s.dealer   = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = {}
+    S.s.hostHands = {}
+    -- Hand: J+Q+K+spades (3 spades; with bidcard 5th would be 4 spades
+    -- forming T-J-Q-K). No side Aces. K+Q present, count post-bidcard
+    -- = 4. A#2 canonical 100-meld branch (T-J-Q-K) qualifies.
+    S.s.hostHands[1] = { "JS", "QS", "KS", "8C", "9D" }
+    if Bot and Bot.PickBid then
+        local result = Bot.PickBid(1)
+        assertEq(result, K.BID_HOKM .. ":S",
+                 "AL.4 (A#2 canonical 100-meld): T-J-Q-K of bidcard suit qualifies BC-MANDATORY")
+    end
     restore()
 end
 
