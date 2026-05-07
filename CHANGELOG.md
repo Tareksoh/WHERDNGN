@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.1.2 — Hotfix: BALOOT vocal misfiring on Sun round-end
+
+User report: BALOOT! voice played at the end of a Sun round (the
+attached screenshot showed a SUN-bid SWA-fail round). Sun has NO
+Belote (Hokm-only mechanic), so the cue was wrong.
+
+### Root cause
+
+`K.SND_BALOOT` was used for TWO purposes:
+1. **Belote announcement** (v1.0.11 D HIGH-2): plays when player
+   announces K+Q-of-trump via the BALOOT! UI button.
+2. **Generic round-end fanfare** (pre-v0.3.0 leftover at
+   `State.lua:1842-1845`): fired on ANY al-kaboot or contract-fail.
+
+When v1.0.11 repurposed `K.SND_BALOOT` exclusively for Belote
+announcement, this generic fanfare path was missed during the
+migration. So in any contract-fail round (Hokm OR Sun), the
+"بلوت" vocal still played as a generic loss stinger — incorrect
+because Sun rounds can't have Belote and Hokm-fail rounds may
+not have an announced Belote either.
+
+### Fix
+
+Removed the generic round-end SND_BALOOT trigger in
+`S.ApplyRoundEnd`. The v0.10.7 specialized cues
+(`SND_HOKM_LOST`, `SND_KABOOT`, `SND_KABOOT_AGAINST`,
+`SND_LOST_ROUND`) already cover all the round-end contextual
+cases. The Belote-bonus reveal still fires correctly via
+`S.ApplyBeloteAnnounce` when the player clicks BALOOT! during
+play (or bot auto-announces).
+
+828/828 tests pass.
+
 ## v1.1.1 — Third-pass audit follow-on (M1/M2/M4 + L1/L2/L3)
 
 Closes the user-prioritized backlog from the v1.1.0 third-pass

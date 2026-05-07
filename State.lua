@@ -1831,18 +1831,20 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     -- seat won the last trick.
     s.turn = nil
     s.turnKind = nil
-    -- Audit fix: BALOOT fanfare for AL-KABOOT (sweep) or contract
-    -- failure now fires on EVERY client, not just the host. The
-    -- sweep / bidderMade flags arrive via MSG_ROUND (broadcast by
-    -- the host's SendRound). Pre-v0.3.0 hosts and Takweesh/SWA call
-    -- sites pass nil for both — treat as no-fanfare. Only fire when
-    -- we have an explicit signal (sweep set, or bidderMade==false).
-    -- (Re-audit V16/V10/V9 finding: the old `bidderMade==false`
-    -- check fired on the absent case too because nil ~= false.)
-    if B.Sound and B.Sound.Cue
-       and (sweep ~= nil or bidderMade == false) then
-        B.Sound.Cue(K.SND_BALOOT)
-    end
+    -- v1.2.0 (user-reported bug): REMOVED generic SND_BALOOT
+    -- round-end fanfare. Pre-v1.2.0 this fired the "Baloot!" vocal
+    -- on ANY al-kaboot or contract-fail — including SUN rounds
+    -- (where Belote doesn't exist) and Hokm fails without an
+    -- actual Belote. v1.0.11 repurposed K.SND_BALOOT exclusively
+    -- for the K+Q-of-trump Belote announcement (D HIGH-2); this
+    -- generic fanfare path was missed during that migration. The
+    -- v0.10.7 specialized round-end cues below (SND_HOKM_LOST,
+    -- SND_KABOOT, SND_KABOOT_AGAINST, SND_LOST_ROUND) cover all
+    -- the contextual cases — the generic SND_BALOOT was layered
+    -- on top redundantly and now plays WRONG vocals at round-end.
+    -- The Belote-bonus reveal still fires correctly via
+    -- S.ApplyBeloteAnnounce when the player clicks the BALOOT!
+    -- button (or bot auto-announces) during play.
 
     -- v0.10.7 user-requested specialized round-end cues. Layer on
     -- top of the generic SND_BALOOT fanfare; the generic SND_LOST_ROUND

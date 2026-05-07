@@ -5047,11 +5047,15 @@ end
 do
     local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
     -- v1.0.6 (B#6): ApplyRoundEnd uses R.TeamOf(winSeat) instead of
-    -- inline team-mapping. Window 10000 covers the full function body
+    -- inline team-mapping. Window 12000 covers the full function body
     -- — ApplyRoundEnd has ~250 lines including comments.
+    -- v1.2.0: bumped 10000→12000 after the SND_BALOOT-fanfare removal
+    -- (which replaced ~14 lines of code with ~14 lines of explanation
+    -- comments, net ~+50 chars; pushed the R.TeamOf pattern just past
+    -- the 10000-char slice edge).
     local fnStart = stateSrc:find("function S%.ApplyRoundEnd")
     if fnStart then
-        local body = stateSrc:sub(fnStart, fnStart + 10000)
+        local body = stateSrc:sub(fnStart, fnStart + 12000)
         assertTrue(body:find("local team = R%.TeamOf%(winSeat%)") ~= nil,
                    "AJ.6 (B#6): ApplyRoundEnd uses R.TeamOf(winSeat) for trickWinners")
     end
