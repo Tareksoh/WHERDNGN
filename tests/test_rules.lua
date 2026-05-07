@@ -544,71 +544,184 @@ do
     assertEq(res.final.B, 44, "Sun sweep: final B = 44")
 end
 
--- v0.10.5 HIGH-2 — Reverse Al-Kaboot (الكبوت المقلوب). Defender team
--- sweeps all 8 tricks, gated on bidder having led trick 1. Source:
--- video #16 (canonical Saudi reverse-AK). Pre-v0.10.5 awarded the
--- forward-AK bonus (250/220) to ANY 8-trick sweeper, over-paying
--- defender by ~16 gp/round Hokm or ~35 gp/round Sun.
+-- v1.0.12 (D HIGH-3 user-canonical) — Reverse Al-Kaboot (الكبوت
+-- المقلوب). User-supplied PDF/Saudi rule replaces the v0.10.5 video-
+-- #16 single-source hypothesis. Conditions:
+--   1. Defender team sweeps all 8 tricks
+--   2. Bid is SUN (not Hokm)
+--   3. Bidder is on dealer's right (seat == NextSeat(dealer))
+--   4. Bidder played an Ace at any point during the round
+-- Reward: 88 banta FLAT (= 880 raw post-multiplier; cardMult-immune)
+--   + defender's declared melds × meldMult.
 
--- H.10 — Hokm reverse-AK with bidder lead → +88 raw (not 250)
-do
-    -- Bidder = seat 1 (team A); defender team B sweeps. Bidder must
-    -- lead trick 1 for reverse-AK to fire. sweptTricks(2) sets all
-    -- winners=2 AND lead=seat 1 (sweptTricks iterates s=1..4 in
-    -- play order). So this is the bidder-led + defender-sweeps case.
-    local tricks = sweptTricks(2)
-    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
-    assertEq(res.sweep, "B", "H.10: defender team sweeps")
-    -- raw.B should be K.AL_KABOOT_REVERSE = 88 (+ optional belote).
-    local expectedRawB = K.AL_KABOOT_REVERSE
-    if res.belote == "B" then expectedRawB = expectedRawB + K.MELD_BELOTE end
-    assertEq(res.raw.B, expectedRawB,
-             "H.10: Hokm reverse-AK raw B = 88 (+20 if belote)")
-    assertEq(res.raw.A, 0, "H.10: bidder team gets 0")
+-- Helper: build sweep tricks where bidder (seat 1) plays all 8 cards
+-- including at least one Ace; defender team B (seat 2) wins all 8.
+local function bidderAceSweep()
+    local cards = fullDeck()
+    local idx = 1
+    local tricks = {}
+    -- Force AS to be played by bidder (seat 1) in trick 1 to satisfy
+    -- the "bidder has Ace" condition.
+    for i = 1, 8 do
+        local plays = {}
+        for s = 1, 4 do
+            local card
+            if i == 1 and s == 1 then
+                card = "AS"  -- bidder seat 1 plays Ace of spades
+            else
+                while cards[idx] == "AS" do idx = idx + 1 end
+                card = cards[idx]
+                idx = idx + 1
+            end
+            plays[#plays + 1] = { seat = s, card = card }
+        end
+        tricks[#tricks + 1] = {
+            winner = 2, -- defender team B sweeps
+            leadSuit = C.Suit(plays[1].card),
+            plays = plays,
+        }
+    end
+    return tricks
 end
 
--- H.11 — Sun reverse-AK with bidder lead → +88 × MULT_SUN raw
+-- H.10 — v1.0.12: HOKM contract does NOT qualify for reverse-AK
+-- (rule is Sun-only). Falls through to regular contract-fail path
+-- where defender team gets handTotal raw.
 do
-    local tricks = sweptTricks(2)
-    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} })
-    assertEq(res.sweep, "B", "H.11: defender team sweeps Sun")
-    assertEq(res.raw.B, K.AL_KABOOT_REVERSE * K.MULT_SUN,
-             "H.11: Sun reverse-AK raw B = 88 × 2 = 176 (NOT 440)")
-    assertEq(res.final.B, 18, "H.11: Sun reverse-AK final B = 18 (NOT 44)")
+    local tricks = bidderAceSweep()
+    -- Bidder seat 1 (team A); dealer seat 4 → NextSeat(4) = 1, so
+    -- bidder IS on dealer's right. Bidder has Ace (AS in trick 1).
+    -- But contract is HOKM → reverse-AK gate fails (Sun required).
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} }, 4)
+    assertEq(res.sweep, nil,
+             "H.10 (v1.0.12): Hokm contract → reverse-AK gate fails (Sun required)")
+    -- Falls through: bidder fails contract; defender team B wins
+    -- handTotal = 162 raw × cardMult=1 = 162.
+    assertEq(res.raw.B, K.HAND_TOTAL_HOKM,
+             "H.10 (v1.0.12): Hokm sweep without reverse-AK → defender takes handTotal=162 raw")
 end
 
--- H.12 — Reverse-AK NOT triggered when bidder didn't lead trick 1.
--- Defender team sweeps but defender led trick 1 → fall through to
--- normal scoring (no AK bonus).
+-- H.11 — v1.0.12: SUN reverse-AK fires with all conditions met.
+-- Bidder seat 1 (dealer's right, dealer=4); bidder played Ace; Sun
+-- bid; defender swept. Result: 88 banta FLAT (cardMult-immune) +
+-- defender melds × meldMult.
 do
-    -- Build manual tricks with seat 2 (defender team B) leading trick 1.
+    local tricks = bidderAceSweep()
+    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} }, 4)
+    assertEq(res.sweep, "B",
+             "H.11 (v1.0.12): defender team sweeps with all conditions met")
+    -- raw.B = K.AL_KABOOT_REVERSE = 880 (cardMult bypassed). No melds.
+    assertEq(res.raw.B, K.AL_KABOOT_REVERSE,
+             "H.11 (v1.0.12): Sun reverse-AK raw B = 880 (= 88 banta flat)")
+    assertEq(res.final.B, 88,
+             "H.11 (v1.0.12): Sun reverse-AK final B = 88 banta")
+    -- Bidder team gets 0 — they were swept.
+    assertEq(res.raw.A, 0, "H.11 (v1.0.12): bidder team raw = 0")
+end
+
+-- H.11b — v1.0.12: Sun reverse-AK + defender melds. The "بالمشاريع"
+-- clause: defender's declared melds ARE added on top of the 88 banta.
+do
+    local tricks = bidderAceSweep()
+    -- Defender (team B) declares a 50-meld in any non-trump suit.
+    -- Sun has no trump — meldMult = K.MULT_SUN (= 2).
+    local meldsByTeam = {
+        A = {},
+        B = {
+            { kind = "sequence", suit = "H", top = "K", len = 4,
+              cards = { "TH", "JH", "QH", "KH" },
+              declaredBy = 2, value = 50 },
+        },
+    }
+    local res = R.ScoreRound(tricks, sun(1), meldsByTeam, 4)
+    assertEq(res.sweep, "B", "H.11b: defender sweeps with meld")
+    -- raw.B = 880 (bonus, cardMult-immune) + 50 × meldMult(=2) = 880+100=980.
+    assertEq(res.raw.B, K.AL_KABOOT_REVERSE + 50 * K.MULT_SUN,
+             "H.11b: Sun reverse-AK + defender 50-meld = 880 + 100 = 980 raw")
+    assertEq(res.final.B, 98, "H.11b: Sun reverse-AK + meld final = 98 banta")
+end
+
+-- H.11c — v1.0.12: bidder has NO Ace → reverse-AK gate fails.
+-- Construct sweep where bidder seat 1 plays no Ace.
+do
+    local cards = fullDeck()
+    -- Drop AS, AH, AD, AC from bidder's slot — give them to defenders.
+    local tricks = {}
+    local bidderSpots = { "7C","8D","9H","TS","JC","QD","KH","8S" }
+    local idx = 1
+    for i = 1, 8 do
+        local plays = {}
+        for s = 1, 4 do
+            local card
+            if s == 1 then
+                card = bidderSpots[i]   -- bidder plays only non-A
+            else
+                repeat card = cards[idx]; idx = idx + 1
+                until card and not (card == bidderSpots[i])
+                if not card then card = "9C" end
+            end
+            plays[#plays + 1] = { seat = s, card = card }
+        end
+        tricks[#tricks + 1] = {
+            winner = 2, leadSuit = C.Suit(plays[1].card), plays = plays,
+        }
+    end
+    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} }, 4)
+    -- Bidder played no Ace → reverse-AK fails → falls through to fail.
+    assertEq(res.sweep, nil,
+             "H.11c: bidder has NO Ace → reverse-AK gate fails (no AK bonus)")
+end
+
+-- H.11d — v1.0.12: bidder NOT on dealer's right → reverse-AK fails.
+do
+    local tricks = bidderAceSweep()
+    -- Dealer = seat 1; bidder = seat 1; NextSeat(1) = 2; so bidder
+    -- is NOT on dealer's right. Sun + Ace held. Should fail gate.
+    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} }, 1)
+    assertEq(res.sweep, nil,
+             "H.11d: bidder NOT on dealer's right → reverse-AK gate fails")
+end
+
+-- H.12 — v1.0.12: legacy gate (bidder-led-trick-1) is no longer the
+-- discriminator. The gate is now (Sun + dealer-right + Ace held).
+-- This test verifies a defender-led sweep DOES qualify if other
+-- conditions are met.
+do
     local cards = fullDeck()
     local idx = 1
     local tricks = {}
     for i = 1, 8 do
         local plays = {}
-        -- Order plays so seat 2 leads trick 1 (defender lead, not bidder).
+        -- Defender (seat 2) leads trick 1 — pre-v1.0.12 this would
+        -- have suppressed reverse-AK. Now: irrelevant.
         local order = (i == 1) and { 2, 3, 4, 1 } or { 1, 2, 3, 4 }
         for _, s in ipairs(order) do
-            plays[#plays + 1] = { seat = s, card = cards[idx] }
-            idx = idx + 1
+            local card
+            if i == 1 and s == 1 then
+                card = "AS"  -- bidder still plays an Ace
+            else
+                while cards[idx] == "AS" do idx = idx + 1 end
+                card = cards[idx]
+                idx = idx + 1
+            end
+            plays[#plays + 1] = { seat = s, card = card }
         end
         tricks[#tricks + 1] = {
-            winner = 2,
-            leadSuit = C.Suit(plays[1].card),
-            plays = plays,
+            winner = 2, leadSuit = C.Suit(plays[1].card), plays = plays,
         }
     end
-    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
-    -- sweep flag was suppressed by reverse-AK gate failing.
-    assertEq(res.sweep, nil,
-             "H.12: defender sweep without bidder-led trick 1 → no AK fires")
-    -- Falls through to normal scoring; defender team B has the trick
-    -- points (counted via teamPoints in R.ScoreRound).
+    -- Bidder seat 1, dealer seat 4 → NextSeat(4)=1 = bidder. Sun bid.
+    -- Bidder played AS in trick 1. All 4 conditions met → reverse-AK
+    -- fires regardless of who LED trick 1.
+    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} }, 4)
+    assertEq(res.sweep, "B",
+             "H.12 (v1.0.12): defender-led trick 1 no longer blocks reverse-AK (gate replaced)")
+    assertEq(res.final.B, 88,
+             "H.12 (v1.0.12): reverse-AK fires → 88 banta defender")
 end
 
 -- H.13 — Forward Al-Kaboot still pays 250/220 (regression pin for
--- the existing behaviour after the v0.10.5 split).
+-- the existing behaviour after the v0.10.5 split). Unchanged in v1.0.12.
 do
     local tricks = sweptTricks(1)   -- bidder = seat 1, team A sweeps
     local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
@@ -767,13 +880,56 @@ do
     assertEq(res.belote, "A", "Belote attribution: A (seat 1 holds K+Q of trump)")
 end
 
--- Belote follows sweep winner.
+-- Belote follows sweep winner — only when reverse-AK actually fires.
+-- v1.0.12 (D HIGH-3): Hokm sweeps no longer trigger reverse-AK
+-- (rule is Sun-only). So this Hokm-defender-sweep test now falls
+-- through to regular fail; the AK override never fires; Belote
+-- stays with the K+Q holder (team A).
 do
     local winners = {2,2,2,2,2,2,2,2}  -- B sweeps; seat 1 (A) holds K+Q
     local tricks = tricksWithSeat1Belote(winners)
     local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
-    assertEq(res.sweep,  "B", "Sweep = B")
-    assertEq(res.belote, "B", "Belote follows sweep winner (override A→B)")
+    assertEq(res.sweep, nil,
+             "Hokm defender sweep (v1.0.12): no reverse-AK → no sweep override")
+    assertEq(res.belote, "A",
+             "Belote stays with K+Q holder (no AK override fires)")
+end
+
+-- v1.0.12: Sun reverse-AK DOES override Belote when conditions hold.
+-- Bidder seat 1 (= NextSeat(dealer=4)), Sun bid, played KH (covers
+-- Ace condition? No, K is not A). Need bidder to have played an Ace.
+-- Use a Sun-context override test where bidder seat 1 has played an
+-- Ace AND holds K+Q hearts (Belote pair). The PDF rule still applies.
+do
+    -- Build: seat 1 plays K+Q of (any suit) + an Ace; defender wins all 8.
+    -- For Sun there's no trump, so K+Q "of trump" doesn't apply (Sun has
+    -- no Belote — Hokm-only). So this case verifies that Sun reverse-AK
+    -- doesn't have a Belote-override path (Belote is Hokm-only anyway).
+    local cards = fullDeck()
+    local idx = 1
+    local tricks = {}
+    for i = 1, 8 do
+        local plays = {}
+        for s = 1, 4 do
+            local card
+            if i == 1 and s == 1 then
+                card = "AS"  -- bidder plays Ace (qualifies reverse-AK)
+            else
+                while cards[idx] == "AS" do idx = idx + 1 end
+                card = cards[idx]
+                idx = idx + 1
+            end
+            plays[#plays + 1] = { seat = s, card = card }
+        end
+        tricks[#tricks + 1] = {
+            winner = 2, leadSuit = C.Suit(plays[1].card), plays = plays,
+        }
+    end
+    local res = R.ScoreRound(tricks, sun(1), { A = {}, B = {} }, 4)
+    assertEq(res.sweep, "B",
+             "v1.0.12: Sun reverse-AK fires (sweep flag set)")
+    assertEq(res.belote, nil,
+             "Sun has no Belote (Hokm-only) — belote always nil")
 end
 
 -- Belote cancellation: K+Q holder also declared a 100-meld.

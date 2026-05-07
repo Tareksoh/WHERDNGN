@@ -111,10 +111,23 @@ your opponent's.
 - **Al-Kaboot (كبوت)** — bidder team sweeps all 8 tricks. Bonus:
   250 raw in Hokm, 220 in Sun (pre-multiplier).
 - **Reverse Al-Kaboot (الكبوت المقلوب)** — *defenders* sweep all 8
-  tricks against the bidder team. Bonus: **+88 raw**. Qualifies
-  only when bidder was the trick-1 leader. **Single-source rule
-  (video #16); confirm before wiring.** New constant proposal:
-  `K.AL_KABOOT_REVERSE = 88`.
+  tricks against the bidder team. **v1.0.12 user-canonical PDF
+  rule** (replacing the v0.10.5 video-#16 single-source hypothesis):
+  «اللاعب الذي على يمين الموزع بشراء صن و(كبتت) عليه ولديه إكه
+   سواء أخذها من الميدان أو كانت في يده. تسجل للفريق المقابل كبوت
+   مقلوب بـ(88) بنط بالمشاريع». All four conditions must hold:
+    1. Defender team sweeps all 8 tricks
+    2. Bid is **SUN** (not Hokm)
+    3. Bidder is on **dealer's right** (`seat == NextSeat(dealer)`)
+    4. Bidder has/had an **Ace** at any point during the round
+       (played in any trick, or — in the rare bidcard-takes-Ace
+       case — would have played it after taking the bidcard)
+  Reward: **88 banta FLAT** (= 880 raw post-multiplier; cardMult-
+  immune so the same 88 banta holds in Sun-bare and Sun-Bel'd) +
+  defender's declared melds × meldMult (the «بالمشاريع» clause).
+  Constant: `K.AL_KABOOT_REVERSE = 880` (post-multiplier raw value).
+  When any condition fails, the defender sweep falls through to
+  the regular contract-fail path (defender takes `handTotal × cardMult`).
 
 ### Penalty system — Kasho vs Qaid
 

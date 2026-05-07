@@ -981,19 +981,44 @@ function R.ScoreRound(tricks, contract, meldsByTeam, dealerSeat,
 
     local sweepIsBidderTeam = sweepTeam and (sweepTeam == bidderTeam) or false
     local sweepIsReverseAK = false
-    local reverseAKBidderLed = false
     if sweepTeam and not sweepIsBidderTeam then
-        -- Reverse Al-Kaboot candidate. Gate on bidder leading trick 1.
-        local trick1 = tricks[1]
-        if trick1 and trick1.plays and trick1.plays[1]
-           and trick1.plays[1].seat == contract.bidder then
-            sweepIsReverseAK = true
-            reverseAKBidderLed = true
+        -- v1.0.12 (D HIGH-3 user-canonical): reverse Al-Kaboot rule.
+        -- All four conditions must hold (per Saudi PDF text):
+        --   1. Defender team swept (already verified — sweepTeam set
+        --      and not bidder team)
+        --   2. Bid is SUN (not Hokm)
+        --   3. Bidder is on dealer's right (seat == NextSeat(dealer))
+        --   4. Bidder has/had an Ace at any point during the round
+        --      (played in any trick — the round is over, so all of
+        --      bidder's 8 cards are in the trick history)
+        --
+        -- If any condition fails, the defender sweep falls through to
+        -- normal scoring (regular contract-fail path: defender wins
+        -- handTotal × cardMult). Pre-v1.0.12 this used a different
+        -- single-source rule (bidder led trick 1, 88 raw). User
+        -- supplied the canonical PDF text replacing that hypothesis.
+        local sunBid       = (contract.type == K.BID_SUN)
+        local dealerRight  = dealerSeat
+                              and contract.bidder == ((dealerSeat % 4) + 1)
+        local bidderHadAce = false
+        if sunBid and dealerRight then
+            for _, t in ipairs(tricks) do
+                for _, p in ipairs(t.plays or {}) do
+                    if p.seat == contract.bidder
+                       and C.Rank(p.card) == "A" then
+                        bidderHadAce = true
+                        break
+                    end
+                end
+                if bidderHadAce then break end
+            end
         end
-        -- If bidder did not lead trick 1, the defender sweep falls
-        -- through to normal scoring (no AK bonus). Suppress sweepTeam
-        -- so the cardA/cardB block below skips its sweep branch.
-        if not reverseAKBidderLed then
+        if sunBid and dealerRight and bidderHadAce then
+            sweepIsReverseAK = true
+        else
+            -- Conditions not met. Suppress sweepTeam so the cardA/cardB
+            -- block below skips its sweep branch — defender sweep then
+            -- falls through to the regular fail path.
             sweepTeam = nil
         end
     end
@@ -1239,8 +1264,15 @@ function R.ScoreRound(tricks, contract, meldsByTeam, dealerSeat,
     -- Cards get full cascade; melds get the Bel-capped multiplier.
     -- Belote: post-everything, fully immune (only meld type that's
     -- multiplier-immune).
-    local rawA = (cardA * cardMult) + ((meldPoints.A or 0) * meldMult)
-    local rawB = (cardB * cardMult) + ((meldPoints.B or 0) * meldMult)
+    --
+    -- v1.0.12 (D HIGH-3): reverse Al-Kaboot bonus is also multiplier-
+    -- immune — the canonical PDF rule says "88 banta" flat regardless
+    -- of Sun-bare or Sun-Bel'd contract state. K.AL_KABOOT_REVERSE
+    -- (now 880) is the post-multiplier raw value. Defender melds still
+    -- get meldMult (Sun×2 or Sun×2×Bel×2, capped per D HIGH-1).
+    local cardMultEffective = sweepIsReverseAK and K.MULT_BASE or cardMult
+    local rawA = (cardA * cardMultEffective) + ((meldPoints.A or 0) * meldMult)
+    local rawB = (cardB * cardMultEffective) + ((meldPoints.B or 0) * meldMult)
 
     -- Belote: independent +20 raw, applied AFTER the multiplier.
     -- Pagat: "Baloot always 2 points unaffected" — Bel/Triple/Four/Sun multipliers

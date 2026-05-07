@@ -137,24 +137,37 @@ K.CARRE_RANKS = { A=true, T=true, K=true, Q=true, J=true }   -- 9 dropped
 K.AL_KABOOT_HOKM = 250
 K.AL_KABOOT_SUN  = 220
 
--- Reverse Al-Kaboot (الكبوت المقلوب) — defenders sweep all 8 tricks,
--- gated on bidder having led trick 1. Per video #16 (the canonical
--- Saudi source for reverse Al-Kaboot), the defender sweep is much
--- less rewarding than forward Al-Kaboot — 88 raw uniformly across
--- contracts, not the 250/220 that forward-AK pays. Awarded only when
--- the bidder team led trick 1; if defenders led the first trick, the
--- sweep falls through to normal scoring (no reverse-AK bonus). This
--- is the SAUDI-canonical asymmetry: forward-AK rewards the bidder for
--- crushing the contract; reverse-AK is a smaller "humiliation" payout
--- that requires the bidder to have actively engaged (led trick 1) and
--- still lost everything.
+-- Reverse Al-Kaboot (الكبوت المقلوب) — defenders sweep all 8 tricks
+-- against the bidder team. Per user-supplied canonical Saudi rule:
 --
--- v0.10.5 fix (review_v0.10.2 SCORING_SUMMARY HIGH-2): pre-v0.10.5
--- Rules.lua:742-745 + 847-853 awarded the same 250/220 to ANY
--- 8-trick sweeper regardless of bidder/defender, over-paying defender
--- by ~16 gp/round (Hokm) or ~35 gp/round (Sun) — game-deciding in a
--- 152-target match. Source: S-Score-06.
-K.AL_KABOOT_REVERSE = 88
+--   "اللاعب الذي على يمين الموزع بشراء صن و(كبتت) عليه ولديه إكه
+--    سواء أخذها من الميدان أو كانت في يده. تسجل للفريق المقابل كبوت
+--    مقلوب بـ(88) بنط بالمشاريع"
+--
+-- = "[When] the player to the dealer's right buys Sun and is kabooted,
+--    AND has an Ace whether he took it from the field [trick/bidcard]
+--    or it was in his hand. The opposite team scores reverse-kaboot
+--    at (88) banta with the melds [+ defender's declared melds]."
+--
+-- All FOUR conditions must hold for reverse-kaboot to fire:
+--   1. Defender team sweeps all 8 tricks
+--   2. Bid is Sun (not Hokm)
+--   3. Bidder is on dealer's right (seat == NextSeat(dealer))
+--   4. Bidder played (or holds) an Ace at any point during the round
+--
+-- Reward: 88 banta FLAT (= 880 raw, post-multiplier — bypasses cardMult
+-- so the same 88-banta result holds in Sun-bare and Sun-Bel'd) +
+-- defender's declared melds × meldMult.
+--
+-- v1.0.12 (D HIGH-3 closure): the user supplied the canonical PDF/Saudi
+-- text, replacing the v0.10.5 video-#16-single-source hypothesis
+-- (88 raw + bidder-led-trick-1). Both the gate AND the value changed:
+--   • Gate: bidder-led-trick-1 → dealer-right + Sun + Ace held
+--   • Value: 88 raw (× cardMult) → 880 raw (cardMult-immune flat)
+--
+-- The constant value is the post-multiplier raw amount: 880 raw
+-- yields floor((880 + 5) / 10) = 88 banta exactly.
+K.AL_KABOOT_REVERSE = 880
 
 -- -- Game phases ------------------------------------------------------
 

@@ -1,5 +1,83 @@
 # Changelog
 
+## v1.0.12 — Reverse Al-Kaboot canonical rule (D HIGH-3)
+
+User supplied the canonical Saudi PDF text for reverse-Kaboot
+(الكبوت المقلوب), replacing the v0.10.5 video-#16 single-source
+hypothesis. Both the gate AND the reward value changed. 821/821
+tests pass.
+
+### CRITICAL — Saudi-rule conformance
+
+User-supplied PDF text:
+> «اللاعب الذي على يمين الموزع بشراء صن و(كبتت) عليه ولديه إكه
+>  سواء أخذها من الميدان أو كانت في يده. تسجل للفريق المقابل كبوت
+>  مقلوب بـ(88) بنط بالمشاريع»
+
+= "When the player on the dealer's right buys Sun and is kabooted,
+   AND has an Ace whether he took it from the field [trick/bidcard]
+   or it was in his hand. The opposite team scores reverse-kaboot
+   at (88) banta with the melds [+ defender's declared melds]."
+
+### What changed
+
+**Pre-v1.0.12 (video-#16 hypothesis)**:
+- Gate: defender sweeps + bidder led trick 1
+- Reward: `K.AL_KABOOT_REVERSE = 88` raw, multiplied by cardMult
+  (88 raw in Hokm = 9 banta; 176 raw in Sun = 18 banta).
+
+**v1.0.12 (user-canonical PDF rule)**:
+- Gate: defender sweeps + Sun bid + bidder on dealer's right +
+  bidder played an Ace at any point
+- Reward: `K.AL_KABOOT_REVERSE = 880` raw, **cardMult-immune**
+  flat (yields 88 banta exactly, same in Sun-bare and Sun-Bel'd)
+  + defender's declared melds × meldMult (the «بالمشاريع» clause)
+
+### Implementation
+
+- **`Constants.lua`**: `K.AL_KABOOT_REVERSE` 88 → 880 with
+  semantics-update comment block citing the user-supplied Arabic
+  text and translation.
+- **`Rules.lua` reverse-AK gate**: replaced the bidder-led-trick-1
+  check with a 4-condition check (`Sun + dealer-right +
+  bidder-played-Ace`). Falls through to regular fail when any
+  condition fails. Uses the existing `dealerSeat` parameter
+  (added in v1.0.9 for PDF Rule 2).
+- **`Rules.lua` rawA/rawB computation**: introduced
+  `cardMultEffective = sweepIsReverseAK and K.MULT_BASE or
+  cardMult` so the reverse-AK bonus bypasses cardMult (matching
+  the "88 banta flat" PDF reading). Defender melds still get
+  `meldMult` (Sun×2 or Sun×2×Bel×2 per D HIGH-1 cap).
+- **`docs/strategy/saudi-rules.md`**: rewrote the Reverse Al-Kaboot
+  bullet with the verbatim Arabic text, four conditions, and the
+  `880`-flat-raw reward.
+
+### Tests
+
+- **`tests/test_rules.lua` Section H** (rewritten):
+  - **H.10**: Hokm contract → reverse-AK gate fails (Sun required);
+    falls through to regular fail (defender takes `handTotal=162`).
+  - **H.11**: Sun + all 4 conditions met → 88 banta flat.
+  - **H.11b** (NEW): Sun reverse-AK + defender 50-meld → 88 + 10
+    = 98 banta (verifies the «بالمشاريع» clause).
+  - **H.11c** (NEW): bidder has NO Ace → reverse-AK gate fails.
+  - **H.11d** (NEW): bidder NOT on dealer's right → gate fails.
+  - **H.12**: defender-led trick 1 NO LONGER blocks reverse-AK
+    (gate replaced; pre-v1.0.12 this was the discriminator).
+  - **H.13**: forward AK regression pin (unchanged).
+- **Section J** updated: Hokm-defender-sweep no longer triggers
+  the reverse-AK Belote-override (Hokm doesn't qualify post-v1.0.12).
+  New test verifies Sun reverse-AK fires when conditions met (Sun
+  has no Belote — Hokm-only — so the override path is moot).
+
+### What WASN'T changed
+
+- Forward Al-Kaboot semantics (250 Hokm / 220 Sun) preserved.
+- Sun×2 / Sun×Bel multiplier behavior preserved.
+- Net.lua Qaid handlers (HostResolveTakweesh + HostResolveSWA) do
+  NOT have a reverse-AK path — the rule only fires in
+  R.ScoreRound at end-of-round.
+
 ## v1.0.11 — Big-3 deferred backlog: Belote announcement + either-defender Bel + BALOOT button
 
 Closes the three big deferred items from v1.0.10's backlog. 813/813
