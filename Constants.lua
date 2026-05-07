@@ -416,27 +416,42 @@ K.OVERCALL_TIMEOUT_SEC = 5
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
 -- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).
-K.BOT_BEL_TH          = 35    -- defenders bel with own strength >= TH.
-                              -- v0.11.20 (post-v0.11.19 empirical):
-                              -- v0.11.19 lowered 60 -> 45 but trace showed
-                              -- 3 defender Bel evals at strength 4, 5, 22
-                              -- vs jth 28-52 — still 0% fire. Drop to 35
-                              -- per Agent 1's math + your empirical data:
-                              -- jth at TH=35 ≈ [25, 45], catches the
-                              -- strength=22 case ~30% of jitter rolls,
-                              -- canonical mardoofa-strength hands ~60%.
-                              -- AKQ stopper bonus also bumped 8 -> 12
-                              -- this release (sunStrength), so defender
-                              -- belStr distribution shifts up slightly.
-                              -- v0.11.19 history: 60 -> 45 (still
-                              -- structurally too high vs 5-card
-                              -- defender realism).
-                              -- (was 70; v0.5 C-3 calibration: TH=70 produced
-                              --  50% false-Bel coin-flip + 247/268 winnable
-                              --  Bels missed per 1000 hands; TH=60 best F1)
-K.BOT_TRIPLE_TH       = 90    -- bidder triples (×3) — needs strong hand
-K.BOT_FOUR_TH         = 110   -- defenders four (×4) — very strong hand
-K.BOT_GAHWA_TH        = 120   -- bidder gahwa (match-win) — terminal, near-certain.
+K.BOT_BEL_TH          = 62    -- defenders bel with own strength >= TH.
+                              -- v1.3.2 (post-v1.3.0 harness fix calibration):
+                              -- the v0.11.20 drop to 35 was tuned against
+                              -- the BUG-ZEROED multiseed harness (test
+                              -- fixture pre-v1.3.0 read empty hands and
+                              -- always returned false). Once the harness
+                              -- was fixed in v1.3.0, the corrected probe
+                              -- showed TH=35 fires Bel at ~92% (defender
+                              -- p25=30, p50=41, p75=53, p90=65 across
+                              -- 4000 evals; jitter band [25,45] catches
+                              -- 65% of single-defender rolls; round-level
+                              -- with 2 defenders + early-return = 92%).
+                              -- The v0.11.20 calibration was an
+                              -- over-correction against a null measurement.
+                              -- Re-anchored to p75=53 + jitter ±10 ≈
+                              -- jth_max 72; targets ~8% natural Bel rate
+                              -- (escalation.md target). v0.11.19/0.11.20
+                              -- history: 60 -> 45 -> 35 -> 62.
+K.BOT_TRIPLE_TH       = 65    -- bidder triples (×3) — needs strong hand.
+                              -- v1.3.2: 90 -> 65. The v0.11.x value of 90
+                              -- was above the realistic 8-card bidder-
+                              -- strength ceiling (p90=65 from corrected
+                              -- multiseed); structurally gated Four+Gahwa
+                              -- to 0% even when their own thresholds were
+                              -- in range. Anchored to bidder p75 (~50)
+                              -- + jitter ±12 ≈ jth_max 77; targets ~15%
+                              -- conditional-on-Bel Triple rate.
+K.BOT_FOUR_TH         = 80    -- defenders four (×4) — very strong hand.
+                              -- v1.3.2: 110 -> 80. Above proposed Triple
+                              -- band (jth_max 77) so Four still requires
+                              -- escalation pressure; below the 8-card
+                              -- ceiling so it's reachable. Targets <5%.
+K.BOT_GAHWA_TH        = 95    -- bidder gahwa (match-win) — terminal, near-certain.
+                              -- v1.3.2: 120 -> 95. Above Four band; stays
+                              -- terminal-rare (<2%) but reachable on
+                              -- top-tier hands.
                               -- v0.11.17 EV-2 (audit): lowered 135 -> 120. The
                               -- escalation chain runs on the FULL 8-card hand
                               -- (post-HostDealRest) by the time PHASE_GAHWA

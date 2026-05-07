@@ -4,7 +4,8 @@
 --
 -- The default `test_baseline_metrics.lua` deals symmetrically (32-card
 -- random shuffle, 8 cards per seat). In symmetric play, no defender
--- hand ever clears K.BOT_BEL_TH (=60 since v0.5.0) because Saudi Bel
+-- hand ever clears K.BOT_BEL_TH (=62 since v1.3.2; was 60→45→35 historically)
+-- because Saudi Bel
 -- is calibrated for the asymmetric clustering humans actually see —
 -- a human bidder typically has J+9-of-trump (or stronger), which
 -- means the OTHER team has weak trump and can have side-suit Ace

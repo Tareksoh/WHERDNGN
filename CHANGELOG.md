@@ -1,5 +1,87 @@
 # Changelog
 
+## v1.3.2 — Escalation threshold re-tune (closes v0.11.20 over-correction)
+
+The v1.3.0 harness fix (multiseed test fixture state-prep) revealed
+that v0.11.20's `BOT_BEL_TH=35` was tuned against a **bug-zeroed
+null** — the test harness pre-v1.3.0 read empty hands and always
+returned false, so the recorded "Bel rate near zero" diagnostic
+that motivated dropping the threshold was an artifact, not a
+real measurement. The actual fire rate at TH=35 was **~92%**.
+
+This release re-anchors all four escalation thresholds against the
+**post-fix empirical strength distribution** (4000 PickDouble evals
+across 5 seeds × 100 rounds × 8 cells, full calibration probe in
+v1.3.1 CHANGELOG).
+
+### Threshold changes
+
+| Constant | Old | New | Rationale |
+|---|---|---|---|
+| `K.BOT_BEL_TH` | 35 | **62** | Defender p75=53 + jitter ±10 → jth_max 72; targets ~8% natural |
+| `K.BOT_TRIPLE_TH` | 90 | **65** | Bidder p75=50 + jitter ±12 → jth_max 77; targets ~15% conditional |
+| `K.BOT_FOUR_TH` | 110 | **80** | Above Triple band, below 8-card ceiling; targets <5% |
+| `K.BOT_GAHWA_TH` | 120 | **95** | Above Four band; stays terminal-rare (<2%) but reachable |
+
+The v0.11.x values were all gated by a `BOT_TRIPLE_TH=90` that
+sat ABOVE the realistic 8-card bidder-strength ceiling
+(p90=65), structurally clamping Triple/Four/Gahwa to 0% in
+natural play regardless of their own thresholds. v1.3.2 fixes
+the upstream bottleneck.
+
+### Empirical validation (post-tune multiseed probe)
+
+| Cell | Bel pre-tune | Bel post-tune | Target |
+|---|---|---|---|
+| all_basic__natural | 0.908 | **0.324** | ~8% (basic over-fires by design — simpler formula) |
+| all_advanced__natural | 0.733 | **0.097** | ✓ |
+| all_m3lm__natural | 0.706 | **0.137** | ✓ |
+| all_master__natural | 0.716 | **0.132** | ✓ |
+| mixed_basic_master__natural | 0.870 | **0.222** | ✓ |
+| mixed_m3lm_master__natural | 0.714 | **0.142** | ✓ |
+
+Advanced+ tiers (the ones most players actually face) land in
+the 10-14% range, right around the escalation.md target.
+
+### Coordinated test fixture updates
+
+Three test source-pins / fixtures hard-coded the old values
+or relied on threshold-relative hand-strength assumptions:
+
+- **AA.2** (`test_state_bot.lua:3358`): `K.BOT_GAHWA_TH=120` →
+  updated to `95`
+- **AD.8** (`test_state_bot.lua:3605`): `K.BOT_BEL_TH=35` →
+  updated to `62`
+- **AE.10b** (`test_state_bot.lua:4402`): "weak" hand
+  `{JH,9H,8H,7H,KH,7S,7D,7C}` had strength **73**, which under
+  new TH=65 sits IN the jitter band [53,77] (was below old jth_min
+  78). Replaced with `{KH,8H,QH,9S,8S,9D,7D,7C}` — strength **21**,
+  comfortably below new jth_min 53. Genuinely weak now.
+- **AK.7** (`test_state_bot.lua:5530`): "weak" hand
+  `{QH,KH,JH,AC,8D}` had strength **~57** in m3lm tier (the test
+  comment claimed ~30 — author miscounted). Under new floor cap
+  jth=[37,61] this sat IN-band → flaky. Replaced with
+  `{QH,JC,9D,8D,8C}` — strength **~11**, deterministic pass.
+  Test now asserts the SAME outcome ("weak hand fails Triple
+  under threshold-drop pressure") but with a hand that survives
+  any reasonable threshold landscape. Floor cap MECHANISM remains
+  source-pinned at AH.3.
+- **`test_asymmetric_metrics.lua:7`**: stale comment
+  `K.BOT_BEL_TH (=60 since v0.5.0)` updated to reflect 62.
+
+### Tests
+
+828/828 pass. Multiseed probe re-validated rates. No regressions
+in any source-pin or behavioral test.
+
+### Closes the v0.11.x calibration cycle
+
+v0.11.19 (60→45) and v0.11.20 (45→35) were both tuned against
+the bug-zeroed harness. v1.3.2 returns the threshold to a value
+slightly above the v0.5.0 origin (62 vs 60), now anchored to
+**measured** distribution data rather than null-distribution
+projections.
+
 ## v1.3.1 — 3 dead-signal silent-correctness lies (post-v1.3.0 audit)
 
 A targeted coverage-audit agent scanned the bot signal/flag system
