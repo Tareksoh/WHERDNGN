@@ -2889,6 +2889,14 @@ local function pickLead(legal, contract, seat)
             local mem = Bot._memory[seat]
             local pas = mem and mem.partnerAkaSuit
             if pas then
+                -- v1.2.2 (P1-4 audit fix): hoist the 0.85 roll OUT of
+                -- the suit loop. Pre-v1.2.2 each matching suit got
+                -- its own roll → variable RNG consumption per
+                -- pickLead (1-4 rolls) shifting downstream seed
+                -- state. Single roll per pickLead invocation: either
+                -- we lead-back this turn OR we delay; uniform RNG
+                -- consumption across calls.
+                local leadBackRoll = math.random()
                 for _, su in ipairs(shuffledSuits()) do
                     if pas[su] and su ~= contract.trump then
                         -- Only lead-back once partner's boss has
@@ -2900,19 +2908,11 @@ local function pickLead(legal, contract, seat)
                                     and S.HighestUnplayedRank(su)
                         if hi and hi ~= "A" then
                             -- v1.2.1 (A4 audit): probabilistic
-                            -- lead-back. Pre-v1.2.1 this fired
-                            -- 100% when conditions matched —
-                            -- opp who saw partner AKA hearts +
-                            -- saw the boss fall trick N could
-                            -- bank "bot opens hearts trick N+1".
-                            -- ~85% probability breaks the
-                            -- determinism without losing most of
-                            -- the cooperation value. Pure
-                            -- unpredictability tweak (no Saudi
-                            -- citation — the lead-back IS
-                            -- canonical; only the timing
-                            -- determinism is the leak).
-                            if math.random() < 0.85 then
+                            -- lead-back. ~85% probability — opp
+                            -- who saw partner AKA + boss falling
+                            -- can no longer bank "bot opens AKA
+                            -- suit at trick N+1" with certainty.
+                            if leadBackRoll < 0.85 then
                                 tahreebPrefSuit = su
                                 tahreebPrefFlavor = "want"
                                 break
@@ -4068,6 +4068,25 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 pointCards = filtered
+            elseif forceDonateCleared then
+                -- v1.2.2 (HIGH-2 audit fix): consume the
+                -- forceDonateCleared flag the v1.2.1 G3 fix set but
+                -- never read. Per video #05 «هل ممكن يكون عنده البنت
+                -- ولا الولد لا مستحيل»: K-singleton means partner
+                -- CAN'T continue the run — donate A/T NOW (before
+                -- they get stranded). Filter pointCards to ONLY A/T
+                -- so the descending-sort below picks A first; if
+                -- neither A nor T is present, fall through to the
+                -- normal pointCards (no-op). Symmetric inversion
+                -- of the saveForPartnerTouch branch.
+                local highCash = {}
+                for _, c in ipairs(pointCards) do
+                    local r = C.Rank(c)
+                    if r == "A" or r == "T" then
+                        highCash[#highCash + 1] = c
+                    end
+                end
+                if #highCash > 0 then pointCards = highCash end
             end
             -- Gate: ≥2 point cards spare, OR late round, OR pos 4.
             -- v0.5.18 keeps the same gate logic but applies to the
@@ -5520,8 +5539,13 @@ local function pickFollow(legal, hand, trick, contract, seat)
         local meCum = S.s.cumulative[myTeam] or 0
         local oppCum = S.s.cumulative[(myTeam == "A") and "B" or "A"] or 0
         local target = S.s.target or 152
-        -- Distinct constants from AKA-withhold (22/18) → 26/22 here.
+        -- v1.2.2 (P1-3 audit fix): A8 race-gap pair was promised in
+        -- v1.2.1 ("26/22") but only `clutchDist=26` was wired; the
+        -- raceGap term was missing. Now: distinct from AKA-withhold's
+        -- (22/18) — tasgheer uses (26/22) so the synchronized-silence
+        -- pattern fully breaks across both branches.
         local clutch = (oppCum >= target - 26) or (meCum >= target - 26)
+                       or (math.abs(oppCum - meCum) <= 22)
         local prob = clutch and 0.03 or 0.07
         if math.random() < prob then
             local sorted = {}

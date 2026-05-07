@@ -4874,6 +4874,22 @@ function N.MaybeRunBot()
                     if akaSuit then
                         S.ApplyAKA(seat, akaSuit)
                         N.SendAKA(seat, akaSuit)
+                    elseif B.Bot.PickAKANoise then
+                        -- v1.2.2 (HIGH-1 audit fix): noise-AKA emission
+                        -- wiring. v1.2.1 introduced Bot.PickAKANoise
+                        -- but never called it — the documented "~3%
+                        -- noise-AKA on second-highest" feature was
+                        -- structurally undelivered. Now: when the
+                        -- real AKA path returns nil (we don't hold
+                        -- the boss, OR the withhold roll fired), give
+                        -- PickAKANoise a chance to emit a deceptive
+                        -- AKA on K/Q where we DON'T hold the suit's A.
+                        -- Saudi-Master tier only, ~3% probability.
+                        local noiseSuit = B.Bot.PickAKANoise(seat, card)
+                        if noiseSuit then
+                            S.ApplyAKA(seat, noiseSuit)
+                            N.SendAKA(seat, noiseSuit)
+                        end
                     end
                 end
                 -- Audit C-1: capture leadSuit BEFORE ApplyPlay so the

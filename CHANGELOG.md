@@ -1,5 +1,79 @@
 # Changelog
 
+## v1.2.2 — Hotfix: 4 v1.2.1 audit findings (3-agent + sim cross-check)
+
+A 3-agent audit (code-bug + rule-correctness + comparison) plus a
+6000-round multiseed tournament simulation found that **2 of v1.2.1's
+13 fixes were half-landed** — the internal logic was correct but the
+integration glue was missing, so the documented features were
+structurally undelivered. v1.2.2 ships the 4 actionable fixes from
+that audit. 828/828 tests pass.
+
+### CRITICAL — silent-correctness lies in v1.2.1
+
+- **HIGH-1: `Bot.PickAKANoise` was dead code in v1.2.1**. The function
+  was defined at `Bot.lua:5740-5771` but `Net.lua` never called it.
+  v1.2.1's documented "~3% noise-AKA emission" was structurally
+  undelivered. Now: `Net.lua`'s AKA-emit path falls through to
+  `Bot.PickAKANoise` when the real `Bot.PickAKA` returns nil
+  (Saudi-Master tier, K/Q lead, no A held in suit). Per video #19's
+  silence-variance principle.
+
+- **HIGH-2: `forceDonateCleared` flag was set but never read**.
+  v1.2.1's G3 fix correctly set the flag at `Bot.lua:4047/4057`
+  when partner's K-singleton signal (`sig.cleared = {Q,J}`) fired,
+  but no consumer in the donate branch read it — the K-singleton
+  case fell through to default donate instead of force-cashing
+  A/T. Per video #05 «هل ممكن يكون عنده البنت ولا الولد لا
+  مستحيل»: K-singleton means partner CAN'T continue → cash A/T
+  NOW. Now: the donate branch filters `pointCards` to A/T-only
+  when `forceDonateCleared = true`, so the descending sort picks
+  the cash card first.
+
+### MEDIUM — v1.2.1 documentation drift
+
+- **MED-3: A4 RNG hoisted outside suit loop**. v1.2.1's
+  `partnerAkaSuit` lead-back ran `math.random()` PER matching suit
+  in the loop body — variable RNG consumption per `pickLead` call
+  (1–4 rolls depending on how many AKA suits matched). Single
+  `leadBackRoll` outside the loop now consumes exactly one random
+  per invocation; either we lead-back this turn OR delay (across
+  all matching suits uniformly). Restores reproducibility.
+
+- **MED-4: A8 tasgheer race-gap pair wired**. v1.2.1's CHANGELOG
+  promised tasgheer clutch constants `(26/22)` distinct from
+  AKA-withhold's `(22/18)`, but the code only set `clutchDist=26`
+  — the `raceGap=22` term was missing. Now wired:
+  `clutch = (oppCum >= target-26) or (meCum >= target-26) or
+  (math.abs(oppCum-meCum) <= 22)`. Synchronized-silence pattern
+  fully breaks across both branches.
+
+### Audit pass-2 (v1.2.1 → v1.2.2) consensus matrix
+
+| Finding | Status | Verdict |
+|---|---|---|
+| HIGH-1 PickAKANoise unwired | Verified by grep + cross-check | **Shipped (P0)** |
+| HIGH-2 forceDonateCleared dead | Verified by grep + cross-check | **Shipped (P0)** |
+| MED-3 A4 random-per-suit | Verified | **Shipped (P1)** |
+| MED-4 A8 race-gap missing | Verified | **Shipped (P1)** |
+| MED-1 G2 short-circuits G4 | Real but G4 is mostly redundant; not harmful | Deferred |
+| MED-2 oppHighInferred latching | Edge case; rare confidence regression | Deferred |
+| LOW-1 A4 hi~="A" tracking | Narrow correctness | Deferred |
+| G8 RANK_PLAIN ordering | **VERIFIED CORRECT** (Constants.lua:51 matches Saudi-Sun) | No fix needed |
+| Bel rate ~0% natural in tournament | **PRE-EXISTING** (since v1.0.10/v1.1.0 calibration) | Separate v1.2.3 calibration sweep |
+
+**6000-round multiseed tournament simulation**: zero crashes, winner
+consistency 0.60–1.00 across configs (variance present per
+v1.1.0+ unpredictability design). v1.2.1's HIGH-1/HIGH-2 dead-code
+paths cause silent-correctness, not stability issues — confirmed by
+the simulation completing cleanly while the dead branches never fired.
+
+### Tests
+
+828/828 pass. No new tests added — the v1.2.2 fixes restore the
+behaviors v1.2.1's CHANGELOG claimed; existing test surface is
+unchanged.
+
 ## v1.2.1 — Hotfix: 13 v1.2.0 re-audit findings (validated by 3-agent swarm)
 
 User reported v1.2.0 felt better in play-testing but ran two more
