@@ -366,6 +366,29 @@ local function runTournament(tierA, tierB, escalationMode, seedOffset)
         local leader   = contract.bidder
 
         if seatTierFlags then applyTierFlags(seatTierFlags[leader]) end
+        -- v1.3.0 (test-fixture audit fix): pre-fix this script called
+        -- resolveEscalation BEFORE playOneRound's freshState/hand setup
+        -- (line 384 below). Bot.PickDouble/Triple/Four/Gahwa all read
+        -- S.s.hostHands; round 1 saw nil (no prior state), rounds 2..N
+        -- saw all-empty arrays (previous round's table.remove drained
+        -- them). Empty-hand strength=0 → always below jth → escalation
+        -- pickers always returned false → recorded rates were
+        -- bug-clamped to 0%. Mirror the subset of playOneRound state
+        -- setup (line 263-276) needed by the pickers BEFORE running
+        -- resolveEscalation; playOneRound itself resets state again
+        -- below so this is non-mutating with respect to play simulation.
+        freshState()
+        S.s.isHost = true
+        S.s.contract = contract
+        do
+            local h = {}
+            for seat = 1, 4 do
+                h[seat] = {}
+                for _, c in ipairs(hands[seat]) do h[seat][#h[seat] + 1] = c end
+            end
+            S.s.hostHands = h
+        end
+        if Bot.ResetMemory then Bot.ResetMemory() end
         resolveEscalation(contract, hands, escalationMode)
 
         if contract.doubled  then esc.bel    = esc.bel    + 1 end

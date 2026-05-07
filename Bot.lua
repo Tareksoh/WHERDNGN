@@ -3974,7 +3974,33 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- (return A) corrupts opp's read without abandoning
             -- the canonical play. M3lm-gated since this nuance is
             -- tournament-strategy.
-            if Bot.IsM3lm and Bot.IsM3lm() and math.random() < 0.30 then
+            --
+            -- v1.3.0 (Faranka inversion — closes weakHandSignal
+            -- consumer gap): the v1.2.0 write-site at Bot.lua:321-323
+            -- documented «if partner is showing weak hand, INVERT
+            -- Faranka-duck behavior — TAKE the trick to keep tempo
+            -- away from the weak partner». The signal was wired in
+            -- pickLead (forceOwnInitiative at line 3636) but the
+            -- pos-4 Faranka site never consumed it, so the v1.2.0
+            -- inversion was structurally undelivered. Mirror the
+            -- pickLead gate here: when partner has shown ≥3 follow
+            -- events with weakHandSignal > 2× highCardPlays, boost
+            -- the capture rate from 30% → 85%. (Not 100% — keep a
+            -- little texture so the read isn't deterministic on the
+            -- pattern; opp who infers «bot saw partner weak» can't
+            -- bank on always-capture either.)
+            local captureRate = 0.30
+            if Bot._partnerStyle then
+                local pStyle = Bot._partnerStyle[R.Partner(seat)]
+                if pStyle and pStyle.weakHandSignal and pStyle.highCardPlays then
+                    local total = pStyle.weakHandSignal + pStyle.highCardPlays
+                    if total >= 3
+                       and pStyle.weakHandSignal > pStyle.highCardPlays * 2 then
+                        captureRate = 0.85
+                    end
+                end
+            end
+            if Bot.IsM3lm and Bot.IsM3lm() and math.random() < captureRate then
                 -- Capture-not-Faranka: take with A. Sun off-trump A
                 -- is the highest in suit; cover stays for next
                 -- trick.

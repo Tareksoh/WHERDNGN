@@ -1,5 +1,108 @@
 # Changelog
 
+## v1.3.0 — Closes weakHandSignal consumer gap + multiseed harness fix
+
+Post-v1.2.3 audit run (3 specialist agents on backlog, code-quality,
+style-ledger integration, plus deep Bel-rate calibration probe)
+identified two structurally-undelivered items from prior releases.
+v1.3.0 ships both fixes. 828/828 tests pass.
+
+### HIGH — Faranka inversion (closes v1.2.0 weakHandSignal consumer gap)
+
+The v1.2.0 style-ledger write-site at `Bot.lua:321-323` documented:
+
+> *"if partner is showing weak hand, INVERT Faranka-duck behavior —
+> TAKE the trick to keep tempo away from the weak partner."*
+
+The `weakHandSignal` counter was wired and incremented correctly,
+and a consumer existed in `pickLead` (`forceOwnInitiative` at line
+3636) — but the **pos-4 Faranka site itself never read the signal**.
+The v1.2.0 inversion was structurally undelivered for 5 releases.
+
+**Fix** (Bot.lua:3977): mirror the pickLead gate at the Faranka site.
+When partner has shown ≥3 follow-events with
+`weakHandSignal > 2× highCardPlays`, boost Faranka-vs-capture rate
+from `0.30 → 0.85`. Not 1.0 — keep texture so opp who infers
+«bot saw partner weak» still can't bank on always-capture.
+
+**Saudi rationale**: per video #20 («تمسك لون»), the strong-hand
+player grabs tempo when partner shows weak. The pos-4 Faranka
+duck-with-cover is the *opposite* — it concedes a trick to save
+the Ace. Two contradictory plays for the same trick configuration;
+the choice depends on partner's read. Pre-fix the bot always
+chose the conservative duck regardless of partner-read, leaving
+free tempo on the table when the read clearly favored capture.
+
+### MED — Test-fixture state-prep bug (multiseed harness)
+
+`tests/test_multiseed_metrics.lua:369` called `resolveEscalation`
+**before** `playOneRound`'s state setup at line 384.
+`Bot.PickDouble/PickTriple/PickFour/PickGahwa` all read
+`S.s.hostHands` — round 1 saw `nil` (no prior state), rounds
+2..N saw all-empty arrays (the previous round's `table.remove`
+loop had drained them). Empty-hand strength = 0 → always below
+jth → escalation pickers always returned `false` → recorded
+rates were **bug-clamped to 0%** in natural mode regardless of
+threshold tuning.
+
+This invalidates the v0.5.1 multiseed finding's Bel-rate
+calibration claim — the "zero Bel" reading was a harness bug,
+not a calibration issue. Past calibration recommendations
+referencing `v0.5_multi_seed_tournament.json` should be
+re-baselined against a corrected run.
+
+**Fix**: mirror the subset of `playOneRound`'s state setup
+(`freshState`, `S.s.contract`, deep-copy hands into
+`S.s.hostHands`, `Bot.ResetMemory`) before
+`resolveEscalation`. `playOneRound` then resets state again
+below, so this is non-mutating with respect to actual play.
+
+This file is a metrics-collection script, not part of
+`run.py`'s HARNESSES list, so the fix doesn't touch the 828
+test suite. It does mean future Bel-rate calibration probes
+will see real distributions instead of the bug-zeroed null.
+
+### Threshold re-tune — DEFERRED, requires user approval
+
+The Bel-rate calibration agent's corrected probe shows current
+`BOT_BEL_TH=35` fires Bel at **~90%** in natural mode against
+the real strength distribution (defender p75=53, p90=65). The
+v0.11.20 drop to 35 was tuned against the bug-zeroed null, so
+it over-corrected. Proposed re-tune:
+
+| Constant | Current | Proposed | Rationale |
+|---|---|---|---|
+| `K.BOT_BEL_TH` | 35 | 62 | Targets ~8% natural rate per `escalation.md` |
+| `K.BOT_TRIPLE_TH` | 90 | 100 | ~15% conditional-on-Bel |
+| `K.BOT_FOUR_TH` | 110 | 108 | <5% rate |
+| `K.BOT_GAHWA_TH` | 120 | 115 | Stays terminal-rare |
+
+AE.10a (rich hand) and AE.10b (weak hand) source-pin tests both
+remain green at proposed thresholds (computed strengths 161/73
+sit decisively on either side of TH=100).
+
+**Not shipped in v1.3.0** — this is a substantive gameplay
+shift that should be approved + verified separately.
+
+### Other audit findings — closed without code change
+
+- **PickKawesh partner-Hokm gate** (audit re-raised): formally
+  closed. The pre-bid timing is structurally pinned —
+  `tahreebClassify` returns nil before contract is set, so
+  partner-Hokm reads cannot leak across the boundary. No fix
+  needed.
+- **MED-1 G2/G4 refactor**: cosmetic only; deferred.
+- **MED-2 oppHighInferred non-monotone assign**: cosmetic;
+  deferred.
+- **LOW-1 partnerAkaSuit rank tracking**: nice-to-have;
+  deferred.
+
+### Tests
+
+828/828 pass. AE.10a/AE.10b unchanged (Faranka inversion is in
+a different code path; weakHandSignal counters require live
+play to populate, which the source-pin fixtures don't trigger).
+
 ## v1.2.3 — Hotfix: user-reported v1.2.2 play-test issues
 
 User reported two issues from live play of v1.2.2:
