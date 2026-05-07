@@ -695,7 +695,34 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
             local priorTrick = { plays = prior, leadSuit = leadSuit }
             local prevWinner = R.CurrentTrickWinner(priorTrick, contract)
             if prevWinner and R.Partner(seat) == prevWinner then
-                -- Discard while partner is winning = Tahreeb signal.
+                -- v1.1.1 (M2 audit): forced-vs-intentional flag.
+                -- Pre-fix the bot recorded its discard as a Tahreeb
+                -- signal even when it was FORCED to discard from its
+                -- only-non-led-non-trump suit. Per video #03 + #09
+                -- the Saudi convention is "Tahreeb AWAY from your
+                -- real holding"; forced dumps from a strong suit
+                -- corrupt the partner-side read. Detect: if the
+                -- player's POST-play hand has 0 other non-led
+                -- (non-trump in Hokm) suits, the discard was forced.
+                -- Marked as `list.forced[i] = true`; tahreebClassify
+                -- filters forced events out of the signal sequence.
+                local trumpSuit = (contract.type == K.BID_HOKM)
+                                   and contract.trump or nil
+                local postHand = (S.s.isHost and S.s.hostHands
+                                   and S.s.hostHands[seat]) or {}
+                local distinct = {}
+                for _, c in ipairs(postHand) do
+                    local su = C.Suit(c)
+                    if su ~= leadSuit and su ~= trumpSuit then
+                        distinct[su] = true
+                    end
+                end
+                local n = 0
+                for _ in pairs(distinct) do n = n + 1 end
+                -- Pre-play also had `cardSuit`; if post-play count
+                -- was 0 (no other non-led non-trump option) then the
+                -- discard was forced — bot had only this one suit.
+                local isForced = (n == 0)
                 local list = style.tahreebSent[cardSuit]
                 if list then
                     -- v0.10.2 M7 — Bargiya canonical FN: محشور بلون
@@ -724,6 +751,11 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
                         list.lenAtAce = preLen + 1
                     end
                     list[#list + 1] = C.Rank(card)
+                    -- v1.1.1 (M2): parallel forced-flag list, indexed
+                    -- the same as the rank list. tahreebClassify
+                    -- filters forced events before classification.
+                    list.forced = list.forced or {}
+                    list.forced[#list] = isForced
                 end
             end
         end
@@ -2251,6 +2283,29 @@ end
 -- Sources: decision-trees.md Section 8 (Definite, videos 01, 09, 10).
 local function tahreebClassify(signals)
     if not signals or #signals == 0 then return nil end
+    -- v1.1.1 (M2 audit): filter out FORCED discards before
+    -- classification. Per video #03 + #09 «do NOT Tahreeb the
+    -- strong suit» — when bot was forced (only-non-led-non-trump
+    -- suit available) the discard isn't a real signal and shouldn't
+    -- corrupt the partner-side read. Build a virtual signals table
+    -- from non-forced events. If the entire sequence was forced,
+    -- treat as no-signal (return nil).
+    if signals.forced then
+        local filtered = {}
+        for i, r in ipairs(signals) do
+            if not signals.forced[i] then
+                filtered[#filtered + 1] = r
+            end
+        end
+        if #filtered == 0 then return nil end
+        if #filtered ~= #signals then
+            -- Replace with filtered view; preserve lenAtAce only if
+            -- the first non-forced event matches the original first.
+            filtered.lenAtAce = (filtered[1] == signals[1])
+                                 and signals.lenAtAce or nil
+            signals = filtered
+        end
+    end
     -- v0.9.0 Bargiya 2-flavor split (audit AUDIT_REPORT_v0.7.1.md
     -- missing item #9, Sources: video #14):
     --   • CONFIRMED invite: signals[1]=="A" AND ≥2 events with the
@@ -2594,6 +2649,17 @@ local function pickLead(legal, contract, seat)
         -- could lead-back without our deny-tempo response. Even though
         -- bargiya_hint is lower-confidence than full bargiya, marking
         -- it as avoid is the correct conservative defense.
+        -- v1.1.1 (L2 audit): track opp-Bargiya suits in receiver
+        -- memory so the must-ruff branch in pickFollow can prefer a
+        -- HIGH ruff (boss-grade trump) to absolutely defeat opp's
+        -- runner-back. Per video #19: opp Bargiya = suit-to-avoid
+        -- (already wired below) PLUS ruff-X-if-possible trigger
+        -- (NEW). Stored on `Bot._memory[seat].opponentBargiyaSuit`.
+        if Bot._memory and Bot._memory[seat] then
+            Bot._memory[seat].opponentBargiyaSuit =
+                Bot._memory[seat].opponentBargiyaSuit
+                or { S = false, H = false, D = false, C = false }
+        end
         for s = 1, 4 do
             if R.TeamOf(s) ~= R.TeamOf(seat) and Bot.IsBotSeat(s) then
                 local oStyle = Bot._partnerStyle[s]
@@ -2605,6 +2671,13 @@ local function pickLead(legal, contract, seat)
                             if cls == "bargiya" or cls == "want"
                                or cls == "bargiya_hint" then
                                 tahreebAvoidSet[su] = true
+                                -- v1.1.1 L2: persist in memory for
+                                -- ruff-bias use in pickFollow.
+                                if cls == "bargiya"
+                                   and Bot._memory[seat]
+                                   and Bot._memory[seat].opponentBargiyaSuit then
+                                    Bot._memory[seat].opponentBargiyaSuit[su] = true
+                                end
                             end
                         end
                     end
@@ -4689,6 +4762,32 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
         end
+        -- v1.1.1 (L2 audit): opp-Bargiya ruff override. When opp
+        -- Bargiya'd suit X (signaled their partner to lead X back),
+        -- and now opp's partner HAS led X, and we're must-ruffing
+        -- (legal is trump-only because we're void in X), pick a
+        -- HIGH trump (boss-grade) instead of cheapest winner. Per
+        -- video #19: opp Bargiya = ruff-X-if-possible trigger;
+        -- using a low trump risks opp's K/A-of-X getting through
+        -- a partner overtrump — high ruff guarantees the kill.
+        -- Hokm-only (Sun has no trump).
+        if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+           and contract.trump and trick.leadSuit
+           and trick.leadSuit ~= contract.trump
+           and Bot._memory and Bot._memory[seat]
+           and Bot._memory[seat].opponentBargiyaSuit
+           and Bot._memory[seat].opponentBargiyaSuit[trick.leadSuit] then
+            -- Are we void in led-suit (must-ruffing)?
+            local hasLead = false
+            for _, c in ipairs(legal) do
+                if C.Suit(c) == trick.leadSuit then hasLead = true; break end
+            end
+            if not hasLead then
+                -- Pick the HIGHEST winner (high ruff) — burns trump
+                -- but defeats opp's intended runner-back decisively.
+                return highestByRank(winners, contract)
+            end
+        end
         -- Default / pos 4 / no advanced: cheapest winner.
         return lowestByRank(winners, contract)
     end
@@ -4804,8 +4903,13 @@ local function pickFollow(legal, hand, trick, contract, seat)
     -- Gate: Sun only; trick 1 or 2; we're not partnerWinning (handled
     -- above); we have ≥3 cards of led suit including K. M3lm-gated
     -- since the K-trickle pattern is tournament-strategy nuance.
+    -- v1.1.1 (L3 audit): trick-window extended 1-2 → 1-3 (per video
+    -- #17 K-cashes-trick-3 timing) and pos-3 K-doubled bait added
+    -- (per video #20 «تمسك لون» control-the-game pattern: at pos-3
+    -- with K + 1 low when opp led LOW, decline to win — let opp
+    -- take cheap, save K for trick 3 ambush).
     if Bot.IsM3lm() and contract.type == K.BID_SUN
-       and trick.leadSuit and (#(S.s.tricks or {}) <= 1) then
+       and trick.leadSuit and (#(S.s.tricks or {}) <= 2) then
         local lead = trick.leadSuit
         local suitCards = {}
         local hasK, kCard = false, nil
@@ -4824,6 +4928,28 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
             if #nonK > 0 then
                 return lowestByRank(nonK, contract)
+            end
+        end
+        -- v1.1.1 (L3 NEW): pos-3 K-doubled bait. We're 3rd-to-play
+        -- in Sun; we hold K + 1 cover; opp led LOW (rank 9 or below
+        -- in plain card order — i.e., 7/8/9). Don't burn K to win
+        -- the cheap trick: duck low, save K for the trick where A
+        -- and T have fallen and our K becomes top-live.
+        local pos = (trick.plays and #trick.plays + 1) or 1
+        if hasK and #suitCards == 2 and pos == 3 and trick.plays
+           and trick.plays[1] then
+            local leadCard = trick.plays[1].card
+            local leadRank = C.Rank(leadCard)
+            -- "Low" lead = rank 9 or below in plain order
+            -- (Sun K=6, J=4, 9=3, 8=2, 7=1; "low" = 7/8/9).
+            if leadRank == "7" or leadRank == "8" or leadRank == "9" then
+                local nonK = {}
+                for _, c in ipairs(legal) do
+                    if c ~= kCard then nonK[#nonK + 1] = c end
+                end
+                if #nonK > 0 then
+                    return lowestByRank(nonK, contract)
+                end
             end
         end
     end

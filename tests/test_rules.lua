@@ -1324,6 +1324,40 @@ do
     -- 8H is NOT trump.
     assertFalse(R.IsValidSWA(1, hands, hokm_C, trick),
                 "v0.5.17 O.4: partner-could-overtake caller's KC → strict-invalid")
+
+    -- v1.1.1 (M1 audit lock): مثلوث anti-pattern. Opp holds K + 2
+    -- low covers in a side suit caller also holds. Caller's
+    -- mid-rank lead in that suit fails — opp's K wins. Per video
+    -- #35 verbatim «في حكم برا اللعب وهذا معه مقطوع» — outside
+    -- trump in opp hand + opp-void-in-side-suit makes Hokm 2-handed
+    -- SWA fail. R.IsValidSWA should structurally catch this via
+    -- the recursive walk.
+    -- Trump = C (clubs). Caller has TS (rank=5 in plain) + AC
+    -- (top trump). Opp seat 2 has KS + 9D + 7D (مثلوث-style: K
+    -- + 2 covers, no trump). Partner empty.
+    hands = {
+        [1] = { "TS", "AC" },
+        [2] = { "KS", "9D", "7D" },
+        [3] = {},
+        [4] = {},
+    }
+    assertFalse(R.IsValidSWA(1, hands, hokm_C,
+                              { plays = {}, leader = 1 }),
+                "v1.1.1 O.5 (M1): مثلوث opp K+covers defeats caller mid-rank lead")
+
+    -- v1.1.1 (M1 audit lock): مقطوع (void) anti-pattern. Opp is
+    -- void in caller's side suit AND has trump. Side-suit lead
+    -- → opp ruffs. Same defeat as O.2 but documented as مقطوع
+    -- (cut/void) for traceability.
+    hands = {
+        [1] = { "AS" },
+        [2] = { "9C" },  -- opp void in S, has trump (C)
+        [3] = {},
+        [4] = {},
+    }
+    assertFalse(R.IsValidSWA(1, hands, hokm_C,
+                              { plays = {}, leader = 1 }),
+                "v1.1.1 O.6 (M1): مقطوع opp void+trump ruffs side-suit SWA lead")
 end
 
 -- =====================================================================

@@ -1,5 +1,83 @@
 # Changelog
 
+## v1.1.1 — Third-pass audit follow-on (M1/M2/M4 + L1/L2/L3)
+
+Closes the user-prioritized backlog from the v1.1.0 third-pass
+agent audit. 828/828 tests pass.
+
+### MEDIUM
+
+- **M1 (SWA Hokm 2-handed مجاوب/مقطوع/مثلوث anti-pattern)**:
+  per video #35 «في حكم برا اللعب وهذا معه مقطوع» — outside trump
+  in opp hand + opp-void-in-side-suit defeats Hokm 2-handed SWA.
+  **Already covered structurally by `R.IsValidSWA`'s recursive
+  minimax** (it explores all legal opp ruffs and over-takes). Added
+  two regression-pin tests (O.5 مثلوث / O.6 مقطوع) that lock the
+  coverage so future changes can't silently regress.
+
+- **M2 (Tahreeb sender forced-vs-intentional flag)**: pre-fix the
+  bot's `tahreebSent[suit]` log made no distinction between forced
+  discards (only-non-led-non-trump suit available) and intentional
+  signals. Per video #03 + #09 the Saudi convention is "Tahreeb
+  AWAY from your real holding"; forced dumps from a strong suit
+  corrupted the partner-side read. Now: `list.forced[i]` parallel
+  array marks each event; `tahreebClassify` filters forced events
+  before classification (returns nil if all events were forced).
+  **Conflict check (Tier 2)**: NO conflict — Tier 2 added
+  `mem.partnerAkaSuit` separately; M2 modifies `tahreebSent`
+  structure independently.
+
+- **M4 (Implicit-AKA receiver tier-symmetry)**: third-pass agent
+  asked to verify that v1.1.0's removal of the SENDER-side
+  `IsBotSeat(partner)` AKA gate didn't leave a parallel issue on
+  the RECEIVER side. **Verified**: implicit-AKA detector at
+  `Bot.lua:3599-3609` checks `lead.seat == R.Partner(seat)` and
+  bare-Ace rank, but does NOT consult `Bot.IsBotSeat`. Both bot
+  and human partners trigger receiver behavior identically. Added
+  AN.1 source-pin test that fails if anyone re-introduces an
+  IsBotSeat gate in the implicit-AKA window.
+  **Conflict check (Tier 1)**: NO conflict — receiver was always
+  tier-symmetric; the bug v1.1.0 fixed was sender-side only.
+
+### LOW
+
+- **L1 (single-point مناطق calibration)**: per video #13 «لا
+  تستهين في المنطقه الواحد» — single-point spreads (J=2 vs 9=0
+  in Sun) decide marginal rounds. v1.1.0's `pickRandomTied`
+  randomizes within RANK ties only; different-rank cards still
+  compare correctly via `TrickRank`. Added AN.2 source-pin test
+  asserting Sun trick-rank `9 < J` and Hokm off-trump rank order
+  preserved post-randomization.
+
+- **L2 (Bargiya-from-opp special override)**: opp Bargiya signals
+  TWO things — (a) "avoid leading this suit" (already wired since
+  v0.9.3) and (b) "be ready to ruff this suit if opp's partner
+  leads it" (NEW). Added `Bot._memory[seat].opponentBargiyaSuit`
+  per-suit flag persisted on confirmed-bargiya opp signals; new
+  pickFollow override picks the HIGHEST winning trump (boss-grade
+  ruff) instead of cheapest when the leadSuit matches an
+  opp-Bargiya'd suit and we're must-ruffing. Defeats opp's
+  intended K/A runner-back decisively. Hokm-only.
+
+- **L3 (Mathlooth-K bait + window extension)**: video #17 K-cashes-
+  trick-3 timing was previously gated to trick 1-2 only. Extended
+  to trick 1-3 so K-preservation lasts the full canonical window.
+  NEW: pos-3 K-doubled bait (per video #20 «تمسك لون» control-the-
+  game): when in Sun pos-3 with K + 1 cover and opp led 7/8/9,
+  duck low — let opp take the cheap trick, save K for the trick
+  where A and T have fallen and our K becomes top-live.
+
+### Tests
+
+- **O.5 / O.6** (test_rules.lua): مثلوث and مقطوع SWA-defeat
+  regression pins.
+- **AN.1** (test_state_bot.lua): implicit-AKA receiver branch
+  source-pin (no IsBotSeat gate).
+- **AN.2** (test_state_bot.lua): single-point مناطق rank-order
+  preservation.
+
+828/828 tests pass (was 821/821; +7 net new).
+
 ## v1.1.0 — Bot human-like unpredictability + partner-coordination upgrades
 
 User reported the bot felt "too predictable and rough." Three audit
