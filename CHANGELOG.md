@@ -1,5 +1,101 @@
 # Changelog
 
+## v1.0.10 — Audit pass-3 quick wins + partner-Hokm BC-MANDATORY override
+
+Closes the LOW/MED severity items from v1.0.9's 4-agent ultra-audit
+plus a HIGH edge-case from a fresh agent review of partner-Hokm
+overcall strategy. 791/791 tests pass.
+
+### CRITICAL — Saudi-rule conflict resolution
+
+- **BC-MANDATORY Belote overrides G-4 partner-Hokm suppression
+  (Bot.lua PickBid R2)**. Pre-v1.0.10 the G-4 partner-Hokm
+  suppression block (videos #29 + #34: "do NOT outbid partner's
+  Hokm") fired BEFORE the BC-MANDATORY-Belote bypass (video #26
+  rule B-6: "Mandatory Hokm with the Belote suit as trump"). Two
+  Definite-confidence Saudi rules conflicted; G-4 silently won.
+  Result: a hand with K+Q+canonical-4-seq in a non-bidcard suit
+  could be forced to PASS when partner had bid Hokm-of-other-suit
+  — forfeiting the +20 multiplier-immune Belote bonus. Per the
+  partner-Hokm-overcall agent review, the structural Belote
+  outweighs partner-support: the bot now overrides G-4 only when
+  `beloteBypassQualifies` returns true for a non-bidcard suit
+  (canonical 4-card trump-seq OR K+Q+count>=3+sideAce). This is
+  the ONLY HOKM-on-HOKM overcall the bot ever performs.
+
+### MEDIUM — Bot strategy
+
+- **M5 target folds Belote ±20 (Bot.lua trick-8 winners block,
+  audit pass-2 A MED-1 / B LOW-1)**. Pre-v1.0.10 M5's
+  algebraically-correct `(oppMeld - myMeld) / 2` adjustment
+  ignored Belote entirely. With opp holding Belote (K+Q-of-trump
+  same-seat, +20 raw), the effective target was off by +10 raw —
+  enough to mis-classify boundary make-or-break decisions at
+  trick-8. Now folds `(oppBelote - myBelote) / 2` into target;
+  uses `R.IsBeloteCancelled` to match the same ≥100-meld-subsumes-
+  Belote rule that R.ScoreRound applies. Hokm-only (Sun has no
+  Belote).
+
+### LOW / cleanup
+
+- **R.TeamOf nil-seat defensive guard (Rules.lua, audit pass-2 B
+  LOW-3)**. Pre-fix nil seat fell through to silent `return "B"`
+  (mis-attribution to team B). Now nil/invalid → nil so callers
+  can branch on it. Existing call sites unaffected (all pass
+  validated seats; 791/791 tests still green).
+
+- **R.MeldRank docstring (Rules.lua, audit pass-2 A MED-3)**.
+  Doc warning added: `R.MeldRank` returns ordinal value only and
+  does NOT apply PDF Rule 2 dealer-right tiebreaker. Callers that
+  need to resolve a tied-rank winner must use `R.CompareMelds`
+  with `dealerSeat` instead. `Bot.PickMelds` is fine using
+  MeldRank directly (only needs strict-greater for filter logic).
+
+- **AL.2 test top="K" → top="A" (audit pass-2 C MED-2)**. The
+  Q-K-A sequence's actual top is A. Pre-fix typo was harmless
+  (partner's len=4 outranked regardless) but fragile if equal-
+  length melds were ever compared.
+
+- **AL.4 rewritten as direct unit tests on `Bot._beloteBypassQualifies`
+  (audit pass-2 C MED-1)**. The PickBid path satisfies A#2
+  transitively for canonical-4-seq hands (T-J-Q-K passes thHokmR1
+  on strength alone), making the canonical-4-seq branch
+  behaviorally untestable through PickBid. Helper now exposed on
+  `Bot._beloteBypassQualifies`; AL.4 splits into 7 sub-tests
+  (a-g) each isolating a specific gate (T-J-Q-K, J-Q-K-A,
+  K+Q+count≥3+sideAce, count==2 fail, no-sideAce fail, no-K fail,
+  nil-suit defensive).
+
+### Tests
+
+- **AL.5 (NEW)**: G-4 regression pin — partner-Hokm with strong
+  different-suit Hokm hand → BID_PASS.
+- **AL.6 (NEW)**: G-4 Sun-overcall allowance — partner-Hokm with
+  Sun-shape → BID_SUN.
+- **AL.7 (NEW)**: BC-MANDATORY > G-4 — partner-Hokm with K+Q
+  Belote in non-partner suit → HOKM:beloteSuit overcall.
+- **AL.4 (REWRITTEN)**: 7 direct unit-test assertions on
+  `Bot._beloteBypassQualifies` (a-g).
+- Y.3b source-pin window bumped 25000→32000 to accommodate the
+  new BC-MANDATORY-overrides-G-4 block.
+
+### Deferred (still in backlog)
+
+- **D HIGH-2 Belote announcement requirement**: requires
+  MSG_BELOTE wire + S.s.beloteAnnounced flag + UI button +
+  R.ScoreRound gate. Substantial multiplayer-coordination scope.
+- **D MED M1 Either-defender Bel**: requires multi-seat
+  belPending tracking + UI changes + AFK timer rework + bot
+  dispatcher updates. Touches 10+ files; needs multiplayer test
+  surface.
+- **D HIGH-3 Reverse Kaboot rule arbitration**: PDF text supports
+  88 raw + bidder-led-trick-1 (current) OR 99 raw + dealer-right-
+  Ace-held (alternate); user arbitration required.
+- **`Bot.PickKawesh` partner-Hokm gate (LOW)**: investigation
+  pending — Kawesh fires at PHASE_DEAL1 (pre-bidding), so partner-
+  bid doesn't yet exist; agent's finding may have conflated
+  pre-bid kawesh vs in-play kasho. Will research.
+
 ## v1.0.9 — PDF cross-check fixes + 4-agent swarm closure
 
 This release closes the critical findings from the four-agent swarm

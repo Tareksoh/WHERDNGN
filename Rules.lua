@@ -22,9 +22,16 @@ end
 
 function R.NextSeat(seat) return (seat % 4) + 1 end
 
+-- v1.0.10 (audit pass-2 B LOW-3): defensive nil-seat guard. Pre-fix
+-- a nil seat fell through to the bare `return "B"` — silently
+-- attributing nil ownership to team B. Not exploitable in production
+-- (all current callers pass a validated seat), but the silent default
+-- could mask a future bug where a misrouted call passes nil. Now nil
+-- (or any non-1/2/3/4 input) returns nil so callers can branch on it.
 function R.TeamOf(seat)
     if seat == 1 or seat == 3 then return "A" end
-    return "B"
+    if seat == 2 or seat == 4 then return "B" end
+    return nil
 end
 
 -- Trick resolution -----------------------------------------------------
@@ -380,6 +387,16 @@ end
 -- melds). The internal `meldRank` orders melds the same way
 -- `R.CompareMelds` does (carrés > sequences; sequences ordered by
 -- length then top card; tie-breakers as documented).
+--
+-- v1.0.10 (audit pass-2 A MED-3): IMPORTANT — `R.MeldRank` returns
+-- a strict ORDINAL value only. It does NOT apply the PDF Rule 2
+-- dealer-right priority for tied-rank melds; equal-rank melds will
+-- compare equal here. Callers that need to resolve a tied-rank
+-- winner MUST call `R.CompareMelds(meldsA, meldsB, contract,
+-- dealerSeat)` instead — that function knows the tiebreak rules.
+-- `Bot.PickMelds` is fine using `R.MeldRank` directly because it
+-- only needs strict-greater comparison (ride or skip), not winner
+-- determination.
 function R.MeldRank(m, contract)
     return meldRank(m, contract)
 end

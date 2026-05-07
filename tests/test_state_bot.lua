@@ -3199,7 +3199,9 @@ do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local pickBid = botSrc:find("function Bot%.PickBid")
     if pickBid then
-        local body = botSrc:sub(pickBid, pickBid + 25000)
+        -- v1.0.10: window bumped 25000→32000 to accommodate the new
+        -- BC-MANDATORY-overrides-G-4 block in R2 partner-Hokm path.
+        local body = botSrc:sub(pickBid, pickBid + 32000)
         assertTrue(body:find("local sunHand = withBidcard%(hand, S%.s%.bidCard%)") ~= nil,
                    "Y.3a (A1): PickBid Sun uses withBidcard")
         assertTrue(body:find("local hokmHand = withBidcard%(hand, S%.s%.bidCard%)") ~= nil,
@@ -5623,7 +5625,12 @@ do
               declaredBy = 3, value = 100 },
         },
         B = {
-            { kind = "sequence", suit = "H", top = "K", len = 3,
+            -- v1.0.10 (audit pass-2 C MED-2): top="A" matches actual
+            -- top of Q-K-A sequence. Pre-fix used top="K" — typo that
+            -- happened not to break the test (partner's len=4 outranks
+            -- regardless) but would silently mis-rank if equal-length
+            -- melds were ever compared.
+            { kind = "sequence", suit = "H", top = "A", len = 3,
               cards = { "QH", "KH", "AH" },
               declaredBy = 2, value = 50 },
         },
@@ -5667,29 +5674,112 @@ do
     restore()
 end
 
--- AL.4 (A#2 helper-direct): beloteBypassQualifies recognises canonical
--- 100-meld T-J-Q-K and J-Q-K-A patterns. We can't access the local
--- helper directly, but we can verify the BEHAVIOR through PickBid:
--- a hand with T-J-Q-K of bidcardsuit should fire BC-MANDATORY even
--- without side Ace.
+-- AL.4 (A#2 helper-direct, v1.0.10 audit pass-2): direct unit tests
+-- on Bot._beloteBypassQualifies. Each branch (canonical T-J-Q-K,
+-- canonical J-Q-K-A, K+Q+count>=3+sideAce, fail cases) gets its
+-- own assertion. Pre-v1.0.10 this was a transitive PickBid test
+-- which passed via threshold for T-J-Q-K hands instead of the
+-- canonical-4-seq branch — branch-coverage gap.
+if Bot and Bot._beloteBypassQualifies then
+    local f = Bot._beloteBypassQualifies
+    -- Canonical T-J-Q-K of S, no side Ace.
+    assertTrue(f({ "TS", "JS", "QS", "KS", "8C" }, "S"),
+               "AL.4a: T-J-Q-K of trump qualifies (canonical 4-seq, no sideAce)")
+    -- Canonical J-Q-K-A of S, no side Ace.
+    assertTrue(f({ "JS", "QS", "KS", "AS", "8C" }, "S"),
+               "AL.4b: J-Q-K-A of trump qualifies (canonical 4-seq, no sideAce)")
+    -- K+Q + count==3 + side Ace (third trump 7).
+    assertTrue(f({ "KS", "QS", "7S", "8C", "AD" }, "S"),
+               "AL.4c: K+Q+count==3+sideAce qualifies (stabilization branch)")
+    -- K+Q + count==2 (no third trump): does NOT qualify even with sideAce.
+    assertFalse(f({ "KS", "QS", "8C", "9D", "AD" }, "S"),
+                "AL.4d: K+Q+count==2 does NOT qualify (count too low)")
+    -- K+Q + count==3 + NO side Ace: does NOT qualify.
+    assertFalse(f({ "KS", "QS", "7S", "8C", "9D" }, "S"),
+                "AL.4e: K+Q+count==3 NO sideAce does NOT qualify (no stabilizer)")
+    -- T-J-Q without K: does NOT qualify (need K+Q for Belote).
+    assertFalse(f({ "TS", "JS", "QS", "AS", "8C" }, "S"),
+                "AL.4f: T-J-Q+A without K does NOT qualify (no Belote pair)")
+    -- Nil suit returns false.
+    assertFalse(f({ "TS", "JS", "QS", "KS" }, nil),
+                "AL.4g: nil suit returns false (defensive)")
+end
+
+-- AL.5 (G-4 partner-Hokm suppression regression pin, v1.0.10):
+-- per Saudi convention (videos #29 + #34, decision-trees Section 1
+-- "Bid takweesh") the bot must NOT outbid partner's Hokm with a
+-- different-suit Hokm. R2 path: partner bid HOKM:S in R1; we hold
+-- a strong but non-mandatory hand in H. Expected: BID_PASS.
 do
     local restore = snapshotS({
         "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
     })
-    S.s.bidRound = 1
-    S.s.bidCard  = "TS"  -- bidcard contributes to T-J-Q-K of S
+    S.s.bidRound = 2
+    S.s.bidCard  = "7C"
     S.s.dealer   = 4
     S.s.cumulative = { A = 0, B = 0 }
-    S.s.bids = {}
+    -- Partner (seat 3) bid HOKM:S in R1.
+    S.s.bids = { [3] = K.BID_HOKM .. ":S" }
     S.s.hostHands = {}
-    -- Hand: J+Q+K+spades (3 spades; with bidcard 5th would be 4 spades
-    -- forming T-J-Q-K). No side Aces. K+Q present, count post-bidcard
-    -- = 4. A#2 canonical 100-meld branch (T-J-Q-K) qualifies.
-    S.s.hostHands[1] = { "JS", "QS", "KS", "8C", "9D" }
+    -- Strong-ish Hokm-H hand: J+9+A in H (hokmMinShape passes via
+    -- mardoofa). NO Belote (no K+Q in any suit). Should PASS per G-4.
+    S.s.hostHands[1] = { "JH", "9H", "AH", "8C", "9D" }
     if Bot and Bot.PickBid then
         local result = Bot.PickBid(1)
-        assertEq(result, K.BID_HOKM .. ":S",
-                 "AL.4 (A#2 canonical 100-meld): T-J-Q-K of bidcard suit qualifies BC-MANDATORY")
+        assertEq(result, K.BID_PASS,
+                 "AL.5 (G-4): partner-Hokm suppresses different-suit Hokm overcall")
+    end
+    restore()
+end
+
+-- AL.6 (G-4 Sun-overcall allowance, v1.0.10):
+-- Sun is a different contract type, not a "competing Hokm" — overcall
+-- is allowed even when partner bid Hokm.
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    S.s.bidRound = 2
+    S.s.bidCard  = "7C"
+    S.s.dealer   = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = { [3] = K.BID_HOKM .. ":S" }   -- partner bid HOKM:S
+    S.s.hostHands = {}
+    -- Sun-shape: A+T mardoofa in S, plus a side Ace.
+    S.s.hostHands[1] = { "AS", "TS", "AC", "AD", "9H" }
+    if Bot and Bot.PickBid then
+        local result = Bot.PickBid(1)
+        assertEq(result, K.BID_SUN,
+                 "AL.6 (G-4 Sun overcall): Sun overcalls partner-Hokm (different contract type)")
+    end
+    restore()
+end
+
+-- AL.7 (BC-MANDATORY overrides G-4 partner-Hokm, v1.0.10 audit pass-3):
+-- per Saudi rule B-6 "Mandatory Hokm with the Belote suit as trump",
+-- a structural Belote (K+Q+canonical-4-seq or K+Q+count>=3+sideAce)
+-- in a non-bidcard suit OVERRIDES G-4 partner-Hokm suppression. The
+-- +20 multiplier-immune Belote bonus is structurally too valuable
+-- to forfeit. This is the ONLY HOKM-on-HOKM overcall the bot ever
+-- performs.
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    S.s.bidRound = 2
+    S.s.bidCard  = "7C"
+    S.s.dealer   = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = { [3] = K.BID_HOKM .. ":S" }   -- partner bid HOKM:S
+    S.s.hostHands = {}
+    -- Hand: K+Q hearts (Belote in H) + 7H (count==3) + AD sideAce.
+    -- A#2 K+Q+count>=3+sideAce branch qualifies. hokmMinShape K+Q
+    -- escape passes for H. BC-MANDATORY should override G-4.
+    S.s.hostHands[1] = { "KH", "QH", "7H", "8C", "AD" }
+    if Bot and Bot.PickBid then
+        local result = Bot.PickBid(1)
+        assertEq(result, K.BID_HOKM .. ":H",
+                 "AL.7 (BC-MANDATORY > G-4): Mandatory Belote in non-partner-suit overrides partner-Hokm suppression")
     end
     restore()
 end

@@ -1032,6 +1032,15 @@ local function beloteBypassQualifies(hand, suit)
     return false
 end
 
+-- v1.0.10 (audit pass-2 C MED-1): expose the helper on Bot for
+-- direct unit testing. The PickBid path can satisfy A#2 transitively
+-- through threshold passes, making it impossible to behaviorally
+-- isolate the canonical-4-seq vs K+Q+count>=3+sideAce branches via
+-- PickBid alone (T-J-Q-K hands always clear thHokmR1 on strength
+-- alone). Direct unit tests on this helper let us pin EACH branch
+-- independently. Underscore prefix marks it as test-internal.
+Bot._beloteBypassQualifies = beloteBypassQualifies
+
 -- v0.5.8 patches S-3/S-4/S-8 helper: count Aces and detect mardoofa
 -- (A+T pair in same suit). Returns aceCount, mardoofaCount.
 --
@@ -1905,6 +1914,32 @@ function Bot.PickBid(seat)
             -- contract type, not a "competing Hokm" violation).
             if sunMinShape(sunHand) and sun >= thSun then
                 return K.BID_SUN
+            end
+            -- v1.0.10 (audit pass-3 / partner-Hokm review HIGH):
+            -- BC-MANDATORY Belote overrides G-4 partner-Hokm
+            -- suppression. Two Definite-confidence Saudi rules
+            -- conflict here: G-4 says "support partner's Hokm"
+            -- (videos #29 + #34) and B-6 says "Mandatory Hokm with
+            -- the Belote suit as trump" (video #26). The +20
+            -- multiplier-immune Belote bonus + structural shape
+            -- (canonical 4-card trump-seq OR K+Q+count>=3+sideAce)
+            -- is too valuable to forfeit on partner-Hokm support
+            -- — and the bidcard-suit Hokm we'd be overcalling is
+            -- distinct from our Belote suit anyway. This is the
+            -- ONLY HOKM-on-HOKM overcall the bot ever performs.
+            -- Use the same beloteBypassQualifies gate as the R2
+            -- BC-MANDATORY block below (line ~1980).
+            do
+                local hokmHand_g4 = withBidcard(hand, S.s.bidCard)
+                local belote_g4 = beloteSuit(hokmHand_g4)
+                if belote_g4
+                   and belote_g4 ~= bidCardSuit
+                   and hokmMinShape(hokmHand_g4, belote_g4)
+                   and beloteBypassQualifies(hokmHand_g4, belote_g4) then
+                    btrace("R2 BC-MANDATORY overrides G-4 partner-Hokm: HOKM:%s",
+                           belote_g4)
+                    return K.BID_HOKM .. ":" .. belote_g4
+                end
             end
             return K.BID_PASS
         end
@@ -4301,6 +4336,37 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
             local m5_myMeld  = (m5_myTeam == "A") and m5_meldA or m5_meldB
             local m5_oppMeld = (m5_oppTeam == "A") and m5_meldA or m5_meldB
+            -- v1.0.10 (audit pass-2 A MED-1 / B LOW-1): fold Belote into
+            -- the M5 target. Belote (+20 raw to K+Q-of-trump-same-seat
+            -- holder) is awarded INDEPENDENTLY of CompareMelds — added
+            -- post-mult to whichever team has the holder. Pre-v1.0.10
+            -- M5 ignored Belote entirely; with opp holding Belote the
+            -- effective target was off by +10 raw (Belote/2 in the
+            -- algebraic mirror, see derivation at line ~4255). Cancellation
+            -- by ≥100 meld matches Rules.lua's R.IsBeloteCancelled — if
+            -- the K+Q holder's TEAM has a ≥100 meld, Belote is subsumed.
+            -- Mirrors Rules.lua:864-879 scan logic. Hokm-only.
+            local m5_beloteTeam
+            if contract.type == K.BID_HOKM and contract.trump and S.s.tricks then
+                local m5_kWho, m5_qWho
+                for _, t in ipairs(S.s.tricks) do
+                    for _, p in ipairs(t.plays or {}) do
+                        if C.Suit(p.card) == contract.trump then
+                            if C.Rank(p.card) == "K" then m5_kWho = p.seat end
+                            if C.Rank(p.card) == "Q" then m5_qWho = p.seat end
+                        end
+                    end
+                end
+                if m5_kWho and m5_qWho and m5_kWho == m5_qWho then
+                    m5_beloteTeam = R.TeamOf(m5_kWho)
+                    if R.IsBeloteCancelled and S.s.meldsByTeam
+                       and R.IsBeloteCancelled(m5_beloteTeam, S.s.meldsByTeam) then
+                        m5_beloteTeam = nil
+                    end
+                end
+            end
+            local m5_myBelote  = (m5_beloteTeam == m5_myTeam)  and (K.MELD_BELOTE or 20) or 0
+            local m5_oppBelote = (m5_beloteTeam == m5_oppTeam) and (K.MELD_BELOTE or 20) or 0
             if m5_isBidderTeam and S.s.tricks then
                 local raw = 0
                 for _, t in ipairs(S.s.tricks) do
@@ -4315,8 +4381,11 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 -- The full inequality solves to ourTrickRaw > baseTarget
                 -- + (oppMeld - myMeld) / 2. Floor-divide for integer
                 -- target since the LHS is integer trick-raw.
+                -- v1.0.10 (audit pass-2): also fold Belote into target —
+                -- same algebraic mirror, +20 raw to the holder's team.
                 local target = baseTarget
                                 + math.floor((m5_oppMeld - m5_myMeld) / 2)
+                                + math.floor((m5_oppBelote - m5_myBelote) / 2)
                 -- Make-or-break: 0 < (target - raw) <= ~30 (current
                 -- trick can swing make-fail boundary). Favor trick-rank
                 -- over face-value to lock the last trick.
@@ -4356,8 +4425,10 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 -- (mirror of bidder formula; we're the "defender" team
                 -- so opp is the bidder team — meld accounting flips
                 -- accordingly via m5_oppMeld and m5_myMeld).
+                -- v1.0.10 (audit pass-2): Belote folded the same way.
                 local defenderTarget = baseTarget
                                        + math.floor((m5_oppMeld - m5_myMeld) / 2)
+                                       + math.floor((m5_oppBelote - m5_myBelote) / 2)
                 local gap = defenderTarget - raw
                 if gap > 0 and gap <= 30 then
                     return highestByRank(winners, contract)
