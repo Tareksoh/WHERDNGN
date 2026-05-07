@@ -1,5 +1,156 @@
 # Changelog
 
+## v1.2.1 — Hotfix: 13 v1.2.0 re-audit findings (validated by 3-agent swarm)
+
+User reported v1.2.0 felt better in play-testing but ran two more
+audits + a 3-agent validation swarm to find residual gaps. Original
+re-audit produced 14 findings (8 unpredictability + 6 partner-
+coordination); validation found 4 of those over-extended Saudi
+rules / mis-cited videos / had no source. This release ships REFINED
+versions of all 14 — 13 with adjustments, 1 dropped (G6) since the
+original concern was based on a misreading of video #17. 828/828
+tests pass.
+
+### CRITICAL — correctness bug
+
+- **G3: Inverted `cleared` semantic in topTouchSignal reads**.
+  Per video #05 «هل ممكن يكون عنده البنت ولا الولد لا مستحيل لو
+  عنده كان لعبها بدال الشايب»: K-singleton (`cleared = {Q,J}`)
+  means partner CAN'T continue the run. Pre-fix BOTH the pickFollow
+  smother gate at line 3941 AND the pickLead reader at line 3037
+  treated `cleared` as a "save for partner" continue-signal — the
+  opposite of what the video says. Now: only `nextDown` (T/Q played
+  → cover held) marks save-for-partner; `cleared` falls through to
+  normal donate, with a NEW force-donate branch in pickFollow that
+  cashes A/T eagerly when partner is broke. Symmetric update at
+  both sites prevents sender/reader mismatch.
+
+### HIGH — predictability tells
+
+- **A1: deceptiveOverplay extended to Hokm with J/9-of-trump
+  anti-trigger**. Per video #08 lines 168-198 the deceptive-overplay
+  rule applies in Hokm too — BUT in Hokm, J and 9 of trump are
+  «تقريبا نفس الاكه» (≈ AKA-equivalent kill cards) and must NEVER
+  be sacrificed. ~25% Hokm probability (vs 40% Sun), explicit
+  `if isHokm and trump and (rank=="J" or rank=="9") then skip`
+  filter. Also wired G5's `oppHighInferred` consumer here — when opp
+  inferred to hold cover in led suit, suppress the deceptive
+  sacrifice (would collide with their outs).
+
+- **A2: AKA probabilistic withhold extended `trick<=4` → `trick<=6`
+  + separate noise-AKA emission**. Per video #19 «دائما خصم يحتفظ
+  قوته في الاخر» — pros withhold MORE in mid/late tricks. Plus a
+  new `Bot.PickAKANoise` ~3% emission on second-highest unplayed
+  (when bot doesn't actually hold the boss) — corrupts opp's
+  reliability on the AKA banner.
+
+- **A3: pos-2 binary breaker**. ~12% probabilistic "win at pos-2
+  with cheapest winner" branch when ≥1 point card already in trick
+  AND we hold a non-sureStopper winner. Breaks the duck-or-stop
+  binary tell. Per video #20 «تمسك اللعب» — pos-2 mid-card win is
+  canonical when grabbing tempo.
+
+- **A4: AKA-receiver lead-back probabilistic (~85%)**. Pre-fix the
+  lead-back fired 100% when partner's boss fell — opp could bank
+  "bot opens AKA-suit at trick N+1". ~85% probability + delay-flag
+  for the ~15% case keeps cooperation value while breaking the
+  determinism. Pure unpredictability tweak (no Saudi citation
+  needed — the lead-back IS canonical; only the timing
+  determinism is the leak).
+
+- **A5: Bel-fear ramp boundaries jittered ±3 per call**. Pre-fix
+  knees at 90/105/130 were sharp inflection points; opp could
+  observe "bot bid Sun at cum=104 but not cum=131" and infer the
+  ramp shape. Per-call jitter preserves the underlying piecewise
+  structure (still video-#11 stepwise) but breaks the precise-
+  ledge tell.
+
+- **A7: Sun Faranka 70/30 probabilistic capture**. ~30% capture-
+  with-A branch (instead of always Faranka with cover) corrupts
+  opp's read on bot's Faranka shape. Per video #06's 5-factor
+  framework — pros do NOT Faranka uniformly. M3lm-gated.
+
+- **A8: Clutch constants desynced + non-zero variance in clutch**.
+  Pre-fix tasgheer/AKA-withhold both used `clutch ⇒ 0% variance`
+  on near-identical thresholds. Synchronized silence became a
+  score-state tell. Now: tasgheer 26/22, AKA-withhold 22/18 (was
+  25/20) — distinct thresholds. Plus ~3% variance even in clutch
+  (was 0%).
+
+### HIGH — partner-coordination
+
+- **G1: weakHandSignal consumed in pickLead "take initiative away
+  from weak partner"**. Per video #20 «اذا انت عندك قوه ... تحاول
+  تمسك اللعب ضعيف ممكن تخلي قويه يمسك اللعب» — strong hand grabs
+  tempo, weak hand defers. The complementary read: when partner
+  shows weak (≥3 events, weakHandSignal > highCardPlays × 2), set
+  `forceOwnInitiative` so Sun shortest-suit lead falls through to
+  longest-suit (where we hold A/T) — taking initiative away from
+  partner. Original re-audit framing ("invert Faranka") was over-
+  extended; this faithful framing matches video #20's tempo-hold
+  semantic.
+
+- **G2: pickFollow preserves T/A of partner's tahreeb-want suit**.
+  Per video #02 «اذا كانت العشره معاها ورقتين ... الافضل انك ما
+  تروح بالعشره وتتهور لا تروح بالثمانيه»: receiver who saw partner
+  Tahreeb suit X must HOLD the cover-grade card in X for the lead-
+  back. RECEIVER-side preservation only (NOT sender encoder change
+  — that would contradict v0.9.0 want-arm).
+
+- **G4: AKA-receiver T/K preservation when paired with Bargiya/want**.
+  Per video #14 lines 144-160 the lead-back receiver keeps the
+  next-down rank for partner's continuation. Re-cited from video
+  #18 (which actually covers AKA-CALLER preconditions) to video
+  #14 (receiver continuation). Scope: only when partner BOTH
+  AKA'd AND Bargiya/want-emitted in same suit (the high-confidence
+  intersection).
+
+- **G5: Export `oppHighInferred` to memory + wire A1 consumer**.
+  Per video #19 «اي شكل خصمك ينفر تفترض انه عنده». 6-factor opp-
+  Tanfeer score (v1.2.0) was write-only into local
+  `tahreebAvoidSet` — now also persisted to
+  `Bot._memory[seat].oppHighInferred[suit]` at confidence ≥ 4.
+  A1's deceptiveOverplay now reads it to suppress the sacrifice
+  when opp is inferred to hold cover in led suit.
+
+### MED — refinements
+
+- **G7: Conditional A+cover gate (late-game only)**. Per video #14
+  lines 311-317: A+cover preferred LATE-game (`#hand <= 4`); early
+  game with cornered single-suit (≥5 cards), A-only is allowed.
+  Pre-fix tightening was too strict (universal `>= 3 + cover`);
+  now branches on hand-size with cornered exception.
+
+- **G8: Conditional Q-play override (consecutive vs non-consecutive
+  Takbeer)**. Per video #21 lines 142-149: default IS highest even
+  for non-consecutive; Q-play (lower) is the EXCEPTION when player
+  has own cover AND wants tempo-hold. Pre-fix framing ("non-
+  consecutive → lower always") was too aggressive; now checks
+  hasCoverAce + non-consecutive gap before firing the override.
+
+### G6 — DROPPED (no code change)
+
+- **G6 Mathlooth-K bidder-team gate**. Validation found video #17
+  explicitly says mathlooth is SYMMETRIC (line 71-74: «لو واحد
+  عنده مثلوث في السبيت ممكن يمسكك فيه» — "if a player has a
+  mathlooth he can trap you in it"). Original re-audit's "bidder-
+  team-only" framing over-constrained. The existing v1.0.4
+  Mathlooth-K trickle works correctly for both sides; no change
+  needed.
+
+### Tests
+
+- **J.4 (M7) phase-split fix**: محشور-proxy bargiya now skips the
+  `handSize >= 5` phase-split (`tahreebPrefMahshour` flag).
+  Sender already cornered themselves; receiver should lead-back
+  immediately, not "burn 1-2 tricks first".
+- **AE.10 re-seed**: added `math.randomseed(20260503)` before the
+  PickTriple-jitter test fixture — v1.2.1's added probabilistic
+  branches consume math.random calls earlier in the suite,
+  shifting subsequent seed state.
+
+828/828 tests pass.
+
 ## v1.2.0 — Tier 5 features (deferred backlog from v1.1.0)
 
 Closes the Tier 5 deferred items from v1.1.0. 828/828 tests pass.
