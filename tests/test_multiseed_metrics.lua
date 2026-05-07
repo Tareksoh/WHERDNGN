@@ -342,16 +342,30 @@ local function runTournament(tierA, tierB, escalationMode, seedOffset)
     local gameOver = false
     local gameWinner = nil
 
+    -- v1.3.3 (harness fix): random per-tournament tier-side flip.
+    -- Pre-fix tierA always sat at seats 1+3 → systematic team-A bias
+    -- (+35-58 GP/game in symmetric all_X cells). Sources of seat bias
+    -- include: (1) pickContract iterates seat 1→4 with strict-> tie-break
+    -- giving seat 1 first claim on equal-score bid hands; (2) bidder
+    -- leads round-1 trick → tempo cascades via trick-winner-leads;
+    -- (3) any subtle deal-pattern asymmetries. Now: 50% of tournaments
+    -- swap tier-to-seat assignment so tier-X gets equal opportunity at
+    -- seats 1+3 vs 2+4. Aggregator interprets game_winner via
+    -- tier_side_flip flag.
+    local sideFlip = (math.random() < 0.5)
+    local effTierA = sideFlip and tierB or tierA
+    local effTierB = sideFlip and tierA or tierB
+
     local seatTierFlags = nil
-    if tierA ~= tierB then
+    if effTierA ~= effTierB then
         seatTierFlags = {
-            [1] = tierFlagsFor(tierA),
-            [2] = tierFlagsFor(tierB),
-            [3] = tierFlagsFor(tierA),
-            [4] = tierFlagsFor(tierB),
+            [1] = tierFlagsFor(effTierA),
+            [2] = tierFlagsFor(effTierB),
+            [3] = tierFlagsFor(effTierA),
+            [4] = tierFlagsFor(effTierB),
         }
     else
-        setTier(tierA)
+        setTier(effTierA)
     end
 
     local roundsPlayed = 0
@@ -489,18 +503,35 @@ local function runTournament(tierA, tierB, escalationMode, seedOffset)
         gahwa_wins_B    = gahwaWinsB,
         game_winner     = gameWinner,
         final_gp        = { A = cumA, B = cumB },
+        -- v1.3.3 harness-bias fix: when tier_side_flip = true, the
+        -- "team A" seats (1+3) actually played the cell's tierB while
+        -- the "team B" seats (2+4) played the cell's tierA. Aggregator
+        -- must interpret game_winner accordingly to compute tier-X
+        -- win rates correctly.
+        tier_side_flip  = sideFlip,
+        tier_A_played   = effTierA,  -- which tier seats 1+3 actually used
+        tier_B_played   = effTierB,  -- which tier seats 2+4 actually used
     }
 end
 
 -- -- Run all 6 × 2 configurations for this seed ----------------------------
 
 local configs = {
-    { name = "all_basic",           tierA = "basic",    tierB = "basic"  },
-    { name = "all_advanced",        tierA = "advanced", tierB = "advanced" },
-    { name = "all_m3lm",            tierA = "m3lm",     tierB = "m3lm"   },
-    { name = "all_master",          tierA = "master",   tierB = "master" },
-    { name = "mixed_basic_master",  tierA = "basic",    tierB = "master" },
-    { name = "mixed_m3lm_master",   tierA = "m3lm",     tierB = "master" },
+    { name = "all_basic",              tierA = "basic",    tierB = "basic"  },
+    { name = "all_advanced",           tierA = "advanced", tierB = "advanced" },
+    { name = "all_m3lm",               tierA = "m3lm",     tierB = "m3lm"   },
+    { name = "all_master",             tierA = "master",   tierB = "master" },
+    -- v1.3.3 tier-hierarchy validation: all 6 pairwise mixed matchups.
+    -- Team A always uses the "lower" tier and Team B the "higher" tier
+    -- (per the canonical Saudi Master > M3lm > Advanced > Basic order).
+    -- Modal winner across seeds tells us if the higher tier reliably
+    -- beats the lower tier in head-to-head play.
+    { name = "mixed_basic_advanced",   tierA = "basic",    tierB = "advanced" },
+    { name = "mixed_basic_m3lm",       tierA = "basic",    tierB = "m3lm"     },
+    { name = "mixed_basic_master",     tierA = "basic",    tierB = "master"   },
+    { name = "mixed_advanced_m3lm",    tierA = "advanced", tierB = "m3lm"     },
+    { name = "mixed_advanced_master",  tierA = "advanced", tierB = "master"   },
+    { name = "mixed_m3lm_master",      tierA = "m3lm",     tierB = "master"   },
 }
 
 -- Large prime shift per seed so round sequences don't overlap across seeds.

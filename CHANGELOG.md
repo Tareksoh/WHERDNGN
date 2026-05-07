@@ -1,5 +1,123 @@
 # Changelog
 
+## v1.3.3 — Tier-hierarchy probe + Advanced bot fixes + UI overflow
+
+A tier head-to-head probe revealed the bot tier system wasn't fully
+working: Master clearly beat all other tiers, but **Advanced lost to
+Basic** in both modes by +17-24 GP/game (Basic = pure random legal
+play). Two underlying bugs identified empirically + new harness
+infrastructure for future probes. Plus a user-reported UI overflow
+fix. 828/828 tests pass.
+
+### HIGH-1 — pos-2 duck telegraph (`Bot.lua:4937` extended to Advanced)
+
+Pre-v1.3.3: pos-2 follow logic (`Bot.lua:4884+`) was a deterministic
+2-state machine — sureStopper-or-duck. The duck always played the
+lowest non-winner. v1.2.1 added a 12% probabilistic breaker but
+**M3lm-tier-only**, leaving Advanced fully deterministic.
+
+In bot-vs-bot play, an opponent observing the Advanced bot duck at
+pos-2 could read "no A/T/sure-stopper in led suit" with 100%
+confidence. Empirical 12-matchup probe attributed ~24 GP/game in
+forced mode and ~17 GP/game in natural mode to this telegraph
+against Basic random opponents.
+
+**Fix**: extended the breaker to fire at `Bot.IsAdvanced()` (any
+tier above Basic) at 25% probability (was M3lm-only at 12%). M3lm
+and Master inherit the higher rate too — same underlying issue,
+higher rate further obscures the signal. Per video #20 «تمسك
+اللعب»: pros sometimes WIN at pos-2 with a mid-card when meaningful
+points are already in the trick.
+
+### HIGH-2 — Ace-exhaustion own-Ace mis-count (`Bot.lua:3201`)
+
+Pre-v1.3.3 the trick-4+ "all side Aces out" inference at line 3201
+counted the bot's OWN Ace as `seen` (exhausted) — a false premise.
+The early-return then bypassed later pickLead heuristics
+(partner-void ruff at 3564, Belote-K+Q preservation, singleton-low,
+Sun shortest-suit lead). Empirical probe attributed ~21-26 GP/game
+in natural mode to this — the bulk of the natural-mode
+Advanced<Basic anomaly.
+
+**Fix**: removed the own-`legal` check inside the loop. Only PLAYED
+Aces count toward exhaustion; our own Ace is still in play and the
+inference must not treat it as "out". Same intent as the original
+heuristic ("if all opp Aces are out, our K/Q/J are bosses" — a
+true-by-construction premise now that own-Ace is excluded).
+
+### MED — Multiseed harness team-A bias fix
+
+Pre-v1.3.3 the multiseed tournament harness systematically favored
+Team A by +35-58 GP/game in symmetric `all_X` cells. Sources:
+1. `pickContract` iterated seats 1→4 with strict `>` tie-break,
+   giving seat 1 first claim on equal-score bid hands
+2. Bidder leads round-1 trick → tempo cascades via trick-winner
+   leads
+3. Other subtle deal-pattern asymmetries
+
+This made all prior tier-comparison data approximately 3x noisier
+than it should have been (raw effect overlaid on +35-58 GP bias).
+
+**Fix**: per-tournament random tier-side flip
+(`tests/test_multiseed_metrics.lua`). 50% of tournaments swap
+which seat-pair gets which tier, so each tier gets equal opportunity
+at seats 1+3 vs 2+4. Tournament results now record `tier_side_flip`
+so the aggregator computes tier-X-vs-tier-Y stats correctly
+regardless of seat assignment. All `mixed_X_Y` analysis post-fix
+is bias-free.
+
+### Tier hierarchy validated (with one residual)
+
+Post-v1.3.3 multiseed probe (5 seeds × 100 rounds × 12 cells with
+random tier-side flip):
+
+| Matchup | natural | forced |
+|---|---|---|
+| advanced vs **master** | master +65 ✓ | master +80 ✓ |
+| m3lm vs **master** | master +44 ✓ | m3lm +9 ⚠ noise |
+| basic vs **master** | master +42 ✓ | master +13 ✓ |
+| advanced vs **m3lm** | tied | advanced +22 (mixed) |
+| basic vs **m3lm** | m3lm +17 ✓ | basic +33 ⚠ |
+| **basic** vs advanced | basic +14 ⚠ | basic +13 ⚠ |
+
+Master is unambiguously the strongest tier (wins 5/6 matchups,
+master+m3lm noise tie in forced m3lm-master only). M3lm > Basic
+in natural, basic edges m3lm/advanced in forced (noisy). Residual
+~14 GP/game basic > advanced gap remains — much smaller than
+pre-fix +17/+24 but not zero. Marked as known-issue for v1.3.4
+investigation.
+
+### Harness extension — full pairwise mixed matchups
+
+Pre-v1.3.3 the multiseed harness only had 2 mixed-tier configs
+(basic_master, m3lm_master). Extended to all 6 pairwise matchups
+(basic_advanced, basic_m3lm, basic_master, advanced_m3lm,
+advanced_master, m3lm_master) so future tier-hierarchy probes
+have complete coverage. Doubled the mixed-cell count from 2 to 6;
+total cells from 12 to 20. Tournament runtime ~7 min (was ~5).
+
+### UI fix — round-result banner title overflow
+
+User-reported: round-end banner title (e.g., "TAKWEESH! Ballripper
+called incorrectly — YA MRW7 TEAM ONE (Ballripper+Bot 3)") had
+words extending outside the box and splitting at the em-dash.
+
+**Diagnosis**: `banner.title` FontString at `UI.lua:1524` had no
+width constraint — text auto-sized to its content and overflowed
+the 270-px-wide banner.
+
+**Fix**: cap `banner.title` width to 256 (banner_width − 7px each
+side padding), enable explicit word wrap. Push subsequent banner
+text rows (bidder, defender, modifiers, belote) down by 16px each
+so a 2-line title doesn't overlap. Banner outer dimensions
+unchanged.
+
+### Tests
+
+828/828 pass. UI.lua is not loaded by `tests/run.py` (pure-logic
+test harnesses); UI fix verified by inspection. Multiseed probe
+re-validated tier hierarchy.
+
 ## v1.3.2 — Escalation threshold re-tune (closes v0.11.20 over-correction)
 
 The v1.3.0 harness fix (multiseed test fixture state-prep) revealed

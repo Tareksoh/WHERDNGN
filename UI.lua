@@ -1523,14 +1523,23 @@ local function buildTable()
     banner.outcome:SetPoint("TOP", 0, -10)
     banner.title = makeText(banner, 14, "CENTER")
     banner.title:SetPoint("TOP", 0, -38)
+    -- v1.3.3 (user-reported UI fix): pre-fix the title FontString
+    -- had no width constraint, so long titles like "TAKWEESH! X
+    -- called incorrectly — YA MRW7 TEAM ONE (X+Y)" overflowed the
+    -- banner box on both sides. Now: cap the width so word-wrap
+    -- engages cleanly inside the banner. Banner is 270 wide; 256
+    -- leaves 7px padding each side. Subsequent text rows pushed
+    -- down 16px so a 2-line title doesn't overlap the bidder line.
+    banner.title:SetWidth(256)
+    banner.title:SetWordWrap(true)
     banner.bidder = makeText(banner, 11, "CENTER")
-    banner.bidder:SetPoint("TOP", 0, -62)
+    banner.bidder:SetPoint("TOP", 0, -78)
     banner.defender = makeText(banner, 11, "CENTER")
-    banner.defender:SetPoint("TOP", 0, -80)
+    banner.defender:SetPoint("TOP", 0, -96)
     banner.modifiers = makeText(banner, 11, "CENTER")
-    banner.modifiers:SetPoint("TOP", 0, -102)
+    banner.modifiers:SetPoint("TOP", 0, -118)
     banner.belote = makeText(banner, 11, "CENTER")
-    banner.belote:SetPoint("TOP", 0, -120)
+    banner.belote:SetPoint("TOP", 0, -136)
     banner.belote:SetTextColor(1, 0.84, 0.30)
     banner.final = makeText(banner, 14, "CENTER")
     banner.final:SetPoint("BOTTOM", 0, 14)

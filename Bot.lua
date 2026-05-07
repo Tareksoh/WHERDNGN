@@ -3203,17 +3203,31 @@ local function pickLead(legal, contract, seat)
             local sideAcesLeft = 0
             for _, su in ipairs(shuffledSuits()) do
                 if su ~= contract.trump then
-                    -- Check if Ace of this suit has been played OR is in our hand.
+                    -- Check if Ace of this suit has been played.
+                    --
+                    -- v1.3.3 (Suspect A audit fix — natural-mode
+                    -- Advanced<Basic root cause): pre-fix this loop
+                    -- ALSO checked whether the Ace was in our own
+                    -- `legal` cards and marked it `seen` if so. That
+                    -- made sideAcesLeft = 0 fire whenever we held the
+                    -- only remaining Ace ourselves — a FALSE PREMISE
+                    -- that the heuristic's intent ("all opponent Aces
+                    -- are out, our K/Q/J are bosses") clearly didn't
+                    -- support. The early-return then bypassed later
+                    -- pickLead heuristics (partner-void ruff,
+                    -- Belote-K+Q preservation, singleton-low,
+                    -- Sun-shortest-suit). Empirical probe showed this
+                    -- cost Advanced ~21-26 GP/game in natural mode
+                    -- head-to-head against Basic, the bulk of the
+                    -- pre-v1.3.3 Advanced<Basic anomaly. Now: only
+                    -- PLAYED Aces count toward exhaustion. Our own
+                    -- Ace is still in play and the inference must
+                    -- not assume it's "out".
                     local aceCard = "A" .. su
                     local seen = false
                     for s2 = 1, 4 do
                         local m = Bot._memory[s2]
                         if m and m.played[aceCard] then seen = true; break end
-                    end
-                    if not seen then
-                        for _, c in ipairs(legal) do
-                            if c == aceCard then seen = true; break end
-                        end
                     end
                     if not seen then sideAcesLeft = sideAcesLeft + 1 end
                 end
@@ -4923,25 +4937,35 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 if sureStopper then return sureStopper end
-                -- v1.2.1 (A3 audit): pos-2 binary breaker. Pre-fix
-                -- pos-2 was a 2-state machine (sureStopper-or-duck);
-                -- a careful opp reading "pos-2 bot just ducked → no
-                -- A/T of led suit" had a fully reliable inference.
-                -- Per video #20 «تمسك اللعب»: pros sometimes WIN at
-                -- pos-2 with a mid-card when the trick already has
-                -- meaningful points. ~12% probabilistic at M3lm+
-                -- tier when ≥1 point card is already in the trick
-                -- AND we hold a non-sureStopper winner. Breaks the
-                -- duck-or-stop binary without compromising the
-                -- "second hand low" canonical rule for clean tricks.
-                if Bot.IsM3lm and Bot.IsM3lm() and #winners >= 1
-                   and trick.plays then
+                -- v1.2.1 (A3 audit) → v1.3.3 (Suspect 2 audit fix):
+                -- pos-2 binary breaker. Pre-v1.2.1 pos-2 was a 2-state
+                -- machine (sureStopper-or-duck); a careful opp reading
+                -- "pos-2 bot just ducked → no A/T of led suit" had a
+                -- fully reliable inference. v1.2.1 added a 12% M3lm-
+                -- only breaker.
+                --
+                -- v1.3.3 expansion: empirical bot-vs-bot probe revealed
+                -- the M3lm-only / 12% setting was structurally
+                -- insufficient. In Advanced-tier matchups (M3lm flag
+                -- off) the breaker never fired, leaving the
+                -- deterministic duck telegraph intact — bots playing
+                -- against the Advanced bot could read "no A/T in led
+                -- suit" with 100% confidence, costing the Advanced bot
+                -- ~24 GP/game in forced mode head-to-head against
+                -- Basic. Extended the breaker to fire at Advanced+
+                -- (any tier above Basic) at 25% probability. M3lm and
+                -- Master inherit the higher rate too — the underlying
+                -- telegraph issue is the same and a higher rate further
+                -- obscures the signal. Per video #20 «تمسك اللعب»:
+                -- pros sometimes WIN at pos-2 with a mid-card when
+                -- meaningful points are already in the trick.
+                if #winners >= 1 and trick.plays then
                     local hasPointCard = false
                     for _, p in ipairs(trick.plays) do
                         local pts = C.PointValue(p.card, contract) or 0
                         if pts >= 4 then hasPointCard = true; break end
                     end
-                    if hasPointCard and math.random() < 0.12 then
+                    if hasPointCard and math.random() < 0.25 then
                         -- Win with cheapest winner (not sureStopper-
                         -- equivalent A/T which is the obvious play).
                         return lowestByRank(winners, contract)

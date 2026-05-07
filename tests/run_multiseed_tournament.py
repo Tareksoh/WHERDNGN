@@ -31,7 +31,9 @@ SEEDS = [1, 12345, 999, 7, 42]
 
 CONFIGS_ORDER = [
     "all_basic", "all_advanced", "all_m3lm", "all_master",
-    "mixed_basic_master", "mixed_m3lm_master",
+    # v1.3.3 tier-hierarchy validation: all 6 pairwise mixed matchups.
+    "mixed_basic_advanced", "mixed_basic_m3lm", "mixed_basic_master",
+    "mixed_advanced_m3lm", "mixed_advanced_master", "mixed_m3lm_master",
 ]
 
 # Metric fields to aggregate across seeds.
@@ -254,7 +256,7 @@ def main(argv: list[str]) -> int:
     here       = os.path.abspath(os.path.dirname(__file__))
     addon_root = os.path.abspath(os.path.join(here, ".."))
 
-    print(f"Multi-seed tournament: {len(SEEDS)} seeds × 12 cells × 100 rounds")
+    print(f"Multi-seed tournament: {len(SEEDS)} seeds × {len(CONFIGS_ORDER) * 2} cells × 100 rounds")
     print(f"Seeds: {SEEDS}")
     print()
 
