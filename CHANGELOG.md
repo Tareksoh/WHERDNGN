@@ -1,5 +1,139 @@
 # Changelog
 
+## v1.3.1 — 3 dead-signal silent-correctness lies (post-v1.3.0 audit)
+
+A targeted coverage-audit agent scanned the bot signal/flag system
+for the same pattern that produced v1.3.0's Faranka inversion (and
+v1.2.2's HIGH-1/HIGH-2): write-site exists, consumer either missing
+or reading the wrong field. Three more HIGH findings — all silent-
+correctness lies where code says one thing and does another. 828/828
+tests pass.
+
+### HIGH-1 — `tahreebActive` permanently false in deceptiveOverplay
+
+`Bot.lua:5184-5191` checked Tahreeb-active state via:
+```
+for _, evt in pairs(pStyle.tahreebSent) do
+    if evt and (evt.flavor == "want" or evt.flavor == "bargiya") then
+```
+But `pStyle.tahreebSent[suit]` is a **raw rank-list array** (e.g.
+`{"7","9"}`) — it has no `.flavor` field. `evt.flavor` was always
+`nil`, `tahreebActive` was permanently `false`, and the
+deceptive-overplay suppression that's supposed to prevent the bot
+from sacrificing honor cards INTO partner's live Tahreeb signal
+**never fired**. Bots routinely collided with partner's planned
+lead-backs.
+
+The other 3 callers of `tahreebClassify` in the same file (lines
+2696, 2775, 5317, 5358) all correctly use the per-suit pattern
+`tahreebClassify(tahreebSent[su])`. Mirror that pattern at the
+deceptiveOverplay site.
+
+### HIGH-2 — `oppHighInferred` BotMaster-sampler consumer missing
+
+The `Bot.lua:2837-2843` write-site comment promised:
+> *"export to `Bot._memory[seat].oppHighInferred` so downstream
+> consumers (A1's deceptiveOverplay, **BotMaster sampler**) can
+> bias on the inferred opp-holds-high reading."*
+
+The `deceptiveOverplay` consumer landed at `Bot.lua:5198-5201`. The
+**BotMaster sampler** never read the flag. ISMCTS rollouts (Saudi
+Master tier) were sampling opp hands with no Tanfeer-derived bias —
+the sampler would mis-assign A/T/K to opp seats we'd already
+*inferred to hold them*. Per video #19 «اي شكل خصمك ينفر تفترض
+انه عنده» — opp Tanfeer = "infer opp holds the high cards in that
+suit"; the sampler was ignoring this.
+
+Fix at `BotMaster.lua` (right after the `leadCount` block in the
+desire-weight loop): when the rollout seat has `oppHighInferred[X]
+== true`, bias both opp seats' desire maps to put A/T/K of X with
+weight 30 (above leadCount's 1, below topTouch's hard-pin of 60 —
+soft inference, not a declared meld).
+
+### HIGH-3 — `forceOwnInitiative` longest-suit consumer missing
+
+The `Bot.lua:3632-3634` write-site comment promised:
+> *"Sets `forceOwnInitiative` flag consumed by Sun shortest-suit
+> (skip) **AND by longest-suit logic (prefer suits where we hold
+> A or T)**."*
+
+The Sun-shortest-suit skip lands at line 3655. The **Hokm
+longest-suit A/T preference** was never wired — the longest-suit
+picker at lines 3704-3739 just used raw `suitCount`. So when partner
+showed a weak hand in a Hokm contract, the bot fell through to plain
+"low from longest" without any A/T-suit preference.
+
+Fix: when `forceOwnInitiative` is set, score suits as
+`count*10 + (hasA*5) + (hasT*3)` so a 4-card-with-A beats a
+5-card-no-honors. Same Fzloky avoid-suit gating; mardoofa-aware
+via the additive A+T bonus.
+
+### Why no test caught these
+
+All three are integration-level silent failures. The functions
+return valid cards either way; only the *strategic preference*
+is wrong. Source-pin tests (`test_state_bot.lua`) check that
+specific hands fire the right pickers, not that the picker
+incorporates all upstream signals. The 828 suite covers
+correctness; gaps like these need pattern-coverage audits.
+
+### Tests
+
+828/828 pass. No test changes — these fixes affect strategic
+preference under partner-state conditions that source-pin
+fixtures don't trigger.
+
+### Calibration probe — empirical measurements (post-v1.3.0 harness)
+
+A second audit agent ran the v1.3.0-corrected harness (5 seeds × 100
+rounds × 8 cells, 286s wall time). Findings are measurement-only,
+no code change in v1.3.1 — but they **revise** the deferred re-tune
+recommendation in the v1.3.0 CHANGELOG.
+
+**Bel rate confirmed ~92%** at current TH=35. Direct probe of 4000
+PickDouble evaluations: defender strength p25=30, p50=41, p75=53,
+p90=65 (mean 42.2). With jitter band [25, 45], ~65% of single-
+defender rolls fire; with two defenders + early-return, round-level
+Bel rate climbs to 92.2%. Validates the v1.3.0 deferred re-tune
+direction (TH=35 is over-tuned).
+
+**v1.2.3 bidding fix is landing.** R1 overall bid rate measured at
+24.7% (basic tier), in the expected 25–50% target band. Position
+gradient pos1=25.2% → pos4=24.3% — present but gentle, no longer
+suppresses bidding the way +5/+3 did.
+
+**Four/Gahwa rate ≈ 0% is STRUCTURAL, not a Bel/Four-threshold issue.**
+Triple gate at `BOT_TRIPLE_TH=90` is above the realistic 8-card
+strength ceiling (p90=65). Triple fires only in ~5–15% of post-Bel
+opportunities; Four (which requires Bel + Triple both fired) ends
+up at 0–3% per cell; Gahwa cascades to 0%. Adjusting `BOT_FOUR_TH`
+or `BOT_GAHWA_TH` does NOT unlock these rungs — `BOT_TRIPLE_TH` is
+the upstream bottleneck.
+
+**Revised re-tune recommendation** (corrects v1.3.0 CHANGELOG):
+
+| Constant | Current | v1.3.0 proposed | **v1.3.1 revised** | Rationale |
+|---|---|---|---|---|
+| `K.BOT_BEL_TH` | 35 | 62 | **62** | Targets ~8% natural rate; p75=53 + jitter |
+| `K.BOT_TRIPLE_TH` | 90 | 100 | **65** | p75=53, p90=65 — TH=100 keeps Triple at <5% |
+| `K.BOT_FOUR_TH` | 110 | 108 | **80** | Above Triple band, below extreme outliers |
+| `K.BOT_GAHWA_TH` | 120 | 115 | **95** | Stays terminal-rare, but reachable |
+
+The v1.3.0 proposal was computed from formulas without measuring
+the post-fix strength distribution; the revised values are anchored
+to the actual p75/p90 empirically observed. AE.10a/AE.10b source-pin
+tests should still hold (rich hand strength 161 ≫ 65; weak hand
+strength 73 sits between proposed Triple TH=65 and Four TH=80, but
+AE.10b probes PickTriple with TH=90 currently — the test pins
+"weak hand does NOT fire PickTriple"; at TH=65 weak hand strength
+73 would now FIRE, breaking AE.10b).
+
+**Status: re-tune still deferred** — the AE.10b interaction means
+threshold drops below 73 require updating the test fixture's "weak"
+hand to something genuinely weak (e.g., the all-7/8 Kawesh shape)
+or accepting the new firing behavior as correct. This is a code+test
+coordinated change that warrants its own deliberate pass.
+
 ## v1.3.0 — Closes weakHandSignal consumer gap + multiseed harness fix
 
 Post-v1.2.3 audit run (3 specialist agents on backlog, code-quality,

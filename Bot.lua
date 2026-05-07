@@ -3701,25 +3701,55 @@ local function pickLead(legal, contract, seat)
     -- 3: lead low from longest non-trump suit. If Fzloky has flagged
     -- a partner-avoid suit (their LOW first-discard), exclude that
     -- suit from the longest-pick when an alternative exists.
+    --
+    -- v1.3.1 (deadSignal-1 audit fix): forceOwnInitiative second
+    -- consumer. The v1.2.1 G1 write-site comment at Bot.lua:3632-3634
+    -- promised the flag is consumed «by Sun shortest-suit (skip) AND
+    -- by longest-suit logic (prefer suits where we hold A or T)».
+    -- The Sun-skip half lands at line 3655, but the longest-suit A/T
+    -- preference was never wired — `longest` was picked purely by
+    -- `suitCount`. Now: when forceOwnInitiative is set (partner shows
+    -- weak hand), score suits as `count*10 + has_A*5 + has_T*3` so a
+    -- 4-card-with-A beats a 5-card-no-honors. Same Fzloky avoid-suit
+    -- gating; mardoofa-aware via the additive A+T bonus.
     if #nonTrumps > 0 then
+        local hasA, hasT = {}, {}
+        for _, c in ipairs(nonTrumps) do
+            local r, s = C.Rank(c), C.Suit(c)
+            if r == "A" then hasA[s] = true end
+            if r == "T" then hasT[s] = true end
+        end
+        local function suitScore(suit)
+            local n = suitCount[suit] or 0
+            if n == 0 then return 0 end
+            if forceOwnInitiative then
+                local bonus = (hasA[suit] and 5 or 0) + (hasT[suit] and 3 or 0)
+                return n * 10 + bonus
+            end
+            return n * 10
+        end
         -- Two-pass selection avoids the iteration-order bug where
         -- pairs(suitCount) might visit the avoid-suit first and let
         -- it claim `longest` before any alternative is considered.
-        -- Pass 1: longest NON-avoid suit. Pass 2: any longest if pass
+        -- Pass 1: best NON-avoid suit. Pass 2: any best if pass
         -- 1 found nothing. The Fzloky "≥2 more cards" tolerance is
         -- now applied as a tie-break — avoid-suit only wins if it
-        -- exceeds the best non-avoid by ≥2.
-        local longest, longestN = nil, 0
+        -- exceeds the best non-avoid by ≥2 in raw count (independent
+        -- of A/T bonus to preserve the original Fzloky semantics).
+        local longest, longestN, longestScore = nil, 0, 0
         for _, suit in ipairs(shuffledSuits()) do
             local n = suitCount[suit] or 0
-            if suit ~= fzlokyAvoidSuit and n > longestN then
-                longest, longestN = suit, n
+            local score = suitScore(suit)
+            if suit ~= fzlokyAvoidSuit and score > longestScore then
+                longest, longestN, longestScore = suit, n, score
             end
         end
         if fzlokyAvoidSuit then
             local avoidN = suitCount[fzlokyAvoidSuit] or 0
             if avoidN >= longestN + 2 then
-                longest, longestN = fzlokyAvoidSuit, avoidN
+                longest = fzlokyAvoidSuit
+                longestN = avoidN
+                longestScore = suitScore(fzlokyAvoidSuit)
             end
         end
         if not longest then
@@ -5181,11 +5211,21 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     local partner = R.Partner(seat)
                     local pStyle = Bot._partnerStyle
                                     and Bot._partnerStyle[partner]
+                    -- v1.3.1 (deadSignal-3 audit fix): pre-fix this
+                    -- iterated `pairs(pStyle.tahreebSent)` and tested
+                    -- `evt.flavor` — but tahreebSent[suit] is a raw
+                    -- rank-list array (e.g. {"7","9"}), NOT a flavor
+                    -- object. `.flavor` was always nil, `tahreebActive`
+                    -- was permanently false, deceptive-overplay
+                    -- suppression NEVER fired. The other 3 callers
+                    -- (Bot.lua:2696, 2775, 5317, 5358) correctly use
+                    -- `tahreebClassify(tahreebSent[su])` per-suit;
+                    -- mirror that pattern here.
                     local tahreebActive = false
                     if pStyle and pStyle.tahreebSent then
-                        for _, evt in pairs(pStyle.tahreebSent) do
-                            if evt and (evt.flavor == "want"
-                                        or evt.flavor == "bargiya") then
+                        for _, su in ipairs({ "S", "H", "D", "C" }) do
+                            local cls = tahreebClassify(pStyle.tahreebSent[su])
+                            if cls == "want" or cls == "bargiya" then
                                 tahreebActive = true; break
                             end
                         end

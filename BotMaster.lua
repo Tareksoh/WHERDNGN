@@ -484,6 +484,36 @@ local function sampleConsistentDeal(seat, unseen)
                     end
                 end
 
+                -- v1.3.1 (deadSignal-2 audit fix): oppHighInferred
+                -- BotMaster-sampler consumer. The v1.2.1 G5 write-site
+                -- comment at Bot.lua:2837-2843 promised the inferred-
+                -- opp-holds-high reading is consumed by «A1's
+                -- deceptiveOverplay AND BotMaster sampler». The
+                -- deceptiveOverplay consumer lands at Bot.lua:5198-
+                -- 5201, but the BotMaster sampler never read the
+                -- flag — ISMCTS rollouts were sampling opp hands
+                -- with no Tanfeer-derived bias, mis-assigning A/T/K
+                -- to opp seats we'd already inferred to hold them.
+                -- Now: when the rollout seat (`seat`) has inferred
+                -- opp-holds-high in suit X, bias both opp seats'
+                -- desire maps to put A/T/K of X with weight 30
+                -- (above the leadCount weight of 1, below partner
+                -- topTouch hard-pin of 60 — soft inference, not a
+                -- declared meld). Per video #19 «اي شكل خصمك ينفر
+                -- تفترض انه عنده» — opp Tanfeer = "infer opp
+                -- holds the high cards in that suit".
+                local seatMem = B.Bot._memory and B.Bot._memory[seat]
+                if seatMem and seatMem.oppHighInferred and sIsOpponent then
+                    for su, inferred in pairs(seatMem.oppHighInferred) do
+                        if inferred then
+                            for _, r in ipairs({ "A", "T", "K" }) do
+                                local card = r .. su
+                                desire[card] = math.max(desire[card] or 0, 30)
+                            end
+                        end
+                    end
+                end
+
                 -- v0.9.0 Section 6 rules 1-4: touching-honors-down
                 -- desire bumps. When this seat showed touching-honors
                 -- in suit X (played T → has K, etc.), HARD-PIN the
