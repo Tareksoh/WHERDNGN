@@ -54,6 +54,17 @@ local function reset()
     s.meldsByTeam = { A = {}, B = {} }
     s.meldsDeclared = {}    -- [seat] = true once declared (or skipped)
     s.belPending  = nil     -- seats waiting to choose Bel/skip
+    -- v1.0.11 (D HIGH-2 Belote announcement): per-seat boolean. The
+    -- holder of K+Q-of-trump must announce the +20 Baloot bonus (per
+    -- PDF: «يجب على اللاعب الذي لديه البلوت ذكره أثناء لعب الورقة
+    -- الثانية وقبل نزولها على الأرض») by clicking the BALOOT! button
+    -- as they play the second of K/Q-of-trump. R.ScoreRound counts
+    -- the bonus only if `s.beloteAnnounced[holder] == true`, OR if
+    -- the holder's team declared a sequence-meld of length>=3 in the
+    -- trump suit that covers both K and Q (Saudi exception:
+    -- «مشروع متسلسل (سرا، خمسين، مائة) فيحسب حتى لو لم يُذكر»).
+    -- Bots auto-announce on the second-card play (always declare).
+    s.beloteAnnounced = {}
     -- Pre-emption (Triple-on-Ace, الثالث): set when a round-2 SUN bid
     -- lands on an Ace bid card. Maps eligible seats (earlier-in-order,
     -- non-partner of buyer) to a pending decision. Cleared when a seat
@@ -1148,6 +1159,14 @@ function S.ApplyDouble(seat, open)
     if not s.contract then return end
     s.contract.doubled = true
     s.contract.belOpen = (open ~= false)
+    -- v1.0.11 (D MED M1 either-defender Bel): record WHICH defender
+    -- actually Bel'd. Pre-v1.0.11 the Beler was hardcoded as
+    -- NextSeat(bidder) implicitly via the wire-side seat gate; either-
+    -- defender support requires explicit tracking so subsequent Four
+    -- eligibility (and UI) can target the right defender. PDF Rule 4:
+    -- "بين اللاعب المشتري والمدبل فقط" = "between the buyer and the
+    -- doubler only" — the doubler is whoever actually Bel'd.
+    s.contract.doublerSeat = seat
     s.belPending = nil
     s.turn = nil
     s.turnKind = nil
@@ -1236,6 +1255,19 @@ function S.ApplyGahwa(seat)
     -- v0.11.17-hotfix F5: see ApplyDouble for rationale.
     if B.Bot and B.Bot.OnEscalation then B.Bot.OnEscalation(seat, "gahwa") end
     B.Sound.Try(K.SND_VOICE_GAHWA)
+end
+
+-- v1.0.11 (D HIGH-2): Baloot/Belote announcement state-apply. Records
+-- that `seat` has announced their K+Q-of-trump bonus. Mirrored on all
+-- clients via MSG_BELOTE wire. Idempotent: re-announcement is a no-op
+-- (and shouldn't happen — UI/Net both gate the click to once-per-round).
+-- Plays the existing K.SND_BALOOT vocal cue on every client.
+function S.ApplyBeloteAnnounce(seat)
+    if not seat then return end
+    if not s.beloteAnnounced then s.beloteAnnounced = {} end
+    if s.beloteAnnounced[seat] then return end
+    s.beloteAnnounced[seat] = true
+    B.Sound.Try(K.SND_BALOOT)
 end
 
 function S.ApplyMeld(seat, kind, suit, top, encodedCards)
@@ -2351,7 +2383,11 @@ function S.HostScoreRoundResult()
     -- priority. PDF: «أفضلية النزول لمن على يمين الموزع» — when
     -- two equal-rank melds tie, the team containing the player on
     -- dealer's right takes the win.
-    local result = R.ScoreRound(s.tricks, s.contract, s.meldsByTeam, s.dealer)
+    -- v1.0.11 (D HIGH-2): pass s.beloteAnnounced so R.ScoreRound's
+    -- announcement gate can drop the +20 bonus when the holder didn't
+    -- click the BALOOT button (with the sequence-meld exception).
+    local result = R.ScoreRound(s.tricks, s.contract, s.meldsByTeam,
+                                 s.dealer, s.beloteAnnounced)
     return result
 end
 

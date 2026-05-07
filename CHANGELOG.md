@@ -1,5 +1,124 @@
 # Changelog
 
+## v1.0.11 — Big-3 deferred backlog: Belote announcement + either-defender Bel + BALOOT button
+
+Closes the three big deferred items from v1.0.10's backlog. 813/813
+tests pass.
+
+### CRITICAL — Saudi-rule conformance
+
+- **D HIGH-2: Belote announcement requirement (PDF §Belote)**.
+  Pre-v1.0.11 the +20 K+Q-of-trump bonus was auto-detected
+  retroactively in `R.ScoreRound` — the bonus always counted as
+  long as the same seat had played both K and Q of trump. PDF text
+  «يجب على اللاعب الذي لديه البلوت ذكره أثناء لعب الورقة الثانية
+  وقبل نزولها على الأرض» = "the holder must announce on the
+  second card of K/Q-of-trump play, before it lands". Now wired
+  end-to-end:
+  - **`K.MSG_BELOTE = "$"`** wire constant + `N.SendBelote` /
+    `N._OnBelote` / `N.LocalBelote` handlers.
+  - **`S.s.beloteAnnounced = {}`** per-seat flag. `S.ApplyBeloteAnnounce`
+    mutates on every client (idempotent; plays K.SND_BALOOT cue).
+  - **`R.ScoreRound` gate**: 5th optional `beloteAnnounced` parameter
+    drops the +20 bonus when the holder is NOT in the announce-set,
+    UNLESS the holder's team has a sequence meld in trump suit
+    covering K+Q (PDF exception: «إذا كان البلوت مكشوف مع مشروع
+    متسلسل فيحسب حتى لو لم يُذكر»). Helper `R.TeamSequenceCoversBelote`
+    exposed for the same gate in `Net.lua`'s Qaid handlers
+    (HostResolveTakweesh + HostResolveSWA invalid-SWA branch).
+  - **Back-compat**: legacy callers passing only the original 4
+    args get the pre-v1.0.11 behavior (Belote always counts) so
+    pre-v1.0.11 saved sessions migrate cleanly.
+
+- **BALOOT! button (Saudi-spelling, flashing)** in `UI.lua`
+  PHASE_PLAY render path. Per user request: button label is
+  "BALOOT!" (not "BELOTE") to match Saudi/Khaleeji transliteration
+  of «بلوت». Visible to local seat when:
+    - Hokm contract + trump suit set, AND
+    - Local hand had/has BOTH K and Q of trump (combines current
+      hand + already-played cards by this seat — covers the
+      narrow window between first-of-pair and second-of-pair
+      plays), AND
+    - Has not yet announced (`S.s.beloteAnnounced[localSeat] ~= true`).
+  Flash animation: `OnUpdate` script pulses the FontString color
+  at 1 Hz between bright gold `(1, 1.0, 0.4)` and white-yellow
+  `(1, 0.85, 0)` so it grabs attention. WoW frame API; defensive
+  no-op if `SetScript` is missing (test environment).
+
+- **Bots auto-announce** via `Net._HostMaybeAutoBelote(seat, card)`,
+  called from the host's bot-play paths in `MaybeRunBot` after
+  `S.ApplyPlay` + `N.SendPlay`. Detects: was the just-played card
+  K-or-Q-of-trump AND has the same bot seat played the other? If
+  so, broadcasts MSG_BELOTE for them. Bots always announce in
+  real Saudi play; only humans have to click the button manually.
+
+### HIGH — Saudi-rule conformance
+
+- **D MED M1: Either-defender Bel (PDF Rule 4)**. Pre-v1.0.11 the
+  Bel/Skip-Double wire gate hardcoded `seat == NextSeat(bidder)`,
+  blocking the OTHER defender (`PrevSeat(bidder)`) from ever
+  Bel'ing. PDF text «المدبل» (the doubler) does not specify which
+  defender — whoever calls Bel first becomes the doubler. Now:
+  - **`Net._OnDouble` / `_OnSkipDouble` / `LocalDouble` /
+    `LocalSkipDouble`**: gate on `S.s.belPending` membership
+    (which already lists both defenders).
+  - **`S.ApplyDouble`**: sets `S.s.contract.doublerSeat = seat`
+    so subsequent Four eligibility targets the SPECIFIC defender
+    who Bel'd (PDF Rule 4: bidder ↔ doubler only).
+  - **`Net._OnFour` / `_OnSkipFour` / `LocalFour`**: gate on
+    `contract.doublerSeat` with NextSeat fallback for stale
+    pre-v1.0.11 saved state.
+  - **`UI.lua` PHASE_DOUBLE / PHASE_FOUR render**: `inPending`
+    helper for the Bel button; `doublerSeat`-with-fallback for
+    the Four button.
+  - **`Net.MaybeRunBot` PHASE_DOUBLE dispatcher**: iterates ALL
+    pending defenders in NextSeat-first order (Saudi vocal-priority
+    convention). First bot to say YES Bels and the chain advances;
+    bots that say NO emit MSG_SKIP_DBL and are removed from
+    belPending. Remaining humans get a sequential AFK timer.
+  - **`Net._HostBelTimeout`**: per-seat timeout removes ONE
+    defender from belPending; finish deal only when empty.
+  - **`Net.S.IsMyTurn` "bel" / "four" branches**: belPending
+    membership check / doublerSeat respectively.
+
+### Tests
+
+- **`tests/test_rules.lua` Section T (NEW, 6 tests)**: Belote
+  announcement gate.
+  - T.1: legacy callers (no `beloteAnnounced` arg) → counts
+    (back-compat preserved).
+  - T.2: announced → counts (PDF base case).
+  - T.3: NOT announced + no covering meld → DROPS.
+  - T.4: NOT announced but trump-seq meld covers K+Q → counts
+    (PDF exception).
+  - T.5: NOT announced + sequence in NON-trump → DROPS (exception
+    is trump-only).
+  - T.6 (a/b/c): `R.TeamSequenceCoversBelote` helper unit tests.
+- **`tests/test_state_bot.lua` Section AM (NEW, 4 tests)**:
+  either-defender Bel state.
+  - AM.1: `S.ApplyDouble` sets `contract.doublerSeat`.
+  - AM.2: `S.ApplyContract` initializes `belPending` with both
+    defenders.
+  - AM.3: nil-doublerSeat fallback to NextSeat (4 bidder positions).
+  - AM.4: `S.ApplyBeloteAnnounce` idempotent + nil-defensive.
+
+### NOT shipped (still backlogged)
+
+- **D HIGH-3 Reverse Kaboot rule arbitration**: PDF cross-check
+  found NO mention of reverse-kaboot in the extracted PDFs (1, 2,
+  3a, 3b, 4, 5, 6, 7). Current 88 raw + bidder-led-trick-1 was a
+  single-source rule from video #16 documented as "confirm before
+  wiring". Alternate 99 raw + dealer-right-Ace-held was a swarm
+  hypothesis without strong source backing. Investigation deferred
+  pending stronger source evidence — current rule preserved as
+  default.
+
+- **`Bot.PickKawesh` partner-Hokm gate (LOW from v1.0.10 audit
+  pass-3)**: agent flagged as a missing gate, but Kawesh fires
+  PHASE_DEAL1 (pre-bidding) so partner-bid doesn't yet exist at
+  that phase — the agent likely conflated kawesh-pre-bid with
+  kasho-during-play. Kept open for future investigation.
+
 ## v1.0.10 — Audit pass-3 quick wins + partner-Hokm BC-MANDATORY override
 
 Closes the LOW/MED severity items from v1.0.9's 4-agent ultra-audit

@@ -1883,6 +1883,166 @@ do
 end
 
 -- =====================================================================
+-- T. v1.0.11 Belote announcement gate (PDF: announce-on-second-card)
+-- =====================================================================
+-- PDF: «يجب على اللاعب الذي لديه البلوت ذكره أثناء لعب الورقة الثانية»
+-- = "Belote holder must announce on the second-card-of-pair play."
+-- EXCEPTION: «إذا كان البلوت مكشوف مع مشروع متسلسل فيحسب حتى لو لم
+-- يُذكر» = "if Belote is laid open with a sequence meld, it counts
+-- without announcement."
+section("T. v1.0.11 Belote announcement gate (PDF §Belote)")
+
+-- Construct a Hokm contract with seat 1 holding K+Q-of-trump (hearts).
+-- Use trick #2 to bury K+Q (seat 1 plays both, won by themselves).
+-- Other tricks won by seat 2 (defender). Total bidder card raw: low.
+-- Use this rig for all T.* tests.
+local function rigBeloteHand(beloteHolderSeat)
+    local s = beloteHolderSeat or 1
+    local cards = fullDeck()
+    local idx = 1
+    local function nextCard()
+        local c = cards[idx]; idx = idx + 1; return c
+    end
+    -- Replace random with deterministic K+Q-of-H from seat s.
+    local tricks = {}
+    -- Trick 1: K of hearts played by seat s, others off-suit.
+    tricks[1] = {
+        leadSuit = "H", winner = s,
+        plays = {
+            { seat = 1, card = (s == 1) and "KH" or "9C" },
+            { seat = 2, card = (s == 2) and "KH" or "8C" },
+            { seat = 3, card = (s == 3) and "KH" or "7C" },
+            { seat = 4, card = (s == 4) and "KH" or "8D" },
+        },
+    }
+    -- Trick 2: Q of hearts played by seat s, won by seat s.
+    tricks[2] = {
+        leadSuit = "H", winner = s,
+        plays = {
+            { seat = 1, card = (s == 1) and "QH" or "9D" },
+            { seat = 2, card = (s == 2) and "QH" or "7D" },
+            { seat = 3, card = (s == 3) and "QH" or "6C" },
+            { seat = 4, card = (s == 4) and "QH" or "5C" },
+        },
+    }
+    -- Tricks 3-8: filler, won by seat 2 (defender team B).
+    local used = { ["KH"] = true, ["QH"] = true,
+                   ["9C"] = true, ["8C"] = true, ["7C"] = true,
+                   ["8D"] = true, ["9D"] = true, ["7D"] = true,
+                   ["6C"] = true, ["5C"] = true }
+    for i = 3, 8 do
+        local plays = {}
+        for sn = 1, 4 do
+            local c
+            repeat c = nextCard() until c and not used[c]
+            used[c] = true
+            plays[#plays + 1] = { seat = sn, card = c }
+        end
+        tricks[i] = { leadSuit = C.Suit(plays[1].card),
+                      winner = 2, plays = plays }
+    end
+    return tricks
+end
+
+do
+    -- T.1: Legacy callers (no beloteAnnounced) → Belote always counts.
+    local tricks = rigBeloteHand(1)
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} })
+    assertEq(res.belote, "A",
+             "T.1: legacy (no beloteAnnounced) → Belote counts (back-compat)")
+end
+
+do
+    -- T.2: beloteAnnounced[holder]=true → Belote counts.
+    local tricks = rigBeloteHand(1)
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} },
+                              nil, { [1] = true })
+    assertEq(res.belote, "A",
+             "T.2: announced → Belote counts (PDF base case)")
+end
+
+do
+    -- T.3: beloteAnnounced={} (no announcement, no covering meld) →
+    -- Belote DROPS (PDF: must announce or be covered).
+    local tricks = rigBeloteHand(1)
+    local res = R.ScoreRound(tricks, hokm("H", 1), { A = {}, B = {} },
+                              nil, {})
+    assertEq(res.belote, nil,
+             "T.3: NOT announced, no covering meld → Belote DROPS")
+end
+
+do
+    -- T.4: beloteAnnounced={} but holder's team has a sequence meld
+    -- in trump suit covering K+Q (J-Q-K-A of hearts) → Belote counts
+    -- via PDF exception («مكشوف مع مشروع متسلسل»).
+    local tricks = rigBeloteHand(1)
+    local meldsByTeam = {
+        A = {
+            { kind = "sequence", suit = "H", top = "A", len = 4,
+              cards = { "JH", "QH", "KH", "AH" },
+              declaredBy = 1, value = 50 },
+        },
+        B = {},
+    }
+    local res = R.ScoreRound(tricks, hokm("H", 1), meldsByTeam, nil, {})
+    assertEq(res.belote, "A",
+             "T.4: NOT announced but covered by trump-seq meld → Belote counts (PDF exception)")
+end
+
+do
+    -- T.5: beloteAnnounced={} and holder's team has a sequence meld
+    -- but in NON-trump suit → Belote DROPS (exception is trump-only).
+    local tricks = rigBeloteHand(1)
+    local meldsByTeam = {
+        A = {
+            { kind = "sequence", suit = "S", top = "A", len = 4,
+              cards = { "JS", "QS", "KS", "AS" },
+              declaredBy = 1, value = 50 },
+        },
+        B = {},
+    }
+    local res = R.ScoreRound(tricks, hokm("H", 1), meldsByTeam, nil, {})
+    assertEq(res.belote, nil,
+             "T.5: NOT announced, sequence in NON-trump → Belote DROPS (exception is trump-only)")
+end
+
+do
+    -- T.6: R.TeamSequenceCoversBelote helper — direct unit test.
+    -- Sequence in trump, K+Q both present → true.
+    local meldsByTeam = {
+        A = {
+            { kind = "sequence", suit = "H", top = "K", len = 3,
+              cards = { "JH", "QH", "KH" }, declaredBy = 1 },
+        },
+        B = {},
+    }
+    assertTrue(R.TeamSequenceCoversBelote("A", meldsByTeam, "H"),
+               "T.6a: trump sequence J-Q-K covers Belote")
+    -- Sequence missing Q (e.g. K-A-9? not actually a valid seq, but
+    -- test the helper: cards list lacks Q → false).
+    local m2 = {
+        A = {
+            { kind = "sequence", suit = "H", top = "A", len = 3,
+              cards = { "JH", "KH", "AH" },  -- missing Q
+              declaredBy = 1 },
+        },
+        B = {},
+    }
+    assertFalse(R.TeamSequenceCoversBelote("A", m2, "H"),
+                "T.6b: sequence cards missing Q → does NOT cover")
+    -- Carré (not sequence) in trump → false.
+    local m3 = {
+        A = {
+            { kind = "carre", value = K.MELD_CARRE_OTHER, top = "K", len = 4,
+              cards = { "KH", "KS", "KD", "KC" } },
+        },
+        B = {},
+    }
+    assertFalse(R.TeamSequenceCoversBelote("A", m3, "H"),
+                "T.6c: carré (not sequence) does NOT cover")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

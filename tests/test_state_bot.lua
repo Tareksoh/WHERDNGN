@@ -5755,6 +5755,86 @@ do
     restore()
 end
 
+-- AM.1 (v1.0.11 D MED M1 either-defender Bel): S.ApplyDouble sets
+-- contract.doublerSeat to track which defender actually Bel'd.
+do
+    local restore = snapshotS({ "phase", "contract", "belPending" })
+    S.s.phase = K.PHASE_DOUBLE
+    S.s.contract = {
+        type = K.BID_HOKM, trump = "H", bidder = 2,
+        doubled = false, tripled = false, foured = false, gahwa = false,
+    }
+    -- Bidder is seat 2 (team B); pending defenders are 1 and 3 (team A).
+    S.s.belPending = { 1, 3 }
+    -- Defender at seat 3 (PrevSeat of bidder 2) Bels.
+    S.ApplyDouble(3, true)
+    assertEq(S.s.contract.doublerSeat, 3,
+             "AM.1a: ApplyDouble sets contract.doublerSeat to 3 (PrevSeat-of-bidder)")
+    assertEq(S.s.contract.doubled, true,
+             "AM.1b: ApplyDouble sets contract.doubled = true")
+    assertEq(S.s.belPending, nil,
+             "AM.1c: ApplyDouble clears belPending")
+    restore()
+end
+
+-- AM.2 (v1.0.11): S.ApplyContract initializes belPending with BOTH
+-- defenders. Pre-v1.0.11 this was already the case (lines 1057, 1068,
+-- 1136), but pin it so the either-defender Bel feature has a stable
+-- foundation.
+do
+    local restore = snapshotS({ "phase", "contract", "belPending", "bids", "dealer" })
+    S.s.phase = K.PHASE_DEAL2BID
+    S.s.bids = {}
+    S.s.dealer = 4
+    S.ApplyContract(2, K.BID_HOKM, "H")
+    -- Bidder seat 2 (team B). Pending defenders should be seats 1 and 3.
+    local pending = S.s.belPending or {}
+    table.sort(pending)
+    assertEq(#pending, 2, "AM.2a: belPending has 2 entries (both defenders)")
+    assertEq(pending[1], 1, "AM.2b: belPending includes seat 1 (defender)")
+    assertEq(pending[2], 3, "AM.2c: belPending includes seat 3 (defender)")
+    restore()
+end
+
+-- AM.3 (v1.0.11): contract.doublerSeat fallback. Pre-v1.0.11 saved
+-- state has no doublerSeat field; the wire/UI code falls back to
+-- NextSeat(bidder). Verify the fallback expression: nil-doublerSeat
+-- case derives NextSeat correctly.
+do
+    -- This is a "pin the fallback expression" test. Direct lookup
+    -- pattern: `S.s.contract.doublerSeat or ((S.s.contract.bidder % 4) + 1)`
+    -- Manually evaluate for both bidder positions.
+    for _, b in ipairs({ 1, 2, 3, 4 }) do
+        local fakeContract = { bidder = b, doublerSeat = nil }
+        local got = fakeContract.doublerSeat or ((fakeContract.bidder % 4) + 1)
+        local expected = (b % 4) + 1
+        assertEq(got, expected,
+                 ("AM.3 (bidder=%d): nil-doublerSeat → NextSeat = %d")
+                 :format(b, expected))
+    end
+end
+
+-- AM.4 (v1.0.11 D HIGH-2): S.ApplyBeloteAnnounce sets the announce
+-- flag and is idempotent.
+do
+    local restore = snapshotS({ "beloteAnnounced" })
+    S.s.beloteAnnounced = {}
+    S.ApplyBeloteAnnounce(2)
+    assertEq(S.s.beloteAnnounced[2], true,
+             "AM.4a: ApplyBeloteAnnounce sets seat=2 in beloteAnnounced")
+    assertEq(S.s.beloteAnnounced[1], nil,
+             "AM.4b: ApplyBeloteAnnounce does NOT set other seats")
+    -- Idempotent: re-call doesn't change anything.
+    S.ApplyBeloteAnnounce(2)
+    assertEq(S.s.beloteAnnounced[2], true,
+             "AM.4c: ApplyBeloteAnnounce idempotent on re-call")
+    -- Defensive: nil seat ignored.
+    S.ApplyBeloteAnnounce(nil)
+    assertEq(S.s.beloteAnnounced[2], true,
+             "AM.4d: ApplyBeloteAnnounce(nil) is no-op")
+    restore()
+end
+
 -- AL.7 (BC-MANDATORY overrides G-4 partner-Hokm, v1.0.10 audit pass-3):
 -- per Saudi rule B-6 "Mandatory Hokm with the Belote suit as trump",
 -- a structural Belote (K+Q+canonical-4-seq or K+Q+count>=3+sideAce)

@@ -187,6 +187,53 @@ function N.SendGahwa(seat)
     broadcast(("%s;%d"):format(K.MSG_GAHWA, seat))
 end
 
+-- v1.0.11 (D HIGH-2): Baloot/Belote announcement broadcast.
+function N.SendBelote(seat)
+    broadcast(("%s;%d"):format(K.MSG_BELOTE, seat))
+end
+
+-- v1.0.11 (D HIGH-2): host-side auto-announce on bot K/Q-of-trump play.
+-- After a bot's play of K-or-Q-of-trump, if the same seat has now
+-- played BOTH K and Q of trump (this play closing the pair), announce
+-- the +20 Belote bonus on their behalf. Bots always announce in real
+-- Saudi play; humans must click the BALOOT! UI button.
+--
+-- Called only from the host's bot-play paths in MaybeRunBot.
+-- Safe to call for non-bot plays too (the seat-bot check is a no-op
+-- if the seat isn't a bot in our table — currently the helper trusts
+-- the caller to gate; double-check via S.s.seats).
+function N._HostMaybeAutoBelote(seat, card)
+    if not S.s.isHost then return end
+    if not S.s.contract or not S.s.contract.trump then return end
+    if S.s.contract.type ~= K.BID_HOKM then return end
+    if not seat or not card then return end
+    if S.s.beloteAnnounced and S.s.beloteAnnounced[seat] then return end
+    -- Only auto-announce for bot seats (humans must click the button).
+    local seats = S.s.seats or {}
+    if not seats[seat] or not seats[seat].isBot then return end
+    -- Was this play K-or-Q of trump?
+    if C.Suit(card) ~= S.s.contract.trump then return end
+    local r = C.Rank(card)
+    if r ~= "K" and r ~= "Q" then return end
+    -- Has the same seat played the OTHER (K or Q) of trump in any
+    -- prior trick (or earlier in the current trick)?
+    local kPlayed, qPlayed = false, false
+    local function scan(plays)
+        for _, p in ipairs(plays or {}) do
+            if p.seat == seat and C.Suit(p.card) == S.s.contract.trump then
+                if     C.Rank(p.card) == "K" then kPlayed = true
+                elseif C.Rank(p.card) == "Q" then qPlayed = true end
+            end
+        end
+    end
+    for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
+    if S.s.trick then scan(S.s.trick.plays) end
+    if kPlayed and qPlayed then
+        S.ApplyBeloteAnnounce(seat)
+        N.SendBelote(seat)
+    end
+end
+
 function N.SendPreempt(seat)
     broadcast(("%s;%d"):format(K.MSG_PREEMPT, seat))
 end
@@ -556,6 +603,9 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnFour(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_GAHWA then
         N._OnGahwa(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_BELOTE then
+        -- v1.0.11 (D HIGH-2): Baloot/Belote announcement.
+        N._OnBelote(sender, tonumber(fields[2]))
     elseif tag == K.MSG_PREEMPT then
         N._OnPreempt(sender, tonumber(fields[2]))
     elseif tag == K.MSG_PREEMPT_PASS then
@@ -986,9 +1036,20 @@ function N._OnDouble(sender, seat, openField)
     -- Idempotence: ignore if no contract or already doubled.
     if not S.s.contract or S.s.contract.doubled then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
-    -- Authority: only the eligible defender (NextSeat of bidder) can bel.
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if seat ~= eligibleSeat then return end
+    -- v1.0.11 (D MED M1 either-defender Bel): accept Bel from EITHER
+    -- defender on the bidder's opposite team. Pre-v1.0.11 the wire
+    -- gate hardcoded `seat == NextSeat(bidder)`, blocking the partner-
+    -- defender (PrevSeat(bidder)) from ever Bel'ing — stricter than
+    -- Saudi convention. PDF text «المدبل» (the doubler) does not
+    -- specify which defender; whoever calls Bel first becomes the
+    -- doubler. `S.s.belPending` already lists both defenders (set in
+    -- S.ApplyContract); we accept any seat in that list.
+    local function pendingContains(t, s)
+        if not t then return false end
+        for _, v in ipairs(t) do if v == s then return true end end
+        return false
+    end
+    if not pendingContains(S.s.belPending, seat) then return end
     if not authorizeSeat(seat, sender) then return end
     -- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate.
     -- Reject illegal Bel attempts at the wire — a human player whose
@@ -1059,8 +1120,14 @@ function N._OnFour(sender, seat, openField)
     if seat < 1 or seat > 4 then return end                  -- v0.11.5 XR-08
     if not S.s.contract or S.s.contract.foured then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
-    -- Four is the DEFENDER's response to Triple.
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    -- v1.0.11 (D MED M1): Four is the SPECIFIC defender who Bel'd
+    -- (now tracked as contract.doublerSeat). PDF Rule 4: escalation
+    -- chain is bidder ↔ doubler only. Pre-v1.0.11 hardcoded
+    -- NextSeat(bidder); now uses the actual doubler seat (back-compat
+    -- fallback to NextSeat(bidder) if doublerSeat missing on stale
+    -- pre-v1.0.11 saved state).
+    local eligibleSeat = S.s.contract.doublerSeat
+                          or ((S.s.contract.bidder % 4) + 1)
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
     local open = (openField == nil) or (openField ~= "0")
@@ -1084,6 +1151,23 @@ function N._OnGahwa(sender, seat)
     -- v0.11.17-hotfix F5: OnEscalation moved into S.ApplyGahwa.
     -- Terminal: no further window. Move into PLAY.
     if S.s.isHost then N.HostFinishDeal() end
+end
+
+-- v1.0.11 (D HIGH-2 Belote announcement): handler for incoming
+-- MSG_BELOTE. Verifies the seat actually holds K+Q-of-trump (defensive
+-- — prevents a hostile peer from claiming Belote without the cards),
+-- gates on PHASE_PLAY (announcement window is during play, not bidding),
+-- gates on contract.type == HOKM (Sun has no Belote), then mutates
+-- S.s.beloteAnnounced via S.ApplyBeloteAnnounce on every client.
+function N._OnBelote(sender, seat)
+    if fromSelf(sender) then return end
+    if not seat or seat < 1 or seat > 4 then return end
+    if not S.s.contract or not S.s.contract.trump then return end
+    if S.s.contract.type ~= K.BID_HOKM then return end   -- Sun has no Belote
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    if not authorizeSeat(seat, sender) then return end
+    S.ApplyBeloteAnnounce(seat)
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
 function N._OnPreempt(sender, seat)
@@ -1496,10 +1580,32 @@ function N._OnSkipDouble(sender, seat)
     if fromSelf(sender) then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
     if not seat or not S.s.contract then return end
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
-    if seat ~= eligibleSeat then return end
+    -- v1.0.11 (D MED M1): either-defender Bel — skip removes ONE
+    -- defender from belPending. Window stays open until ALL defenders
+    -- have decided. State mutation runs on every client (not just
+    -- host) so non-host UIs reflect the partial-skip immediately.
+    local function pendingContains(t, sa)
+        if not t then return false end
+        for _, v in ipairs(t) do if v == sa then return true end end
+        return false
+    end
+    if not pendingContains(S.s.belPending, seat) then return end
     if not authorizeSeat(seat, sender) then return end
-    if S.s.isHost then N.HostFinishDeal() end
+    -- Remove seat from belPending on all clients.
+    local newPending = {}
+    for _, v in ipairs(S.s.belPending) do
+        if v ~= seat then newPending[#newPending + 1] = v end
+    end
+    S.s.belPending = newPending
+    if S.s.isHost then
+        if #newPending == 0 then
+            N.HostFinishDeal()
+        else
+            -- Other defender(s) still have a window — re-dispatch.
+            N.MaybeRunBot()
+        end
+    end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
 end
 
 function N._OnSkipTriple(sender, seat)
@@ -1516,8 +1622,9 @@ function N._OnSkipFour(sender, seat)
     if fromSelf(sender) then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
     if not seat or not S.s.contract then return end
-    -- Defender skips their Four window.
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    -- v1.0.11 (D MED M1): Four-skip from the SPECIFIC doubler.
+    local eligibleSeat = S.s.contract.doublerSeat
+                          or ((S.s.contract.bidder % 4) + 1)
     if seat ~= eligibleSeat then return end
     if not authorizeSeat(seat, sender) then return end
     if S.s.isHost then N.HostFinishDeal() end
@@ -2107,8 +2214,15 @@ function N.LocalDouble(open)
     if S.s.paused then return end
     if not S.s.contract or S.s.contract.doubled then return end
     if S.s.phase ~= K.PHASE_DOUBLE then return end
-    local b = S.s.contract.bidder
-    if S.s.localSeat ~= (b % 4) + 1 then return end
+    -- v1.0.11 (D MED M1 either-defender Bel): accept either defender.
+    -- Localseat must be in S.s.belPending (set by S.ApplyContract to
+    -- include both defenders).
+    local function pendingContains(t, s)
+        if not t then return false end
+        for _, v in ipairs(t) do if v == s then return true end end
+        return false
+    end
+    if not pendingContains(S.s.belPending, S.s.localSeat) then return end
     -- v0.5.9 Section 2 patch E-1: Sun Bel-100 legality gate.
     -- Local gate (UI surface). The Bel button should already be
     -- hidden by the UI when CanBel is false, but defend in depth.
@@ -2151,7 +2265,11 @@ function N.LocalFour(open)
     if S.s.paused then return end
     if not S.s.contract or S.s.contract.foured then return end
     if S.s.phase ~= K.PHASE_FOUR then return end
-    local eligibleSeat = (S.s.contract.bidder % 4) + 1
+    -- v1.0.11 (D MED M1): Four eligibility = the SPECIFIC doubler seat
+    -- (whoever Bel'd), with back-compat fallback to NextSeat(bidder)
+    -- for stale pre-v1.0.11 saved state without contract.doublerSeat.
+    local eligibleSeat = S.s.contract.doublerSeat
+                          or ((S.s.contract.bidder % 4) + 1)
     if S.s.localSeat ~= eligibleSeat then return end
     cancelLocalWarn()
     if open == nil then open = true end
@@ -2172,6 +2290,40 @@ function N.LocalGahwa()
     N.SendGahwa(S.s.localSeat)
     -- Terminal: no further window.
     if S.s.isHost then N.HostFinishDeal() end
+end
+
+-- v1.0.11 (D HIGH-2): local Baloot/Belote announce. Called from the
+-- BALOOT! UI button. Verifies the local seat actually holds K+Q-of-
+-- trump in their hand (defensive UI gate), then broadcasts MSG_BELOTE
+-- and applies state locally (the wire-back skips fromSelf).
+function N.LocalBelote()
+    if S.s.paused then return end
+    if not S.s.contract or not S.s.contract.trump then return end
+    if S.s.contract.type ~= K.BID_HOKM then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    if not S.s.localSeat then return end
+    if S.s.beloteAnnounced and S.s.beloteAnnounced[S.s.localSeat] then
+        return -- already announced, idempotent
+    end
+    -- Hand check: must hold both K and Q of trump.
+    local hand = S.s.hostHands and S.s.hostHands[S.s.localSeat]
+    if hand then
+        local hasK, hasQ = false, false
+        for _, c in ipairs(hand) do
+            if C.Suit(c) == S.s.contract.trump then
+                if C.Rank(c) == "K" then hasK = true
+                elseif C.Rank(c) == "Q" then hasQ = true end
+            end
+        end
+        -- Saudi rule: Baloot is announceable only if BOTH K+Q still
+        -- in hand OR you've just played the second of the pair. Since
+        -- the play-and-announce moment is just after playing the
+        -- second card, allow if either both still present (just before
+        -- play) or one present (just after first-of-pair played).
+        if not (hasK or hasQ) then return end
+    end
+    S.ApplyBeloteAnnounce(S.s.localSeat)
+    N.SendBelote(S.s.localSeat)
 end
 
 -- Local pre-emption (الثالث, "Triple-on-Ace") action.
@@ -2237,19 +2389,42 @@ function N.LocalSkipDouble()
     if S.s.paused then return end
     if not S.s.contract or not S.s.localSeat then return end
     cancelLocalWarn()
-    local def = (S.s.contract.bidder % 4) + 1
+    -- v1.0.11 (D MED M1): either-defender Bel — local skip eligible
+    -- to either defender during PHASE_DOUBLE; the SPECIFIC doubler
+    -- during PHASE_FOUR (set by S.ApplyDouble).
+    local function pendingContains(t, sa)
+        if not t then return false end
+        for _, v in ipairs(t) do if v == sa then return true end end
+        return false
+    end
+    local fourSeat = S.s.contract.doublerSeat
+                      or ((S.s.contract.bidder % 4) + 1)
     if S.s.phase == K.PHASE_DOUBLE then
-        if S.s.localSeat ~= def then return end
+        if not pendingContains(S.s.belPending, S.s.localSeat) then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, S.s.localSeat))
-        if S.s.isHost then N.HostFinishDeal() end
+        -- v1.0.11: mutate belPending locally (the wire echo skips
+        -- via fromSelf, so this side has to update its own state).
+        local newPending = {}
+        for _, v in ipairs(S.s.belPending) do
+            if v ~= S.s.localSeat then newPending[#newPending + 1] = v end
+        end
+        S.s.belPending = newPending
+        if S.s.isHost then
+            if #newPending == 0 then
+                N.HostFinishDeal()
+            else
+                N.MaybeRunBot()
+            end
+        end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
     elseif S.s.phase == K.PHASE_TRIPLE then
         -- Bidder skips Triple.
         if S.s.localSeat ~= S.s.contract.bidder then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_FOUR then
-        -- Defender skips Four.
-        if S.s.localSeat ~= def then return end
+        -- Specific doubler skips Four.
+        if S.s.localSeat ~= fourSeat then return end
         broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, S.s.localSeat))
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_GAHWA then
@@ -2537,6 +2712,18 @@ function N.HostResolveTakweesh(callerSeat)
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
             if R.IsBeloteCancelled(belote, S.s.meldsByTeam) then
+                belote = nil
+            end
+            -- v1.0.11 (D HIGH-2): announcement gate also applies on
+            -- the Takweesh/Qaid scoring path. Drop Belote bonus if
+            -- the holder didn't announce (BALOOT button) AND the
+            -- holder's team has no sequence meld in trump covering
+            -- K+Q (PDF exception).
+            if belote and S.s.beloteAnnounced
+               and not S.s.beloteAnnounced[kWho]
+               and R.TeamSequenceCoversBelote
+               and not R.TeamSequenceCoversBelote(belote, S.s.meldsByTeam,
+                                                   c.trump) then
                 belote = nil
             end
         end
@@ -3399,6 +3586,15 @@ function N.HostResolveSWA(callerSeat, callerHand)
                 if R.IsBeloteCancelled(beloteOwner, S.s.meldsByTeam) then
                     beloteOwner = nil
                 end
+                -- v1.0.11 (D HIGH-2): announcement gate (SWA-Qaid path).
+                if beloteOwner and S.s.beloteAnnounced
+                   and not S.s.beloteAnnounced[kWho]
+                   and R.TeamSequenceCoversBelote
+                   and not R.TeamSequenceCoversBelote(beloteOwner,
+                                                       S.s.meldsByTeam,
+                                                       c.trump) then
+                    beloteOwner = nil
+                end
             end
         end
         -- v1.0.9 D HIGH-1: cards × cardMult, melds × meldMult (cap at
@@ -3463,7 +3659,8 @@ function N.HostResolveSWA(callerSeat, callerHand)
         end
 
         -- v1.0.9 (PDF Rule 2): pass dealer for tied-meld priority.
-        result = R.ScoreRound(synth, c, S.s.meldsByTeam, S.s.dealer)
+        result = R.ScoreRound(synth, c, S.s.meldsByTeam, S.s.dealer,
+                               S.s.beloteAnnounced)
         addA = result.final.A
         addB = result.final.B
         sweepTeam = result.sweep
@@ -3841,18 +4038,27 @@ function N.StartLocalWarn(kind)
     if kind == "bid" or kind == "play" then
         mine = (S.s.turn == S.s.localSeat) and (S.s.turnKind == kind)
     elseif kind == "bel" then
-        -- Defender (bidder+1, the seat after bidder) considers Bel.
-        mine = S.s.contract and S.s.localSeat
-               and S.s.localSeat == ((S.s.contract.bidder % 4) + 1)
+        -- v1.0.11 (D MED M1): EITHER defender considers Bel — check
+        -- belPending membership instead of hardcoding NextSeat(bidder).
+        mine = false
+        if S.s.contract and S.s.localSeat and S.s.belPending then
+            for _, v in ipairs(S.s.belPending) do
+                if v == S.s.localSeat then mine = true; break end
+            end
+        end
     elseif kind == "triple" then
         -- v0.2.0: Triple is bidder's response to Bel.
         mine = S.s.contract and S.s.localSeat
                and S.s.localSeat == S.s.contract.bidder
     elseif kind == "four" then
-        -- Audit fix: Four is the DEFENDER's response to Triple.
-        -- Same eligible seat as Bel (defender at bidder+1).
+        -- v1.0.11 (D MED M1): Four is the SPECIFIC doubler's response
+        -- to Triple (the defender who actually Bel'd, not just any
+        -- defender). Use contract.doublerSeat with NextSeat fallback.
+        local fourSeat = (S.s.contract and S.s.contract.doublerSeat)
+                          or (S.s.contract
+                              and ((S.s.contract.bidder % 4) + 1))
         mine = S.s.contract and S.s.localSeat
-               and S.s.localSeat == ((S.s.contract.bidder % 4) + 1)
+               and S.s.localSeat == fourSeat
     elseif kind == "gahwa" then
         -- Audit fix: Gahwa is the BIDDER's terminal escalation.
         mine = S.s.contract and S.s.localSeat
@@ -3985,7 +4191,18 @@ function N._HostBelTimeout(seat, kind)
     if kind == "double" and S.s.phase == K.PHASE_DOUBLE then
         log("Info", "AFK timeout: bel skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
-        N.HostFinishDeal()
+        -- v1.0.11 (D MED M1): mutate belPending locally; finish only
+        -- when all defenders have decided.
+        local newPending = {}
+        for _, v in ipairs(S.s.belPending or {}) do
+            if v ~= seat then newPending[#newPending + 1] = v end
+        end
+        S.s.belPending = newPending
+        if #newPending == 0 then
+            N.HostFinishDeal()
+        else
+            N.MaybeRunBot()
+        end
     elseif kind == "triple" and S.s.phase == K.PHASE_TRIPLE then
         log("Info", "AFK timeout: triple skip seat=%d", seat)
         broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, seat))
@@ -4085,74 +4302,89 @@ function N.MaybeRunBot()
     -- branch below from spuriously firing during the window.
     if S.s.phase == K.PHASE_OVERCALL then return end
 
-    -- Bel decision: defender at NextSeat(bidder)
+    -- v1.0.11 (D MED M1 either-defender Bel): dispatch ALL pending
+    -- defenders in NextSeat-first order. Pre-v1.0.11 only NextSeat
+    -- (bidder) was eligible; both defenders are now in S.s.belPending.
+    -- Sequence: ask each bot defender PickDouble (NextSeat first per
+    -- Saudi vocal-priority convention). First bot to say YES Bels and
+    -- the chain advances. Bots that say NO emit MSG_SKIP_DBL and are
+    -- removed from belPending. Remaining humans get a sequential AFK
+    -- timer (re-armed via MaybeRunBot recursion when one of them skips).
     if S.s.phase == K.PHASE_DOUBLE and S.s.contract then
-        local belSeat = (S.s.contract.bidder % 4) + 1
-        if isBotSeat(belSeat) then
-            log("Info", "schedule bel-decision for bot seat=%d", belSeat)
-            C_Timer.After(BOT_DELAY_BEL, function()
-                -- Re-re-audit W2/W5 fix: track BOTH `applied` (ApplyX
-                -- ran) and `skipSent` (broadcast SKIP_X already done)
-                -- so recovery doesn't double-broadcast OR stall when
-                -- ApplyX advanced phase past the simple PHASE check.
-                local applied, skipSent = false, false
-                local ok, err = pcall(function()
-                    if S.s.paused then return end
-                    if S.s.phase ~= K.PHASE_DOUBLE then
-                        log("Info", "bel-decision skipped: phase=%s", tostring(S.s.phase))
-                        return
-                    end
-                    local bel, wantOpen = B.Bot.PickDouble(belSeat)
-                    log("Info", "bel-decision seat=%d pick=%s open=%s",
-                        belSeat, tostring(bel), tostring(wantOpen))
-                    if bel then
-                        local isSun = S.s.contract
-                                  and S.s.contract.type == K.BID_SUN
-                        local effOpen = (not isSun) and wantOpen
-                        S.ApplyDouble(belSeat, effOpen)
-                        applied = true
-                        N.SendDouble(belSeat, effOpen)
-                        if isSun or not effOpen then
-                            N.HostFinishDeal()
-                        else
-                            N.MaybeRunBot()
-                        end
-                    else
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
-                        skipSent = true
-                        N.HostFinishDeal()
-                    end
-                end)
-                if not ok then
-                    log("Error", "bel-decision callback failed: %s", tostring(err))
-                    if applied then
-                        -- ApplyDouble advanced phase. For an open Bel
-                        -- in Hokm phase is now PHASE_TRIPLE — must
-                        -- run MaybeRunBot for the bidder's Triple
-                        -- decision, NOT HostFinishDeal which would
-                        -- skip the entire Triple/Four/Gahwa chain.
-                        if S.s.phase == K.PHASE_PLAY then
-                            N.HostFinishDeal()
-                        else
-                            N.MaybeRunBot()
-                        end
-                    elseif skipSent then
-                        -- broadcast already happened; just advance.
-                        N.HostFinishDeal()
-                    elseif S.s.phase == K.PHASE_DOUBLE then
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, belSeat))
-                        N.HostFinishDeal()
-                    end
-                end
-                if B.UI then B.UI.Refresh() end
-            end)
-            return
-        else
-            -- Human at the defender seat: arm an AFK timer so the
-            -- contract doesn't freeze if they never click.
-            N.StartBelTimer(belSeat, "double")
+        local pending = S.s.belPending or {}
+        if #pending == 0 then
+            -- Defensive: no eligible defenders (shouldn't happen post-
+            -- ApplyContract). Advance to play.
+            N.HostFinishDeal()
             return
         end
+        -- Build seat order: NextSeat(bidder) first, then PrevSeat(bidder).
+        local nextSeat = (S.s.contract.bidder % 4) + 1
+        local prevSeat = ((S.s.contract.bidder + 2) % 4) + 1
+        local function inPending(seat)
+            for _, v in ipairs(pending) do if v == seat then return true end end
+            return false
+        end
+        local order = {}
+        if inPending(nextSeat) then order[#order + 1] = nextSeat end
+        if inPending(prevSeat) then order[#order + 1] = prevSeat end
+
+        -- First non-bot defender (if any) — needs an AFK timer if no
+        -- bot Bels first. Loop processes bots; humans accumulate.
+        local firstHuman
+        local botSkips = {}
+        local belFired = false
+        for _, belSeat in ipairs(order) do
+            if isBotSeat(belSeat) then
+                log("Info", "schedule bel-decision for bot seat=%d", belSeat)
+                local bel, wantOpen = B.Bot.PickDouble(belSeat)
+                log("Info", "bel-decision seat=%d pick=%s open=%s",
+                    belSeat, tostring(bel), tostring(wantOpen))
+                if bel then
+                    local isSun = S.s.contract
+                              and S.s.contract.type == K.BID_SUN
+                    local effOpen = (not isSun) and wantOpen
+                    S.ApplyDouble(belSeat, effOpen)
+                    N.SendDouble(belSeat, effOpen)
+                    belFired = true
+                    if isSun or not effOpen then
+                        N.HostFinishDeal()
+                    else
+                        N.MaybeRunBot()
+                    end
+                    return
+                else
+                    botSkips[#botSkips + 1] = belSeat
+                end
+            else
+                firstHuman = firstHuman or belSeat
+            end
+        end
+        -- No bot Bel'd. Broadcast skips for the bots and update
+        -- belPending to drop them.
+        for _, seat in ipairs(botSkips) do
+            broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+        end
+        if #botSkips > 0 then
+            local newPending = {}
+            for _, seat in ipairs(pending) do
+                local skipped = false
+                for _, ss in ipairs(botSkips) do
+                    if seat == ss then skipped = true; break end
+                end
+                if not skipped then newPending[#newPending + 1] = seat end
+            end
+            S.s.belPending = newPending
+            pending = newPending
+        end
+        if #pending == 0 then
+            N.HostFinishDeal()
+        else
+            -- Humans remain — arm AFK for the first, in NextSeat order.
+            local timerSeat = inPending(nextSeat) and nextSeat or prevSeat
+            N.StartBelTimer(timerSeat, "double")
+        end
+        return
     end
 
     -- v0.2.0: Triple decision is the BIDDER's response to Bel.
@@ -4210,8 +4442,10 @@ function N.MaybeRunBot()
     end
 
     -- v0.2.0: Four decision is the DEFENDER's response to Triple.
+    -- v1.0.11 (D MED M1): SPECIFIC doubler seat, not generic NextSeat.
     if S.s.phase == K.PHASE_FOUR and S.s.contract then
-        local defSeat = (S.s.contract.bidder % 4) + 1
+        local defSeat = S.s.contract.doublerSeat
+                         or ((S.s.contract.bidder % 4) + 1)
         if isBotSeat(defSeat) then
             C_Timer.After(BOT_DELAY_BEL, function()
                 local applied, skipSent = false, false
@@ -4653,6 +4887,13 @@ function N.MaybeRunBot()
                     B.Bot.OnPlayObserved(seat, card, leadBefore)
                 end
                 N.SendPlay(seat, card)
+                -- v1.0.11 (D HIGH-2): bot auto-announce Baloot/Belote
+                -- when this play closes their K+Q-of-trump pair. PDF
+                -- requires announcement-on-second-card to count the +20
+                -- bonus; bots always announce (they would never miss
+                -- the click in real play). Humans get the BALOOT! UI
+                -- button and click manually.
+                N._HostMaybeAutoBelote(seat, card)
                 N._HostStepPlay()
             end)
             if not ok then
@@ -4694,6 +4935,7 @@ function N.MaybeRunBot()
                                 B.Bot.OnPlayObserved(seat, best, leadBefore)
                             end
                             N.SendPlay(seat, best)
+                            N._HostMaybeAutoBelote(seat, best)
                             N._HostStepPlay()
                         end
                     end

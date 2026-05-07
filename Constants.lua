@@ -261,6 +261,15 @@ K.MSG_PREEMPT      = "@"  -- "Triple-on-Ace" pre-emption (الثالث): an
                           -- declarer. Settles the bid by reassigning
                           -- declarer to the pre-empter.
 K.MSG_PREEMPT_PASS = "%"  -- waive the pre-emption right. Payload: seat.
+K.MSG_BELOTE       = "$"  -- v1.0.11: Baloot/Belote announcement (PDF
+                          -- §Belote): «يجب على اللاعب الذي لديه
+                          -- البلوت ذكره أثناء لعب الورقة الثانية» —
+                          -- "the holder must announce on the second
+                          -- card of K+Q-of-trump play". Payload:
+                          -- seat. R.ScoreRound counts the +20 Belote
+                          -- bonus only if announced (or covered by a
+                          -- declared sequence-meld containing K+Q).
+                          -- Bots auto-announce via Net.HostMaybeBelote.
 K.MSG_OVERCALL_OPEN     = ">"  -- v0.7 host opens a 5s post-Hokm Sun-overcall
                               -- window. No payload — clients already have
                               -- the contract / bidder / bidCard / dealer

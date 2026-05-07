@@ -923,7 +923,10 @@ local function rolloutValue(seat, card, world, contract)
         end
         -- v1.0.9 (PDF Rule 2): pass dealer for tied-meld priority
         -- in rollouts so simulated scoring matches live scoring.
-        result = R.ScoreRound(simTricks, contract, meldsByTeam, S.s.dealer)
+        -- v1.0.11 (D HIGH-2): also pass beloteAnnounced so rollouts
+        -- model the announcement gate consistently with live scoring.
+        result = R.ScoreRound(simTricks, contract, meldsByTeam, S.s.dealer,
+                               S.s.beloteAnnounced)
     end)
 
     -- ALWAYS restore state, even on rollout error.

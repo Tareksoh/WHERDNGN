@@ -845,7 +845,46 @@ end
 -- v1.0.9 (PDF Rule 2): added optional `dealerSeat` for tied-meld
 -- dealer-right tiebreaker. Back-compat: nil dealer means CompareMelds
 -- falls back to "tie" → both teams 0 melds (legacy behavior).
-function R.ScoreRound(tricks, contract, meldsByTeam, dealerSeat)
+-- v1.0.11 (D HIGH-2): helper — does any sequence meld in trump suit
+-- declared by `team` cover both K and Q of trump? Used by the Belote
+-- announcement gate (PDF exception: «إذا كان البلوت مكشوف مع مشروع
+-- متسلسل فيحسب حتى لو لم يُذكر»). Returns true if any team meld is a
+-- sequence in trumpSuit whose card list contains K-of-trump AND
+-- Q-of-trump.
+local function teamSequenceCoversBelote(team, meldsByTeam, trumpSuit)
+    if not team or not meldsByTeam or not trumpSuit then return false end
+    local list = meldsByTeam[team]
+    if not list then return false end
+    for _, m in ipairs(list) do
+        if (m.kind == "sequence" or m.kind == "seq3" or m.kind == "seq4"
+            or m.kind == "seq5") and m.suit == trumpSuit then
+            local hasK, hasQ = false, false
+            for _, card in ipairs(m.cards or {}) do
+                if C.Suit(card) == trumpSuit then
+                    if     C.Rank(card) == "K" then hasK = true
+                    elseif C.Rank(card) == "Q" then hasQ = true end
+                end
+            end
+            if hasK and hasQ then return true end
+        end
+    end
+    return false
+end
+
+-- v1.0.11 (D HIGH-2): expose helper for Net.lua's Qaid handlers
+-- (HostResolveTakweesh + HostResolveSWA) which run their own Belote
+-- detection and need the same PDF exception check.
+R.TeamSequenceCoversBelote = teamSequenceCoversBelote
+
+-- v1.0.11 (D HIGH-2 Belote announcement): added `beloteAnnounced`
+-- as a 5th optional parameter — a `[seat] = true` table, the value
+-- of `S.s.beloteAnnounced` at scoring time. When provided AND the
+-- holder is NOT in the table, Belote counts only if the holder's
+-- team has a sequence meld in trump suit that covers K+Q (PDF
+-- exception). Legacy callers (no parameter) get the pre-v1.0.11
+-- behavior — Belote always counts when detected.
+function R.ScoreRound(tricks, contract, meldsByTeam, dealerSeat,
+                      beloteAnnounced)
     local teamPoints = { A = 0, B = 0 }
     local trickCount = { A = 0, B = 0 }
     local lastTrickTeam
@@ -891,6 +930,28 @@ function R.ScoreRound(tricks, contract, meldsByTeam, dealerSeat)
         if kWho and qWho and kWho == qWho then
             belote = R.TeamOf(kWho)
         else
+            kWho = nil
+        end
+    end
+
+    -- v1.0.11 (D HIGH-2 Belote announcement gate). PDF rule:
+    -- «يجب على اللاعب الذي لديه البلوت ذكره أثناء لعب الورقة الثانية
+    --  وقبل نزولها على الأرض، أما إذا كان البلوت مكشوف مع مشروع
+    --  متسلسل (سرا، خمسين، مائة) فيحسب حتى لو لم يُذكر»
+    -- = "The Belote holder must announce on the second card of K/Q-of-
+    --   trump play. EXCEPTION: if Belote is laid open with a sequence
+    --   meld (Sera/50/100), it counts even without announcement."
+    --
+    -- Implementation: when `beloteAnnounced` is provided AND the K+Q
+    -- holder is NOT in the announce-set, drop the bonus UNLESS the
+    -- holder's team has a sequence meld in trump suit covering K+Q.
+    -- Legacy callers (no `beloteAnnounced` arg) skip the gate
+    -- entirely — pre-v1.0.11 behavior preserved.
+    if belote and beloteAnnounced and kWho
+       and not beloteAnnounced[kWho] then
+        if not teamSequenceCoversBelote(belote, meldsByTeam,
+                                         contract.trump) then
+            belote = nil
             kWho = nil
         end
     end

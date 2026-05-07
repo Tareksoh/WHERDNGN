@@ -1787,8 +1787,19 @@ local function renderActions()
         end
     elseif S.s.phase == K.PHASE_DOUBLE then
         local b = S.s.contract and S.s.contract.bidder
+        -- v1.0.11 (D MED M1 either-defender Bel): show Bel buttons to
+        -- either defender on the bidder's opposite team. S.s.belPending
+        -- is the source-of-truth list (set by S.ApplyContract; mutated
+        -- by skip/timeout to track who hasn't yet decided).
         local nextSeat = b and ((b % 4) + 1) or nil
-        if nextSeat == S.s.localSeat then
+        local function inPending(seat)
+            if not S.s.belPending then return false end
+            for _, v in ipairs(S.s.belPending) do
+                if v == seat then return true end
+            end
+            return false
+        end
+        if inPending(S.s.localSeat) then
             -- Bel (×2). Open/Closed (التربيع) choice: open lets the
             -- bidder counter with Triple; closed stops the chain.
             -- Sun has no Triple rung, so only the Bel button shows.
@@ -1852,8 +1863,12 @@ local function renderActions()
         end
     elseif S.s.phase == K.PHASE_FOUR then
         -- v0.2.0: Four is the DEFENDER's response to Triple.
+        -- v1.0.11 (D MED M1): use the SPECIFIC doubler seat
+        -- (S.s.contract.doublerSeat) — pre-v1.0.11 hardcoded
+        -- NextSeat(bidder); back-compat fallback for stale state.
         local b = S.s.contract and S.s.contract.bidder
-        local def = b and ((b % 4) + 1) or nil
+        local def = (S.s.contract and S.s.contract.doublerSeat)
+                     or (b and ((b % 4) + 1)) or nil
         if def == S.s.localSeat then
             addConfirmAction("Four & open (x4)",
                 "|cffff3333Confirm Four & open?|r",
@@ -2113,6 +2128,68 @@ local function renderActions()
                     -- إكَهْ, so the audio carries the Saudi feel.
                     addAction(("|cff66ff88AKA|r %s"):format(glyph),
                         function() net().LocalAKA(cand.suit) end)
+                end
+            end
+            -- v1.0.11 (D HIGH-2): BALOOT! button — Saudi spelling per
+            -- user request. Shown when local seat holds at least one
+            -- of K-or-Q-of-trump (the other may have just been played
+            -- on the second-card-of-pair moment, per PDF rule), Hokm
+            -- contract, hasn't yet announced. Click broadcasts
+            -- MSG_BELOTE so R.ScoreRound counts the +20 bonus. Bots
+            -- auto-announce (Net._HostMaybeAutoBelote); humans must
+            -- click manually.
+            if S.s.contract and S.s.contract.type == K.BID_HOKM
+               and S.s.contract.trump and S.s.localSeat then
+                local already = S.s.beloteAnnounced
+                                  and S.s.beloteAnnounced[S.s.localSeat]
+                if not already then
+                    -- Detect: did local seat ever HOLD K+Q-of-trump?
+                    -- Combine current hand + cards already played by
+                    -- this seat. If both K and Q seen, show button.
+                    local trump = S.s.contract.trump
+                    local hand = S.s.hostHands and S.s.hostHands[S.s.localSeat]
+                    local hasK, hasQ = false, false
+                    for _, c in ipairs(hand or {}) do
+                        if C.Suit(c) == trump then
+                            if     C.Rank(c) == "K" then hasK = true
+                            elseif C.Rank(c) == "Q" then hasQ = true end
+                        end
+                    end
+                    -- Also count played cards by this seat.
+                    local function scan(plays)
+                        for _, p in ipairs(plays or {}) do
+                            if p.seat == S.s.localSeat
+                               and C.Suit(p.card) == trump then
+                                if     C.Rank(p.card) == "K" then hasK = true
+                                elseif C.Rank(p.card) == "Q" then hasQ = true end
+                            end
+                        end
+                    end
+                    for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
+                    if S.s.trick then scan(S.s.trick.plays) end
+                    if hasK and hasQ then
+                        -- Bright yellow label, all-caps Saudi spelling.
+                        local btn = addAction("|cffffff00BALOOT!|r",
+                            function() net().LocalBelote() end)
+                        -- Flash: pulse the text color via OnUpdate so
+                        -- it grabs attention. WoW Button:GetFontString
+                        -- returns the label FontString; SetTextColor
+                        -- uses RGB ∈ [0,1]. Cycle 2 Hz between bright
+                        -- gold and white. PulseScript is a no-op if
+                        -- the frame API isn't available (test env).
+                        if btn and btn.SetScript then
+                            btn._beloteT = 0
+                            btn:SetScript("OnUpdate", function(self, elapsed)
+                                self._beloteT = (self._beloteT or 0) + (elapsed or 0)
+                                local pulse = (math.sin(self._beloteT * 6.283) + 1) * 0.5
+                                local fs = self.GetFontString and self:GetFontString()
+                                if fs and fs.SetTextColor then
+                                    -- Flash: gold → bright yellow.
+                                    fs:SetTextColor(1, 0.85 + pulse * 0.15, pulse * 0.4)
+                                end
+                            end)
+                        end
+                    end
                 end
             end
         end
