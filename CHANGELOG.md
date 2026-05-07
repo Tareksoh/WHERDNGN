@@ -1,5 +1,80 @@
 # Changelog
 
+## v1.2.3 — Hotfix: user-reported v1.2.2 play-test issues
+
+User reported two issues from live play of v1.2.2:
+1. **Bidding too conservative** — bidcalc trace showed bots passing
+   on hands they should bid (e.g., A♦+T♥+K♦ at bidPos 1, sun=20 vs
+   thSun=47).
+2. **Hand display order** — card sort didn't put trump first and
+   the suit-color alternation broke when trump landed mid-order.
+
+### Bidding fix — MED-10 R1 position bias reduced 5/3 → 2/1
+
+**Diagnosis**: v1.1.0's MED-10 added `+5` to thSun/thHokmR1 at
+bidPos 1, `+3` at bidPos 2 (per video #25 «اذا كنت تشك خلاص
+امرر» — first-lap-pass discipline). Pre-v1.1.0 there was no
+position bias. Combined with the existing Bel-fear ramp (0–8) and
+BID_JITTER (±6), the +5 push routinely made thSun unreachable for
+moderate hands.
+
+User trace example:
+```
+[bid s2 r1] hand=[8C QS AD TH KD] sun=20 thSun=42  (logged)
+[bid s2 r1] R1 direct Sun skipped: sun=20 thSun=47  (gate-checked)
+```
+The 42→47 jump is the +5 bidPos-1 bias. The bot's hand had A♦+T♥
++K♦ — a real Sun candidate — but sun=20 vs thSun=47 forced PASS.
+
+**Fix**: reduce to +2/+1 (bidPos 1/2). Preserves the Saudi
+convention texture (still position-aware caution) but doesn't
+compound with jitter+ramp into unreachable thresholds.
+
+**Side-effect analysis** (per user request):
+- ✓ **More R1 commitments** — bots bid more from bidPos 1/2 → fewer
+  redeals, more dynamic play (matches user's intended outcome)
+- ✓ **Slight Bel-rate uptick potential** — more bids = more
+  opportunities for defenders to Bel (helps the v1.0.10/v1.1.0
+  Bel-rate-near-zero issue, though that's a separate calibration)
+- ✓ **Saudi convention preserved** — +2/+1 still adds positional
+  bias; first-lap-pass discipline holds in directional terms
+- ⚠ **Slight unpredictability reduction** — same hand at bidPos 1
+  vs bidPos 4 will produce more SIMILAR bids than under +5/+3.
+  Acceptable tradeoff; the unpredictability source isn't position
+  bias alone (BID_JITTER ±6 + shuffledSuits + tie-break randomness
+  in v1.1.0 still provide variance)
+- ✓ **Bel-fear ramp interaction** — old combined max (ramp + jitter
+  + 5 bias) = up to 19 raw bias; new max (ramp + jitter + 2) = up
+  to 16. Still substantial; still respects the band
+
+No regressions detected. Net positive change for play feel.
+
+### Card hand display — trump-first sort + alternating colors
+
+Pre-fix `SUIT_DISPLAY = { S=1, H=2, C=3, D=4 }` was fixed
+regardless of contract. When trump was Hearts, trump landed in
+position 2; when trump was Diamonds, trump landed at position 4
+(end of hand). The display lost both Saudi convention (trump
+should be scannable first when reading own hand) and the intended
+black-red-black-red alternation when trump landed mid-order.
+
+**Fix**: per-trump suit-display map. Trump suit is always position
+1; remaining 3 suits alternate colors so no two adjacent share a
+color:
+- Trump ♠ (B): ♠ ♥ ♣ ♦ (B R B R)
+- Trump ♥ (R): ♥ ♠ ♦ ♣ (R B R B)
+- Trump ♦ (R): ♦ ♣ ♥ ♠ (R B R B)
+- Trump ♣ (B): ♣ ♦ ♠ ♥ (B R B R)
+
+Sun (no trump) keeps the default S/H/C/D order. Within-suit sort
+unchanged (descending TrickRank — trump uses Hokm rank order, off-
+trump uses plain rank).
+
+### Tests
+
+828/828 pass. No test changes (sort is pure display; bidding
+fix is a magnitude tune).
+
 ## v1.2.2 — Hotfix: 4 v1.2.1 audit findings (3-agent + sim cross-check)
 
 A 3-agent audit (code-bug + rule-correctness + comparison) plus a

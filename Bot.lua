@@ -1780,9 +1780,14 @@ function Bot.PickBid(seat)
     -- conservatism. Pre-fix R1 first-lap-pass discipline (per video
     -- #25 «اول دور... اذا كنت تشك خلاص امرر») wasn't wired — bidPos
     -- 1 (info-poor) bid identical hands the same way as bidPos 4
-    -- (info-rich). Now: at bidPos 1 add +5 to thHokmR1/thSun,
-    -- bidPos 2 +3, bidPos 3-4 unchanged. Re-introduces the "wait
-    -- and see" Saudi convention as observable bot personality.
+    -- (info-rich). Now: position-bias adds to thHokmR1/thSun.
+    --
+    -- v1.2.2 user-reported tuning: pre-v1.2.2 bias was +5/+3 which
+    -- COMPOUNDED with the existing Bel-fear ramp (0–8) and BID_JITTER
+    -- (±6) to push thSun unreachable for moderate hands. User trace
+    -- showed sun=20 vs thSun=47 at bidPos 1 — passing on hands that
+    -- should be considered. Reduced to +2/+1 — still adds the "wait
+    -- and see" texture but stays within reachable range.
     if round == 1 and S.s.dealer then
         local d = S.s.dealer
         local order = { (d % 4) + 1, ((d + 1) % 4) + 1,
@@ -1792,11 +1797,11 @@ function Bot.PickBid(seat)
             if st == seat then bidPos = i; break end
         end
         if bidPos == 1 then
-            thHokmR1 = thHokmR1 + 5
-            thSun = thSun + 5
+            thHokmR1 = thHokmR1 + 2
+            thSun = thSun + 2
         elseif bidPos == 2 then
-            thHokmR1 = thHokmR1 + 3
-            thSun = thSun + 3
+            thHokmR1 = thHokmR1 + 1
+            thSun = thSun + 1
         end
     end
 

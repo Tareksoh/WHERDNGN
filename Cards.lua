@@ -183,8 +183,29 @@ end
 -- layout. Stable for display only — doesn't affect game state.
 local SUIT_DISPLAY = { S = 1, H = 2, C = 3, D = 4 }  -- ♠ ♥ ♣ ♦  (B R B R)
 
+-- v1.2.2 user-reported: hand display didn't put trump FIRST. In Hokm
+-- the trump suit is the most operationally important; Saudi-table
+-- convention is to scan trump first when reading own hand. Plus the
+-- alternating color split was broken when trump landed in the middle
+-- of the fixed S/H/C/D order. Now: trump suit is always position 1,
+-- and the remaining 3 suits alternate colors starting from the
+-- opposite color of trump so no two adjacent suits share a color.
+-- Sun has no trump → falls back to default S/H/C/D (B R B R).
+local SUIT_DISPLAY_BY_TRUMP = {
+    S = { S = 1, H = 2, C = 3, D = 4 },  -- ♠(B) ♥(R) ♣(B) ♦(R)
+    H = { H = 1, S = 2, D = 3, C = 4 },  -- ♥(R) ♠(B) ♦(R) ♣(B)
+    D = { D = 1, C = 2, H = 3, S = 4 },  -- ♦(R) ♣(B) ♥(R) ♠(B)
+    C = { C = 1, D = 2, S = 3, H = 4 },  -- ♣(B) ♦(R) ♠(B) ♥(R)
+}
+
 function M.SortHand(cards, contract)
     contract = contract or { type = K.BID_SUN }
+    -- v1.2.2: trump-first ordering for Hokm; Sun keeps default.
+    local order = SUIT_DISPLAY
+    if contract.type == K.BID_HOKM and contract.trump
+       and SUIT_DISPLAY_BY_TRUMP[contract.trump] then
+        order = SUIT_DISPLAY_BY_TRUMP[contract.trump]
+    end
     table.sort(cards, function(a, b)
         local sa, sb = M.Suit(a), M.Suit(b)
         -- Audit fix: nil-safe SUIT_DISPLAY lookup. An invalid card with
@@ -192,7 +213,7 @@ function M.SortHand(cards, contract)
         -- raises a "compare nil with number" runtime error inside
         -- table.sort. Coerce unknowns to a sentinel that sorts last.
         if sa ~= sb then
-            return (SUIT_DISPLAY[sa] or 99) < (SUIT_DISPLAY[sb] or 99)
+            return (order[sa] or 99) < (order[sb] or 99)
         end
         return M.TrickRank(a, contract) > M.TrickRank(b, contract)
     end)
