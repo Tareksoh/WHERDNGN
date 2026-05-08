@@ -3083,6 +3083,34 @@ local function renderBanner()
     local banner = tablePanel and tablePanel.banner
     if not banner then return end
 
+    -- v1.3.5 (dealer dice roll): at NEW-game start (round 1 transition
+    -- from idle/round-0), S.ApplyStart arms s.dealerRollAt = now+3.5.
+    -- Show a "DICE ROLL" banner during this window naming the rolled
+    -- first dealer. Takes priority over phase-based content so the
+    -- pick is visible before deal-phase animations kick in. The
+    -- structural fix is in N.HostStartRound (`dealer = math.random(1,4)`
+    -- replaces the previous hardcoded `dealer = 1` at game start);
+    -- this banner is the per-client visual feedback.
+    do
+        local now = (GetTime and GetTime()) or 0
+        if S.s.dealerRollAt and now < S.s.dealerRollAt then
+            local seat = S.s.dealer
+            local info = S.s.seats and seat and S.s.seats[seat]
+            local nm = (info and info.name) and shortName(info.name)
+                       or ("seat " .. tostring(seat))
+            banner:Show()
+            banner:SetBackdropBorderColor(unpack(COL.legalEdge))
+            if banner.outcome then banner.outcome:SetText("") end
+            banner.bidder:SetText("")
+            banner.defender:SetText("")
+            banner.modifiers:SetText("")
+            banner.belote:SetText("")
+            banner.title:SetText("|cffffd055🎲  DICE ROLL|r")
+            banner.final:SetText(("First dealer: |cff66ddff%s|r"):format(nm))
+            return
+        end
+    end
+
     -- Redeal announcement (all-pass both rounds → dealer rotates).
     -- Shown for ~3 seconds before the actual deal lands. Takes priority
     -- over any other banner state so the player can clearly see who

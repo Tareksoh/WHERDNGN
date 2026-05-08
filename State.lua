@@ -813,6 +813,30 @@ function S.ApplyStart(roundNumber, dealer)
     -- so we always reset round state here. Re-applying mid-round would
     -- only happen via rare network duplicates; acceptable in v1.
     local newRoundNum = roundNumber or (s.roundNumber + 1)
+    -- v1.3.5 (dealer dice roll): when a NEW game starts (round 1
+    -- transition from idle/round-0), arm a UI banner that displays
+    -- the rolled first dealer for ~3.5 seconds before the deal
+    -- phase visuals take over. The dealer value itself is sent in
+    -- the SendStart broadcast and applied below; the banner is a
+    -- per-client visual cue (timestamp gates rendering, no need to
+    -- sync the timestamp itself across clients — within network
+    -- latency the banner will fire roughly together on all seats).
+    if newRoundNum == 1 and (s.roundNumber or 0) == 0 then
+        local now = (GetTime and GetTime()) or 0
+        s.dealerRollAt = now + 3.5
+        -- Schedule a UI refresh at expiry so the banner clears even
+        -- if no other state change happens. Mirrors the redealing
+        -- timer pattern at line 162-170.
+        if C_Timer and C_Timer.After then
+            C_Timer.After(3.5, function()
+                if s.dealerRollAt
+                   and ((GetTime and GetTime()) or 0) >= s.dealerRollAt then
+                    s.dealerRollAt = nil
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end
+            end)
+        end
+    end
     s.roundNumber  = newRoundNum
     s.dealer       = dealer or s.dealer
     s.bidCard      = nil

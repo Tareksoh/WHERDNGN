@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.3.5 — Random first dealer with dice-roll banner
+
+Pre-v1.3.5: at game start, dealer was hardcoded to seat 1
+(`Net.lua:2155`). This created persistent "team A starts" bias —
+the seat-1 dealer position cascades into round-1 lead order, which
+cascades into trick-winner-leads tempo control, giving team A a
+structural edge that doesn't exist in real Saudi-table play
+(where the first dealer is decided by card-cut, dice roll, or
+verbal agreement).
+
+This is also the real-game equivalent of the v1.3.3 multiseed
+harness fix (per-tournament random tier-side flip). The harness
+fix corrected synthetic-test bias; v1.3.5 corrects the same
+structural bias in actual play.
+
+### Changes
+
+- **`Net.lua` `HostStartRound`** (line 2155 area): `dealer = 1` →
+  `dealer = math.random(1, 4)`. Subsequent round-to-round rotation
+  unchanged (`(s.dealer % 4) + 1`).
+
+- **`State.lua` `S.ApplyStart`**: when `roundNumber` transitions
+  from 0 to 1 (new-game first round), arm
+  `s.dealerRollAt = GetTime() + 3.5` and schedule a UI refresh at
+  expiry. The timestamp gates the dice-roll banner display;
+  per-client local timestamp is fine (network latency is small
+  vs the 3.5s window so visual sync is acceptable).
+
+- **`UI.lua` `renderBanner`**: while
+  `now < s.dealerRollAt`, show a "🎲 DICE ROLL" banner naming the
+  rolled first dealer. Takes priority over phase-based content so
+  the pick is visible before deal-phase animations begin. Auto-
+  clears at expiry via the scheduled refresh.
+
+### Why this matters
+
+In matched-tier real-world play, both teams use the same
+heuristics (information balance is symmetric). But seat-position
+bias was structural — team A's first-trick lead advantage was
+built into every game. With random dealer, seats 1-4 are equally
+likely to lead the first trick, eliminating the bias entirely.
+
+### Saudi-table convention
+
+The first dealer is traditionally decided by some random
+mechanism (card-cut where each player draws a card and lowest
+becomes dealer; or verbal agreement / die roll). The dice-roll
+visualization matches this convention with an unambiguous random
+mechanism that all seats can see.
+
+### Tests
+
+828/828 pass. Tests don't go through `HostStartRound` (they use
+the harness's own `playOneRound` with explicit `leaderSeat`), so
+the random-dealer change has no test-side impact.
+
 ## v1.3.4 — Saudi-pro adherence audit walkbacks (3 magnitude corrections)
 
 A meta-audit reviewed v1.3.0–v1.3.3 changes against canonical

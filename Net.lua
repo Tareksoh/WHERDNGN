@@ -2152,7 +2152,19 @@ function N.HostStartRound()
     -- is 0 and we anchor dealer at the host (seat 1).
     local dealer
     if S.s.roundNumber == 0 then
-        dealer = 1
+        -- v1.3.5 (random first dealer): pre-fix dealer was hardcoded
+        -- to seat 1 at game start. This created persistent "team A
+        -- starts" bias — seat 1 led the round-1 trick (since bidder-
+        -- after-dealer is seat 2 only when dealer is 1, and bidder
+        -- usually leads round 1 in this code path), which cascades
+        -- into trick-winner-leads tempo control. Random first dealer
+        -- (1-4 uniform) eliminates the structural bias and matches
+        -- Saudi-table convention where the first dealer is decided
+        -- by card-cut, dice roll, or verbal agreement. UI fires a
+        -- ~3.5s "DICE ROLL" banner via S.ApplyStart's transition
+        -- detection (s.dealerRollAt) so all seats see the random
+        -- pick before deal phase visuals kick in.
+        dealer = math.random(1, 4)
     else
         dealer = (S.s.dealer % 4) + 1
     end
