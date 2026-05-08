@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.6.0-hotfix — Pos-2 deception variable rename (meta-audit cleanup)
+
+A meta-audit of the v1.5.3 swarm reports (re-verified v1.6.0 against
+actual code) flagged a misleading variable name in the pos-2 hand-
+shape deception block I just shipped: `opp4` was named for "opp at
+pos-4" but actually points at pos-3 (the seat immediately after us
+in trick rotation, which IS the opp at pos-2). At pos-2 our partner
+is pos-4 (across the table); pos-3 is the opp between us.
+
+The seat-math was correct — the deception fires for the right
+reasons — but the variable name + comment misled future readers.
+
+**Fix** (`Bot.lua:5358`): renamed `opp4` → `pos3Opp` and updated the
+comment to clearly state pos-3 = opp, pos-4 = partner. Behavior
+unchanged. 819/819 tests pass.
+
 ## v1.6.0 — Anti-prediction release (5-agent swarm audit fixes)
 
 A 5-agent parallel audit asked: **is the bot bulletproof or too

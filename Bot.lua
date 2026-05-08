@@ -5355,14 +5355,21 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     -- can't ruff our lower winner.
                     if altWinner then
                         local partnerSeat = R.Partner(seat)
-                        local opp4 = (seat % 4) + 1     -- next seat (opp)
-                        if opp4 == partnerSeat then opp4 = (partnerSeat % 4) + 1 end
+                        -- v1.6.0-hotfix (meta-audit): seat-math here is
+                        -- correct but original variable was misnamed
+                        -- `opp4`. At pos-2, partner is pos-4 (across
+                        -- the table) and the OPP between us and partner
+                        -- is pos-3 (next seat in trick rotation). The
+                        -- defensive fallback handles the rare seat-3
+                        -- vs partner edge.
+                        local pos3Opp = (seat % 4) + 1     -- pos-3 in trick order = opp
+                        if pos3Opp == partnerSeat then pos3Opp = (partnerSeat % 4) + 1 end
                         local pVoid = Bot._memory and Bot._memory[partnerSeat]
                                       and Bot._memory[partnerSeat].void
                                       and Bot._memory[partnerSeat].void[trick.leadSuit]
-                        local oVoid = Bot._memory and Bot._memory[opp4]
-                                      and Bot._memory[opp4].void
-                                      and Bot._memory[opp4].void[trick.leadSuit]
+                        local oVoid = Bot._memory and Bot._memory[pos3Opp]
+                                      and Bot._memory[pos3Opp].void
+                                      and Bot._memory[pos3Opp].void[trick.leadSuit]
                         if not pVoid and not oVoid then
                             return altWinner   -- deception fires
                         end
