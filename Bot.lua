@@ -3651,13 +3651,47 @@ local function pickLead(legal, contract, seat)
             count[C.Suit(c)] = count[C.Suit(c)] + 1
         end
         -- Compute round-end-deferral predicate once (used per-suit).
+        --
+        -- v1.4.8 (audit HIGH-2 fix): pre-fix this fired on
+        -- (partner has 0 captures) AND (trick ≤ 5) — too broad.
+        -- User reported: "bots saving big cards for last trick,
+        -- losing control over rounds, scoring less or losing
+        -- contract." Video #9 «احتفظ فيها وخليها للأخير» («save
+        -- it for the end») applies to a DEFENDED team comfortable
+        -- with their lead — not a struggling bidder. Two changes:
+        --   1. Tightened trick gate: was ≤ 5, now ≤ 3. After
+        --      trick 3 the landscape is clear enough to establish.
+        --   2. Added underContractPressure bypass: if bot is on
+        --      bidder team and current raw is < target - 30, skip
+        --      the deferral entirely. Take the T-boss now —
+        --      contract failure is the bigger risk than burning
+        --      the round-end T.
         local partner = R.Partner(seat)
         local partnerWonAny = false
         local trickCount = #(S.s.tricks or {})
         for _, t in ipairs(S.s.tricks or {}) do
             if t.winner == partner then partnerWonAny = true; break end
         end
-        local roundEndDeferActive = (not partnerWonAny) and trickCount <= 5
+        local underContractPressure = false
+        if contract.bidder and S.s.tricks and trickCount >= 4 then
+            local myTeam = R.TeamOf(seat)
+            local isBidderTeam = (R.TeamOf(contract.bidder) == myTeam)
+            if isBidderTeam then
+                local raw = 0
+                for _, t in ipairs(S.s.tricks) do
+                    if R.TeamOf(t.winner) == myTeam then
+                        for _, p in ipairs(t.plays or {}) do
+                            raw = raw + (C.PointValue(p.card, contract) or 0)
+                        end
+                    end
+                end
+                local baseTarget = (contract.type == K.BID_SUN) and 65 or 81
+                underContractPressure = (raw < baseTarget - 30)
+            end
+        end
+        local roundEndDeferActive = (not partnerWonAny)
+                                     and trickCount <= 3
+                                     and not underContractPressure
         -- Find a suit where: (a) we have ≥3 cards, (b) we hold the
         -- highest LIVE card (top unplayed), and (c) that highest is
         -- A or T (a real "boss" — leading K alone is too weak).
@@ -5019,6 +5053,35 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         end
                     end
                 end
+                -- v1.4.8 (audit HIGH-1 fix — Hokm K-is-boss):
+                -- when A of led suit has already been played this
+                -- round, our K becomes the live boss of the suit. The
+                -- pre-fix code only promoted trump-winners as
+                -- sureStopper and side-suit A/T in Sun — but in Hokm
+                -- after A is dead, K has no card above it, and (since
+                -- we only get here past the trump-out check) we don't
+                -- need to fear ruff in the same way as a live A. Bot
+                -- was systematically ducking K with low while opps
+                -- took with Q/J — the user-reported "saves big cards
+                -- for last trick, loses control" pattern matches this
+                -- exactly. Per video #5 second-hand-low convention:
+                -- the rule applies when the K is NOT the live boss;
+                -- once A is dead, K should be played to win the
+                -- trick now.
+                if not sureStopper and trick.leadSuit
+                   and contract.type == K.BID_HOKM
+                   and trick.leadSuit ~= contract.trump
+                   and S.s.playedCardsThisRound then
+                    local aceKey = "A" .. trick.leadSuit
+                    if S.s.playedCardsThisRound[aceKey] then
+                        for _, c in ipairs(winners) do
+                            if C.Suit(c) == trick.leadSuit
+                               and C.Rank(c) == "K" then
+                                sureStopper = c; break
+                            end
+                        end
+                    end
+                end
                 if sureStopper then return sureStopper end
                 -- v1.4.6 removed the probabilistic pos-2 breaker
                 -- (was 18%/25% in v1.4.5). 4-perspective audit found
@@ -5200,27 +5263,30 @@ local function pickFollow(legal, hand, trick, contract, seat)
                             nonClutch = false
                         end
                     end
-                    -- C9: pos-4 not known to hold A of led suit
+                    -- C9 (v1.4.8 audit HIGH-3 fix): pos-4 confirmed
+                    -- UNABLE to beat partner's lead. Pre-fix this used
+                    -- a weak `pos4HasA = false` predicate that treated
+                    -- unknown as "no A," making the rule MORE likely
+                    -- to fire when memory was sparse — exact opposite
+                    -- of safe. Real Saudi-pro hold-back is:
+                    -- "let opp think they hold the suit" — only
+                    -- meaningful when partner DEFINITELY wins this
+                    -- trick. If pos-4 can over-take partner's mid
+                    -- lead with their A/Q/J, the saved K bought
+                    -- nothing and the trick is just lost.
+                    --
+                    -- Strict gate: pos-4 must be CONFIRMED VOID in
+                    -- led suit (Bot._memory[pos4].void[lead] = true)
+                    -- to fire the hold-back. In Sun, void means pos-4
+                    -- can't follow → can't beat partner. (In Hokm
+                    -- void = ruff threat, but this whole block is
+                    -- contract.type == K.BID_SUN gated above.)
                     local pos4Seat = (seat % 4) + 1
-                    local pos4HasA = false
+                    local pos4CannotBeat = false
                     if Bot._memory and Bot._memory[pos4Seat]
-                       and Bot._memory[pos4Seat].played then
-                        -- played[A+lead] = false means we've not yet
-                        -- seen A played; pos-4 might or might not have it
-                        -- Conservative: treat unknown as "might have" UNLESS
-                        -- we have explicit evidence otherwise (e.g. pos-4
-                        -- showed void in led suit earlier — they don't have
-                        -- the A then either)
-                        local pos4Void = Bot._memory[pos4Seat].void
-                                         and Bot._memory[pos4Seat].void[lead]
-                        if not pos4Void then
-                            -- pos-4 might have A; we don't know with
-                            -- certainty. Conservative: fire less often.
-                            -- (Probabilistic gate already accounts for this
-                            -- uncertainty — 30% rate at M3lm.)
-                            pos4HasA = false  -- treat unknown as "no A"
-                                              -- and rely on prob gate
-                        end
+                       and Bot._memory[pos4Seat].void
+                       and Bot._memory[pos4Seat].void[lead] then
+                        pos4CannotBeat = true
                     end
                     -- All conditions satisfied → probabilistic fire
                     local fireRate = 0.30
@@ -5231,7 +5297,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
                        and hasK and lowCard
                        and hasIndependentStrength
                        and midRound and nonClutch
-                       and not pos4HasA
+                       and pos4CannotBeat
                        and math.random() < fireRate then
                         -- Hold-back FIRES: duck with the low, save K
                         -- for "next round" psychological play.

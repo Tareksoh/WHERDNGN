@@ -1,5 +1,102 @@
 # Changelog
 
+## v1.4.8 — Over-save audit fixes (user-reported play feedback)
+
+User reported from real human play after v1.4.7:
+
+> "Bots still do not attempt to win tricks in favor of saving big
+> cards to win the last trick, which results in losing control over
+> the rounds and scoring less or losing contract."
+
+A focused audit (Ruflo reviewer agent) found 3 HIGH-severity
+over-save bugs with a shared root cause: **every "save" heuristic
+was built without context-awareness**. They fire in isolation
+without checking card-state, score-state, or position-certainty.
+
+### HIGH-1 — Pos-2 ducks K in Hokm even when K is the live boss
+
+`Bot.lua:5023+` (sureStopper block). Pre-fix: in Hokm, the
+sureStopper check only promoted trump winners on `trumpOut <= 1`.
+Side-suit Ks were never promoted, even when A of the suit was
+already played (making K the live boss with no card above it).
+Bot systematically ducked K with low cards while opps took with
+Q/J — exactly matching the user's complaint.
+
+**Fix**: added a Hokm-only K-promotion check. When `S.s.playedCardsThisRound["A"+leadSuit]` is true (A already played),
+K becomes a sureStopper. Per video #5: second-hand-low convention
+applies when K is NOT the live boss; once A is dead, K should be
+played to win the trick now.
+
+### HIGH-2 — Round-end T-deferral fires too broadly
+
+`Bot.lua:3653+`. Pre-fix: the v1.4.3 round-end strong-card
+deferral fired whenever `partner has 0 captures AND trickCount <= 5`
+— too generous. Bot delayed leading T-boss suits even when the
+bidder team was failing the round. Video #9 «احتفظ فيها وخليها
+للأخير» applies to a defended team comfortable with their lead,
+NOT a struggling bidder who needs the points now.
+
+**Fix two parts**:
+1. **Tightened trick gate** from `<= 5` to `<= 3`. After trick 3
+   the landscape is clear enough to establish T-boss leads.
+2. **Added `underContractPressure` bypass**: if bot is on bidder
+   team AND current raw < (target - 30), skip the deferral
+   entirely. Take the T-boss now; contract failure is the bigger
+   risk than burning the round-end T value.
+
+### HIGH-3 — Pos-3 hold-back fires without confirming partner will win
+
+`Bot.lua:5267+` (v1.4.4 pos-3 hold-back). Pre-fix: the 9-condition
+gate required "partner currently winning" but **didn't verify
+partner WILL ACTUALLY win the trick after pos-4 plays**. The C9
+condition `pos4HasA = false` treated unknown as "no A," making
+the rule MORE likely to fire when memory was sparse — opposite of
+safe. Pos-4 (opp) often overcuts partner's mid lead with Q/J that
+bot's K could have taken. Bot saved K for psychological bait that
+didn't materialize because partner lost the trick anyway.
+
+**Fix**: replaced the weak `pos4HasA` check with a STRICT
+`pos4CannotBeat` predicate. The hold-back now requires pos-4 to
+be CONFIRMED VOID in the led suit (Bot._memory[pos4].void[lead] =
+true) — only then is partner's mid-card lead actually a guaranteed
+winner. With pos-4 void, partner cannot be over-taken; saving the
+K is meaningful. Without that proof, fall through to the standard
+highest-winner pickup.
+
+### Shared theme: context-awareness
+
+All three fixes plumb context the heuristics were missing:
+- HIGH-1: **card-state** (is K live boss?)
+- HIGH-2: **score-state** (is bidder team failing?)
+- HIGH-3: **position certainty** (will partner actually win?)
+
+The `underContractPressure` predicate added in HIGH-2 is a model
+that future audits should reuse for other save-rules (e.g.,
+Faranka pos-4 captureRate could become pressure-aware).
+
+### Tests
+
+828/828 pass. The fixes are additive — they constrain when each
+heuristic fires, never expand. Existing source-pin tests don't
+exercise the specific board-states (K-boss in Hokm, mid-round
+bidder pressure, pos-4 confirmed void) that gate the new
+behavior, so test outcomes are unchanged.
+
+### Expected play impact
+
+User's reported pattern should resolve:
+- HIGH-1 → Hokm bidder ducks fewer Ks; recaptures suit control
+  faster after A is played
+- HIGH-2 → Failing-bidder bots stop hoarding T-boss suits and
+  start leading them when contract pressure is real
+- HIGH-3 → Pos-3 hold-back rarely fires now (requires confirmed
+  pos-4 void), eliminating the misfires where bot saved K but
+  partner still lost the trick
+
+If user plays bot vs human after this and the issue persists, MED-4
+(mid-round bidder-pressure override for tricks 5-7) and MED-5
+(pos-2 A/T elevation when trump exhausted) are queued for v1.4.9.
+
 ## v1.4.7 — Code cleanup (282 lines saved, behavior preserved)
 
 After the 16-release audit cycle (v1.3.0 → v1.4.6) accumulated
