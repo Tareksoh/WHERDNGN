@@ -3658,6 +3658,139 @@ local function pickLead(legal, contract, seat)
         end
     end
 
+    -- v1.4.3 (audit follow-up — Sun establishing «مسك اللون»).
+    -- Source: video #20 (control_game) Common-confidence rule.
+    -- Saudi pro convention: when you hold the top live card (typically
+    -- A) of a suit AND have ≥3 cards in that suit, LEAD that suit to
+    -- cash multiple tricks. Opponents' mid-cards fall on follow-ups;
+    -- after 1-2 cycles your K/J become bosses. Confirmed by video #6
+    -- anti-establishing rule: «ما تترنك اذا عندك اكثر من ورقتين …
+    -- العشره راح تنزل من اول حله» (don't Faranka if you have >2
+    -- cards in suit — T will fall naturally).
+    --
+    -- Tahreeb integration: this is a LEAD heuristic; Tahreeb is a
+    -- FOLLOW heuristic — different code paths, no direct conflict.
+    -- forceOwnInitiative (v1.3.1) also prefers A/T-bearing suits when
+    -- partner shows weak; the two converge on the same suit choice
+    -- in overlapping cases. Establishing fires AFTER forceOwnInitiative
+    -- specifically and BEFORE Sun shortest-suit so the boss-and-long
+    -- shape gets priority over the default short-suit-clear.
+    --
+    -- Conflict resolution with shortest-suit (H-7): when bot holds
+    -- BOTH a 3+-card-with-A long suit AND a short non-A suit, the
+    -- establishing rule WINS. Per video #20, the long suit becomes
+    -- the bot's "controlled" suit; ceding tempo to clear the short
+    -- suit first is the wrong move when we have a true boss-and-long.
+    -- M3lm+ gated (sophisticated convention).
+    --
+    -- v1.4.3 (audit follow-up — round-end strong-card deferral).
+    -- Source: video #9 (most_essential_tahreeb).
+    -- Saudi pro: «احتفظ فيها وخليها للأخير» (preserve it and keep
+    -- it for the end). When partner has NOT yet captured a trick
+    -- this round, do NOT burn a T (10-point honor) early; lead a
+    -- Tahreeb-style signal first, save T for round-end where the
+    -- last-trick bonus + face-value compounds. The deferral applies
+    -- to the establishing rule specifically — establishing on a
+    -- T-boss suit (A played, T now boss) early-round burns the T
+    -- when the same trick at round-end captures more total points.
+    -- Skip establishing when: partner has 0 tricks AND we're at
+    -- trick ≤ 5 (round-end window starts trick 6+).
+    if contract.type == K.BID_SUN and not forceOwnInitiative
+       and Bot.IsM3lm and Bot.IsM3lm() then
+        local count = { S = 0, H = 0, D = 0, C = 0 }
+        for _, c in ipairs(legal) do
+            count[C.Suit(c)] = count[C.Suit(c)] + 1
+        end
+        -- Compute round-end-deferral predicate once (used per-suit).
+        local partner = R.Partner(seat)
+        local partnerWonAny = false
+        local trickCount = #(S.s.tricks or {})
+        for _, t in ipairs(S.s.tricks or {}) do
+            if t.winner == partner then partnerWonAny = true; break end
+        end
+        local roundEndDeferActive = (not partnerWonAny) and trickCount <= 5
+        -- Find a suit where: (a) we have ≥3 cards, (b) we hold the
+        -- highest LIVE card (top unplayed), and (c) that highest is
+        -- A or T (a real "boss" — leading K alone is too weak).
+        local plainOrder = { "A", "T", "K", "Q", "J", "9", "8", "7" }
+        for _, suit in ipairs(shuffledSuits()) do
+            if count[suit] >= 3 then
+                -- Walk plain order: first unplayed rank IS the live boss
+                local liveBoss = nil
+                if S.s.playedCardsThisRound then
+                    for _, r in ipairs(plainOrder) do
+                        if not S.s.playedCardsThisRound[r .. suit] then
+                            liveBoss = r; break
+                        end
+                    end
+                end
+                -- Check we hold the live boss
+                local weHoldBoss = false
+                if liveBoss == "A" or liveBoss == "T" then
+                    for _, c in ipairs(legal) do
+                        if C.Suit(c) == suit and C.Rank(c) == liveBoss then
+                            weHoldBoss = true; break
+                        end
+                    end
+                end
+                -- Round-end deferral: skip establishing on a T-boss
+                -- suit when partner hasn't won yet + early/mid round.
+                -- Establishing on A-boss is fine (A doesn't carry the
+                -- 10-point round-end value that justifies preservation).
+                local deferThisSuit = (roundEndDeferActive
+                                       and liveBoss == "T")
+                if weHoldBoss and not deferThisSuit then
+                    -- Lead the boss (highest rank we hold in this suit
+                    -- by trick rank). For Sun's plain ordering, A > T.
+                    local lead = nil
+                    local bestRank = -1
+                    for _, c in ipairs(legal) do
+                        if C.Suit(c) == suit then
+                            local cr = C.TrickRank(c, contract)
+                            if cr > bestRank then
+                                lead = c; bestRank = cr
+                            end
+                        end
+                    end
+                    if lead then return lead end
+                end
+            end
+        end
+    end
+
+    -- v1.4.3 (audit follow-up — adjacent-to-T anti-rule, video #2).
+    -- «خطأ أنك تروح بالورقة اللي جنب العشرة لو كانت العشرة مردوفة»
+    -- (it's wrong to lead the card adjacent to T when T is doubled).
+    -- Leading 9 from a T+9 doubleton telegraphs to opps that we hold
+    -- T (the conventional inference: bots/pros don't lead the LOW of
+    -- a doubleton without specific reason, so leading 9 implies the
+    -- suit-mate is higher). Detect this shape and avoid it in
+    -- subsequent suit-selection (shortest-suit, longest-low). M3lm+
+    -- gated (sophisticated read).
+    local tPlusNineDoubletonSuit = nil
+    if Bot.IsM3lm and Bot.IsM3lm() then
+        local suitCountForT9 = { S = 0, H = 0, D = 0, C = 0 }
+        local hasT9 = { S = { t = false, n = false },
+                        H = { t = false, n = false },
+                        D = { t = false, n = false },
+                        C = { t = false, n = false } }
+        for _, c in ipairs(legal) do
+            if not C.IsTrump(c, contract) then
+                local r, s = C.Rank(c), C.Suit(c)
+                suitCountForT9[s] = suitCountForT9[s] + 1
+                if r == "T" then hasT9[s].t = true end
+                if r == "9" then hasT9[s].n = true end
+            end
+        end
+        for _, suit in ipairs({ "S", "H", "D", "C" }) do
+            if suitCountForT9[suit] == 2
+               and hasT9[suit].t and hasT9[suit].n then
+                tPlusNineDoubletonSuit = suit
+                break
+            end
+        end
+    end
+
     -- v0.5 H-7: Sun shortest-suit lead. Saudi pro convention is to
     -- lead from the shortest non-trump suit in Sun (forcing opponents
     -- to play their boss in that suit early; once spent, our lower
@@ -3684,13 +3817,35 @@ local function pickLead(legal, contract, seat)
             count[C.Suit(c)] = count[C.Suit(c)] + 1
             if C.Rank(c) == "A" then hasA[C.Suit(c)] = true end
         end
+        -- v1.4.3 anti-T+9-doubleton: skip the T+9 doubleton suit
+        -- in shortest-suit selection if alternatives exist (avoids
+        -- the "lead 9 from T+9 telegraphs T" leak). Falls through
+        -- gracefully — if T+9 IS the only valid shortest, the
+        -- selection re-runs without the exclusion.
         local shortestSuit, shortestN = nil, 99
         local shortestNonAceSuit, shortestNonAceN = nil, 99
         for _, suit in ipairs(shuffledSuits()) do
             local n = count[suit] or 0
-            if n > 0 and n < shortestN then shortestSuit, shortestN = suit, n end
-            if n > 0 and not hasA[suit] and n < shortestNonAceN then
+            if n > 0 and n < shortestN
+               and suit ~= tPlusNineDoubletonSuit then
+                shortestSuit, shortestN = suit, n
+            end
+            if n > 0 and not hasA[suit] and n < shortestNonAceN
+               and suit ~= tPlusNineDoubletonSuit then
                 shortestNonAceSuit, shortestNonAceN = suit, n
+            end
+        end
+        -- Fallback: if anti-T+9 exclusion left no candidate (T+9
+        -- was the only suit), re-run without exclusion.
+        if not shortestSuit then
+            for _, suit in ipairs(shuffledSuits()) do
+                local n = count[suit] or 0
+                if n > 0 and n < shortestN then
+                    shortestSuit, shortestN = suit, n
+                end
+                if n > 0 and not hasA[suit] and n < shortestNonAceN then
+                    shortestNonAceSuit, shortestNonAceN = suit, n
+                end
             end
         end
         -- Sun-bidder-partner: prefer the shortest non-Ace-holding
@@ -6201,6 +6356,33 @@ function Bot.PickDouble(seat)
         return false, false
     end
 
+    -- v1.4.3 (audit follow-up — score-desperation Bel hand-bypass).
+    -- Source: video #25 (when_bid_sun) R26.
+    -- Saudi pro reasoning: «ما أنت خسرانه — ممكن يجيك مشروع»
+    -- (you can't lose more than you're already losing — and you might
+    -- land a meld). When our team is severely behind AND opp is
+    -- within one round of winning, the round is essentially conceded;
+    -- a Bel cannot meaningfully worsen our cumulative position
+    -- (failing the Bel'd round vs failing un-Bel'd is the same
+    -- match outcome). Bel REGARDLESS of hand strength — the ×2
+    -- multiplier preserves the small upside (any pulled trick or
+    -- meld is doubled in our pile). Closed Bel (wantOpen=false)
+    -- prevents this from cascading into Triple/Four/Gahwa where
+    -- strength threshold checks should remain in force.
+    -- M3lm-gated: this is a strategic read, not a basic-tier rule.
+    if Bot.IsM3lm and Bot.IsM3lm() and S.s.cumulative then
+        local myTeam = R.TeamOf(seat)
+        local oppTeam = (myTeam == "A") and "B" or "A"
+        local myCum = S.s.cumulative[myTeam] or 0
+        local oppCum = S.s.cumulative[oppTeam] or 0
+        local target = S.s.target or 152
+        if oppCum >= target - 26 and myCum <= oppCum - 50 then
+            eltrace("PickDouble FIRE: score-desperation (myCum=%d oppCum=%d target=%d)",
+                    myCum, oppCum, target)
+            return true, false  -- Bel, closed
+        end
+    end
+
     local strength = sunStrength(hand)
     if contract.type == K.BID_HOKM and contract.trump then
         -- Trump cards are an extra defensive resource. Audit C-4 fix:
@@ -6263,6 +6445,33 @@ function Bot.PickDouble(seat)
         local bidUrg = opponentUrgency(contract.bidder)
         if bidUrg >= 6 then
             th = th - 5
+        end
+    end
+
+    -- v1.4.3 (audit follow-up — 100-meld + Ace defender Bel modifier).
+    -- Source: video #25 (when_bid_sun) R27.
+    -- Saudi pro: defender holding a 100-meld (مشروع 100) + an Ace has
+    -- "almost guaranteed positive EV" on Bel. The 100-meld already
+    -- locks in 100 raw points for our team independent of trick play;
+    -- the Ace ensures we capture at least one trick of trick-points;
+    -- Bel doubles both. Lower effective BOT_BEL_TH by 15 when this
+    -- shape is present — meaningful nudge without forcing Bel on
+    -- hopeless hands. Threshold floor (BOT_BEL_TH - 16) still
+    -- applies below. M3lm-gated: requires meld-state read +
+    -- positional Bel reasoning.
+    if Bot.IsM3lm() and S.s.meldsByTeam and R.SumMeldValue then
+        local myTeam = R.TeamOf(seat)
+        local myMelds = S.s.meldsByTeam[myTeam]
+        local meldTotal = (myMelds and R.SumMeldValue(myMelds)) or 0
+        if meldTotal >= 100 then
+            local hasAce = false
+            for _, c in ipairs(hand) do
+                if C.Rank(c) == "A" then hasAce = true; break end
+            end
+            if hasAce then
+                th = th - 15
+                eltrace("PickDouble: 100-meld + Ace modifier applied (-15)")
+            end
         end
     end
 

@@ -1,5 +1,108 @@
 # Changelog
 
+## v1.4.3 — Saudi-pro convention implementations (5 new + 1 stale closed)
+
+User triaged the v1.4.2 mining-derived deferrals. v1.4.3 implements
+the approved items + closes one as STALE. 828/828 tests pass.
+
+### #1 — Score-desperation Bel hand-bypass (`Bot.lua:6204+`)
+
+Source: video #25 (when_bid_sun) R26.
+> «ما أنت خسرانه — ممكن يجيك مشروع»
+> (you can't lose more than you're already losing)
+
+When defender team is severely behind AND opp is within one round
+of winning, the round is essentially conceded — Bel cannot
+worsen our cumulative position materially. Bel REGARDLESS of
+hand. Closed Bel (`wantOpen=false`) prevents cascade into Triple/
+Four/Gahwa where strength threshold checks remain in force.
+
+Predicate (M3lm-gated, before strength check):
+```
+oppCum >= target - 26 AND myCum <= oppCum - 50
+```
+
+### #2 — 100-meld + Ace defender Bel modifier (`Bot.lua:6296+`)
+
+Source: video #25 R27. Defender holding مشروع 100 + Ace has
+"almost guaranteed positive EV" on Bel. Lower effective
+`BOT_BEL_TH` by 15 when this shape is present (M3lm-gated).
+Threshold floor still applies. Reads `S.s.meldsByTeam[myTeam]`
+via `R.SumMeldValue` for declared 100-meld + scans hand for Ace.
+
+### #3 — Round-1 Bel restriction: NOT IMPLEMENTED per user direction
+
+Per user: "do not add it." Single-source video #11 evidence is
+session-variant («بعض الجلسات تمنع هذا الشيء»), not universal.
+
+### #4 — Sun establishing «مسك اللون» (`Bot.lua:3690+`)
+
+Source: video #20 (control_game). Saudi pro convention: when
+holding the top live card (A or T) of a non-trump suit AND ≥3
+cards in that suit, LEAD that suit to cash multiple tricks.
+Inserted BEFORE Sun shortest-suit logic. M3lm-gated.
+
+**Tahreeb integration**: lead heuristic vs follow heuristic —
+different code paths. forceOwnInitiative converges on same suit
+choice; new establishing fires only when forceOwnInitiative
+hasn't already decided.
+
+**Conflict resolution**: when bot has BOTH a 3+-with-A long suit
+AND short non-A suits, establishing wins. Per video #20 the long
+suit is "the controlled suit"; ceding tempo to clear short suits
+first is wrong when we have boss-and-long.
+
+### #6 — Round-end strong-card deferral (woven into #4)
+
+Source: video #9. «احتفظ فيها وخليها للأخير» (preserve, keep for
+end). Predicate: `partnerNotYetCaptured AND trickCount <= 5 AND
+liveBoss == "T"`. Skips establishing when activated — preserves
+T for round-end where the +10 last-trick bonus + face-value
+captures more total points.
+
+### #7 — Adjacent-to-T anti-rule (`Bot.lua:3690+`)
+
+Source: video #2. «خطأ أنك تروح بالورقة اللي جنب العشرة لو كانت
+العشرة مردوفة» (wrong to lead 9 from T+9 doubleton). Detects
+T+9 doubleton suits and excludes them from Sun shortest-suit
+selection when alternatives exist. Falls through to non-exclusion
+if T+9 was the only option (degenerate case). M3lm-gated.
+
+### #8 — STALE: topTouchSignal already fully wired
+
+The user's audit found this nominally-deferred item is in fact
+already implemented since v0.9.2 + v1.0.3 + v0.10.0:
+- **Write site** `Bot.lua:565-627` with forced-play gate at
+  line 583-609 (the user's "check if partner is forced"
+  concern is already honored — T/K/Q signals require observing
+  a lower-rank play from same seat first; suppresses singleton/
+  forced cases)
+- **pickLead reader** `Bot.lua:3070+`
+- **BotMaster sampler reader** `BotMaster.lua:546-572`
+  (nextDown weight 60, cleared/broke handling)
+
+No implementation needed; doc updates in v1.4.0 + v1.4.2 had
+already correctly classified this as wired in some places. The
+v1.4.2 mining-agent task list was over-cautious.
+
+### #5 — STILL PENDING: pos-3 hold-back (awaiting user direction)
+
+User's question on v1.4.2: "can we somehow implement this with
+conditions?" — a 9-condition gating proposal was offered. User
+hasn't given the go-ahead yet. NOT IMPLEMENTED in v1.4.3.
+
+### Test fixture update
+
+`tests/test_state_bot.lua:3597` — bumped AD.7 PickDouble eltrace
+window from 8000 to 14000 chars to accommodate v1.4.3 additions
+(score-desperation early-return + 100-meld modifier) which
+pushed the strength-eval log past the original 8000-char window.
+
+### Tests
+
+828/828 pass. All new heuristics are M3lm+ gated; no impact on
+basic/advanced source-pin tests.
+
 ## v1.4.2 — Video-mining + audit cycle (LOCAL ONLY — pending user review)
 
 > **NOT YET PUSHED**: this release is committed locally. The user is

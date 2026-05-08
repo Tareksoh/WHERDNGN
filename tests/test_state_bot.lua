@@ -3591,11 +3591,14 @@ do
 end
 
 -- AD.7 (escalation observability): PickDouble has eltrace
+-- v1.4.3: bumped window 8000 -> 14000 to accommodate v1.4.3 additions
+-- (score-desperation early-return + 100-meld modifier) which
+-- pushed the strength-eval log past the original 8000-char window.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickDouble")
     if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 8000)
+        local body = botSrc:sub(fnStart, fnStart + 14000)
         assertTrue(body:find("local function eltrace") ~= nil,
                    "AD.7a: PickDouble defines eltrace helper")
         assertTrue(body:find("PickDouble eval: strength=") ~= nil,
