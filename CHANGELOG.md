@@ -1,5 +1,81 @@
 # Changelog
 
+## v1.4.6 — Pos-2 breaker REMOVED (4-perspective audit consensus)
+
+After v1.4.5 raised the pos-2 breaker rate to 18%/25% per Codex's
+audit, the user requested a deeper multi-perspective audit. **All
+4 perspectives reached strong consensus that the pos-2 breaker —
+at any non-zero rate — was wrong.**
+
+### The smoking gun
+
+A separate strategy-only 4th-opinion audit (no code reference, pure
+Saudi-Baloot strategy expertise) discovered:
+
+> **Video #20 «تمسك اللعب» is a POS-3 rule, NOT pos-2.**
+
+The citation has been wrong for ~5 releases (v1.2.1 onward). Real
+Saudi-pro pos-2 deviation rate is **3-5%, and those deviations are
+HAND-SHAPE FORCED** (consecutive top trumps per video #22, bare-T
+J-bait per video #08), **not probabilistic**.
+
+> "Pros punish convention-violators by tightening their reads, not
+> loosening them. A 20% deviation rate doesn't 'corrupt the model'
+> — it just labels the bot as a non-pro." — 4th opinion
+
+A probabilistic pos-2 breaker reads as «غلط» (a beginner mistake)
+to a Saudi-table observer, regardless of rate.
+
+### 4-perspective evolution
+
+| Perspective | Original | After re-eval | Direction |
+|---|---|---|---|
+| Codex | 18%/25% | **12%/15%** | flipped LOWER |
+| Ruflo | 12%/15% | **15%/20%** | moved up to mid |
+| Gemini | reduce/remove | (re-eval API-failed) | unchanged |
+| 4th opinion (strategy-only) | N/A | **~3-5% max OR 0%** | strong remove |
+
+**Vote tally**: 4-of-4 said v1.4.5's 18%/25% was wrong; 3-of-4
+said any rate above ~5% was wrong.
+
+### Resolution: removal
+
+Per 4th-opinion's specific recommendation: "if you must give the
+bot any deviation budget, cap it at the legitimate carve-outs."
+Those carve-outs are already wired elsewhere:
+
+- **Hokm pos-2 sureStopper** (one-trump-out detection): existing
+  at `Bot.lua:5210+`
+- **Saudi-Master T-bait** (video #08): existing at `Bot.lua:5311+`
+  in the deceptiveOverplay branch
+- **Default canonical "second hand low"**: the standard duck path
+  below
+
+The probabilistic breaker (v1.2.1 → v1.4.5) is now removed. It
+was an information-warfare optimization that didn't match Saudi-
+pro reality.
+
+### Code change
+
+`Bot.lua:5236+` — removed the ~22-line probabilistic breaker
+block. Replaced with a multi-paragraph comment documenting the
+audit history, the citation correction (video #20 is pos-3),
+and where the legitimate carve-outs live.
+
+### Tests
+
+828/828 pass. The breaker was probabilistic — source-pin tests
+fired deterministic paths and weren't affected by removal.
+
+### Other items still under review
+
+- **BOT_FOUR_TH < BOT_TRIPLE_TH inversion** (Gemini's other
+  finding): Gemini wants refactor to 87 + remove +5 bonus;
+  Codex/Ruflo say it's fine as-is. 1-vs-2 minority view, deferred.
+- **Tahreeb sender bot-partner gate** (kept removed in v1.4.5):
+  Codex's solid argument; the convention is partnership LANGUAGE
+  and humans parse it. No re-review needed.
+
 ## v1.4.5 — Codex-aligned audit follow-ups (pos-2 breaker + Tahreeb gate)
 
 User direction after multi-perspective audit synthesis: apply the

@@ -5234,53 +5234,43 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 if sureStopper then return sureStopper end
-                -- v1.2.1 (A3 audit) → v1.3.3 → v1.3.4 (Saudi-pro
-                -- adherence audit walkback): pos-2 binary breaker.
-                -- Pre-v1.2.1 pos-2 was a 2-state machine
-                -- (sureStopper-or-duck); a careful opp reading "pos-2
-                -- bot just ducked → no A/T of led suit" had a fully
-                -- reliable inference. v1.2.1 added a 12% M3lm-only
-                -- breaker per video #20 «تمسك اللعب». v1.3.3 extended
-                -- to all Advanced+ at 25% to close a +24 GP/game bot-
-                -- vs-bot probe gap.
+                -- v1.4.6 (4-perspective audit removal): the
+                -- probabilistic pos-2 breaker is gone.
                 --
-                -- v1.3.4 walkback: the audit found 25% was bot-vs-bot
-                -- overfit — video #20 supports the EXISTENCE of mid-
-                -- card wins at pos-2 (qualitative principle) but does
-                -- NOT quantify a 25% rate; that magnitude was reverse-
-                -- engineered from the +24 GP probe finding. Walked
-                -- back to: 12% Advanced, 20% M3lm/Master.
+                -- History: v1.2.1 added a 12% M3lm-only breaker
+                -- citing video #20 «تمسك اللعب» (control the game).
+                -- v1.3.3 raised to 25% Advanced+ to close a bot-vs-
+                -- bot probe gap; v1.3.4 walked back to 12%/20%;
+                -- v1.4.5 raised again to 18%/25% per Codex's
+                -- "humans don't punish deviations" reasoning.
                 --
-                -- v1.4.5 (multi-perspective audit, Codex finding under
-                -- human-target play): the v1.3.4 12%/20% rates were
-                -- TOO TIMID for human-target EV. Humans don't punish
-                -- second-hand-low determinism the way pattern-matching
-                -- bots do; modest deviations corrupt opp's hand-
-                -- distribution model without becoming a new predictable
-                -- pattern. v1.3.4 correctly rejected 25% Advanced as
-                -- bot-probe-overfit but went too far in the other
-                -- direction. Per Codex audit: raise to 18% Advanced /
-                -- 25% M3lm-Master. Preserves canonical "second hand
-                -- low" 75-82% of the time (convention dominates) while
-                -- creating meaningful information warfare against
-                -- humans who maintain a "bot follows convention"
-                -- mental model.
-                if #winners >= 1 and trick.plays then
-                    local hasPointCard = false
-                    for _, p in ipairs(trick.plays) do
-                        local pts = C.PointValue(p.card, contract) or 0
-                        if pts >= 4 then hasPointCard = true; break end
-                    end
-                    local breakerRate = 0.18
-                    if Bot.IsM3lm and Bot.IsM3lm() then
-                        breakerRate = 0.25
-                    end
-                    if hasPointCard and math.random() < breakerRate then
-                        -- Win with cheapest winner (not sureStopper-
-                        -- equivalent A/T which is the obvious play).
-                        return lowestByRank(winners, contract)
-                    end
-                end
+                -- v1.4.6 4-perspective audit (Codex revised + Ruflo
+                -- revised + Gemini original + 4th-opinion strategy-
+                -- only) reached strong consensus that ALL non-zero
+                -- rates were wrong. The 4th-opinion's smoking-gun
+                -- finding: video #20 «تمسك اللعب» is a POS-3 rule,
+                -- NOT pos-2. Our citation has been wrong for ~5
+                -- releases. Real Saudi-pro pos-2 deviation rate is
+                -- 3-5%, and even those deviations are HAND-SHAPE
+                -- FORCED (consecutive top trumps per video #22, or
+                -- bare-T J-bait per video #08), not probabilistic.
+                --
+                -- Per the 4th-opinion: «pros punish convention-
+                -- violators by tightening their reads, not loosening
+                -- them. A 20% deviation rate doesn't 'corrupt the
+                -- model' — it just labels the bot as a non-pro»
+                -- (i.e., reads as «غلط», a beginner mistake).
+                --
+                -- The legitimate carve-outs are wired ELSEWHERE:
+                --   * Hokm pos-2 sureStopper (one trump out): above
+                --     in this same block at line 5210+
+                --   * Saudi-Master T-bait (video #08): in the
+                --     deceptiveOverplay branch later in pickFollow,
+                --     gated to Saudi Master tier and specific shape
+                --   * Default canonical "second hand low": below
+                --
+                -- Random pos-2 breaker is now dead code at every
+                -- tier. Falls through to the standard duck.
                 -- Duck: throw the lowest legal that ISN'T a winner.
                 local nonWinners = {}
                 for _, c in ipairs(legal) do
