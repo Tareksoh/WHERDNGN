@@ -1,5 +1,138 @@
 # Changelog
 
+## v1.4.2 — Video-mining + audit cycle (LOCAL ONLY — pending user review)
+
+> **NOT YET PUSHED**: this release is committed locally. The user is
+> asleep; pending review and explicit ship approval.
+
+Three parallel research agents completed during the user's sleep:
+
+1. **Bel/Bel-x2 video mining** — scanned all 44 transcripts in
+   `_transcripts/` for evidence on the previously-blocked
+   Bel-mandatory + Bel-x2 + Round-1-Bel + score-state-aware items.
+2. **Opening-leads video mining** — scanned all transcripts for
+   the 5 prose TODOs in `opening-leads.md` (9-vs-J first lead,
+   AKA-setup, Sun establishing, "lead the boss" deviations,
+   tenor/sequence leads).
+3. **v1.3.x → v1.4.1 audit** — cross-validated all 8 releases for
+   correctness, regression risk, test coverage, and Saudi-pro
+   convention adherence.
+
+828/828 tests pass.
+
+### Audit findings — 0 correctness bugs, 3 stale comments fixed
+
+The audit verdict: **net-positive trajectory, no release should be
+reverted, no correctness bugs found**. Three documentation issues
+flagged and fixed:
+
+1. **`Constants.lua:461+` — BOT_FOUR_TH comment stale**: with v1.3.4's
+   walkback raising BOT_TRIPLE_TH 65→82, the BOT_FOUR_TH=80 raw
+   constant now sits BELOW Triple's raw threshold. This LOOKS like
+   inversion but is mitigated by `Bot.PickFour`'s +5 strength
+   bonus (Bot.lua:6552, unconditional since v0.11.18 DEAD-1 audit).
+   Comment expanded with full clarification and explicit warning
+   against naive constant-raising. Net behavior unchanged — Four
+   still fires at 3-7% in forced-mode probe per multiseed.
+
+2. **`tests/test_state_bot.lua:5573` — AK.7 stale arithmetic**:
+   comment said "Floor cap = 49 (TH=65)" referencing v1.3.2's
+   temporary value. v1.3.4 walked back to TH=82, so floor is now
+   66. Test outcome unchanged (hand strength ~11 << 54 jth_min at
+   floor 66 - jitter 12). Comment corrected.
+
+3. **Concern 1 (Tahreeb sender) deferral note**: audit confirmed
+   `tahreebClassify` at Bot.lua:2322 returns "want"/"bargiya" by
+   rank sequence and doesn't distinguish sender-side suit strength.
+   Receiver action identical for both classifications → deferral
+   rationale internally consistent. Already documented in code
+   comment + decision-trees.md.
+
+### `escalation.md` — Bel mining update (3 new patterns, 6 still BLOCKED)
+
+44-transcript scan results:
+
+**Found** (Common evidence, Bel-mandatory patterns):
+- **Score-desperation Bel** (`25_when_bid_sun` R26): defender team
+  severely behind, opp took Sun → Bel REGARDLESS of hand. Quote:
+  «ما أنت خسرانه — ممكن يجيك مشروع» (you can't lose more than
+  you're already losing). DEFERRED implementation pending magnitude
+  validation.
+- **100-meld + Ace defender Bel** (`25_when_bid_sun` R27): defender
+  holds مشروع 100 + Ace → "almost guaranteed positive EV." DEFERRED.
+- **A+T mardoofa probabilistic Bel** (`25_when_bid_sun` R28): defender
+  holds Ace+Ten same suit, partner draw may complete 100-meld.
+  Already partially captured in `aceCountAndMardoofa` strength
+  formula.
+
+**Found** (Common, Round-1):
+- **Round-1 Bel restriction** (`11_bel_beginners` row 6):
+  «بعض الجلسات تمنع هذا الشيء» (some sessions forbid this). Anti-grief
+  rule, session-variant. DEFERRED — needs user direction on
+  default behavior (hard-rule? tier-gated? configurable?).
+
+**Still BLOCKED** after exhaustive scan:
+- Shape-based Bel-mandatory ("3+ Aces", "trump-void+ruff")
+- Bel-x2 hand-shape thresholds (no transcript provides any)
+- Open Bel vs Closed Bel discrimination
+- Bel timing (delay vs immediate)
+- Mid-chain reads ("after Bel-x2, partner expects X")
+- Reckless Gahwa under match-point desperation
+
+### `opening-leads.md` — substantial unblocking (5 topics)
+
+44-transcript scan results across all 5 prose TODOs:
+
+**Topic 1 — 9 vs J first lead**: Common evidence. J is canonical;
+9 is "AKA-equivalent, never sacrifice" per video #08. Already
+implicit in current `pickLead` code via `highestByRank(trumpCards)`.
+Gap: no explicit "9-lead is mistake" framing exists.
+
+**Topic 2 — AKA-setup leads**: Definite evidence. 4-condition
+predicate (highest unplayed non-trump, partner likely void, defender
+leading, not the Ace itself). Already largely wired (implicit-AKA
+on bare-Ace + ruff-suppression). Gap: trick-1 *opening choice* as
+function of "set up best AKA" not addressed.
+
+**Topic 3 — Sun "establishing" suits**: Common evidence. Saudi
+term is **«مسك اللون»** (holding the suit), not "establishing".
+3 rules from video #20: lead 3+-with-top-cards, give up T early
+when no other strength, preserve T as re-entry when 2+ side cards.
+**CONFLICT**: current `pickLead` Sun shortest-suit logic (H-7
+v0.5.0) goes opposite direction in 3+-with-A scenarios. DEFERRED —
+needs careful integration.
+
+**Topic 4 — Lead-the-boss deviations**: 4 distinct cases identified.
+Two wired (deceptive overplay, Faranka). Two partially wired
+(pos-3 hold-back, round-end deferral). DEFERRED implementation
+recommendations.
+
+**Topic 5 — Sequence/tenor leads**: T-lead decision tree wired
+v0.11.16 (Tahreeb-return context). NEW evidence: **adjacent-to-T
+anti-rule** from video #2 — don't lead 9 from T+9 doubleton
+(telegraphs T). DEFERRED — straightforward addition. Touching-
+honors ledger remains DEFERRED Fzloky-tier feature.
+
+### What's deferred for user direction
+
+Several findings are actionable but require user judgment before
+implementing:
+
+1. **Score-desperation Bel hand-bypass** — magnitude calibration
+2. **100-meld + Ace conditional Bel** — meld-aware PickDouble
+3. **Round-1 Bel restriction** — hard rule? tier-gated? toggle?
+4. **Sun establishing vs shortest-suit conflict** — which wins
+   when bot holds 3+-with-top-cards vs traditional shortest-lead?
+5. **Pos-3 hold-back gate** — explicit predicate
+6. **Round-end strong-card deferral** — explicit predicate
+7. **Adjacent-to-T anti-rule** — straightforward but new gate
+8. **Touching-honors ledger** — Fzloky-tier `toptouchSignal` key
+
+### Tests
+
+828/828 pass. No code logic changes — only documentation expansions
++ comment corrections.
+
 ## v1.4.1 — Deferred-item triage + Takbeer pos-3 enhancement
 
 User triaged the v1.4.0 deferred items with explicit guidance per

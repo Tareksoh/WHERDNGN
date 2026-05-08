@@ -463,6 +463,35 @@ K.BOT_FOUR_TH         = 80    -- defenders four (×4) — very strong hand.
                               -- band (jth_max 77) so Four still requires
                               -- escalation pressure; below the 8-card
                               -- ceiling so it's reachable. Targets <5%.
+                              --
+                              -- ⚠ v1.4.2 audit clarification — chain
+                              -- ordering note: after v1.3.4's walkback
+                              -- raised BOT_TRIPLE_TH 65 → 82, this
+                              -- raw constant (80) sits BELOW Triple's
+                              -- raw threshold. This LOOKS inverted but
+                              -- is mitigated by `Bot.PickFour` adding
+                              -- a +5 strength bonus before threshold
+                              -- comparison (Bot.lua:6552 — partner-
+                              -- kept-chain-open signal, unconditional
+                              -- since DEAD-1 audit). Net effect:
+                              -- defender effective Four firing range
+                              -- (TH-5±jitter15) overlaps Triple's
+                              -- bidder firing range (TH±jitter12).
+                              -- The +5 bonus + small overlap is by
+                              -- design — the chain rungs evaluate
+                              -- DIFFERENT teams (bidder vs defender)
+                              -- with similar strength distributions
+                              -- (defender p90=65, bidder p90=108 from
+                              -- v1.3.0 calibration probe), so direct
+                              -- raw-TH comparison isn't meaningful.
+                              -- DO NOT raise this constant naively
+                              -- to "fix the inversion" — that would
+                              -- collapse Four firing to ~0% in
+                              -- forced-mode probe (currently 3-7%
+                              -- per multiseed measurement). Any
+                              -- future re-calibration must consider
+                              -- the +5 bonus + per-team strength
+                              -- distributions together.
 K.BOT_GAHWA_TH        = 95    -- bidder gahwa (match-win) — terminal, near-certain.
                               -- v1.3.2: 120 -> 95. Above Four band; stays
                               -- terminal-rare (<2%) but reachable on

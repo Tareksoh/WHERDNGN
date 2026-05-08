@@ -5570,7 +5570,11 @@ do
     }
     -- Bidder team near clinch (combinedUrgency drop, capped at -15)
     -- AND Bel'ed defender has style.bels >= 2 (-8 styleBelTendency).
-    -- Floor cap at BOT_TRIPLE_TH - 16 = 49 (post-v1.3.2 with TH=65).
+    -- Floor cap at BOT_TRIPLE_TH - 16 = 66 (post-v1.3.4 with TH=82).
+    -- v1.4.2 audit fix: comment said "= 49 (TH=65)" referencing v1.3.2's
+    -- temporary value; v1.3.4 walked back to TH=82, so floor cap is now
+    -- 66. Test outcome unchanged (hand strength ~11 << jth_min 54 at
+    -- floor 66 - jitter 12).
     S.s.cumulative = { A = 0, B = 130 }  -- bidder team B near clinch
     S.s.target = 152
     Bot._partnerStyle = Bot._partnerStyle or {}

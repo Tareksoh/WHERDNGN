@@ -34,15 +34,20 @@ When modifying escalation-decision bot logic, this is the reference:
 - `Bot.PickTriple` — bidder Bel x2 counter-decision (×3)
 - `Bot.PickFour` — defender ×4 counter-decision
 - `Bot.PickGahwa` — bidder Gahwa (Coffee) terminal decision
-- `K.BOT_BEL_TH=60`, `K.BOT_TRIPLE_TH=90`, `K.BOT_FOUR_TH=110`,
-  `K.BOT_GAHWA_TH=135` — threshold values
+- `K.BOT_BEL_TH=62`, `K.BOT_TRIPLE_TH=82`, `K.BOT_FOUR_TH=80`,
+  `K.BOT_GAHWA_TH=95` — threshold values (current as of v1.4.x;
+  re-anchored to corrected multiseed harness in v1.3.2-v1.3.4).
 
-**Critical context:** as of v0.5, the escalation chain fires at
-**0% in symmetric pure-bot play**. The thresholds are calibrated
-for asymmetric human hand distributions. See
-`.swarm_findings/v0.5_FINAL_REPORT.md` section 4 for the gap.
-**Real-game telemetry (or asymmetric playtest data from
-transcripts) is the unblocking input here.**
+**Updated context (v1.3.x cycle):** the original v0.5 "0% chain
+fire" was caused by a multiseed harness state-prep bug (fixed in
+v1.3.0) — escalation pickers read empty `S.s.hostHands` arrays
+and always returned false. Once the harness was fixed, the
+corrected probe showed `BOT_BEL_TH=35` fired Bel at ~92% (the
+v0.11.20 calibration was tuned against a bug-zeroed null).
+Thresholds were re-anchored in v1.3.2 against measured
+distributions and walked back in v1.3.4 to align with `escalation.md`
+prose-ordering (Triple-worthy hand requires more strength than
+Bel-worthy hand).
 
 ---
 
@@ -57,12 +62,34 @@ strategy literature emphasizes:
 - Long off-suit cards (7-9 in non-trump) are dead weight; they
   dilute strength score.
 
-> **TODO from videos:**
-> - Specific "Bel-mandatory" hand patterns Saudi pros recognize.
-> - When to Bel "for show" (closed Bel, signaling weakness without
->   inviting Bel x2).
-> - Bel timing — does the defender always Bel immediately, or
->   delay-Bel after seeing partner's response?
+### v1.4.2 video-mining update — Bel-mandatory patterns
+
+44 video transcripts in `_transcripts/` were systematically scanned
+for Bel-mandatory hand-shape patterns. **Result: shape-based
+"3+ side Aces = always Bel" or "multi-void = always Bel" rules
+have ZERO transcript support.** The closest evidence is EV-based
+reasoning that converges on Bel under specific conditions:
+
+| Pattern | Source | Confidence | Code mapping |
+|---|---|---|---|
+| **Score-desperation Bel** — defender team severely behind, opp took Sun. Speaker «ما أنت خسرانه — ممكن يجيك مشروع» (you can't lose more than you're already losing). Round already conceded; Bel cannot meaningfully worsen cumulative position. Bel REGARDLESS of hand. | `25_when_bid_sun` R26 | Common (single source, explicit reasoning) | `Bot.PickDouble` Bot.lua:6045 — score-urgency path. NOT yet wired as a hand-bypass; current `scoreUrgency` only adjusts threshold magnitudes, not bypasses. **Recommendation**: when `cumulative[myTeam] < cumulative[oppTeam] - 80` (or similar large gap), bypass strength check entirely. **DEFERRED** — magnitude needs play-test validation. |
+| **100-meld + Ace defender Bel** — defender holds مشروع 100 (a 100-point meld) plus an Ace. "Almost guaranteed positive EV." | `25_when_bid_sun` R27 | Common (single source) | `Bot.PickDouble` — conditional on `meldPoints[myTeam] >= 100 + has_ace`. Currently melds aren't read in `PickDouble`. **Recommendation**: implement conditional-Bel for 100-meld+Ace shape. **DEFERRED**. |
+| **A+T mardoofa Bel** — defender holds Ace + Ten of same suit. «ممكن تجيك عشرة رابعة وتكمل لك 100» (10 may complete a 100-meld). Probabilistic positive EV. | `25_when_bid_sun` R28 | Sometimes (single source, "ممكن" / probabilistic) | `Bot.PickDouble` — strength-formula already gives mardoofa shapes a bonus via `aceCountAndMardoofa` (Bot.lua:1138-1155). Likely already captured by current threshold tuning. |
+| **Bel-fear bidder side** — bidder anticipates opp Bel when bidder has weak hand near match-point. Restraint at bid time, not at Bel time. | `25_when_bid_sun` R19, `26_when_bid_hokm` R18 | Common | `Bot.PickBid` — already wired via Bel-fear ramp (v0.6.0 → v1.2.1 jitter). |
+
+**No transcript evidence found for**: shape-based Bel-mandatory
+patterns ("3+ Aces", "trump-void enabling ruff"), "open Bel vs
+closed Bel" discrimination heuristics, "delay-Bel after partner
+response" timing rules. These remain **BLOCKED** — the corpus
+either doesn't contain dedicated videos on these or they're
+addressed implicitly (see `K.BOT_BEL_TH` calibration history).
+
+> **TODO from videos** (still open after 44-transcript scan):
+> - "Open Bel vs Closed Bel" discrimination — `wantOpen` second
+>   return value in `Bot.PickDouble` has no video basis. **BLOCKED**.
+> - Bel timing (delay vs immediate) — not addressed. **BLOCKED**.
+> - Mid-chain reads ("after Bel x2, partner of bidder should
+>   expect X") — not addressed. **BLOCKED**.
 
 ### Open Bel vs Closed Bel
 
@@ -87,9 +114,35 @@ Bel-x2-mandatory patterns:
 - Bidder has Belote (K+Q of trump, +20 multiplier-immune).
 - Bidder has 5+ trumps total.
 
-> **TODO from videos:** Saudi tournaments often see Bel x2 in
-> situations bot would consider weak. What hand patterns justify
-> "aggressive Bel x2"?
+### v1.4.2 video-mining update — Bel-x2 thresholds
+
+44-transcript scan for Bel-x2 "aggressive" hand-shape patterns.
+**Result: BLOCKED.** The only transcript covering Bel-x2 mechanics
+is `11_bel_beginners_extracted.md`, which treats Bel-x2 as a
+binary structural option (defender Bel'd, bidder either counters
+or accepts). Speaker quotes:
+
+> «اللي راح يفوز في هذه السكه راح يفوز في الجيم كامل»
+> (whoever wins this round wins the entire game)
+
+This emphasizes the stakes but provides ZERO hand-strength criteria.
+The transcript's own "Non-rule observations" section explicitly
+flags: "No discussion of Bel x2 / Four / Gahwa strength thresholds
+beyond restating 'doubles the prior multiplier'."
+
+**No other video** (videos 12-44, including `26_when_bid_hokm` R19
+that mentions "ما يخلونها قهوة" — "they don't let it reach Coffee")
+provides Bel-x2 hand-shape triggers. The "اglsavg" pacing/restraint
+observation isn't about *when* to call Bel-x2; it's about session-
+level conservatism.
+
+`K.BOT_TRIPLE_TH=82` (v1.3.4) remains a calibration-empirical value
+without video grounding. Any future tuning should be empirical.
+
+> **TODO from videos** (still BLOCKED after exhaustive scan):
+> - Saudi-pro Bel-x2 hand-shape triggers — no transcript exists.
+> - "Aggressive Bel-x2 on weak hands" pattern — no source.
+> - "Bel-x2 on J+9+meld" or similar quantified patterns — no source.
 
 ---
 
@@ -128,6 +181,42 @@ Gahwa-mandatory patterns:
 > — situations where Gahwa was right despite looking thin. Capture
 > patterns. Also: when is the *reckless* Gahwa correct (matchpoint
 > desperation vs likely-fail)?
+
+---
+
+## v1.4.2 video-mining update — Round-1 Bel restriction
+
+44-transcript scan for the round-1 anti-grief rule referenced in
+`decision-trees.md:91`. **Result: Common-tier evidence, single
+source, session-variant.**
+
+Source: `11_bel_beginners` decision rules row 6. Speaker:
+
+> «بعض الجلسات تمنع هذا الشيء»
+> (some sessions forbid this)
+
+Context: calling Bel (or Gahwa) on the very first round of a
+fresh match (score 0–0) is banned in some Saudi-table rule sets
+to prevent a sore-loser one-shot-killing the match via Gahwa on
+the opening bid. Speaker frames it as «تخرب اللعب» (spoiling the
+game) — anti-grief for fresh matches.
+
+**Variant**: NOT a universal rule. Speaker explicitly says some
+sessions enforce it, others don't.
+
+**Recommendation for bot default**: round-1 Bel/Gahwa restraint
+as the BEGINNER-FRIENDLY default. M3lm+ tier could allow override
+on extreme-strength hands. **DEFERRED** — implementation decision
+pending user direction:
+- Hard rule (always restrict round-1 Bel)?
+- Soft tier-gated (basic/advanced restrict; M3lm+ allow)?
+- Configurable WHEREDNGNDB.allowR1Bel toggle?
+
+The exact wording of the rule (whether "round 1 of the entire
+match" or "first sakkah") is not specified beyond "score 0–0 on
+fresh match." Cross-referenced in `40_cut_deal_rules` non-rule
+observations as an open question — confirms `11_bel_beginners`
+as the sole source.
 
 ---
 
