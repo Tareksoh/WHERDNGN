@@ -1047,14 +1047,14 @@ end
 function S.RecordOvercallDecision(seat, decision)
     if not s.overcall then return false end
     if not seat or seat < 1 or seat > 4 then return false end
-    -- Validate decision string. Existing strings: UPGRADE, TAKE, WAIVE.
-    -- v0.8 additions: TAKE_HOKM_<S|H|D|C> for cross-trump Hokm take.
+    -- Validate decision string. Valid: UPGRADE, TAKE, WAIVE.
+    -- v1.5.3: TAKE_HOKM_<suit> removed (non-canonical — Saudi rule per
+    -- saudi-rules.md:26-28 says first non-pass wins; non-bidder cross-
+    -- trump take never existed in canonical play). Wire-side gate too,
+    -- so any stale client emitting TAKE_HOKM is silently rejected.
     local valid = decision == "UPGRADE"
                   or decision == "TAKE"
                   or decision == "WAIVE"
-                  or (decision and decision:sub(1, 10) == "TAKE_HOKM_"
-                      and #decision == 11
-                      and ({S=true,H=true,D=true,C=true})[decision:sub(11, 11)])
     if not valid then return false end
     -- Once a seat decides, lock it in (no take-backs per the rule
     -- "once said WLA, locked out").
@@ -1090,18 +1090,11 @@ function S.FinalizeOvercall()
             -- Re-derive defender pair (mirrors S.ApplyContract).
             local oppA = result.by == 1 or result.by == 3
             s.belPending = oppA and { 2, 4 } or { 1, 3 }
-        elseif result.type == "TAKE_HOKM" then
-            -- v0.8 cross-trump take: non-bidder takes as their own
-            -- Hokm with a different trump suit. result.trump carries
-            -- the chosen suit. Contract type remains Hokm (no Sun
-            -- multiplier change), bidder becomes taker, trump is
-            -- rewritten. Defender pair re-derived as for TAKE.
-            s.contract.type   = K.BID_HOKM
-            s.contract.trump  = result.trump
-            s.contract.bidder = result.by
-            local oppA = result.by == 1 or result.by == 3
-            s.belPending = oppA and { 2, 4 } or { 1, 3 }
         end
+        -- v1.5.3: TAKE_HOKM branch removed. R.ResolveOvercall no longer
+        -- emits "TAKE_HOKM"; if stale state somehow surfaces one, the
+        -- result.taken flag still fires but no contract mutation occurs
+        -- (defaults to no-op, Hokm stands).
     end
     s.overcall = nil
     s.phase = K.PHASE_DOUBLE

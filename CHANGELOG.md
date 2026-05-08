@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.5.3 — Remove non-canonical TAKE_HOKM cross-trump overcall
+
+User-reported: "when someone bids hokm in bidding round 1, how come
+the dealer can bid switch to hokm 2 with different suit??"
+
+### What was happening
+
+In the post-Hokm-bid 5-second overcall window (`PHASE_OVERCALL`), the
+v0.8.0 "cross-trump Hokm take" feature let any non-bidder seat submit
+decision `TAKE_HOKM_<S/H/D/C>` to **rewrite the contract** — replacing
+both the bidder seat and the trump suit. The dealer (or any non-bidder)
+could effectively snatch a Hokm contract from the legitimate winner
+and play it with their own preferred trump.
+
+### Why it was wrong
+
+`docs/strategy/saudi-rules.md:26-28` (the canonical Saudi rule):
+
+> **Bid resolution:** First non-pass wins the contract; subsequent
+> players can `PASS`, accept silently, or call `ASHKAL` if they're
+> the partner of the Hokm-bidder and prefer to play it as Sun.
+
+Three legitimate post-Hokm responses: PASS, ACCEPT, ASHKAL. **A non-
+bidder snatching the contract with a different trump suit is not in
+Saudi convention.** That's what round 2 is for: pass round 1 if you
+don't like the up-card; bid your suit when round 2 starts.
+
+The feature was added in commit `a48fe34` (v0.8.0) as a "symmetric
+extension" of v0.7.0's Sun-overcall window — **with no Saudi-rule
+citation**, no video, no decision-trees entry, no saudi-rules.md
+mention. The Sun-overcall window itself (UPGRADE bidder→Sun, TAKE
+non-bidder→Sun) IS canonical and remains intact (saudi-rules.md:256
+✓).
+
+### Fix
+
+Removed TAKE_HOKM_<suit> end-to-end:
+
+- **Rules.lua** `R.ResolveOvercall`: dropped TAKE_HOKM_<suit> branch.
+  Function now resolves UPGRADE / TAKE / WAIVE only.
+- **State.lua** `S.RecordOvercallDecision`: validity check rejects
+  any TAKE_HOKM-prefixed decision.
+- **State.lua** `S.FinalizeOvercall`: dropped TAKE_HOKM contract-
+  mutation branch.
+- **Net.lua** `N.LocalOvercall`: same wire-side validity gate (silent
+  reject — stale clients on v0.8.0+ that emit TAKE_HOKM are dropped
+  at the wire so the host never accepts them either).
+- **UI.lua**: removed the "Take as Hokm <suit>" button + 30-line
+  `bestHokmTake()` heuristic + the corresponding "decided" label
+  branch. The overcall window now shows: Take as Sun / WLA only
+  (plus UPGRADE for the bidder).
+- **Bot.lua** `Bot.PickOvercall`: collapsed the per-suit Hokm-take
+  evaluation. Non-bidder bot now picks TAKE (Sun, if `sunStr >=
+  K.BOT_OVERCALL_TAKE_TH`) or WAIVE.
+- **Constants.lua**: removed `K.BOT_OVERCALL_TAKE_HOKM_TH`.
+- **Tests**: rewrote `test_rules.lua` P.23-P.29 + added P.30 to
+  assert TAKE_HOKM_<suit> is silently rejected; rewrote
+  `test_state_bot.lua` H.15-H.17 with new rejection coverage.
+
+### Tests
+
+819/819 pass (was 828 — 9 cross-trump-take regression pins removed).
+
+### Stale-client compatibility
+
+A client running v0.8.0–v1.5.2 that hasn't updated to v1.5.3 will
+still **emit** `TAKE_HOKM_<suit>` from its UI, but every host
+running v1.5.3 silently drops it (wire-side validity gate). Net
+effect: the stale client's "Take as Hokm <suit>" button no-ops and
+the Hokm contract stands. No desync.
+
 ## v1.5.2 — Easter egg hotfix (photo swap + aspect-preserving overlay)
 
 User swapped the bundled Easter photo (the v1.5.1 image was wrong)

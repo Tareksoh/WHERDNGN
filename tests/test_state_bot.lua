@@ -1519,56 +1519,45 @@ do
     assertEq(pick, "WAIVE", "H.14: M3lm bidder + weak hand → WAIVE")
     S.FinalizeOvercall()
 
-    -- H.15: v0.8 cross-trump TAKE_HOKM resolution.
-    -- Bidder Hokm-C, non-bidder seat 3 has Hokm-strong cards in S
-    -- (different suit). Should TAKE_HOKM_S, contract becomes Hokm-S
-    -- with bidder=3.
+    -- v1.5.3: H.15 / H.16 / H.17 rewritten — TAKE_HOKM_<suit> removed
+    -- (saudi-rules.md:26-28; non-canonical cross-trump non-bidder take).
+    -- Replaced with rejection regression pins.
+
+    -- H.15: Bot non-bidder with Hokm-strong cross-trump hand → WAIVE.
+    -- Pre-v1.5.3 this picked TAKE_HOKM_S; v1.5.3 collapses to TAKE-or-
+    -- WAIVE. Same hand setup; with no Sun shape the bot waives.
     setup(1, "C", false, "9C", 4)
     S.BeginOvercall("9C", 4)
-    -- Seat 3's hand: J+9+A+T+K of Spades + 3 low side cards =
-    -- score 20+14+11+10+4 = 59 base; count=5 → +(5-2)*5 = 15 dist;
-    -- J+9 synergy +18 (Advanced) = 92. Above BOT_OVERCALL_TAKE_HOKM_TH=80.
-    -- Sun strength: 5 hi cards of one suit but only 3 suits total =
-    -- distribution penalty + low non-Spade Aces. Should pick Hokm.
     S.s.hostHands = {
         [1] = { "JC","9C","AC","TC","KC","QC","8C","7C" },  -- bidder Hokm-C strong
         [2] = { "JH","9H","KH","QH","8H","7H","JD","9D" },
-        [3] = { "JS","9S","AS","TS","KS","8H","7D","8D" },  -- Hokm-S strong
-        [4] = { "AH","TH","AD","TD","QS","JC","QD","KD" },  -- arbitrary
+        [3] = { "JS","9S","AS","TS","KS","8H","7D","8D" },  -- Hokm-S strong, weak Sun
+        [4] = { "AH","TH","AD","TD","QS","JC","QD","KD" },
     }
     pick = Bot.PickOvercall(3)
-    assertEq(pick, "TAKE_HOKM_S",
-             "H.15: M3lm non-bidder + Hokm-S strong → TAKE_HOKM_S")
-    -- Resolve and verify contract rewrite.
-    S.RecordOvercallDecision(3, "TAKE_HOKM_S")
-    S.RecordOvercallDecision(1, "WAIVE")
-    S.RecordOvercallDecision(2, "WAIVE")
-    S.RecordOvercallDecision(4, "WAIVE")
-    res = S.FinalizeOvercall()
-    assertEq(res.taken, true,                     "H.15: TAKE_HOKM resolved as taken")
-    assertEq(res.type,  "TAKE_HOKM",              "H.15: result.type=TAKE_HOKM")
-    assertEq(res.trump, "S",                      "H.15: result.trump=S")
-    assertEq(S.s.contract.type,   K.BID_HOKM,     "H.15: contract.type stays Hokm")
-    assertEq(S.s.contract.trump,  "S",            "H.15: contract.trump rewritten to S")
-    assertEq(S.s.contract.bidder, 3,              "H.15: contract.bidder rewritten to 3")
-    assertEq(S.s.phase,           K.PHASE_DOUBLE, "H.15: phase advanced")
-
-    -- H.16: lock-out with TAKE_HOKM decision.
-    setup(1, "C", false, "9C", 4)
-    S.BeginOvercall("9C", 4)
-    local first = S.RecordOvercallDecision(2, "TAKE_HOKM_S")
-    local second = S.RecordOvercallDecision(2, "WAIVE")
-    assertEq(first,  true,  "H.16: TAKE_HOKM_S recorded")
-    assertEq(second, false, "H.16: lock-out — second decision rejected")
-    assertEq(S.s.overcall.decisions[2], "TAKE_HOKM_S", "H.16: TAKE_HOKM_S preserved")
+    assertEq(pick, "WAIVE",
+             "H.15 (v1.5.3): cross-trump Hokm-strong hand → WAIVE (TAKE_HOKM removed)")
     S.FinalizeOvercall()
 
-    -- H.17: invalid TAKE_HOKM_<bad-suit> rejected at RecordOvercallDecision.
+    -- H.16: TAKE_HOKM_<suit> rejected at RecordOvercallDecision.
+    setup(1, "C", false, "9C", 4)
+    S.BeginOvercall("9C", 4)
+    assertEq(S.RecordOvercallDecision(2, "TAKE_HOKM_S"), false,
+             "H.16 (v1.5.3): TAKE_HOKM_S rejected at RecordOvercallDecision")
+    assertEq(S.s.overcall.decisions[2], nil,
+             "H.16 (v1.5.3): no decision recorded for rejected TAKE_HOKM_S")
+    S.FinalizeOvercall()
+
+    -- H.17: invalid TAKE_HOKM variants still rejected (defense in depth).
     setup(1, "C", false, "9C", 4)
     S.BeginOvercall("9C", 4)
     assertEq(S.RecordOvercallDecision(2, "TAKE_HOKM_X"), false, "H.17a: bad suit X rejected")
     assertEq(S.RecordOvercallDecision(2, "TAKE_HOKM_"),  false, "H.17b: missing suit rejected")
     assertEq(S.RecordOvercallDecision(2, "TAKE_HOKM"),   false, "H.17c: no _-suffix rejected")
+    assertEq(S.RecordOvercallDecision(2, "TAKE_HOKM_C"), false,
+             "H.17d (v1.5.3): TAKE_HOKM_C — same as current trump rejected")
+    assertEq(S.RecordOvercallDecision(2, "TAKE_HOKM_H"), false,
+             "H.17e (v1.5.3): TAKE_HOKM_H — different suit also rejected (cross-trump removed)")
     S.FinalizeOvercall()
 end
 

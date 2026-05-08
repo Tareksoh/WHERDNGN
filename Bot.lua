@@ -7232,44 +7232,17 @@ function Bot.PickOvercall(seat)
         return "WAIVE"
     end
 
-    -- Non-bidder: choose between TAKE (as Sun) and TAKE_HOKM_<suit>
-    -- (v0.8 cross-trump Hokm take). Evaluate each candidate; pick
-    -- the strongest contract type that clears its threshold.
+    -- Non-bidder: TAKE (as Sun) or WAIVE.
     --
-    -- Sun takes use sunStrength against BOT_OVERCALL_TAKE_TH.
-    -- Hokm-take suits (excluding bidder's current trump) use
-    -- suitStrengthAsTrump against BOT_OVERCALL_TAKE_HOKM_TH.
-    -- We compare RAW strength scores across types — sunStr and
-    -- trump-strength share the same "strength score" scale via the
-    -- existing escalation formulas, so highest wins.
-    local bestType, bestScore = "WAIVE", -1
-    if sunStr >= K.BOT_OVERCALL_TAKE_TH and sunStr > bestScore then
-        bestType, bestScore = "TAKE", sunStr
+    -- v1.5.3 (user-reported, saudi-rules.md:26-28): TAKE_HOKM_<suit>
+    -- evaluation removed. Cross-trump non-bidder take is non-canonical
+    -- — the canonical Saudi response to a Hokm bid is PASS, ACCEPT, or
+    -- ASHKAL (partner-only). Sun-overcall (TAKE) remains, since
+    -- "Sun overcalls Hokm" is documented at saudi-rules.md:256.
+    if sunStr >= K.BOT_OVERCALL_TAKE_TH then
+        return "TAKE"
     end
-    for _, suit in ipairs(shuffledSuits()) do
-        if suit ~= contract.trump then
-            -- v0.11.16 BC-1: include bidcard in cross-trump-Hokm shape +
-            -- strength evaluation (parallels R2 Hokm path).
-            local trumpStr, trumpCnt = suitStrengthAsTrump(hypHand, suit)
-            -- Saudi minimum-Hokm shape gate (mirror of B-1 from
-            -- pickBid): require J of trump + count >= 3 to even
-            -- consider taking this as Hokm. Without this gate the
-            -- threshold can be cleared by side-suit-Ace stacking on
-            -- a hand with no actual trump support.
-            local hasJ = false
-            for _, c in ipairs(hypHand) do
-                if C.Suit(c) == suit and C.Rank(c) == "J" then
-                    hasJ = true; break
-                end
-            end
-            if hasJ and trumpCnt >= 3
-               and trumpStr >= K.BOT_OVERCALL_TAKE_HOKM_TH
-               and trumpStr > bestScore then
-                bestType, bestScore = "TAKE_HOKM_" .. suit, trumpStr
-            end
-        end
-    end
-    return bestType
+    return "WAIVE"
 end
 
 function Bot.PickKawesh(seat)

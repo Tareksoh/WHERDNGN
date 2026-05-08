@@ -703,10 +703,7 @@ end
 --   decisions  : {[seat] = decision | nil}
 --                Decision strings:
 --                  "UPGRADE"          — bidder upgrades own Hokm to Sun
---                  "TAKE"             — non-bidder takes as Sun (legacy alias)
---                  "TAKE_HOKM_<suit>" — non-bidder takes as Hokm with trump
---                                       suit (v0.8). Suit ∈ {S,H,D,C} and
---                                       must NOT match bidder's current trump.
+--                  "TAKE"             — non-bidder takes as Sun
 --                  "WAIVE"            — decline (also nil = WAIVE on timeout)
 --   contract   : current contract table (Hokm).
 --   bidCard    : the R1 bid card, or nil for R2.
@@ -715,13 +712,19 @@ end
 --   { taken = false }                                                   — Hokm stands.
 --   { taken = true, by = N, type = "UPGRADE" }                          — bidder upgrade.
 --   { taken = true, by = N, type = "TAKE" }                             — N takes as Sun.
---   { taken = true, by = N, type = "TAKE_HOKM", trump = "<suit>" }      — N takes as Hokm.
 -- Priority: bidder UPGRADE wins if eligible & decided; otherwise
--- earliest-in-bid-order taking-decision among non-bidder seats wins
--- (TAKE and TAKE_HOKM_<suit> share priority; bid order is the
--- discriminator regardless of contract type chosen). Bid order starts
--- at the seat to dealer's right (Saudi anticlockwise convention) and
--- proceeds through 4 seats.
+-- earliest-in-bid-order TAKE among non-bidder seats wins. Bid order
+-- starts at the seat to dealer's right (Saudi anticlockwise convention)
+-- and proceeds through 4 seats.
+--
+-- v1.5.3 (user-reported, saudi-rules.md:26-28): removed TAKE_HOKM_<suit>
+-- branch. Saudi rule "first non-pass wins; subsequent players can PASS,
+-- accept silently, or call ASHKAL" rules out a non-bidder snatching the
+-- contract with a different trump suit. The v0.8.0 cross-trump take was
+-- a "feels symmetric" extension with no Saudi-rule citation. The
+-- canonical mechanism for "I want different trump" is to pass round 1
+-- and bid your suit in round 2. Sun-overcall (UPGRADE / TAKE) remains —
+-- it's documented as canonical at saudi-rules.md:256.
 function R.ResolveOvercall(decisions, contract, bidCard, dealerSeat)
     if not contract or not decisions or not dealerSeat then
         return { taken = false }
@@ -733,22 +736,12 @@ function R.ResolveOvercall(decisions, contract, bidCard, dealerSeat)
        and R.CanOvercall(bidder, contract, bidCard) then
         return { taken = true, by = bidder, type = "UPGRADE" }
     end
-    -- Non-bidder TAKE / TAKE_HOKM_<suit> in bid order.
+    -- Non-bidder TAKE (Sun) in bid order.
     local s = R.NextSeat(dealerSeat)
     for _ = 1, 4 do
         if s ~= bidder and R.CanOvercall(s, contract, bidCard) then
-            local d = decisions[s]
-            if d == "TAKE" then
+            if decisions[s] == "TAKE" then
                 return { taken = true, by = s, type = "TAKE" }
-            elseif d and d:sub(1, 10) == "TAKE_HOKM_" then
-                local suit = d:sub(11, 11)
-                -- Validate suit and reject same-as-current-trump (no
-                -- point taking the same Hokm). Invalid → treat as WAIVE.
-                if (suit == "S" or suit == "H" or suit == "D" or suit == "C")
-                   and suit ~= contract.trump then
-                    return { taken = true, by = s, type = "TAKE_HOKM",
-                             trump = suit }
-                end
             end
         end
         s = R.NextSeat(s)

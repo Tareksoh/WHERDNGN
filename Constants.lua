@@ -606,13 +606,10 @@ K.SUN_BEL_CUMULATIVE_GATE = 100
 -- effective points if you fail.
 K.BOT_OVERCALL_SELF_TH = 75   -- bidder upgrade Hokm→Sun threshold
 K.BOT_OVERCALL_TAKE_TH = 80   -- non-bidder take-as-Sun threshold
--- v0.8 Hokm cross-trump take threshold. A non-bidder seat may also
--- take the contract as their OWN Hokm (different trump suit) within
--- the same 5s window. The threshold is per-suit suitStrengthAsTrump
--- against the bidder's current trump (which the taker rejects). Keep
--- close to OVERCALL_TAKE_TH so cross-trump-Hokm takes are roughly as
--- demanding as a Sun take.
-K.BOT_OVERCALL_TAKE_HOKM_TH = 80
+-- v1.5.3: K.BOT_OVERCALL_TAKE_HOKM_TH removed. The v0.8 cross-trump
+-- Hokm-take feature it gated was non-canonical (saudi-rules.md:26-28);
+-- non-bidder seats can no longer take the contract with a different
+-- Hokm trump suit. Sun-overcall (UPGRADE / TAKE) remains.
 
 -- v1.0.3 (U-8): AKA late-round clutch threshold. Bot.PickAKA fires AKA
 -- on tricks 6-8 only when the round is "decisive" — opp near-win,
