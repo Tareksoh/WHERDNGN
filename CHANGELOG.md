@@ -1,5 +1,158 @@
 # Changelog
 
+## v1.4.0 — Strategy-doc audit + Saudi-pro convention fixes
+
+A cross-validation agent reviewed the v1.3.x release work against
+canonical Saudi-pro convention (`docs/strategy/*.md` + 41 video
+transcripts in `docs/strategy/_transcripts/`). The agent found
+that **most "TODOs" the prior scanner flagged were STALE** — already
+wired in older releases. True remaining work was much smaller. v1.4.0
+ships the principled fixes from the audit plus deferred items
+documented for follow-up.
+
+### Glossary corrections (user-reported)
+
+`docs/strategy/glossary.md` had wrong suit mappings:
+
+- **shareeha/shareer** (الشريه) was listed as Hearts — actually
+  **Spades**. Spelling also corrected from الشريحه → الشريه (no ح).
+- **haas/haaws** (الهاص) was listed as "Clubs (best guess)" —
+  actually **Hearts**. Spelling corrected from الهاس → الهاص (saad,
+  not seen).
+- **Clubs (♣)** is now an **OPEN QUESTION** — the previous "haas =
+  Clubs" was misattribution. No confirmed Saudi slang for Clubs
+  in any video transcript yet; flagged for separate research pass.
+- **dayma/dayman** (الديمن) confirmed Diamonds (canonical spelling
+  noted).
+- **sbeet/sbeed/sbeel** confirmed Spades (alternate slang, unchanged).
+
+Verified: no code references the slang names; only the glossary did.
+
+### Reverse Al-Kaboot doc unit-error (Concern 2)
+
+`decision-trees.md:206` previously said "+88 raw to defending team"
+implying raw points before contract multiplier. That was wrong:
+`K.AL_KABOOT_REVERSE = 880` (Constants.lua:170) is the post-multiplier
+flat value yielding +88 banta because `cardMult` is bypassed. **Code
+is correct; doc had a unit-error.** Doc updated to clarify the +88
+banta semantics with `cardMult`-bypass note. Fully wired since v0.10.5
+(Rules.lua:960-1023) with v1.0.12 4-condition canonical gate.
+
+### bot-personalities.md probabilistic SWA contradiction (Concern 3)
+
+Personalities table at line 167 said "Probabilistic SWA: Yes (via
+ISMCTS)" for Saudi Master tier — but `decision-trees.md:208`
+explicitly RETRACTED probabilistic SWA per video #35 ("ما تساوي بدون
+ما تستاذن مستحيل يمشونها"). Anyone using personalities.md as
+implementation spec would wire a behavior that's forbidden.
+
+**Fix**: marked the row RETRACTED with cross-reference to the
+decision-trees retraction. Saudi convention is deterministic-only
+SWA at every tier; bots must NOT generate sub-100%-certain SWA
+claims.
+
+### Faranka pos-4 anti-trigger row 167 (Concern 5)
+
+`Bot.lua:3995+` Faranka block fired when `hasA + cover + suitCount==2`
+but missed the **anti-trigger when bot holds the two highest unplayed**
+of led suit. In that case "ducking" with cover wouldn't actually duck
+— cover would beat partner's winning card, taking the trick from
+partner. Faranka becomes meaningless.
+
+**Fix**: added `holdsTopTwoUnplayed` predicate using
+`S.s.playedCardsThisRound` to walk the rank order and find the two
+highest unplayed in led suit. If bot's cover rank matches the
+second-highest unplayed (and bot holds A which is the top), skip
+Faranka and fall through to smother (next branch) which correctly
+donates A to partner-winning trick. Per video #06 anti-trigger row.
+
+### T-sacrifice Saudi Master tier gate
+
+`Bot.lua:5311+` deceptiveOverplay fallback `return higher[math.random()]`
+could pick T (10) of led suit at any Advanced+ tier when no J was
+found. But per `bot-personalities.md:161`, T-sacrifice is **Saudi
+Master ONLY** ("only a real pro plays this"). M3lm and Fzloky
+firing the T fallback violated tier-spec.
+
+**Fix**: gate the random `higher[]` fallback on
+`Bot.IsSaudiMaster()`. Lower tiers fall through to canonical
+non-deceptive play when no J is available.
+
+### Concern 1 — Tahreeb sender contradiction documented (NOT reverted)
+
+The validation agent found that `Bot.lua:4373-4396` ("want" sender
+arm, v0.9.0, Definite-tagged citing video 10) emits the bottom-up
+ascending signal from a suit that has A or T. But **video #1 form
+5** explicitly says bottom-up = "want, no Ace" (substitutes for
+Bargiya when no Ace held), and **video #3** says "Tahreeb a WEAK
+suit, partner returns the OPPOSITE-color/shape suit which is the
+strong one you withheld." Both indicate bottom-up should fire from
+a WEAK suit, not a strong one.
+
+This is a **single-source contradiction with current Definite-tagged
+v0.9.0 wiring**. User flagged as "not straightforward" — needs
+cross-video reconciliation. v1.4.0 adds a code comment at
+`Bot.lua:4373` flagging the discrepancy and explicitly DEFERS the
+behavioral reversal pending more analysis. Doc row at
+`decision-trees.md:222` updated with the same flag.
+
+### Doc cleanup — STALE markers (most "TODOs" already wired)
+
+The prior TODO scanner over-flagged because docs lag code. v1.4.0
+audit cross-referenced each `(not yet wired)` marker against current
+code state. Confirmed STALE (already wired in older releases) and
+updated:
+
+- **Bel-100 Sun gate** (`R.CanBel`) — wired since v0.10.0 R1
+- **Reverse Al-Kaboot scoring** — wired since v0.10.5 + v1.0.12
+- **Al-Kaboot pursuit trick-3 trigger** — wired since v0.5.19 + v1.0.3
+- **Bargiya sender** — wired v0.9.0 + v1.0.3 + v1.2.1 G7
+- **T-4 dump-ordering** — wired v0.5.10 + v0.5.11
+- **Implicit AKA on bare-Ace lead** — wired v0.5.16 + v0.11.18-final U-1
+- **pickFollow non-trump-discard preference** — wired v0.11.19 U-6
+- **Round-1 conservative pass bias** — wired v1.1.0 MED-10 + v1.2.2
+- **Sun ATmardoofa check** — `sunMinShape()` Bot.lua:1047-1063
+- **Bel-fear score-state bias** — wired v0.6.0 B-7 → v1.2.1 jitter
+- **Ashkal 85-pivot to direct Sun** — `Bot.PickAshkal` Bot.lua:1808+
+- **Min-Hokm-bid explicit check** — `hokmMinShape()` already gates
+- **Deceptive overplay Sun + Hokm** — wired v1.1.0 + v1.2.1
+- **Most Tahreeb sender + receiver branches** — wired v0.5.10
+  through v0.11.16
+
+### Deferred to v1.4.x
+
+The audit also identified items that are genuinely valid TODOs but
+require deeper design or video research:
+
+- **Tahreeb sender row 225 reversal** (Concern 1) — single-source
+  contradiction with current code; needs cross-video evidence
+- **Takbeer/Tasgheer certainty gate** (rows 123-128, Concern 4) —
+  qualitative video sources; pos-4 case largely covered by smother
+  + lowest-on-opp-winning, but explicit pos-3/pos-2 certainty
+  predicate needs design
+- **Tahreeb receiver row 238** — high-card-return discipline when
+  forced into Tahreeb-suit
+- **Tahreeb receiver row 240** — release-control re-supply
+- **Touching-honors inference ledger** — new `toptouchSignal` ledger
+  key + Fzloky-tier consumers
+- **Sabotage-own-sweep** — single-source video #15, ambiguous
+  implementation magnitude
+- **Bel-mandatory hand patterns** + **Bel-x2 aggressive patterns** —
+  blocked on video research
+- **`escalation.md` stub population** — video sources don't supply
+  hand-strength thresholds; calibration is empirical
+- **`opening-leads.md` stub population** — needs video transcript
+  mining
+- **bot-personalities.md tier flavors** + **Saudi Master signature
+  moves enumeration** — needs video research
+
+### Tests
+
+828/828 pass. Faranka anti-trigger fix doesn't affect existing
+fixtures (the precondition is more restrictive, only kicks in on
+specific board states). T-sacrifice gate change is a tier-narrowing
+that doesn't break source-pin tests.
+
 ## v1.3.5 — Random first dealer with dice-roll banner
 
 Pre-v1.3.5: at game start, dealer was hardcoded to seat 1

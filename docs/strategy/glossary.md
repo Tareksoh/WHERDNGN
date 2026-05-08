@@ -347,9 +347,10 @@ is significant inter-speaker variation** — flagged below.
 | Arabic | Suit | Variation |
 |---|---|---|
 | السبيت / السبيد / السبيل (sbeet / sbeed / sbeel) | **Spades (♠)** | Multiple spellings, same suit. |
-| الهاس / الهاوس (haas / haus) | **Clubs (♣)** — best guess | Inconsistent; may be Hearts in some videos. Cross-reference example structure. |
-| الشريحه / شرير (shareeha / shareer) | **Hearts (♥)** | Multiple spellings. |
-| الدايمه / دايمن (dayma / dayman) | **Diamonds (♦)** | Stable. |
+| الشريه / شرير (shareeha / shareer) | **Spades (♠)** | Alternate slang for Spades. **v1.3.6 user-correction**: previously listed as Hearts in the glossary — that was wrong. Spelling also corrected from الشريحه → الشريه (no ح). |
+| الهاص / الهاوس (haas / haaws) | **Hearts (♥)** | **v1.3.6 user-correction**: previously listed as "Clubs (best guess)" — that was wrong. Spelling also corrected from الهاس → الهاص (saad, not seen). |
+| الديمن / دايمن (dayma / dayman) | **Diamonds (♦)** | Stable. Spelling note: الديمن is the canonical form. |
+| **Clubs (♣)** — Saudi slang | **OPEN QUESTION** | The previous glossary's "haas = Clubs (best guess)" was a misattribution; the user has now confirmed haas = Hearts. There is no confirmed Saudi-table slang for Clubs in any video transcript yet. Worth a separate research pass. |
 
 > **Rule for transcripts:** when a card-name or suit-name conflict
 > arises in extraction, the **example structure** (rank order,

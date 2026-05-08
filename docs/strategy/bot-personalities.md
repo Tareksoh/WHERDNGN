@@ -164,11 +164,19 @@ The bot needs play-signature differences. Per video extraction:
 | Reads touching-honors signaling | No | No | Yes | Yes | Yes |
 | Pigeonhole trump-pin (full extension of H-1) | No | No | No | Yes | Yes |
 | Per-partner conventionAdherence calibration | No | No | No | Yes | Yes |
-| Probabilistic SWA (sub-100% certain) | No | No | No | No | Yes (via ISMCTS) |
+| Probabilistic SWA (sub-100% certain) | **RETRACTED** — Saudi-strict deterministic-only SWA per video #35; see decision-trees.md:208 | | | | |
 
 This table is the **operational tier-distinguishing spec**. When
 implementing a new heuristic, gate it by tier consistent with this
 table.
+
+> **v1.4.0 doc fix**: the previous "Probabilistic SWA — Yes (via ISMCTS) at Saudi Master" entry directly contradicted the
+> retraction in `decision-trees.md:208`. Per video #35
+> ("ما تساوي بدون ما تستاذن مستحيل يمشونها"),
+> Saudi convention is deterministic-only SWA at every tier. Bots
+> must NOT generate sub-100%-certain SWA claims — including Saudi
+> Master via ISMCTS. The row above is preserved as a marker so
+> readers don't re-introduce the bug from the table.
 
 ---
 

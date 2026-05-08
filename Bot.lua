@@ -4002,11 +4002,38 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
         end
+        -- v1.4.0 (Concern 5 audit fix — Faranka anti-trigger row 167):
+        -- if we hold the TWO HIGHEST UNPLAYED of led suit, "ducking"
+        -- with cover wouldn't actually duck — cover would beat the
+        -- highest already-played card (since nothing in opp's hand is
+        -- higher than our cover by definition). Faranka becomes
+        -- meaningless: we'd take the trick from partner and have
+        -- no follow-up advantage. Fall through to smother (next
+        -- branch) which correctly donates A to partner-winning
+        -- trick. Per decision-trees.md row 167 (video #06).
+        local holdsTopTwoUnplayed = false
+        if hasA and cover and S.s.playedCardsThisRound then
+            local plainOrder = { "A", "T", "K", "Q", "J", "9", "8", "7" }
+            local firstUnplayed, secondUnplayed = nil, nil
+            for _, r in ipairs(plainOrder) do
+                if not S.s.playedCardsThisRound[r .. lead] then
+                    if not firstUnplayed then
+                        firstUnplayed = r
+                    else
+                        secondUnplayed = r; break
+                    end
+                end
+            end
+            if secondUnplayed and C.Rank(cover) == secondUnplayed then
+                holdsTopTwoUnplayed = true
+            end
+        end
         -- Faranka fires when:
         --   • We have A + a cover (T or K) of led suit.
         --   • Exactly 2 cards in led suit (rule 4 anti-trigger).
         --   • Bidder-team only (rule 9 anti-trigger).
-        if hasA and cover and suitCount == 2 then
+        --   • Anti-trigger row 167 (v1.4.0): NOT holding top 2 unplayed.
+        if hasA and cover and suitCount == 2 and not holdsTopTwoUnplayed then
             -- v1.2.1 (A7 audit): probabilistic Faranka. Pre-fix this
             -- fired deterministically on the 4-condition shape; opp
             -- who saw bot Faranka with [A♥,T♥] once learned bot
@@ -4359,6 +4386,22 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- Subsequent events naturally produce the "high" half of
             -- the pattern because the lowest is now gone.
             -- Fires BEFORE T-4 so want suits win over doubleton dump.
+            --
+            -- ⚠ v1.4.0 audit-flagged contradiction with video #03:
+            -- video #1 form 5 (bottom-up = "want, no Ace") and video
+            -- #3 (Tahreeb a WEAK suit, partner returns opposite color
+            -- and that's your STRONG suit) both indicate the bottom-up
+            -- ascending signal should fire from a WEAK suit (no A/T),
+            -- not from a STRONG suit holding A/T. Current code emits
+            -- bottom-up from a suit WITH A or T — receiver reading the
+            -- signal would deduce "partner wants this suit, no Ace"
+            -- but partner DOES have A. This may mislead.
+            --
+            -- DEFERRED: reversing this is delicate (game-feel change,
+            -- single-source contradiction with current Definite-tagged
+            -- v0.9.0 wiring citing video 10). User flagged as "not
+            -- straightforward" — needs cross-video reconciliation.
+            -- Tracked as v1.4.x decision item; do NOT silently flip.
             -- v0.11.18-final U-2 (ultra audit): Sun-only gate. Per
             -- decision-trees.md Section 8 every sender row is tagged
             -- "Sun, partner winning; ...". The Bargiya branch above
@@ -5285,10 +5328,27 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         -- Pick the deceptive overplay card. Prefer
                         -- the "Shayb" (J of non-trump suit, since
                         -- trump-J is excluded above) per video #08.
+                        --
+                        -- v1.4.0 (T-sacrifice tier-gate audit fix):
+                        -- pre-fix, if no J was in `higher` the fallback
+                        -- picked a random card from `higher` — which
+                        -- could be the T (10) of the led suit. Per
+                        -- bot-personalities.md:161, T-sacrifice is
+                        -- "Saudi Master ONLY" ("only a real pro plays
+                        -- this"). At M3lm and Fzloky tiers, the
+                        -- T-sacrifice fallback violated the tier-spec.
+                        -- Now: if no J found, only Saudi Master tier
+                        -- proceeds with the higher[] random fallback;
+                        -- lower tiers fall through to the canonical
+                        -- non-deceptive play below.
                         for _, c in ipairs(higher) do
                             if C.Rank(c) == "J" then return c end
                         end
-                        return higher[math.random(#higher)]
+                        if Bot.IsSaudiMaster and Bot.IsSaudiMaster() then
+                            return higher[math.random(#higher)]
+                        end
+                        -- Lower tiers: skip T-sacrifice fallback,
+                        -- fall through to canonical play.
                     end
                 end
             end
