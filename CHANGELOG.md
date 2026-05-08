@@ -1,5 +1,66 @@
 # Changelog
 
+## v1.4.7 — Code cleanup (282 lines saved, behavior preserved)
+
+After the 16-release audit cycle (v1.3.0 → v1.4.6) accumulated
+multi-paragraph audit-history comments, this release condenses
+them. Goal: reduce clutter without affecting bot outcome.
+
+### Method
+
+Identified comment blocks ≥18 lines (the worst offenders). Each
+was condensed to retain:
+- Source citation (video #, decision-trees.md ref)
+- Confidence level (Definite / Common / Sometimes)
+- Behavior summary
+- Tier gating
+
+Removed:
+- Full audit dialogue history (kept canonical conclusion)
+- Stale "v0.X.X" trajectory traces (kept current state)
+- Long auditor quotes from earlier releases
+- Multi-paragraph deferral rationales for items already resolved
+
+### Blocks consolidated
+
+| Location | Before | After | Saved |
+|---|---:|---:|---:|
+| Tahreeb sender comment block | 137 lines | 16 lines | -121 |
+| Pos-2 breaker history | 38 lines | 14 lines | -24 |
+| Sun establishing rule | 37 lines | 19 lines | -18 |
+| Faranka pos-4 history | 36 lines | 14 lines | -22 |
+| Mathlooth K-tripled history | 35 lines | 14 lines | -21 |
+| Hokm Faranka exceptions | 34 lines | 9 lines | -25 |
+| Defender J/9 trump-burn | 31 lines | 9 lines | -22 |
+| SWA-response comment | 27 lines | 8 lines | -19 |
+| Touching-honors inferences | 27 lines | 11 lines | -16 |
+| Hokm minimum shape | 26 lines | 7 lines | -19 |
+
+**Total Bot.lua: 7543 → 7261 (282 lines saved, 3.7% reduction)**
+
+### Source-pin test updates
+
+Two source-pin tests anchored on comment text that was condensed:
+- AI.8 (Mathlooth K-tripled trickle) — pin updated
+- AG.7a (J/9 trump-burn protection) — pin updated
+
+Both pins now anchor on the new shorter comment text. Tests
+remain functionally equivalent.
+
+### Tests
+
+828/828 pass. Zero behavioral change — all condensations were
+comment-only. Code logic byte-identical aside from the two pin
+updates above.
+
+### What was NOT cleaned up
+
+- `Bot.IsBotSeat`-based gates (recently restructured in v1.4.5;
+  current comments are accurate)
+- v1.4.x audit-citation comments (still useful provenance)
+- Function-level docstrings (kept terse and current)
+- Code logic itself (pure comment-only cleanup)
+
 ## v1.4.6 — Pos-2 breaker REMOVED (4-perspective audit consensus)
 
 After v1.4.5 raised the pos-2 breaker rate to 18%/25% per Codex's

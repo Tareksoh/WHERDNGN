@@ -535,33 +535,17 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
         style.leadCount[cardSuit] = (style.leadCount[cardSuit] or 0) + 1
     end
 
-    -- v0.9.0 Section 6 rules 1-4 (Definite, video 05): touching-
-    -- honors-down inferences. When `seat` plays in a trick led by
-    -- their PARTNER's Ace of the same suit (or AKA-led), Saudi
-    -- convention reads:
-    --   plays T  → seat HAS the K (rule 1)
-    --   plays K  → seat is K-singleton; Q AND J are ELSEWHERE (rule 2)
-    --   plays Q  → seat HAS the J (rule 3)
-    --   plays 7/8/9 → broke in the suit's high cards (rule 4)
-    --
-    -- v0.10.0 R6 fix (review_v0.10.0/reaudit_R6_touching_honors.md):
-    --   * K-signal interpretation was INVERTED. Pre-v0.10.0 set
-    --     `entry.nextDown = "Q"` — pinning Q to the seat that the
-    --     source EXPLICITLY says does NOT hold Q. Per video #05 lines
-    --     783-884: "Can he have Q or J? No, impossible — he would
-    --     have played those instead." K-played means K-singleton.
-    --     Use `entry.cleared = {"Q","J"}` to negative-bias instead.
-    --   * 9 added to broke handler (per Phase1-D R3e: "9/8/7 →
-    --     discourage further A-runs"; pre-v0.10.0 only handled 7/8).
-    --   * Trust-asymmetry note: writer remains symmetric (records
-    --     observation for any seat); the READER (BotMaster.lua)
-    --     applies the team-gate so opponent inferences don't
-    --     weaponize against the bot.
-    --
-    -- v0.9.2 #12 fix (audit_v0.9.0/12_touching_honors.md): activated
-    -- the previously dead branch by substituting `trickPlays` for the
-    -- undeclared `trick` variable. Without R6's K-fix the activation
-    -- turned dead-code-wrong into reachable-mispredicting-wrong.
+    -- Touching-honors-down inferences (Definite, video #05).
+    -- When seat plays in a trick led by their PARTNER's Ace (or
+    -- AKA-led), Saudi convention reads:
+    --   plays T → has the K              (entry.nextDown = "K")
+    --   plays K → K-singleton, no Q or J (entry.cleared = {"Q","J"})
+    --   plays Q → has the J              (entry.nextDown = "J")
+    --   plays 7/8/9 → broke in the suit  (entry.broke = true)
+    -- v0.10.0 R6 fixed inverted K interpretation (was pinning Q to
+    -- the seat that EXPLICITLY doesn't hold Q). Writer is symmetric;
+    -- reader (BotMaster.lua) applies team-gate so opp inferences
+    -- don't weaponize against the bot.
     if not wasIllegal and contract and trickPlays
        and #trickPlays >= 2 and style.topTouchSignal then
         local lead = trickPlays[1]
@@ -921,32 +905,14 @@ local function sideSuitAceBonus(hand, trumpSuit)
     return math.min(n, 3) * 8
 end
 
--- v0.5.8 patch B-1/B-4 (decision-trees.md Section 1, Hokm bidding):
--- the Saudi minimum-Hokm shape is "الحكم المغطى" — J of trump + ≥1
--- cover trump (مردوفة, so count >= 2) + ≥1 side Ace (B-1).
--- The B-2 escape clause: 4+ trumps including J is enough on its own,
--- side-Ace not required (trump-heavy hand is self-sufficient). The
--- absolute floor (B-4) is "no J OR count <= 2 → never bid Hokm".
--- Audit fix (post-v0.5.8 commit, before tag): the original gate
--- enforced only J + count >= 3 and missed the side-Ace requirement
--- of B-1 — a J + 2 trumps + 0 side-Ace hand passed the gate even
--- though it has no side trick power. Now correctly implements:
---   (count >= 4 AND hasJ)  ← B-2 self-sufficient
---   OR
---   (count == 3 AND hasJ AND hasSideAce)  ← B-1 minimum
--- Returns true if the minimum shape is met.
---
--- v0.10.0 X4/L07 fix (review_v0.10.0/xref_X4_pro2_deal.md):
--- Pro-2 PDF L07 says "Hokm bid REQUIRES Ace" as a defensive rule
--- against Sun-overcall, Kaboot, and 4-Hundred (Carré-A) by opp.
--- Per Phase 1 Source H this is STRATEGY (not a hard rule), so it's
--- tier-gated: M3lm+ enforces it; Basic/Advanced stay permissive.
--- Pre-v0.10.0 the `count >= 4` self-sufficient branch passed
--- without ANY Ace check — half-implemented L07. Now M3lm+ must
--- have at least ONE Ace anywhere in hand (side-suit OR trump-A).
---
--- Sources: decision-trees.md Section 1 rules B-1, B-2, B-4 (all
---   Definite, video 26); Pro-2 PDF L07 (review_v0.10.0).
+-- Hokm minimum shape «الحكم المغطى» (Definite, video #26).
+-- Returns true when:
+--   (count >= 4 AND hasJ)                    ← B-2 self-sufficient
+--   OR (count == 3 AND hasJ AND hasSideAce)  ← B-1 minimum
+-- Floor (B-4): no J or count <= 2 → never bid Hokm.
+-- M3lm+ also requires ≥1 Ace anywhere (Pro-2 PDF L07 defensive
+-- rule against Sun-overcall / Kaboot / Carré-A by opp; tier-gated
+-- as STRATEGY per Phase 1 Source H, not a hard rule).
 local function hokmMinShape(hand, suit)
     if not suit then return false end
     local hasJ, count = false, 0
@@ -3658,43 +3624,26 @@ local function pickLead(legal, contract, seat)
         end
     end
 
-    -- v1.4.3 (audit follow-up — Sun establishing «مسك اللون»).
-    -- Source: video #20 (control_game) Common-confidence rule.
-    -- Saudi pro convention: when you hold the top live card (typically
-    -- A) of a suit AND have ≥3 cards in that suit, LEAD that suit to
-    -- cash multiple tricks. Opponents' mid-cards fall on follow-ups;
-    -- after 1-2 cycles your K/J become bosses. Confirmed by video #6
-    -- anti-establishing rule: «ما تترنك اذا عندك اكثر من ورقتين …
-    -- العشره راح تنزل من اول حله» (don't Faranka if you have >2
-    -- cards in suit — T will fall naturally).
+    -- v1.4.3: Sun establishing «مسك اللون» + round-end T deferral.
+    -- Sources: video #20 (control_game), video #6 (faranka_in_sun),
+    -- video #9 (most_essential_tahreeb).
     --
-    -- Tahreeb integration: this is a LEAD heuristic; Tahreeb is a
-    -- FOLLOW heuristic — different code paths, no direct conflict.
-    -- forceOwnInitiative (v1.3.1) also prefers A/T-bearing suits when
-    -- partner shows weak; the two converge on the same suit choice
-    -- in overlapping cases. Establishing fires AFTER forceOwnInitiative
-    -- specifically and BEFORE Sun shortest-suit so the boss-and-long
-    -- shape gets priority over the default short-suit-clear.
+    -- Establishing rule: when holding the top live card (A or T)
+    -- of a non-trump suit AND ≥3 cards in that suit, LEAD that
+    -- suit. Opponents' mid-cards fall naturally on follow-ups;
+    -- K/J become bosses after 1-2 cycles. Wins over Sun shortest-
+    -- suit (H-7 default) when bot has true boss-and-long shape.
+    -- Composes with v1.3.1 forceOwnInitiative (which prefers A/T
+    -- suits when partner shows weak) — fires only when
+    -- forceOwnInitiative didn't already decide.
     --
-    -- Conflict resolution with shortest-suit (H-7): when bot holds
-    -- BOTH a 3+-card-with-A long suit AND a short non-A suit, the
-    -- establishing rule WINS. Per video #20, the long suit becomes
-    -- the bot's "controlled" suit; ceding tempo to clear the short
-    -- suit first is the wrong move when we have a true boss-and-long.
-    -- M3lm+ gated (sophisticated convention).
+    -- Round-end T deferral (video #9 «احتفظ فيها وخليها للأخير»):
+    -- skip establishing on T-boss suit when partner has 0 tricks
+    -- AND trick ≤ 5. T is worth more at round-end (last-trick
+    -- bonus + face-value compounds). A-boss not deferred (no
+    -- last-trick bonus value to preserve).
     --
-    -- v1.4.3 (audit follow-up — round-end strong-card deferral).
-    -- Source: video #9 (most_essential_tahreeb).
-    -- Saudi pro: «احتفظ فيها وخليها للأخير» (preserve it and keep
-    -- it for the end). When partner has NOT yet captured a trick
-    -- this round, do NOT burn a T (10-point honor) early; lead a
-    -- Tahreeb-style signal first, save T for round-end where the
-    -- last-trick bonus + face-value compounds. The deferral applies
-    -- to the establishing rule specifically — establishing on a
-    -- T-boss suit (A played, T now boss) early-round burns the T
-    -- when the same trick at round-end captures more total points.
-    -- Skip establishing when: partner has 0 tricks AND we're at
-    -- trick ≤ 5 (round-end window starts trick 6+).
+    -- M3lm+ gated.
     if contract.type == K.BID_SUN and not forceOwnInitiative
        and Bot.IsM3lm and Bot.IsM3lm() then
         local count = { S = 0, H = 0, D = 0, C = 0 }
@@ -4189,42 +4138,22 @@ local function pickFollow(legal, hand, trick, contract, seat)
         --   • Bidder-team only (rule 9 anti-trigger).
         --   • Anti-trigger row 167 (v1.4.0): NOT holding top 2 unplayed.
         if hasA and cover and suitCount == 2 and not holdsTopTwoUnplayed then
-            -- v1.2.1 (A7 audit): probabilistic Faranka. Pre-fix this
-            -- fired deterministically on the 4-condition shape; opp
-            -- who saw bot Faranka with [A♥,T♥] once learned bot
-            -- ALWAYS Faranka in this exact spot, making re-leading
-            -- ♥ a free 10-points-back tactic. Per video #06's
-            -- 5-factor framework («راح اعطيك خمس عوامل رئيسيه»)
-            -- pros do NOT Faranka uniformly — they evaluate the
-            -- factors. ~70% probabilistic Faranka + ~30% capture
-            -- (return A) corrupts opp's read without abandoning
-            -- the canonical play. M3lm-gated since this nuance is
-            -- tournament-strategy.
+            -- Faranka pos-4: probabilistic + weak-partner inversion.
+            -- Sources: video #06 (faranka_in_sun), video #20 (control).
             --
-            -- v1.3.0 (Faranka inversion — closes weakHandSignal
-            -- consumer gap): the v1.2.0 write-site at Bot.lua:321-323
-            -- documented «if partner is showing weak hand, INVERT
-            -- Faranka-duck behavior — TAKE the trick to keep tempo
-            -- away from the weak partner». The signal was wired in
-            -- pickLead (forceOwnInitiative at line 3636) but the
-            -- pos-4 Faranka site never consumed it, so the v1.2.0
-            -- inversion was structurally undelivered. Mirror the
-            -- pickLead gate here: when partner has shown ≥3 follow
-            -- events with weakHandSignal > 2× highCardPlays, boost
-            -- the capture rate from 30% → 85%. (Not 100% — keep a
-            -- little texture so the read isn't deterministic on the
-            -- pattern; opp who infers «bot saw partner weak» can't
-            -- bank on always-capture either.)
-            -- v1.3.4 (Saudi-pro adherence audit walkback): pre-fix
-            -- inversion captureRate was 0.85. Audit found 0.85 had no
-            -- video frequency citation — video #20 establishes the
-            -- principle (strong hand grabs tempo when partner shows
-            -- weak) but doesn't quantify how often. 0.85 was
-            -- arbitrary. Lowered to 0.70 — still represents a
-            -- substantial directional shift from default 0.30
-            -- consistent with the video principle, without committing
-            -- to "capture 85% of the time" based on a single-source
-            -- qualitative citation.
+            -- Default: 30% capture (return A) / 70% Faranka (duck
+            -- with cover). Pre-v1.2.1 was deterministic Faranka,
+            -- which let opp read «bot always Farankas this shape»
+            -- and exploit re-leads. Probabilistic break per video
+            -- #06's 5-factor framework. M3lm-gated.
+            --
+            -- v1.3.0 weakHandSignal inversion: when partner shows
+            -- weak hand pattern (≥3 events, weakHandSignal > 2×
+            -- highCardPlays), boost capture rate to 0.70 (was 0.85
+            -- in v1.3.0; walked back in v1.3.4 — 0.85 had no video
+            -- frequency citation). Implements the v1.2.0 write-site
+            -- semantic «strong hand grabs tempo when partner shows
+            -- weak» (per video #20).
             local captureRate = 0.30
             if Bot._partnerStyle then
                 local pStyle = Bot._partnerStyle[R.Partner(seat)]
@@ -4545,121 +4474,25 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
 
-            -- v0.9.0 Tahreeb "want" sender arm (Definite, video 10 —
-            -- audit AUDIT_REPORT_v0.7.1.md missing item #7). Pre-v0.9.0
-            -- only T-4 ("LARGER first" = don't-want signal) was wired;
-            -- the "want" arm (LOW-then-HIGH ascending sequence) was
-            -- never emitted, so the receiver's "want" classification
-            -- could only fire by coincidence. Now wired: when we hold
-            -- A or T of a side suit with ≥3 cards (winner + ≥2 covers),
-            -- the FIRST discard event from that suit is the LOWEST
-            -- non-winner — receiver reads it as event#1 of an
-            -- ascending sequence ("want this suit, lead it back").
-            -- Subsequent events naturally produce the "high" half of
-            -- the pattern because the lowest is now gone.
-            -- Fires BEFORE T-4 so want suits win over doubleton dump.
+            -- Tahreeb "want" sender arm (Sun-only).
+            -- Source: video #1 form 5 «بدال البرقيه» (bottom-up =
+            -- "want this suit, NO Ace"). Receiver decodes the
+            -- ascending sequence as "lead suit back, partner has
+            -- cards but no A/T". Bargiya (above) handles the A+cover
+            -- case; this arm covers want-without-Ace.
             --
-            -- ⚠ v1.4.0 / v1.4.1 audit-flagged complexity (videos 1, 3, 5):
-            --
-            -- VIDEO 1 (tahreeb_beginners) defines 5 forms:
-            --   1. Same-suit top-down: refuse this suit
-            --   2. Cross-color top discard: refuse via opposite color
-            --   3. Two-card same-suit refusal
-            --   4. Bargiya (A discard, want this suit, have SWA)
-            --   5. Bottom-up same-suit (want this suit, NO Ace) —
-            --      "بدال البرقيه" (substitute for Bargiya when no Ace)
-            --
-            -- VIDEO 3 (tahreeb_vs_tanfeer) adds suit categorization:
-            --   * WEAK suit (no honors) — Tahreeb a card here:
-            --     signals "nothing valuable, don't return"
-            --   * MEDIUM suit (Ace alone) — Tahreeb signals "I have
-            --     at least the Ace there, return"
-            --   * STRONG suit (multiple top cards left) — DO NOT
-            --     Tahreeb this suit. Partner returns opposite-color
-            --     by convention (which is your real strong suit).
-            --
-            -- VIDEO 5 (predictions) confirms touching-honors signaling
-            -- and notes Sun off-suit losers dump highest, Hokm trump
-            -- losers dump lowest (inverse). When uncertain who wins,
-            -- default to Tahreeb semantics.
-            --
-            -- CONTRADICTION WITH CURRENT CODE: this loop emits the
-            -- bottom-up "want" signal from a suit with ≥3 cards AND
-            -- A or T. Per video 1 form 5, bottom-up should fire only
-            -- when sender does NOT hold the Ace (the "substitute for
-            -- Bargiya" interpretation). Per video 3 STRONG-suit gate,
-            -- a suit with A is a STRONG suit and should NOT be
-            -- Tahreeb'd at all.
-            --
-            -- WHY IT'S NOT STRAIGHTFORWARD (per user's feedback):
-            -- Practical impact is mitigated because:
-            --   (a) Receiver action on "want" decode = lead suit back.
-            --       If sender DOES have A in that suit (mislabeled),
-            --       sender's A wins on the lead-back regardless of
-            --       which Tahreeb sub-form was emitted.
-            --   (b) The semantic distinction (Bargiya vs bottom-up)
-            --       affects only RECEIVER INFERENCE about sender's
-            --       hand, not the lead-back action itself.
-            --   (c) Reversing to "bottom-up only from no-A suits"
-            --       would mean fewer "want" signals overall (only
-            --       fires when we have a wanted suit but truly no A),
-            --       potentially reducing partner-coordination
-            --       opportunities the current code provides.
-            --
-            -- DEFERRED: behavioral reversal would need cross-video
-            -- reconciliation + bot-vs-bot impact measurement to verify
-            -- it doesn't reduce trick-capture. Currently maintaining
-            -- v0.9.0 behavior. Receiver decoder at Bot.lua:2322+
-            -- handles both Bargiya and ascending-want correctly
-            -- regardless of sender's exact spec compliance.
-            -- v0.11.18-final U-2 (ultra audit): Sun-only gate. Per
-            -- decision-trees.md Section 8 every sender row is tagged
-            -- "Sun, partner winning; ...". The Bargiya branch above
-            -- correctly gates on K.BID_SUN; this "want" arm did not.
-            -- In Hokm partner-leads-trump-pull is the convention; the
-            -- "want this side suit returned" semantic doesn't fit
-            -- Hokm partnerships. Pre-fix the Hokm "want" emission
-            -- biased partner toward leading sideX when the natural
-            -- play is to continue trump-pull. Wrapped in if-block
-            -- (rather than early-return) so T-4 below still runs in
-            -- Hokm — T-4 is contract-agnostic (refusal signal).
+            -- v1.4.4 reversed v0.9.0 wiring per multi-perspective
+            -- audit: pre-fix this fired from suits WITH A or T (a
+            -- STRONG suit per video #3 — should NOT be Tahreeb'd).
+            -- Now requires no A AND no T for canonical "want without
+            -- Ace" semantics. Sun-only gate (v0.11.18-final U-2):
+            -- Hokm partnerships use trump-pull, not side-suit
+            -- want-back. Receiver decoder at Bot.lua:2322+
+            -- (tahreebClassify) treats ascending sequence as "want".
             if contract.type == K.BID_SUN then
-            -- v1.4.4 (multi-perspective audit fix — Tahreeb sender
-            -- semantic correction). Both Codex CLI and ruflo audit
-            -- agents independently classified this loop as DRIFTED
-            -- under human-target play:
-            --
-            -- > "Bots mostly care that the lead-back suit is right;
-            -- > humans infer whether you hold A, whether the suit is
-            -- > medium, and which suit you are withholding. Current
-            -- > behavior preserves tactical lead-back value but
-            -- > corrupts partnership semantics." (Codex)
-            --
-            -- > "Human opponents actively model partner's hand. When
-            -- > the bot emits a bottom-up 'want' signal from a suit
-            -- > holding A+T (a STRONG suit per video #3), a human
-            -- > opponent correctly infers 'sender has high cards in
-            -- > that suit' — the inverse of what the signal is
-            -- > supposed to convey." (ruflo)
-            --
-            -- Both auditors recommended reversing the deferred-in-v1.4.1
-            -- behavior. Per video #1 form 5: bottom-up = "want, NO
-            -- Ace" (substitute for Bargiya when no Ace held). Per
-            -- video #3: STRONG suits should NOT be Tahreeb'd.
-            --
-            -- v1.4.4 fix: bottom-up "want" arm now requires the suit
-            -- to have NO A and NO T (matching the video's "no Ace"
-            -- semantics). Bargiya (above) still handles A-with-cover.
-            -- Suits with T-only or A-only-without-cover fall through
-            -- to T-4 dump-ordering, then to default lowestByRank.
-            -- The bottom-up signals that DO fire are now semantically
-            -- correct and worth more against human opponents.
             for _, su in ipairs(shuffledSuits()) do
                 local cards = bySuit[su]
                 if #cards >= 3 then
-                    -- v1.4.4 inverted gate: fire ONLY when no A AND no T.
-                    -- (Pre-fix required A or T present; per videos 1+3
-                    -- this was inverted from the canonical convention.)
                     local hasA, hasT = false, false
                     for _, c in ipairs(cards) do
                         local r = C.Rank(c)
@@ -4810,40 +4643,15 @@ local function pickFollow(legal, hand, trick, contract, seat)
         if wouldWin(c, trick, contract, seat) then winners[#winners + 1] = c end
     end
 
-    -- v0.8.4 Section 10 Hokm Faranka exceptions (Common, video 04).
-    -- Default Hokm behavior is "no Faranka — play winners". The
-    -- following narrow exceptions allow withholding the top trump
-    -- (play a non-winner instead, saving the top for later).
-    --
-    -- v1.0.2 (F9 cleanup): comment refreshed to reflect the
-    -- current bidder-team gating semantics — both #2 and #4 are
-    -- bidder-TEAM exceptions (v0.9.2 #49 + v0.10.0 X3 widened both
-    -- from bidder-only). The anti-trigger paragraph was removed:
-    -- v0.10.3 deleted the "opp bidder led trump-Q AND we hold J+8"
-    -- rule for being sourceless and structurally unreachable post
-    -- v0.10.0 (D-RT-03 S-5).
-    --
-    --   Exception #2: bidder-team AND we hold ONLY 2 trumps total
-    --     — trump posture is already weak, so the Faranka EV cost
-    --     is small.
-    --   Exception #3: bidder-team AND J of trump is dead AND we
-    --     hold the 9 of trump — 9 is the new top live trump, so
-    --     withholding it for ambush has clear EV.
-    --   Exception #4: bidder-team AND both opponents are observed
-    --     void in trump (or trump pool exhausted via played-pile)
-    --     — risk-free Faranka, no opp can punish the withhold.
-    --
-    -- F-16 K-cover veto applies to Exceptions #2 and #3 (no K of
-    -- trump → don't Faranka), but is scoped OFF Exception #4
-    -- where the threat model is structurally extinct (D-RT-03 S-1).
-    --
-    -- Exceptions #1 and #5 remain deferred: #1 needs sweep-track
-    -- cross-wiring from pickLead; #5 needs a partner-extra-trump
-    -- style-ledger counter. Both flagged in CHANGELOG history.
-    --
-    -- M3lm-gated since the exceptions are tournament-strategy
-    -- nuances; lower tiers stay with the default no-Faranka.
-    -- Sources: decision-trees.md Section 10 (Common, video 04).
+    -- Hokm Faranka exceptions (M3lm-gated, video #04). Default
+    -- Hokm = no Faranka. Three exceptions allow withholding top
+    -- trump (bidder-team only):
+    --   #2: bidder-team + only 2 trumps total (weak posture, low EV cost)
+    --   #3: bidder-team + J dead + we hold 9 (9 is new top live trump)
+    --   #4: bidder-team + both opps observed void in trump (risk-free)
+    -- F-16 K-cover veto applies to #2 and #3 (no K → don't Faranka).
+    -- Exceptions #1 (sweep-track) and #5 (partner-trump-extra)
+    -- remain deferred — see CHANGELOG history.
     if Bot.IsM3lm() and contract.type == K.BID_HOKM and contract.trump
        and trick.leadSuit and #winners > 0 then
         local farankaTriggered = false
@@ -5016,37 +4824,15 @@ local function pickFollow(legal, hand, trick, contract, seat)
         end
     end
 
-    -- v1.0.0 Cluster 2 F2 (defender play): J/9 trump-burn protection
-    -- on bidder's low-trump probe. The bidder leads low trump (7/8/Q
-    -- in trump rank order) to count opp trumps and exhaust covers
-    -- BEFORE deploying their A or T of trump. If a defender uses
-    -- J or 9 to take such a trick, they reveal their kill card AND
-    -- burn it on a low-value trick. Saudi pros DUCK with non-J/9
-    -- trump (or non-winner trump) to keep J/9 hidden and reserved
-    -- for a meaningful trump-pull (where J kills bidder's A, etc.).
-    --
-    -- Mirror of pickLead's saveHighTrump (line ~2733) but on the
-    -- response side. Fires before the winners/Faranka path so the
-    -- "play cheapest winner" default doesn't burn J/9 against us.
-    --
-    -- Gate:
-    --   * Hokm contract; trump-led trick.
-    --   * Lead seat = contract.bidder (this is bidder's probe).
-    --   * Lead-card rank ∈ {7, 8, Q} (low trump in Saudi rank order:
-    --     J=8 > 9=7 > A=6 > T=5 > K=4 > Q=3 > 8=2 > 7=1).
-    --     A/J/9/K/T are bidder's "real" pulls — when bidder leads
-    --     those, defender SHOULD use J/9 to take if possible.
-    --   * Defender team (R.TeamOf(seat) ~= R.TeamOf(bidder)).
-    --   * legal contains J or 9 of trump (i.e., we're being asked
-    --     to either use it as a winner OR keep it; the burn-risk
-    --     case is when J/9 is among winners).
-    --   * legal also contains non-J/9 trump (we have a duck option;
-    --     legality preserved by trump-only filter).
-    --
-    -- Action: return the lowest non-J/9 trump in legal. This may
-    -- be a winning card (e.g., K vs Q lead) — that's fine, we still
-    -- take the trick without burning the killer. Or a non-winner
-    -- — opp wins the low trick, our killer survives.
+    -- Defender J/9 trump-burn protection on bidder's low-trump probe.
+    -- v1.0.0 Cluster 2 F2. Saudi convention: when bidder leads low
+    -- trump (7/8/Q) to count opp trumps, defender DUCKS with non-J/9
+    -- trump to keep killers hidden for the real pull (where J can
+    -- kill bidder's A). Mirrors pickLead's saveHighTrump on the
+    -- response side. Gate: Hokm + trump-led + lead seat = bidder +
+    -- lead-rank ∈ {7, 8, Q} + defender team + legal contains J or 9
+    -- of trump + has non-J/9 trump alternative. Action: return
+    -- lowest non-J/9 trump (may be a winner — that's fine).
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM
        and contract.trump and trick.leadSuit == contract.trump
        and trick.plays and trick.plays[1]
@@ -5234,43 +5020,18 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 if sureStopper then return sureStopper end
-                -- v1.4.6 (4-perspective audit removal): the
-                -- probabilistic pos-2 breaker is gone.
+                -- v1.4.6 removed the probabilistic pos-2 breaker
+                -- (was 18%/25% in v1.4.5). 4-perspective audit found
+                -- the v1.2.1 citation of video #20 «تمسك اللعب» was
+                -- wrong — that's a POS-3 rule, not pos-2. Real
+                -- Saudi-pro pos-2 deviations are HAND-SHAPE FORCED
+                -- (video #22 consecutive top trumps, video #08
+                -- bare-T J-bait), not probabilistic. Random
+                -- deviation reads as «غلط» (beginner mistake) to a
+                -- Saudi-table observer. Carve-outs are wired
+                -- elsewhere: Hokm sureStopper above, Saudi-Master
+                -- T-bait in deceptiveOverplay below.
                 --
-                -- History: v1.2.1 added a 12% M3lm-only breaker
-                -- citing video #20 «تمسك اللعب» (control the game).
-                -- v1.3.3 raised to 25% Advanced+ to close a bot-vs-
-                -- bot probe gap; v1.3.4 walked back to 12%/20%;
-                -- v1.4.5 raised again to 18%/25% per Codex's
-                -- "humans don't punish deviations" reasoning.
-                --
-                -- v1.4.6 4-perspective audit (Codex revised + Ruflo
-                -- revised + Gemini original + 4th-opinion strategy-
-                -- only) reached strong consensus that ALL non-zero
-                -- rates were wrong. The 4th-opinion's smoking-gun
-                -- finding: video #20 «تمسك اللعب» is a POS-3 rule,
-                -- NOT pos-2. Our citation has been wrong for ~5
-                -- releases. Real Saudi-pro pos-2 deviation rate is
-                -- 3-5%, and even those deviations are HAND-SHAPE
-                -- FORCED (consecutive top trumps per video #22, or
-                -- bare-T J-bait per video #08), not probabilistic.
-                --
-                -- Per the 4th-opinion: «pros punish convention-
-                -- violators by tightening their reads, not loosening
-                -- them. A 20% deviation rate doesn't 'corrupt the
-                -- model' — it just labels the bot as a non-pro»
-                -- (i.e., reads as «غلط», a beginner mistake).
-                --
-                -- The legitimate carve-outs are wired ELSEWHERE:
-                --   * Hokm pos-2 sureStopper (one trump out): above
-                --     in this same block at line 5210+
-                --   * Saudi-Master T-bait (video #08): in the
-                --     deceptiveOverplay branch later in pickFollow,
-                --     gated to Saudi Master tier and specific shape
-                --   * Default canonical "second hand low": below
-                --
-                -- Random pos-2 breaker is now dead code at every
-                -- tier. Falls through to the standard duck.
                 -- Duck: throw the lowest legal that ISN'T a winner.
                 local nonWinners = {}
                 for _, c in ipairs(legal) do
@@ -5983,41 +5744,19 @@ local function pickFollow(legal, hand, trick, contract, seat)
             return lowestByRank(withoutBelote, contract)
         end
     end
-    -- v0.7.2 Section 4 rule 1A (Common, video 05): REVERTED v0.5.11
-    -- over-correction. Originally v0.5.11 added "Sun losing-side
-    -- off-suit follow → dump HIGHEST" citing both videos #05 and #09.
-    -- Re-read of video #05 transcript shows the convention is
-    -- Tasgheer / play-SMALLEST under a winning higher card — opp's
-    -- K-play implies no Q/J/9/8/7 below it, mirrored: we play our
-    -- smallest non-saving card. Video #09's "biggest mistake" rule
-    -- is a DIFFERENT scenario (partner-led re-entry preservation),
-    -- handled separately at the partnerWinning fall-through above.
+    -- Mathlooth K-tripled (Sun, video #17 + video #20). M3lm-gated.
+    -- When holding K + ≥2 lowers in led suit AND in tricks 1-3,
+    -- exclude K from low-pick candidates — preserve K for trick 3+
+    -- cash after A and T fall naturally. Plus pos-3 K-doubled bait
+    -- (v1.1.1 «تمسك لون»): at pos-3 with K + 1 low when opp led
+    -- LOW, decline to win; let opp take cheap, ambush with K
+    -- later.
     --
-    -- Reaching this code path means: not partnerWinning (handled
-    -- above) AND we can't beat (winners-branch failed). All legal
-    -- in-suit cards are dump-pile (no winning save candidates).
-    -- The fall-through to lowestByRank(legal) at the function's
-    -- bottom (after the v0.5.14 Tanfeer sender) already implements
-    -- this correctly — no Sun-specific branch needed here. Left as
-    -- a documentation marker.
-    -- Sources: decision-trees.md Section 4 rule 1A (Common, video 05).
-    --
-    -- v1.0.4 (agent #8): Mathlooth K-tripled trickle in Sun.
-    -- Per decision-trees.md §4 row 11 (Definite, video 17): "Sun,
-    -- you hold K + 2 lower in side suit, side suit led → reserve K
-    -- for trick 3 — A and T fall in tricks 1-2, K becomes top-live
-    -- and cashes." When followed-suit cards include K + ≥2 lowers
-    -- AND we're in early tricks (1-2), exclude K from the lowestByRank
-    -- candidate pool. The fall-through then picks 7 (or 8) instead
-    -- of K — preserving K for the trick-3 cash.
-    -- Gate: Sun only; trick 1 or 2; we're not partnerWinning (handled
-    -- above); we have ≥3 cards of led suit including K. M3lm-gated
-    -- since the K-trickle pattern is tournament-strategy nuance.
-    -- v1.1.1 (L3 audit): trick-window extended 1-2 → 1-3 (per video
-    -- #17 K-cashes-trick-3 timing) and pos-3 K-doubled bait added
-    -- (per video #20 «تمسك لون» control-the-game pattern: at pos-3
-    -- with K + 1 low when opp led LOW, decline to win — let opp
-    -- take cheap, save K for trick 3 ambush).
+    -- Note: v0.7.2 reverted an earlier v0.5.11 "dump HIGHEST under
+    -- opp-winning" branch — the canonical Sun convention is
+    -- Tasgheer (play smallest), handled by lowestByRank(legal) at
+    -- the function's bottom. No Sun-specific branch needed at the
+    -- general opp-winning fall-through.
     if Bot.IsM3lm() and contract.type == K.BID_SUN
        and trick.leadSuit and (#(S.s.tricks or {}) <= 2) then
         local lead = trick.leadSuit
@@ -7418,34 +7157,13 @@ end
 -- ---------------------------------------------------------------------
 -- SWA-response: deny clearly-invalid claims (v0.11.16 audit H1)
 -- ---------------------------------------------------------------------
--- When an opponent (human or bot) calls SWA, the host runs the bots'
--- response on cross-team seats. Pre-v0.11.16 bots auto-accepted ALL
--- incoming SWAs (Net.lua line ~3006: `_OnSWAResp("__host__", s2, true, ...)`)
--- — eliminating the entire defensive side of SWA. Humans got free EV
--- by SWA-bluffing against bot opponents who couldn't deny.
---
--- This function returns true (ACCEPT) for any plausible SWA and false
--- (DENY) only when R.IsValidSWA strictly rejects the claim. Bots
--- default toward ACCEPT to match the addon UX intent (5-second auto-
--- approve was designed for human deadlock prevention, not bot
--- adversarial play); the deny path is reserved for clearly-invalid
--- claims where the validator can prove failure under perfect knowledge.
---
--- Caveats:
---   * Bots run host-side, so they have access to S.s.hostHands —
---     full information for ALL seats. The validator runs against
---     real hands, producing a strict yes/no on the SWA claim.
---   * Defensive: if encodedHand is missing/short, fall through to
---     accept (the v0.11.5 XR-06 cap means we never see >16 chars).
---   * If R.IsValidSWA itself errors (defensive pcall), accept by
---     default — a bot crash should not deny a valid SWA.
---
--- Saudi rule reference:
---   * endgame.md:185-187 + decision-trees.md:209: "Opp denies your
---     SWA claim via Takweesh, demanding شرح (proof) — if they
---     cannot prove the claim, Qaid is awarded against them."
---   * saudi-rules.md:110: "Opponents can deny via Takweesh OR demand
---     proof."
+-- When an opponent calls SWA, the host runs bot response on cross-team
+-- seats. Returns true (ACCEPT) for any plausible SWA, false (DENY) only
+-- when R.IsValidSWA strictly rejects (bots have host-side full info via
+-- S.s.hostHands). Defaults toward ACCEPT to match addon UX (5-second
+-- auto-approve is human-deadlock prevention); DENY reserved for
+-- clearly-invalid claims. Saudi rule: endgame.md:185-187 +
+-- decision-trees.md:209 — Takweesh denial demands شرح (proof).
 function Bot.PickSWAResponse(seat, callerSeat, encodedCallerHand)
     if not S.s.isHost then return true end  -- only host runs bots
     if not S.s.contract then return true end

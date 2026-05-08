@@ -4602,7 +4602,8 @@ end
 -- AG.7 (Cluster 2 F2 Defender J/9 trump burn protection).
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local block = botSrc:find("v1%.0%.0 Cluster 2 F2 %(defender play%): J/9 trump%-burn protection")
+    -- v1.4.7 cleanup: comment shortened; pin updated to match.
+    local block = botSrc:find("Defender J/9 trump%-burn protection on bidder")
     assertTrue(block ~= nil,
                "AG.7a (F2): J/9 trump-burn protection block exists in pickFollow")
     if block then
@@ -4990,9 +4991,10 @@ do
 end
 
 -- AI.8 (agent #8 Mathlooth K-tripled): pickFollow Sun K-trickle pattern.
+-- v1.4.7 cleanup: comment text shortened; test pin updated to match.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("v1%.0%.4 %(agent #8%): Mathlooth K%-tripled") ~= nil,
+    assertTrue(botSrc:find("Mathlooth K%-tripled %(Sun, video #17") ~= nil,
                "AI.8 (agent #8): pickFollow Mathlooth K-tripled trickle exists")
 end
 
