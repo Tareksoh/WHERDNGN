@@ -54,6 +54,12 @@ local SOUND = "Interface\\AddOns\\WHEREDNGN\\media\\easter.mp3"
 local TRIGGER_CHANCE = 0.10           -- 10% per escalation-skip pass
 local PHOTO_DURATION_SECONDS = 5.0    -- adjust to match your sound length
 
+-- Photo aspect ratio (width / height of the source image). Used by
+-- _showPhoto to letterbox/pillarbox-fit the photo to the screen
+-- without distortion. Update this if you swap easter.jpg for a
+-- different image. Approximate values are fine.
+local PHOTO_ASPECT = 1.0              -- current easter.jpg is 267x267 square
+
 -- ----- Public API --------------------------------------------
 
 -- Returns true if the egg fired. Looks up `playerName` in TARGETS,
@@ -87,11 +93,29 @@ function M._showPhoto(path, duration)
         f:SetAllPoints(UIParent)
         f:SetFrameStrata("FULLSCREEN_DIALOG")
         f:EnableMouse(true)  -- block click-through while overlay is up
+        -- Solid black backdrop (letterbox/pillarbox bars when aspect doesn't match)
+        f.bg = f:CreateTexture(nil, "BACKGROUND")
+        f.bg:SetAllPoints(f)
+        f.bg:SetColorTexture(0, 0, 0, 1)
+        -- Photo texture, sized to preserve aspect ratio (set per-show below)
         f.tex = f:CreateTexture(nil, "ARTWORK")
-        f.tex:SetAllPoints(f)
+        f.tex:SetPoint("CENTER", f, "CENTER")
         -- Click anywhere to dismiss early
         f:SetScript("OnMouseDown", function(self) self:Hide() end)
         M._overlay = f
+    end
+    -- Recompute photo size each show — UIParent may have resized,
+    -- and the source aspect can be tweaked via PHOTO_ASPECT.
+    local sw, sh = UIParent:GetSize()
+    local pa = PHOTO_ASPECT
+    if not pa or pa <= 0 then pa = 1.0 end
+    local sa = (sw and sh and sh > 0) and (sw / sh) or 1.0
+    if pa >= sa then
+        -- photo wider than screen → fit width, letterbox top/bottom
+        f.tex:SetSize(sw, sw / pa)
+    else
+        -- photo taller than screen → fit height, pillarbox sides
+        f.tex:SetSize(sh * pa, sh)
     end
     f.tex:SetTexture(path)
     f:Show()

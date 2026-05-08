@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.5.2 — Easter egg hotfix (photo swap + aspect-preserving overlay)
+
+User swapped the bundled Easter photo (the v1.5.1 image was wrong)
+and asked for the overlay to preserve aspect ratio so portrait
+photos don't get stretched into screen-filling distortion.
+
+### Photo asset replaced
+
+`media/easter.jpg` replaced with the correct image. `easter.mp3`
+unchanged.
+
+### Aspect-preserving overlay
+
+`Easter.lua:_showPhoto` (~line 80+) reworked:
+
+- Frame still spans `UIParent` and blocks click-through, but is
+  now backed by a solid-black `BACKGROUND` texture that paints
+  the letterbox/pillarbox bars.
+- The photo texture itself is anchored to CENTER and **sized
+  per-show** based on screen dimensions and a new
+  `PHOTO_ASPECT` constant (width/height of the source image).
+- If `PHOTO_ASPECT >= screen_aspect` → fit width, letterbox top/
+  bottom. Else → fit height, pillarbox left/right.
+
+Update `PHOTO_ASPECT` in `Easter.lua` if you swap the photo for a
+different aspect later. Approximate values are fine — the sizing
+is robust to small mismatches.
+
+### Tests
+
+828/828 pass. No game-logic touched; only the overlay rendering
+and the bundled asset.
+
 ## v1.5.1 — Takweesh realism fix + hidden Easter egg
 
 ### Takweesh realism fix (user-reported bug)
