@@ -4450,8 +4450,25 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
             return true
         end)()
-        if Bot.IsM3lm() and voidInLed
-           and Bot.IsBotSeat(R.Partner(seat)) then
+        -- v1.4.5 (multi-perspective audit, Codex finding): removed
+        -- the bot-partner-only gate. Pre-fix: `Bot.IsBotSeat(R.Partner
+        -- (seat))` constrained Tahreeb sender to fire only when partner
+        -- was a bot, treating human partners as "noise". Per Codex
+        -- audit:
+        --
+        -- > "Strong human players do read Saudi signals. Ignoring
+        -- > human-readable signaling leaves EV on table."
+        --
+        -- Saudi convention is a partnership language; competent human
+        -- partners (the kind who know to expect Tahreeb signaling)
+        -- understand and parse the convention. Sending the signal
+        -- helps them whether they're bot or human. M3lm+ tier gating
+        -- preserved (basic/advanced bots don't emit; the convention
+        -- is sophisticated). Receiver-side reads of human signals are
+        -- still appropriately discounted (humans may not strictly
+        -- follow the convention) — that asymmetry is correct per
+        -- audit guidance.
+        if Bot.IsM3lm() and voidInLed then
             -- Group legal cards by suit (excluding trump in Hokm —
             -- trump discards have their own value as ruff fodder).
             local bySuit = { S = {}, H = {}, D = {}, C = {} }
@@ -5232,22 +5249,31 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 -- card wins at pos-2 (qualitative principle) but does
                 -- NOT quantify a 25% rate; that magnitude was reverse-
                 -- engineered from the +24 GP probe finding. Walked
-                -- back to: 12% Advanced (matches v1.2.1's original
-                -- M3lm-only rate, now extended to Advanced as a
-                -- reasonable tier-broadening), 20% M3lm/Master (slight
-                -- bump from 12% — pro-tier nuance can read partner +
-                -- opp signals more, justifying somewhat more variance).
-                -- Preserves canonical "second hand low" 80-88% of the
-                -- time vs bot-vs-bot's 75% under v1.3.3.
+                -- back to: 12% Advanced, 20% M3lm/Master.
+                --
+                -- v1.4.5 (multi-perspective audit, Codex finding under
+                -- human-target play): the v1.3.4 12%/20% rates were
+                -- TOO TIMID for human-target EV. Humans don't punish
+                -- second-hand-low determinism the way pattern-matching
+                -- bots do; modest deviations corrupt opp's hand-
+                -- distribution model without becoming a new predictable
+                -- pattern. v1.3.4 correctly rejected 25% Advanced as
+                -- bot-probe-overfit but went too far in the other
+                -- direction. Per Codex audit: raise to 18% Advanced /
+                -- 25% M3lm-Master. Preserves canonical "second hand
+                -- low" 75-82% of the time (convention dominates) while
+                -- creating meaningful information warfare against
+                -- humans who maintain a "bot follows convention"
+                -- mental model.
                 if #winners >= 1 and trick.plays then
                     local hasPointCard = false
                     for _, p in ipairs(trick.plays) do
                         local pts = C.PointValue(p.card, contract) or 0
                         if pts >= 4 then hasPointCard = true; break end
                     end
-                    local breakerRate = 0.12
+                    local breakerRate = 0.18
                     if Bot.IsM3lm and Bot.IsM3lm() then
-                        breakerRate = 0.20
+                        breakerRate = 0.25
                     end
                     if hasPointCard and math.random() < breakerRate then
                         -- Win with cheapest winner (not sureStopper-

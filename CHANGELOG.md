@@ -1,5 +1,71 @@
 # Changelog
 
+## v1.4.5 — Codex-aligned audit follow-ups (pos-2 breaker + Tahreeb gate)
+
+User direction after multi-perspective audit synthesis: apply the
+two Codex-recommended changes that were skipped in v1.4.4 due to
+auditor disagreement (pos-2 breaker rate) or scope (Tahreeb sender
+gate expansion).
+
+### Pos-2 breaker rate raise (Bot.lua:5244 area)
+
+Codex audit finding under human-target play: the v1.3.4 12%/20%
+rates were "too timid for human-target EV. Humans don't punish
+second-hand-low determinism the way pattern-matching bots do;
+modest deviations corrupt opp's hand-distribution model without
+becoming a new predictable pattern."
+
+**Trajectory:** 12% M3lm (v1.2.1) → 25% Advanced+ (v1.3.3, bot-vs-bot
+probe driven) → 12%/20% (v1.3.4 walkback for "no video frequency
+citation") → **18%/25% (v1.4.5 multi-perspective audit)**.
+
+The v1.3.4 walkback correctly rejected 25% as bot-probe-overfit
+but went too far in the other direction. New rates preserve
+canonical "second hand low" 75-82% of the time (convention
+dominates) while creating meaningful information warfare against
+humans who maintain a "bot follows convention" mental model.
+
+Ruflo agent in the same audit suggested the alternative direction
+(12%→keep, M3lm 20%→15% with `baitedSuit` modifier). User chose
+Codex's path per "raise it to 18/25."
+
+### Tahreeb sender bot-partner gate removed (Bot.lua:4453+)
+
+Pre-v1.4.5: the Tahreeb sender block at `Bot.lua:4453` had a
+`Bot.IsBotSeat(R.Partner(seat))` gate — Tahreeb signals only fired
+when partner was a bot, treating human partners as "noise." Codex
+audit:
+
+> "Strong human players do read Saudi signals. Ignoring
+> human-readable signaling leaves EV on table."
+
+Saudi-pro convention is a partnership LANGUAGE — competent human
+partners (the kind who play the addon and recognize Tahreeb
+forms) understand and parse the convention. Restricting signaling
+to bot-only partners misses real EV.
+
+**Fix**: removed the bot-partner gate. M3lm+ tier gating preserved
+(basic/advanced bots don't emit; the convention is sophisticated
+enough that lower tiers shouldn't try). Receiver-side reads of
+human signals remain appropriately discounted — humans may not
+strictly follow the convention; the asymmetry (emit at full
+confidence to humans, parse human signals at lower confidence)
+is the correct per-Codex audit guidance.
+
+### Items still NOT changed
+
+The audit's other findings (BOT_FOUR_TH ordering, Sun
+establishing, score-desperation Bel, 100-meld modifier, Faranka
+inversion 0.70, T-sacrifice gate) were classified ALIGNED by
+both auditors — no action needed.
+
+### Tests
+
+828/828 pass. The Tahreeb gate removal is a behavioral expansion
+(Tahreeb fires more often — now in mixed-tier games with human
+partners). The pos-2 rate raise is a magnitude tune. Neither
+breaks source-pin fixtures.
+
 ## v1.4.4 — Pos-3 hold-back + multi-perspective audit fixes (LOCAL ONLY)
 
 > **NOT YET PUSHED**: pending user review of multi-perspective audit
