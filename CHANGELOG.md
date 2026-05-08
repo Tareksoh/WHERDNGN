@@ -1,5 +1,127 @@
 # Changelog
 
+## v1.5.0 — Audit-gap closures (5 new heuristics + 3 stale items closed)
+
+User instruction: bundle the 8 audit-list items into v1.5.0. Most
+HIGH/MEDIUM items implemented; the 3 LOW-priority items found to
+be STALE (already wired in older releases). 828/828 tests pass.
+
+### Implemented (5 items)
+
+#### #1 — Sun K-is-boss sureStopper parallel (HIGH)
+
+`Bot.lua:5023+`. Mirrors v1.4.8 HIGH-1 fix into Sun. When A of led
+suit is already played (`S.s.playedCardsThisRound["A"+leadSuit]`),
+K becomes the live boss. Same over-save bug existed in Sun as in
+Hokm; pos-2 was systematically ducking K when K could win the
+trick. In Sun there's no trump → no ruff threat ever; K is
+unambiguously boss when A is dead. Promote K to sureStopper.
+
+#### #2 — Faranka 5-factor framework (HIGH)
+
+`Bot.lua:4174+`. Pre-v1.5.0: flat 0.30 capture / 0.70 Faranka with
+v1.3.0 weakHandSignal inversion. Per video #06 «راح اعطيك خمس
+عوامل رئيسيه» (5 main factors), pros don't Faranka uniformly —
+they evaluate factors and adjust. Replaced the flat rate with
+factor-additive computation:
+
+- Base captureRate = 0.50 (uncertain default)
+- F1: Cover is J (best — J+A doubleton) → -0.10 (more Faranka)
+- F2: Partner-takes (already required) → no additional adjustment
+- F3: Al-Kaboot pursuit active for our team → -0.10
+- F4: Faranka-success would flip game-loss to opp → -0.10
+- F5: LHO is bidder + trick == 1 (proxy for LHO holds T) → -0.10
+- WeakHandSignal inversion (video #20): +0.40 capture
+- Anti-trigger: opp-bidder + Kaboot threat → captureRate = 1.0
+  (always take, deny their Kaboot)
+- Clamped [0.05, 0.95] preserves unpredictability per v1.2.1 A7
+
+M3lm-gated.
+
+#### #3 — predictTrickWinner helper (HIGH, ADDITIVE only)
+
+`Bot.lua:3993+`. Centralized trick-winner certainty computation
+per videos #21/22/23 (Takbeer/Tasgheer triage). Returns
+`(winnerSeat, confidence)` where confidence is "certain" / "likely"
+/ "uncertain". Used by NEW branches in v1.5.x+. Existing inline
+certainty checks in v1.4.1 pos-3 Takbeer + v1.4.8 HIGH-3 hold-back
+remain as-is per user direction "keep and replace in later release."
+
+#### #4 — Hokm trump adjacency (MEDIUM)
+
+`Bot.lua:5476+`. Per video #22 R1+R3+R8: when all winners are
+trump, the canonical play depends on consecutiveness. Pre-fix
+always picked LOWEST trump. New rule:
+- Consecutive trump pair (e.g., A+T): play HIGHEST (R1 — top-down
+  for partner read)
+- Non-consecutive pair (e.g., 9+8): play LOWEST (R3 — preserve
+  top trump, opp burns shape mid-trumps to capture)
+- 3+ trumps OR singleton: lowest (R3 default)
+
+Trump rank order is non-natural (J>9>A>T>K>Q>8>7); uses
+`K.RANK_TRUMP_HOKM`.
+
+#### #5 — Tanfeer factor 5: switch detection (MEDIUM)
+
+`Bot.lua:739+, 2733+`. Per video #19 §2.5: when an opp has signaled
+suit X first and later switches to suit Y, the X-read should be
+CANCELLED — the newer signal supersedes. Pre-v1.5.0 wired factors
+1, 2, 3, 4, 6 but factor 5 (cancellation) was deferred. Added:
+- New `list.firstTrickN` field on `tahreebSent[suit]` records the
+  trick of FIRST event for each suit
+- Confidence computation finds opp's latest-signaled suit (max
+  firstTrickN); earlier suits get 50% weight downgrade
+
+### STALE (3 items — already wired in older releases)
+
+#### #6 — Ashkal bid-up rank gates: STALE
+
+The audit listed "A-upcard, T+A anti-triggers, 65-84 vs 85+ split"
+as gaps. All are wired:
+- A-upcard reject: `Bot.lua:1826` (v0.5.8 A-3)
+- K-upcard reject: `Bot.lua:1837` (v0.9.1 A-2)
+- T-cardinality: `Bot.lua:1846-1852` (v0.9.2 A-2 cardinality)
+- T+A anti-trigger: `Bot.lua:1859-1865` (v0.5.8 A-4)
+- 3+ Aces: `Bot.lua:1880` (v0.5.8 A-5)
+- 65-84/85+ split: `Bot.lua:1889` (v0.5.8 A-6 + v0.5.13 const)
+
+Receiver-side `ashkalSuit` ledger (R24-R26) for partner-Ashkal-
+direction reads in pickLead is genuinely deferred — Ashkal is
+rare, low priority.
+
+#### #7 — SWA two-handed Hokm mode: STALE
+
+The audit listed "partner rank-1 + trump+void detection" as a
+gap. `R.IsValidSWA` (Rules.lua:482+) does a full game-tree
+expansion with recursion-budget guard. It SIMULATES partner's
+optimal play including ruff opportunities. The two-handed Hokm
+SWA route (partner ruffs caller's side lead) is exhaustively
+explored by the validator — caller's claim returns true only if
+a winning line exists. Bot.PickSWA delegates to R.IsValidSWA;
+no separate two-handed branch needed.
+
+#### #8 — Mathlooth anti-SWA guard: STALE
+
+The audit listed "opp K+2 kills SWA" as a gap. Same as #7 —
+R.IsValidSWA's recursive simulation explores opp K+2 capture
+paths. If the K-of-suit can capture the caller's side card after
+the caller's top-2 of suit are played, the simulation returns
+false. The Mathlooth-trap scenario is automatically detected.
+
+### Tests
+
+828/828 pass. All v1.5.0 changes are additive or refinements;
+existing source-pin tests don't exercise the specific board states
+that gate the new behavior.
+
+### Audit cycle status
+
+After v1.5.0, the audit list from v1.4.7's playtest follow-up is
+fully addressed. Real implementations: 5 (HIGH/MEDIUM items).
+Confirmed STALE: 3 (LOW items — already wired). Open items
+remaining (deferred): receiver-side ashkalSuit ledger (low impact,
+Ashkal is rare).
+
 ## v1.4.8 — Over-save audit fixes (user-reported play feedback)
 
 User reported from real human play after v1.4.7:

@@ -763,6 +763,18 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
                         -- length-in-suit (the discard was on cardSuit).
                         list.lenAtAce = preLen + 1
                     end
+                    -- v1.5.0 (audit follow-up — Tanfeer factor 5,
+                    -- video #19 §2.5): record FIRST-trick-N per suit
+                    -- so factor-5 cancellation logic can detect when
+                    -- an opp has SWITCHED signaled suits across
+                    -- tricks. Per video: "opp discards X first, then
+                    -- later discards Y → CANCEL the X-read; top now
+                    -- attributed to Y." Stored as `list.firstTrickN`
+                    -- alongside the rank array; only set on first
+                    -- event for the suit (don't overwrite).
+                    if not list.firstTrickN then
+                        list.firstTrickN = #(S.s.tricks or {}) + 1
+                    end
                     list[#list + 1] = C.Rank(card)
                     -- v1.1.1 (M2): parallel forced-flag list, indexed
                     -- the same as the rank list. tahreebClassify
@@ -2736,6 +2748,20 @@ local function pickLead(legal, contract, seat)
                 local oStyle = Bot._partnerStyle[s]
                 local osignals = oStyle and oStyle.tahreebSent
                 if osignals then
+                    -- v1.5.0 (Tanfeer factor 5 — switch detection):
+                    -- find the LATEST-signaled suit for this opp
+                    -- (max firstTrickN). Opp's later-signaled suit
+                    -- gets full weight; earlier suits get half weight
+                    -- per video #19 §2.5 cancellation rule.
+                    local opp_latestSuit, opp_latestTrickN = nil, -1
+                    for _, su in ipairs({ "S", "H", "D", "C" }) do
+                        local sig = osignals[su]
+                        if sig and sig.firstTrickN
+                           and sig.firstTrickN > opp_latestTrickN then
+                            opp_latestSuit = su
+                            opp_latestTrickN = sig.firstTrickN
+                        end
+                    end
                     for _, su in ipairs(shuffledSuits()) do
                         if su ~= contract.trump then
                             local cls = tahreebClassify(osignals[su])
@@ -2772,6 +2798,21 @@ local function pickLead(legal, contract, seat)
                                 -- IS the bidder → stronger).
                                 if contract.bidder == s then
                                     w = w + 1
+                                end
+                                -- v1.5.0 (Tanfeer factor 5 — switch
+                                -- detection): if opp has signaled a
+                                -- LATER suit (max firstTrickN > this
+                                -- suit's firstTrickN), downgrade by
+                                -- 50%. Per video #19 §2.5: "the newer
+                                -- signal supersedes; opp's strength
+                                -- has shifted to Y." Cancel-flag is
+                                -- soft (multiply, not zero) since the
+                                -- old suit may still hold mid-rank
+                                -- value even if not the strongest.
+                                if opp_latestSuit and opp_latestSuit ~= su
+                                   and sigList and sigList.firstTrickN
+                                   and opp_latestTrickN > sigList.firstTrickN then
+                                    w = math.floor(w * 0.5)
                                 end
                                 oppSuitConfidence[su] =
                                     oppSuitConfidence[su] + w
@@ -3990,6 +4031,65 @@ local function suitCardsOutstanding(hand, suit)
     return math.max(0, out)
 end
 
+-- v1.5.0 (audit follow-up — predictTrickWinner helper).
+-- Sources: videos #21/22/23 (Takbeer/Tasgheer certainty triage).
+-- The Takbeer/Tasgheer rules require knowing WHO will take this
+-- trick before deciding to magnify (for partner) or miniaturize
+-- (for opp). Existing pickFollow branches embed certainty logic
+-- inline (v1.4.1 pos-3 partner-Takbeer reads pos-4 void; v1.4.8
+-- HIGH-3 pos-3 hold-back checks pos4CannotBeat). This helper
+-- centralizes the certainty computation.
+--
+-- Returns: (winnerSeat, confidence) where confidence is one of:
+--   "certain"    — given known voids + remaining unplayed cards,
+--                  the predicted winner is mathematically locked
+--   "likely"     — high probability based on memory but not locked
+--   "uncertain"  — too many unknowns; default behaviors apply
+--
+-- v1.5.0 scope: ADDITIVE only — defined as a building block for
+-- future Takbeer/Tasgheer expansions. Existing branches keep their
+-- inline logic untouched (per user direction "keep and replace in
+-- later release"). Called by NEW branches in v1.5.x+ as needed.
+local function predictTrickWinner(trick, contract, seat, knownVoids)
+    if not trick or not trick.plays or #trick.plays == 0 then
+        return nil, "uncertain"
+    end
+    local curWinner = R.CurrentTrickWinner(trick, contract)
+    local pos = #trick.plays + 1
+    -- Pos-4 (lastSeat): current winner is locked once we play.
+    -- Caller's own play is added afterward; for prediction purposes
+    -- here, the winner is whichever of {curWinner, our card} wins.
+    -- For "certain partner / certain opp" classification at pos-4,
+    -- check curWinner's team vs our team.
+    if pos == 4 then
+        return curWinner, "certain"
+    end
+    -- Pos-3 (we're third to play): can be certain when pos-4
+    -- demonstrably cannot beat the current winner.
+    if pos == 3 and trick.leadSuit and knownVoids then
+        local pos4Seat = (seat % 4) + 1
+        local pos4Voids = knownVoids[pos4Seat]
+        if pos4Voids and pos4Voids[trick.leadSuit] then
+            -- Pos-4 cannot follow led suit. In Sun this means they
+            -- can't beat (no trump). In Hokm with trump available
+            -- they could ruff — only "certain" if pos-4 also void
+            -- in trump or trump fully exhausted.
+            if contract.type == K.BID_SUN then
+                return curWinner, "certain"
+            elseif contract.type == K.BID_HOKM and contract.trump
+                   and pos4Voids[contract.trump] then
+                return curWinner, "certain"
+            else
+                return curWinner, "likely"
+            end
+        end
+    end
+    -- Pos-1, pos-2: rarely certain at this stage; leave to inline
+    -- heuristics. Future expansion could add specific certainty
+    -- predicates if they prove valuable.
+    return curWinner, "uncertain"
+end
+
 local function pickFollow(legal, hand, trick, contract, seat)
     local curWinner = R.CurrentTrickWinner(trick, contract)
     local partnerWinning = curWinner and R.Partner(seat) == curWinner
@@ -4172,33 +4272,108 @@ local function pickFollow(legal, hand, trick, contract, seat)
         --   • Bidder-team only (rule 9 anti-trigger).
         --   • Anti-trigger row 167 (v1.4.0): NOT holding top 2 unplayed.
         if hasA and cover and suitCount == 2 and not holdsTopTwoUnplayed then
-            -- Faranka pos-4: probabilistic + weak-partner inversion.
-            -- Sources: video #06 (faranka_in_sun), video #20 (control).
+            -- v1.5.0 (audit follow-up — Faranka 5-factor framework).
+            -- Sources: video #06 (faranka_in_sun) — explicit 5-factor
+            -- framework + video #20 (control) — weak-partner inversion.
             --
-            -- Default: 30% capture (return A) / 70% Faranka (duck
-            -- with cover). Pre-v1.2.1 was deterministic Faranka,
-            -- which let opp read «bot always Farankas this shape»
-            -- and exploit re-leads. Probabilistic break per video
-            -- #06's 5-factor framework. M3lm-gated.
+            -- Pre-v1.5.0: flat 30% capture / 70% Faranka, with a
+            -- v1.3.0 weak-partner inversion to 70% capture. The flat
+            -- rate didn't reflect video #06's stated 5-factor
+            -- gradient («راح اعطيك خمس عوامل رئيسيه» — "I'll give you
+            -- five main factors"). Pros don't Faranka uniformly —
+            -- they evaluate factors and adjust.
             --
-            -- v1.3.0 weakHandSignal inversion: when partner shows
-            -- weak hand pattern (≥3 events, weakHandSignal > 2×
-            -- highCardPlays), boost capture rate to 0.70 (was 0.85
-            -- in v1.3.0; walked back in v1.3.4 — 0.85 had no video
-            -- frequency citation). Implements the v1.2.0 write-site
-            -- semantic «strong hand grabs tempo when partner shows
-            -- weak» (per video #20).
-            local captureRate = 0.30
+            -- v1.5.0 5-factor framework — each factor that favors
+            -- Faranka decreases capture rate (more duck) by 0.10:
+            --   F1: Cover is J (highest possible cover, video factor 1)
+            --   F2: Partner-takes (already required by partnerWinning)
+            --   F3: Al-Kaboot pursuit active (sweepPursuit true)
+            --   F4: Faranka would flip game-loss to opp (score-aware)
+            --   F5: LHO is bidder + trick == 1 (proxy for LHO holds T)
+            --   Plus weakHandSignal inversion (video #20): boost
+            --   capture by +0.40 (strong-hand-grabs-tempo)
+            --   Anti-trigger: opp-bidder + Kaboot threat → capture=1
+            --   (always take, deny their Kaboot)
+            -- Score base = 0.50 (uncertain default). Range clamped
+            -- to [0.05, 0.95] so neither extreme is deterministic
+            -- (preserves unpredictability per v1.2.1 A7 audit).
+            -- M3lm-gated.
+            local captureRate = 0.50
+            -- F1: cover is J (best — J+A doubleton)
+            if cover and C.Rank(cover) == "J" then
+                captureRate = captureRate - 0.10
+            end
+            -- F2: partner-takes is implicit (partnerWinning required
+            -- by outer gate). No additional score.
+            -- F3: Al-Kaboot pursuit active for our team
+            local sweepActive = false
+            if S.s.tricks and #S.s.tricks >= 2 then
+                local myTeam = R.TeamOf(seat)
+                local allMine = true
+                for _, t in ipairs(S.s.tricks) do
+                    if R.TeamOf(t.winner) ~= myTeam then
+                        allMine = false; break
+                    end
+                end
+                sweepActive = allMine
+            end
+            if sweepActive then
+                captureRate = captureRate - 0.10
+            end
+            -- F4: Faranka-success would flip game-loss to opp.
+            -- Heuristic: opp's cumulative is within target-26 (clinch
+            -- pressure on opp side) AND we're behind in this round →
+            -- securing this Faranka denies them the points.
+            if S.s.cumulative and S.s.target then
+                local myTeam = R.TeamOf(seat)
+                local oppTeam = (myTeam == "A") and "B" or "A"
+                local oppCum = S.s.cumulative[oppTeam] or 0
+                local target = S.s.target
+                if oppCum >= target - 26 then
+                    captureRate = captureRate - 0.10
+                end
+            end
+            -- F5: LHO (next-trick leader) is the bidder AND we're at
+            -- trick 1 (fresh hand) — proxy for "LHO probably has T".
+            -- We're at pos-4, so LHO is the next-clockwise seat.
+            local lhoSeat = (seat % 4) + 1
+            local trickN = #(S.s.tricks or {}) + 1
+            if contract.bidder == lhoSeat and trickN == 1 then
+                captureRate = captureRate - 0.10
+            end
+            -- Weak-partner inversion (video #20): if partner has shown
+            -- weak hand pattern, INVERT — strong hand grabs tempo.
             if Bot._partnerStyle then
                 local pStyle = Bot._partnerStyle[R.Partner(seat)]
                 if pStyle and pStyle.weakHandSignal and pStyle.highCardPlays then
                     local total = pStyle.weakHandSignal + pStyle.highCardPlays
                     if total >= 3
                        and pStyle.weakHandSignal > pStyle.highCardPlays * 2 then
-                        captureRate = 0.70
+                        captureRate = captureRate + 0.40
                     end
                 end
             end
+            -- Anti-trigger: opp-bidders + Kaboot threat (defender
+            -- must break Kaboot, can't gamble Faranka). Per video
+            -- #06: "if opp is bidder and threatening Al-Kaboot,
+            -- DON'T Faranka — defend, don't experiment."
+            if contract.bidder
+               and R.TeamOf(contract.bidder) ~= R.TeamOf(seat)
+               and S.s.tricks and #S.s.tricks >= 3 then
+                local oppTeam = R.TeamOf(contract.bidder)
+                local oppSweep = true
+                for _, t in ipairs(S.s.tricks) do
+                    if R.TeamOf(t.winner) ~= oppTeam then
+                        oppSweep = false; break
+                    end
+                end
+                if oppSweep then
+                    captureRate = 1.0  -- always take, break Kaboot
+                end
+            end
+            -- Clamp [0.05, 0.95]
+            if captureRate < 0.05 then captureRate = 0.05 end
+            if captureRate > 0.95 then captureRate = 0.95 end
             if Bot.IsM3lm and Bot.IsM3lm() and math.random() < captureRate then
                 -- Capture-not-Faranka: take with A. Sun off-trump A
                 -- is the highest in suit; cover stays for next
@@ -5053,6 +5228,25 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         end
                     end
                 end
+                -- v1.5.0 (Sun K-is-boss parallel — mirrors v1.4.8
+                -- HIGH-1 fix into Sun): in Sun there's no trump → no
+                -- ruff threat ever. Once A of led suit is played,
+                -- K becomes the live boss with nothing above. Same
+                -- saving-K-too-long bug existed here as in Hokm.
+                -- Promote K to sureStopper when A is gone.
+                if not sureStopper and trick.leadSuit
+                   and contract.type == K.BID_SUN
+                   and S.s.playedCardsThisRound then
+                    local aceKey = "A" .. trick.leadSuit
+                    if S.s.playedCardsThisRound[aceKey] then
+                        for _, c in ipairs(winners) do
+                            if C.Suit(c) == trick.leadSuit
+                               and C.Rank(c) == "K" then
+                                sureStopper = c; break
+                            end
+                        end
+                    end
+                end
                 -- v1.4.8 (audit HIGH-1 fix — Hokm K-is-boss):
                 -- when A of led suit has already been played this
                 -- round, our K becomes the live boss of the suit. The
@@ -5321,6 +5515,25 @@ local function pickFollow(legal, hand, trick, contract, seat)
                             end
                         end
                         if #trumpWinners > 0 and #trumpWinners == #winners then
+                            -- v1.5.0 (audit follow-up — Hokm trump
+                            -- adjacency, video #22 R1+R3+R8):
+                            -- consecutive trump winners → play HIGHEST
+                            -- (R1: top-down for partner read). Non-
+                            -- consecutive → play LOWEST (R3: preserve
+                            -- top trump as re-entry, opp will burn
+                            -- shape mid-trumps to capture).
+                            -- Trump rank order is non-natural
+                            -- (J>9>A>T>K>Q>8>7); use K.RANK_TRUMP_HOKM.
+                            if #trumpWinners == 2 then
+                                local r1 = K.RANK_TRUMP_HOKM[C.Rank(trumpWinners[1])] or 0
+                                local r2 = K.RANK_TRUMP_HOKM[C.Rank(trumpWinners[2])] or 0
+                                if math.abs(r1 - r2) == 1 then
+                                    -- Consecutive: play highest (R1)
+                                    return highestByRank(trumpWinners, contract)
+                                end
+                            end
+                            -- 1 winner OR 3+ winners OR non-consecutive
+                            -- pair: play lowest (R3 — conserve top trump).
                             return lowestByRank(trumpWinners, contract)
                         end
                     end
