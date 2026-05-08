@@ -2736,6 +2736,16 @@ local function renderCenter()
        or S.s.phase == K.PHASE_TRIPLE
        or S.s.phase == K.PHASE_FOUR
        or S.s.phase == K.PHASE_GAHWA then
+        -- v1.4.4 (UI fix — user-reported): hide the bid card during
+        -- the dice-roll window so it doesn't bleed through behind
+        -- the DICE ROLL banner. Banner shows for ~3.5s at game start;
+        -- bid card resumes when dealerRollAt expires.
+        local now = (GetTime and GetTime()) or 0
+        if S.s.dealerRollAt and now < S.s.dealerRollAt then
+            local slot = centerCards.bid
+            if slot and slot.frame then slot.frame:Hide() end
+            return
+        end
         if S.s.bidCard then
             local slot = centerCards.bid
             slot.frame:Show()
@@ -3105,7 +3115,12 @@ local function renderBanner()
             banner.defender:SetText("")
             banner.modifiers:SetText("")
             banner.belote:SetText("")
-            banner.title:SetText("|cffffd055🎲  DICE ROLL|r")
+            -- v1.4.4 (UI fix — user-reported): WoW's default font
+            -- doesn't render the 🎲 emoji (U+1F3B2) — was showing as
+            -- a missing-glyph box. Replace with plain text title.
+            -- The bid card backdrop is now hidden during this window
+            -- (see bid-card render block) so the banner stands clean.
+            banner.title:SetText("|cffffd055-=  DICE ROLL  =-|r")
             banner.final:SetText(("First dealer: |cff66ddff%s|r"):format(nm))
             return
         end

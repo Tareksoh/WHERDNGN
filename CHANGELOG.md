@@ -1,5 +1,153 @@
 # Changelog
 
+## v1.4.4 — Pos-3 hold-back + multi-perspective audit fixes (LOCAL ONLY)
+
+> **NOT YET PUSHED**: pending user review of multi-perspective audit
+> synthesis. The user dispatched 3 parallel audits (Codex CLI,
+> Gemini CLI, ruflo agent) for "Re-evaluate bot heuristics under
+> human-target play, not bot-vs-bot."
+
+**Audit dispatch results:**
+- **Codex CLI**: completed, structured findings ✓
+- **ruflo agent** (ruflo-core:reviewer): completed, 1200-word report ✓
+- **Gemini CLI**: failed with Google API 500 error after retries
+
+828/828 tests pass.
+
+### #5 — Pos-3 hold-back implemented (NEW)
+
+User direction: "consider and use psychological bait if the risk
+is not extremely high and we can contain it in specific scenarios."
+
+Implemented at `Bot.lua:5290+` with **9-condition contained gate**
+per video #20 «تخليه يمسك» (let opp think they're holding the suit;
+ambush next round). M3lm+ tier, Sun contract only, probabilistic
+fire (30% M3lm, 40% Saudi Master).
+
+Conditions:
+1. M3lm+ tier
+2. Sun contract
+3. Pos-3 + partner-led MID card (rank 8/9/J/Q — expanded per
+   ruflo audit; pre-fix only matched 9/J creating a detectable
+   pattern gap)
+4. Opp pos-2 played LOWER than partner's lead (partner currently
+   winning)
+5. Bot holds K of led + ≥1 low (7/8/9) of led
+6. Bot has independent strength elsewhere (Ace in another suit OR
+   3+-card non-trump suit)
+7. Trick number 2-5 (mid-round window)
+8. Score non-clutch (both teams below target-26)
+9. Pos-4 not known holding A of led
+
+**Math under human-target play**: roughly breakeven on point-count
+vs default take-with-K. Real value is **information warfare** —
+opp observing the duck reads "bot has nothing in this suit",
+corrupting their hand-distribution model for the rest of the
+round. Against humans, ~55% probability of re-lead bait creates
+positive expected information capture even when point-EV is
+breakeven.
+
+### Multi-perspective audit consensus fixes
+
+Two independent audits (Codex CLI + ruflo agent) agreed on:
+
+**HIGH consensus — Tahreeb sender reversal** (`Bot.lua:4609-4666`):
+
+Both auditors classified the v1.4.1-deferred behavior as DRIFTED
+under human-target play. The user's earlier hesitation was based
+on bot-vs-bot reasoning where the lead-back action is the same
+regardless of signal sub-form. But against humans:
+
+> "Humans actively model partner's hand. When the bot emits a
+> bottom-up 'want' signal from a suit holding A+T, a human
+> opponent correctly infers 'sender has high cards in that
+> suit' — the inverse of what the signal is supposed to convey."
+> (ruflo)
+
+> "Bots mostly care that the lead-back suit is right; humans
+> infer whether you hold A, whether the suit is medium, and
+> which suit you are withholding. Current behavior preserves
+> tactical lead-back value but corrupts partnership semantics."
+> (Codex)
+
+**Fix**: per video #1 form 5, bottom-up = "want, NO Ace". The
+"want" sender at Bot.lua:4609 now requires **no A AND no T** in
+the suit (was: requires A or T present). Bargiya (above this
+block) still handles A-with-cover. Suits with T-only or
+A-only-without-cover now fall through to T-4 dump-ordering or
+default low.
+
+This OVERTURNS the v1.4.1 deferral decision — the multi-perspective
+audit found human-target reasoning makes the reversal correct
+despite single-source video evidence concerns.
+
+**Pos-3 hold-back C3 expansion** (`Bot.lua:5324-5333`):
+
+Per ruflo audit: the 9-or-J-only gate created a detectable
+pattern gap. Expanded to include 8 and Q so M3lm-tier opps can't
+probe partner-led-8 tricks for predictable bot behavior.
+
+### Disagreement — Pos-2 breaker rate (12%/20%) NOT changed
+
+Auditors disagreed:
+- **Codex**: too low for human-target; raise to 18%/25%
+- **ruflo**: 12% Advanced is correct; drop M3lm 20%→15% with
+  signal-based modifier (e.g., +5% when baitedSuit set)
+
+Without consensus, the breaker rates stay at v1.3.4 walkback
+values (12%/20%). User decision pending.
+
+### UI fix — Dice banner (user-reported)
+
+Pre-v1.4.4: dice-roll banner showed an empty box where the 🎲
+emoji was supposed to render (WoW's default font lacks emoji
+support). The bid card (face-up dealing card) was also visible
+beneath the banner, creating visual clash.
+
+**Fixes** in `UI.lua`:
+1. `🎲  DICE ROLL` title → `-=  DICE ROLL  =-` (ASCII flair that
+   renders in WoW's font universally)
+2. Bid card render at `UI.lua:2739` now hides the bid card slot
+   while `s.dealerRollAt > now` (the dice-roll window). Banner
+   stands clean during the 3.5-second dealer announcement.
+
+### Other audit findings (no action — confirmed ALIGNED)
+
+Both auditors agreed these are correctly calibrated for
+human-target play:
+- **BOT_FOUR_TH=80 < BOT_TRIPLE_TH=82 ordering**: mitigated by
+  `Bot.PickFour`'s +5 strength bonus; per-team distributions
+  differ. Comment is complete and accurate.
+- **Sun establishing «مسك اللون»**: correctly overrides H-7
+  shortest-suit when holding 3+-with-A. Matches video #20
+  control concept and video #6 anti-Faranka note.
+- **Score-desperation Bel hand-bypass**: video #25 R26 directly
+  sourced; correctly calibrated.
+- **100-meld + Ace Bel modifier**: video #25 R27 directly sourced.
+- **Faranka inversion 0.70 captureRate**: directionally correct;
+  magnitude qualitative-only but defensible.
+- **T-sacrifice Saudi Master tier gate**: per video #8 + bot-
+  personalities.md tier spec; correctly enforced.
+- **BotMaster oppHighInferred weight 30**: video #19 correctly
+  encoded; appropriate weight in the leadCount=1 / topTouch=60
+  scale.
+
+### Items deferred for further review
+
+- **Tahreeb bot-partner gate** (Codex finding): currently signals
+  fire only when partner is bot. Codex argues this leaves EV on
+  the table against strong human partners who do read Saudi
+  signals. Significant tier-design change; needs user direction.
+- **Pos-2 breaker rate adjustment**: auditor disagreement; user
+  to choose 18%/25% (Codex) vs 12%/15%-with-modifier (ruflo).
+
+### Tests
+
+828/828 pass. The Tahreeb sender reversal is a behavioral change
+but no source-pin tests exercise the specific A/T-suit branch
+that was inverted (the gate's inputs are runtime memory, not
+fixture-controlled).
+
 ## v1.4.3 — Saudi-pro convention implementations (5 new + 1 stale closed)
 
 User triaged the v1.4.2 mining-derived deferrals. v1.4.3 implements

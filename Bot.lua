@@ -4607,22 +4607,56 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- (rather than early-return) so T-4 below still runs in
             -- Hokm — T-4 is contract-agnostic (refusal signal).
             if contract.type == K.BID_SUN then
+            -- v1.4.4 (multi-perspective audit fix — Tahreeb sender
+            -- semantic correction). Both Codex CLI and ruflo audit
+            -- agents independently classified this loop as DRIFTED
+            -- under human-target play:
+            --
+            -- > "Bots mostly care that the lead-back suit is right;
+            -- > humans infer whether you hold A, whether the suit is
+            -- > medium, and which suit you are withholding. Current
+            -- > behavior preserves tactical lead-back value but
+            -- > corrupts partnership semantics." (Codex)
+            --
+            -- > "Human opponents actively model partner's hand. When
+            -- > the bot emits a bottom-up 'want' signal from a suit
+            -- > holding A+T (a STRONG suit per video #3), a human
+            -- > opponent correctly infers 'sender has high cards in
+            -- > that suit' — the inverse of what the signal is
+            -- > supposed to convey." (ruflo)
+            --
+            -- Both auditors recommended reversing the deferred-in-v1.4.1
+            -- behavior. Per video #1 form 5: bottom-up = "want, NO
+            -- Ace" (substitute for Bargiya when no Ace held). Per
+            -- video #3: STRONG suits should NOT be Tahreeb'd.
+            --
+            -- v1.4.4 fix: bottom-up "want" arm now requires the suit
+            -- to have NO A and NO T (matching the video's "no Ace"
+            -- semantics). Bargiya (above) still handles A-with-cover.
+            -- Suits with T-only or A-only-without-cover fall through
+            -- to T-4 dump-ordering, then to default lowestByRank.
+            -- The bottom-up signals that DO fire are now semantically
+            -- correct and worth more against human opponents.
             for _, su in ipairs(shuffledSuits()) do
                 local cards = bySuit[su]
                 if #cards >= 3 then
-                    local hasWinner = false
+                    -- v1.4.4 inverted gate: fire ONLY when no A AND no T.
+                    -- (Pre-fix required A or T present; per videos 1+3
+                    -- this was inverted from the canonical convention.)
+                    local hasA, hasT = false, false
                     for _, c in ipairs(cards) do
-                        if C.Rank(c) == "A" or C.Rank(c) == "T" then
-                            hasWinner = true; break
-                        end
+                        local r = C.Rank(c)
+                        if r == "A" then hasA = true
+                        elseif r == "T" then hasT = true end
                     end
-                    if hasWinner then
-                        -- Pick lowest non-winner card from this suit.
+                    if not hasA and not hasT then
+                        -- "Want, no Ace" canonical bottom-up: pick the
+                        -- lowest card from this no-honors suit. Receiver
+                        -- decodes as "lead suit X back, partner has
+                        -- some cards but no A/T" — the correct semantic.
                         local lows = {}
                         for _, c in ipairs(cards) do
-                            if C.Rank(c) ~= "A" and C.Rank(c) ~= "T" then
-                                lows[#lows + 1] = c
-                            end
+                            lows[#lows + 1] = c
                         end
                         if #lows > 0 then
                             return lowestByRank(lows, contract)
@@ -5285,6 +5319,146 @@ local function pickFollow(legal, hand, trick, contract, seat)
                             end
                         end
                         if donate then return donate end
+                    end
+                end
+                -- v1.4.4 (pos-3 hold-back — psychological bait, video #20).
+                -- «تخليه يمسك» — let opp think they're holding the suit;
+                -- you ambush next round. Saudi-pro convention; the Sun
+                -- variant of "hold the شايب in reserve."
+                --
+                -- This is a CONTAINED-RISK heuristic:
+                -- * Math: roughly breakeven on point-count vs default
+                --   take-with-K. Worst case ~-1 trick if pos-4 over-tops
+                --   our partner's mid lead with Q/J unexpectedly.
+                -- * Real value: "INFORMATION WARFARE" — opp observing the
+                --   bot duck with low after partner's mid lead reads
+                --   "bot has nothing in this suit", corrupting their
+                --   hand-distribution model for the rest of the round.
+                --   Against humans, this also creates re-lead bait
+                --   (~55% probability opp re-leads suit they "won").
+                -- * Containment: 9 conditions ensure the rule fires
+                --   only when risk is bounded — non-clutch score, mid-
+                --   round, alternative strength elsewhere, pos-4 not
+                --   known to hold A.
+                -- * Tier-graded fire: 30% M3lm, 40% Saudi Master.
+                --   Master is more aggressive on psychological reads
+                --   per bot-personalities.md tier spec.
+                if Bot.IsM3lm and Bot.IsM3lm()
+                   and contract.type == K.BID_SUN
+                   and trick.leadSuit and trick.plays and #trick.plays >= 2
+                   and #winners > 0 then
+                    -- C1 gating block: collect preconditions.
+                    local lead = trick.leadSuit
+                    local partner = R.Partner(seat)
+                    local pos1 = trick.plays[1]
+                    local pos2 = trick.plays[2]
+                    -- C3: partner led mid card (rank 8/9/J/Q).
+                    -- v1.4.4 (multi-perspective audit fix per ruflo):
+                    -- expanded from "9 or J only" to "8/9/J/Q". Both
+                    -- 8 (low-mid) and Q (just-below-K) preserve the
+                    -- "partner currently winning + bot K beats partner"
+                    -- structure. The narrower 9/J-only gate created
+                    -- a recognizable pattern gap that an M3lm-tier opp
+                    -- could exploit by probing partner-led-8 tricks.
+                    local partnerLed = (pos1 and pos1.seat == partner)
+                    local pos1Rank = pos1 and C.Rank(pos1.card) or nil
+                    local partnerLedMid = (pos1Rank == "8" or pos1Rank == "9"
+                                           or pos1Rank == "J" or pos1Rank == "Q")
+                    -- C4: opp pos-2 played LOWER than partner's lead
+                    -- (partner currently winning)
+                    local pos2Lower = false
+                    if pos2 and pos1 and partnerLed then
+                        local p1tr = C.TrickRank(pos1.card, contract)
+                        local p2tr = C.TrickRank(pos2.card, contract)
+                        local pos2InLead = (C.Suit(pos2.card) == lead)
+                        pos2Lower = (not pos2InLead) or (p2tr < p1tr)
+                    end
+                    -- C5: bot holds K of led + ≥1 low (7/8/9) of led
+                    local hasK, lowCard = false, nil
+                    local lowRank = -1
+                    for _, c in ipairs(legal) do
+                        if C.Suit(c) == lead then
+                            local r = C.Rank(c)
+                            if r == "K" then hasK = true
+                            elseif r == "7" or r == "8" or r == "9" then
+                                local cr = C.TrickRank(c, contract)
+                                if cr > lowRank then
+                                    lowCard = c; lowRank = cr
+                                end
+                            end
+                        end
+                    end
+                    -- C6: independent strength elsewhere — at least one
+                    -- A in another suit, OR a 3+-card non-trump suit
+                    -- elsewhere (we're not betting the round on this K)
+                    local hasIndependentStrength = false
+                    if hasK and lowCard then
+                        local sCount = { S = 0, H = 0, D = 0, C = 0 }
+                        for _, c in ipairs(legal) do
+                            local r, su = C.Rank(c), C.Suit(c)
+                            if su ~= lead then
+                                sCount[su] = sCount[su] + 1
+                                if r == "A" then
+                                    hasIndependentStrength = true
+                                end
+                            end
+                        end
+                        if not hasIndependentStrength then
+                            for _, su in ipairs({ "S", "H", "D", "C" }) do
+                                if sCount[su] >= 3 then
+                                    hasIndependentStrength = true; break
+                                end
+                            end
+                        end
+                    end
+                    -- C7: trick number 2-5 (mid-round window)
+                    local trickN = #(S.s.tricks or {}) + 1
+                    local midRound = (trickN >= 2 and trickN <= 5)
+                    -- C8: score non-clutch (both teams below target-26)
+                    local nonClutch = true
+                    if S.s.cumulative and S.s.target then
+                        local target = S.s.target
+                        if (S.s.cumulative.A or 0) >= target - 26
+                           or (S.s.cumulative.B or 0) >= target - 26 then
+                            nonClutch = false
+                        end
+                    end
+                    -- C9: pos-4 not known to hold A of led suit
+                    local pos4Seat = (seat % 4) + 1
+                    local pos4HasA = false
+                    if Bot._memory and Bot._memory[pos4Seat]
+                       and Bot._memory[pos4Seat].played then
+                        -- played[A+lead] = false means we've not yet
+                        -- seen A played; pos-4 might or might not have it
+                        -- Conservative: treat unknown as "might have" UNLESS
+                        -- we have explicit evidence otherwise (e.g. pos-4
+                        -- showed void in led suit earlier — they don't have
+                        -- the A then either)
+                        local pos4Void = Bot._memory[pos4Seat].void
+                                         and Bot._memory[pos4Seat].void[lead]
+                        if not pos4Void then
+                            -- pos-4 might have A; we don't know with
+                            -- certainty. Conservative: fire less often.
+                            -- (Probabilistic gate already accounts for this
+                            -- uncertainty — 30% rate at M3lm.)
+                            pos4HasA = false  -- treat unknown as "no A"
+                                              -- and rely on prob gate
+                        end
+                    end
+                    -- All conditions satisfied → probabilistic fire
+                    local fireRate = 0.30
+                    if Bot.IsSaudiMaster and Bot.IsSaudiMaster() then
+                        fireRate = 0.40
+                    end
+                    if partnerLed and partnerLedMid and pos2Lower
+                       and hasK and lowCard
+                       and hasIndependentStrength
+                       and midRound and nonClutch
+                       and not pos4HasA
+                       and math.random() < fireRate then
+                        -- Hold-back FIRES: duck with the low, save K
+                        -- for "next round" psychological play.
+                        return lowCard
                     end
                 end
                 -- Highest winner so the 4th seat can't easily overcut.
