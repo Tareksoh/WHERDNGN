@@ -17,6 +17,7 @@ cards/__pycache__/
 .swarm_findings/v1.4.4_*
 .swarm_findings/v1.4.6_*
 human_target_ev_audit_report.md
+# v1.5.3 swarm audit committed as historical record (not gitignored).
 
 
 # Whisper audio cache (large binaries, regeneratable)

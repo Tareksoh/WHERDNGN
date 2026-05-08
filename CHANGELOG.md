@@ -1,5 +1,118 @@
 # Changelog
 
+## v1.6.0 — Anti-prediction release (5-agent swarm audit fixes)
+
+A 5-agent parallel audit asked: **is the bot bulletproof or too
+predictable when playing skilled humans?** Verdict: not bulletproof.
+55% of decision points fully deterministic, 60 exploits cataloged
+(3 CRITICAL, 15 HIGH), variance budget ~3-5× narrower than Saudi
+pros, lead-suit predictability ±1 candidate after 4-6 rounds.
+
+This release ships the top 5 surgical fixes from the audit's
+counter-strategy synthesis. All five are additive, tier-gated, and
+partner-bot-safe (analyzed individually — no fix breaks signal
+comprehension between bots).
+
+### CS-01 — Faranka borderline-state breaker (M3lm+, HIGH ROI)
+
+`Bot.lua:~4374`. Pre-fix, the v1.5.0 5-factor framework deterministic-
+ally maps board state → captureRate; any opp who memorizes the
+factors predicts bot behavior on every Faranka shape. Per video #20
+"التحكم في الدور" pros vary at borderline states (~10-15% bluff
+fraction).
+
+When `captureRate` lands in the genuinely-uncertain band [0.40, 0.60]
+after factor adjustments, add a ±0.10 random kick BEFORE the clamp.
+~20% of borderline rolls now flip across the Faranka/capture
+threshold randomly. Partner-bot reads only the result, not the
+predicted outcome — wobble stays inside the 0.50-base noise budget
+already absorbed.
+
+### CS-02 — Self-style escalation jitter (Fzloky+, HIGH ROI)
+
+`Bot.lua:~6580 + 6810/6988/7070/7124`. Pre-fix every Fzloky bot's
+Bel/Triple/Four/Gahwa decision used the same per-rung jitter band,
+so reading one bot's escalation pattern leaked the strength range
+for every bot at the table. Bot-strength-from-Bel was readable to
+~22 points resolution.
+
+New helper `selfStyleJitterBonus(seat, kind)` extends each rung's
+jitter by an extra ±N drawn from the seat's lifetime escalation
+counter (`Bot._partnerStyle[seat].bels/triples/fours/gahwas`). Loose
+callers (escalated often) get wider bands; tight callers (rarely
+escalate) get narrower. Same Bel from two different bots now conveys
+different strength. Per-rung caps: Bel +4, Triple +5, Four +5, Gahwa
++6. Partner reads the post-Bel multiplier change, not predicted-in-
+advance — meaning of a fired Bel unchanged.
+
+### CS-03 — Lead-suit perturbation (Fzloky+, HIGH ROI)
+
+`Bot.lua:~6470`. `pickLead` resolves through a long deterministic
+branch-priority chain. When 2+ branches would fire on the same hand
+state, the FIRST branch always wins — pre-computable.
+
+New `perturbLeadSuit` wrapper (forward-decl pattern) at Fzloky+ tier
+swaps with 6% probability after `pickLead` resolves. Swap target:
+same-rank-class card in a DIFFERENT, NON-TRUMP suit. Carve-outs:
+trump leads (signal-critical), A/J leads (boss-claim + AKA), single-
+ton suits. Lead-suit prediction degrades from ~85% to ~60% on flat-
+top states without breaking any signal.
+
+### Pos-2 hand-shape deception re-intro (Saudi Master, 8% rate)
+
+`Bot.lua:~5285`. v1.4.6 fully removed the v1.4.5 probabilistic pos-2
+breaker after a 4-perspective audit found pure-probability deviation
+read as «غلط» (beginner mistake) to a Saudi observer. The v1.5.3
+swarm (variance gap, agent 4) found the removal went too far for
+human-target play: pos-2 is the most-read position in Saudi Baloot,
+and a fully deterministic pos-2 makes the bot strictly readable.
+
+Per video #22 R3, pros DO deviate at pos-2 — but on HAND-SHAPE
+TRIGGERS, not pure probability. v1.6.0 re-introduces the breaker as
+a hand-shape-conditioned, Saudi-Master-only branch:
+
+- Trigger: Hokm contract, sureStopper has been picked (we WERE going
+  to take with the boss), AND we hold a same-suit "next card down"
+  that still wins the trick AND neither pos-3 nor pos-4 is known void
+  in the led suit
+- 8% chance to swap down: play the lower winner instead. Opp infers
+  we don't have the higher card and counter-attacks the (now-fake)
+  absent boss. We surprise with the higher card next round.
+- Carve-outs: trump suit (signal-critical), Sun contract (no ruff
+  threat — deception value lower), A/J as alt-winner (signal-carrier
+  ranks).
+
+Pure-probability "duck when you should take" remains excluded as
+«غلط» — this is a TAKE-side deception only.
+
+### AKA bluff rate bump (0.03 → 0.08)
+
+`Bot.lua:~6398`. AKA was the single highest-leak signal — the call
+banner pinpoints the live boss in the announced suit. Pre-fix 3%
+noise rate at Saudi Master was too low to meaningfully degrade opp's
+prior; opp could treat 97% of AKA calls as honest. 8% (~3× increase)
+shifts the expectation enough that opp must seriously hedge against
+the bluff arm. Still well below convention-breaking levels.
+
+### Tests
+
+819/819 pass. All five fixes are additive perturbations on existing
+deterministic paths; existing source-pin tests don't exercise the
+specific board states that gate the new variance behavior.
+
+### Cumulative impact estimate
+
+Per audit Agent 5: human-exploit edge against M3lm+ bots estimated
+to drop from ~15-20% per game to ~5-8% — rough, hard to measure
+without bot-vs-pro tournament data.
+
+### Audit reports committed as historical record
+
+The five swarm audit reports are now committed under
+`.swarm_findings/v1.5.3_audit_*.md` (pattern mining, exploit playbook,
+signal leakage, variance gap, counter-strategy). Future audits can
+diff against these as a baseline.
+
 ## v1.5.3 — Remove non-canonical TAKE_HOKM cross-trump overcall
 
 User-reported: "when someone bids hokm in bidding round 1, how come

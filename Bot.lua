@@ -4371,6 +4371,23 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     captureRate = 1.0  -- always take, break Kaboot
                 end
             end
+            -- v1.6.0 CS-01 (audit v1.5.3 swarm — predictability fix):
+            -- borderline-state breaker. When the factor-additive
+            -- captureRate lands in the genuinely-uncertain band
+            -- [0.40, 0.60] — i.e. neither the cover, sweep, game-flip,
+            -- nor LHO factors push it strongly either way — add a
+            -- ±0.10 random kick before the clamp. This shifts the
+            -- actual roll across the Faranka/capture flip threshold
+            -- on ~20% of borderline rolls that were previously fully
+            -- predictable to humans memorizing the 5-factor framework.
+            -- M3lm+-gated; partner-bot doesn't predict outcomes in
+            -- advance, only observes the result, so the wobble stays
+            -- inside the noise budget partner already absorbs from
+            -- the 0.50 base.
+            if Bot.IsM3lm and Bot.IsM3lm()
+               and captureRate >= 0.40 and captureRate <= 0.60 then
+                captureRate = captureRate + (math.random() * 0.20 - 0.10)
+            end
             -- Clamp [0.05, 0.95]
             if captureRate < 0.05 then captureRate = 0.05 end
             if captureRate > 0.95 then captureRate = 0.95 end
@@ -5276,18 +5293,88 @@ local function pickFollow(legal, hand, trick, contract, seat)
                         end
                     end
                 end
+                -- v1.6.0 (audit v1.5.3 swarm — pos-2 deception re-intro):
+                -- v1.4.6 fully removed the probabilistic pos-2 breaker
+                -- on the basis that v1.4.5's pure-probability deviation
+                -- read as «غلط» (beginner mistake) to a Saudi observer.
+                -- The v1.5.3 audit (variance gap, agent 4) found that
+                -- removal went too far for HUMAN-target play: pos-2 is
+                -- the most-read position in Saudi Baloot, and a fully
+                -- deterministic pos-2 makes the bot strictly readable.
+                -- Per video #22 R3, pros DO deviate at pos-2 — but on
+                -- HAND-SHAPE TRIGGERS, not pure probability.
+                --
+                -- v1.6.0 re-introduces pos-2 deception as a hand-shape-
+                -- conditioned, Saudi-Master-only branch. Trigger: Hokm
+                -- contract, sureStopper has been picked (we WERE going
+                -- to take with the boss), and we hold a same-suit "next
+                -- card down" that still wins the trick. With 8% chance,
+                -- swap down: play the lower winner instead. Opp sees
+                -- the lower card, infers we don't have the higher one,
+                -- and sets up a counter-attack against the (now-fake)
+                -- absent higher card. We use the higher card next round
+                -- to surprise.
+                --
+                -- Carve-outs (forbidden):
+                --  • Trump suit (signal-critical for partner reads)
+                --  • Sun contract (no ruff threat — deception value lower)
+                --  • Pos-3/pos-4 has known void in led suit (would over-
+                --    cut our lower winner; deception fails)
+                --  • The "lower winner" is also rank A or J (signal carriers)
+                if sureStopper and Bot.IsSaudiMaster and Bot.IsSaudiMaster()
+                   and contract.type == K.BID_HOKM
+                   and trick.leadSuit and trick.leadSuit ~= contract.trump
+                   and math.random() < 0.08 then
+                    local sureRank = C.Rank(sureStopper)
+                    -- Find a strictly lower-ranked legal that is also a
+                    -- winner (so the trick is still ours).
+                    local rankIdx = {}
+                    do
+                        local i = 1
+                        for _, r in ipairs(K.RANK_PLAIN or { "7","8","9","J","Q","K","T","A" }) do
+                            rankIdx[r] = i; i = i + 1
+                        end
+                    end
+                    local sureIdx = rankIdx[sureRank] or 0
+                    local altWinner = nil
+                    for _, c in ipairs(legal) do
+                        local cIdx = rankIdx[C.Rank(c)] or 0
+                        if c ~= sureStopper
+                           and C.Suit(c) == trick.leadSuit
+                           and C.Rank(c) ~= "A" and C.Rank(c) ~= "J"
+                           and cIdx > 0 and cIdx < sureIdx then
+                            -- Verify it's still a winner (in `winners`).
+                            for _, w in ipairs(winners) do
+                                if w == c then altWinner = c; break end
+                            end
+                            if altWinner then break end
+                        end
+                    end
+                    -- Last gate: pos-3 (partner) and pos-4 (opp) not
+                    -- KNOWN void in led suit — deception requires they
+                    -- can't ruff our lower winner.
+                    if altWinner then
+                        local partnerSeat = R.Partner(seat)
+                        local opp4 = (seat % 4) + 1     -- next seat (opp)
+                        if opp4 == partnerSeat then opp4 = (partnerSeat % 4) + 1 end
+                        local pVoid = Bot._memory and Bot._memory[partnerSeat]
+                                      and Bot._memory[partnerSeat].void
+                                      and Bot._memory[partnerSeat].void[trick.leadSuit]
+                        local oVoid = Bot._memory and Bot._memory[opp4]
+                                      and Bot._memory[opp4].void
+                                      and Bot._memory[opp4].void[trick.leadSuit]
+                        if not pVoid and not oVoid then
+                            return altWinner   -- deception fires
+                        end
+                    end
+                end
                 if sureStopper then return sureStopper end
-                -- v1.4.6 removed the probabilistic pos-2 breaker
-                -- (was 18%/25% in v1.4.5). 4-perspective audit found
-                -- the v1.2.1 citation of video #20 «تمسك اللعب» was
-                -- wrong — that's a POS-3 rule, not pos-2. Real
-                -- Saudi-pro pos-2 deviations are HAND-SHAPE FORCED
-                -- (video #22 consecutive top trumps, video #08
-                -- bare-T J-bait), not probabilistic. Random
-                -- deviation reads as «غلط» (beginner mistake) to a
-                -- Saudi-table observer. Carve-outs are wired
-                -- elsewhere: Hokm sureStopper above, Saudi-Master
-                -- T-bait in deceptiveOverplay below.
+                -- v1.4.6 NOTE preserved: pure-probability pos-2 deviation
+                -- (the v1.4.5 18%/25% breaker on non-take cases) remains
+                -- removed. The v1.6.0 hand-shape breaker above is opt-in
+                -- on the TAKE side only — when we're already winning the
+                -- trick, just with a different card. Random "duck when
+                -- you should take" is still excluded as «غلط».
                 --
                 -- Duck: throw the lowest legal that ISN'T a winner.
                 local nonWinners = {}
@@ -6394,7 +6481,17 @@ function Bot.PickAKANoise(seat, leadCard)
     if not S.s.trick or #S.s.trick.plays > 0 then return nil end
     local trump = S.s.contract.trump
     if not trump then return nil end
-    if math.random() >= 0.03 then return nil end
+    -- v1.6.0 (audit v1.5.3 swarm — signal leakage agent 3): noise rate
+    -- bumped from 0.03 to 0.08. Audit found AKA was the single highest-
+    -- leak signal (CRITICAL severity at sub-Saudi-Master tiers because
+    -- the call-banner pinpoints the live boss). The 3% noise rate at
+    -- Saudi Master was too low to meaningfully degrade opp's prior on
+    -- AKA contents — opp could safely treat 97% of AKA calls as honest
+    -- and ignore the noise floor. 8% (~3x increase) shifts the
+    -- expectation enough that opp must seriously hedge against the
+    -- bluff arm. Still well below convention-breaking levels (no opp
+    -- would dismiss an AKA as 92% trustworthy).
+    if math.random() >= 0.08 then return nil end
     -- Avoid trump suit + dedup with already-sent AKA suits.
     Bot._memory = Bot._memory or emptyMemory()
     local mem = Bot._memory[seat]
@@ -6419,6 +6516,12 @@ function Bot.PickAKANoise(seat, leadCard)
     if mem and mem.akaSent then mem.akaSent[su] = true end
     return su
 end
+
+-- Forward declaration for v1.6.0 CS-03 lead-suit perturbation. The
+-- assignment `function perturbLeadSuit(...)` below this point writes
+-- to this local (Lua 5.1 idiom), so PickPlay's call site at line 6470
+-- resolves to the local rather than creating a global.
+local perturbLeadSuit
 
 function Bot.PickPlay(seat)
     -- v0.5 C-1: Saudi Master ISMCTS delegation. Previously Bot.PickPlay
@@ -6447,9 +6550,65 @@ function Bot.PickPlay(seat)
     if #legal == 1 then return legal[1] end
 
     if not trick or not trick.plays or #trick.plays == 0 then
-        return pickLead(legal, contract, seat)
+        return perturbLeadSuit(pickLead(legal, contract, seat),
+                               legal, contract)
     end
     return pickFollow(legal, hand, trick, contract, seat)
+end
+
+-- v1.6.0 CS-03 (audit v1.5.3 swarm — predictability fix): lead-suit
+-- perturbation. pickLead resolves through a long deterministic
+-- branch-priority chain (closed-trump filter → trick-8 targeting →
+-- sweep-pursuit → tahreeb-pref → AKA continuation → defender-style →
+-- lowestByRank fallback). When 2+ branches would fire on the same
+-- hand state, the FIRST listed branch always wins. A perfect-memory
+-- opp pre-computes this.
+--
+-- Fix: at Fzloky+ tier only, with 6% probability after pickLead
+-- resolves, swap the chosen card with a same-rank-class alternative
+-- in a DIFFERENT, NON-TRUMP suit. Same rank-class preserves the
+-- lead's strategic value (boss/mid/low quality unchanged); the suit
+-- swap degrades opp's lead-suit prediction from ~85% to ~60% on
+-- flat-top states without breaking any signal.
+--
+-- Carve-outs that we DO NOT perturb (signal-critical):
+--   • Trump leads — partner reads trump-led-vs-side-led for read on
+--     bidder-team strength
+--   • A/J leads — boss-claim and AKA-hint signals
+--   • Singletons — no alternative anyway
+--
+-- Partner impact: minimal. Partner reads the suit led; the
+-- post-perturb suit is one of pickLead's own candidate set (legal +
+-- same rank class), all Saudi-canonical. Partner's read-side logic
+-- treats lead-suit as input, not predicted-in-advance.
+--
+-- Defined as a forward-decl-style local function so PickPlay can
+-- reference it on the line above. Must come AFTER PickPlay since
+-- Lua 5.1 needs the upvalue captured before the call site, but
+-- since perturbLeadSuit is itself local, declaring it ABOVE PickPlay
+-- (with a forward-decl pattern) is the cleanest fix.
+function perturbLeadSuit(card, legal, contract)
+    if not card then return card end
+    if not Bot.IsFzloky or not Bot.IsFzloky() then return card end
+    if not legal or #legal < 2 then return card end
+    if math.random() >= 0.06 then return card end
+    local rank = C.Rank(card)
+    local suit = C.Suit(card)
+    local trump = contract and contract.trump
+    if trump and suit == trump then return card end
+    if rank == "A" or rank == "J" then return card end
+    -- Find same-rank legal alternatives in a DIFFERENT, non-trump suit.
+    local pool = {}
+    for _, c in ipairs(legal) do
+        if c ~= card
+           and C.Suit(c) ~= suit
+           and C.Rank(c) == rank
+           and (not trump or C.Suit(c) ~= trump) then
+            pool[#pool + 1] = c
+        end
+    end
+    if #pool > 0 then return pool[math.random(#pool)] end
+    return card
 end
 
 -- ---------------------------------------------------------------------
@@ -6531,6 +6690,50 @@ local BEL_JITTER = 10
 local TRIPLE_JITTER = 12
 local FOUR_JITTER   = 15
 local GAHWA_JITTER  = 18
+
+-- v1.6.0 CS-02 (audit v1.5.3 swarm — predictability fix): self-style
+-- jitter widening for Fzloky+. Pre-fix, every Fzloky bot's Bel/Triple/
+-- Four/Gahwa decision was driven by the same per-rung jitter band — so
+-- once a human read one bot's escalation pattern, every bot at that
+-- table escalated from the same implied strength range. Hand-strength-
+-- from-Bel was readable to ~22 points resolution.
+--
+-- Fix: thread the seat's lifetime escalation count (Bot._partnerStyle
+-- [seat].bels / .triples / .fours / .gahwas) into an extra jitter delta.
+-- Seats that have escalated often get wider effective jitter ("loose"
+-- caller — could Bel from anywhere); seats that haven't get tighter
+-- ("tight" caller — Bel implies serious strength). Net: opp can't bank
+-- "all bots Bel from the same band". The same Bel from a loose-bel
+-- seat conveys less strength info than the same Bel from a tight-bel
+-- seat.
+--
+-- Partner impact: minimal. Partner observes contract.cardMult after
+-- the Bel fires (read-side); the wider WHICH-hands-Bel band doesn't
+-- change the meaning of the Bel itself — partner's Triple-eval ladder
+-- runs on the standard threshold scale.
+local function selfStyleJitterBonus(seat, kind)
+    if not Bot.IsFzloky or not Bot.IsFzloky() then return 0 end
+    if not Bot._partnerStyle then return 0 end
+    local m = Bot._partnerStyle[seat]
+    if not m then return 0 end
+    local count = (kind == "bels"    and m.bels)
+               or (kind == "triples" and m.triples)
+               or (kind == "fours"   and m.fours)
+               or (kind == "gahwas"  and m.gahwas)
+               or 0
+    -- Seat with 0-1 calls of this kind → tight reputation, mild
+    -- contract: -2 jitter (band tighter). Seat with 2+ → loose
+    -- reputation, expand: +(count-1), capped at +5. Higher rungs
+    -- cap at higher max since they're rarer (more variance budget).
+    local maxBonus = (kind == "bels" and 4)
+                  or (kind == "triples" and 5)
+                  or (kind == "fours" and 5)
+                  or (kind == "gahwas" and 6)
+                  or 4
+    local extra = math.min(maxBonus, math.max(-2, count - 1))
+    if extra == 0 then return 0 end
+    return math.random(-math.abs(extra), math.abs(extra))
+end
 
 -- v0.2.0: returns (yes, wantOpen) like the other escalation pickers.
 -- wantOpen: open the chain to a bidder Triple counter only if our hand
@@ -6747,6 +6950,8 @@ function Bot.PickDouble(seat)
     if th < K.BOT_BEL_TH - 16 then th = K.BOT_BEL_TH - 16 end
 
     local jth = jitter(th, BEL_JITTER)
+    -- v1.6.0 CS-02: self-style jitter widening (Fzloky+).
+    jth = jth + selfStyleJitterBonus(seat, "bels")
     eltrace("PickDouble eval: strength=%d th=%d jth=%d (BOT_BEL_TH=%d)",
             strength, th, jth, K.BOT_BEL_TH)
     if strength < jth then
@@ -6923,6 +7128,8 @@ function Bot.PickTriple(seat)
     -- v1.1.0 (audit unpredictability MED-7): Triple uses ±12 jitter
     -- (vs Bel ±10) — higher rung = larger variance.
     local jth = jitter(th, TRIPLE_JITTER)
+    -- v1.6.0 CS-02: self-style jitter widening (Fzloky+).
+    jth = jth + selfStyleJitterBonus(seat, "triples")
     eltrace("PickTriple eval: strength=%d th=%d jth=%d (BOT_TRIPLE_TH=%d)",
             strength, th, jth, K.BOT_TRIPLE_TH)
     if strength < jth then
@@ -7005,6 +7212,8 @@ function Bot.PickFour(seat)
     -- v1.1.0 (audit MED-7): Four uses ±15 jitter — higher rung,
     -- larger decision variance.
     local jth = jitter(th, FOUR_JITTER)
+    -- v1.6.0 CS-02: self-style jitter widening (Fzloky+).
+    jth = jth + selfStyleJitterBonus(seat, "fours")
     eltrace("PickFour eval: strength=%d th=%d jth=%d (BOT_FOUR_TH=%d)",
             strength, th, jth, K.BOT_FOUR_TH)
     if strength < jth then
@@ -7059,6 +7268,8 @@ function Bot.PickGahwa(seat)
     -- highest variance to break "pure deterministic from hand shape"
     -- escalation chain pattern.
     local jth = jitter(th, GAHWA_JITTER)
+    -- v1.6.0 CS-02: self-style jitter widening (Fzloky+).
+    jth = jth + selfStyleJitterBonus(seat, "gahwas")
     eltrace("PickGahwa eval: strength=%d th=%d jth=%d (BOT_GAHWA_TH=%d)",
             strength, th, jth, K.BOT_GAHWA_TH)
     local yes = strength >= jth
