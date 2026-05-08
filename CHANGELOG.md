@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.6.1 — Wire desync fix (MSG_TURN dropped frame recovery)
+
+User-reported: "the game froze, it was two humans and two bots, the
+host human opposite seat bot choose hokm and turn moved for the next
+human to bid but he still sees the bot's turn while the host sees it
+as the other human turn."
+
+### Root cause
+
+WoW's `CHAT_MSG_ADDON` channel can silently drop frames under throttle
+pressure (heavy guild chat, instance transition, or another addon
+spamming the same prefix). The bot's bid sequence emits two back-to-
+back broadcasts:
+
+```
+1. MSG_BID;<bot>;HOKM:S    ← arrived at remote ✓
+2. MSG_TURN;<next>;bid     ← dropped on the wire ✗
+```
+
+The remote applied the bid (`bids[bot] = HOKM:S`) but its local
+`s.turn` pointer never advanced. `S.IsMyTurn()` returned false on the
+next-bidder's screen → no bid UI → game frozen for that user. Host
+state moved on correctly; remote was stuck.
+
+A defensive 250ms re-broadcast for `MSG_CONTRACT` was added in
+v0.11.11 (`NetU-01`) to address the same throttle-drop class of bug
+in the dense overcall sequence — but `MSG_TURN` had no equivalent
+guard, even though it's just as critical for unfreezing remote
+clients.
+
+### Fix
+
+`Net.lua` `N.SendTurn` now mirrors the v0.11.11 NetU-01 pattern:
+after the initial broadcast, schedule a 250ms re-broadcast that
+self-suppresses if the host has moved past this turn.
+
+```lua
+if C_Timer and C_Timer.After then
+    C_Timer.After(0.25, function()
+        if S.s.isHost and S.s.turn == seat
+           and S.s.turnKind == kind then
+            broadcast(("%s;%d;%s"):format(K.MSG_TURN, seat, kind))
+        end
+    end)
+end
+```
+
+Properties:
+- **Idempotent on receive**: `S.ApplyTurn` just writes `s.turn = seat`
+  unconditionally; applying twice is a no-op.
+- **Self-suppressing**: if the host has moved past this turn (next
+  bid, contract, trick advance), the host-side gate prevents stale
+  re-broadcasts.
+- **250ms < any natural turn change**: `BOT_DELAY_BID` and
+  `BOT_DELAY_PLAY` are both ≥ 1.5s; human delays are longer. The
+  re-broadcast cannot carry stale info.
+
+### Impact
+
+Single point of change covers every turn advance — bid, play, all
+phases. Eliminates the entire class of "remote stuck on stale turn"
+desyncs caused by single-frame drops. Throttle pressure modest
+(re-broadcasts only fire when needed, plus a single duplicate per
+turn change otherwise).
+
+### Tests
+
+819/819 pass. The fix is a wire-level resilience addition; the test
+harness doesn't exercise `C_Timer` so the re-broadcast is dormant in
+tests but doesn't perturb existing flows.
+
 ## v1.6.0-hotfix — Pos-2 deception variable rename (meta-audit cleanup)
 
 A meta-audit of the v1.5.3 swarm reports (re-verified v1.6.0 against

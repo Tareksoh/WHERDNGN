@@ -150,6 +150,33 @@ end
 
 function N.SendTurn(seat, kind)
     broadcast(("%s;%d;%s"):format(K.MSG_TURN, seat, kind))
+    -- v1.6.1 (user-reported wire desync): defensive 250ms re-broadcast,
+    -- mirror of v0.11.11 NetU-01 MSG_CONTRACT pattern. WoW's CHAT_MSG_ADDON
+    -- channel can silently drop frames under throttle pressure (heavy
+    -- guild chat, instance transition, another addon spamming the same
+    -- prefix). User-reported scenario: bot bids HOKM in round 1, host
+    -- correctly advances turn to next human, but the remote's MSG_TURN
+    -- broadcast was dropped — leaving the remote stuck on the bot's
+    -- turn while the host had moved on. With no recovery mechanism the
+    -- game appears frozen for the affected client.
+    --
+    -- The re-broadcast is:
+    --   • Idempotent on receive: S.ApplyTurn just writes s.turn = seat
+    --     unconditionally, so applying twice is a no-op.
+    --   • Self-suppressing: if the host has moved past this turn (next
+    --     bid arrived, contract resolved, trick advanced) the gate
+    --     S.s.turn == seat AND turnKind == kind fails and we skip.
+    --   • 250ms is tighter than any natural turn change (BOT_DELAY_BID
+    --     and BOT_DELAY_PLAY are both >= 1.5s; human delays even longer)
+    --     so the re-broadcast cannot carry stale info.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.isHost and S.s.turn == seat
+               and S.s.turnKind == kind then
+                broadcast(("%s;%d;%s"):format(K.MSG_TURN, seat, kind))
+            end
+        end)
+    end
     -- Host arms the AFK auto-action timer for human seats. Bots
     -- self-act via MaybeRunBot and aren't subject to the timeout.
     if S.s.isHost then N.StartTurnTimer(seat, kind) end
