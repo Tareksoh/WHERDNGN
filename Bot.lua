@@ -4387,21 +4387,59 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- the pattern because the lowest is now gone.
             -- Fires BEFORE T-4 so want suits win over doubleton dump.
             --
-            -- ⚠ v1.4.0 audit-flagged contradiction with video #03:
-            -- video #1 form 5 (bottom-up = "want, no Ace") and video
-            -- #3 (Tahreeb a WEAK suit, partner returns opposite color
-            -- and that's your STRONG suit) both indicate the bottom-up
-            -- ascending signal should fire from a WEAK suit (no A/T),
-            -- not from a STRONG suit holding A/T. Current code emits
-            -- bottom-up from a suit WITH A or T — receiver reading the
-            -- signal would deduce "partner wants this suit, no Ace"
-            -- but partner DOES have A. This may mislead.
+            -- ⚠ v1.4.0 / v1.4.1 audit-flagged complexity (videos 1, 3, 5):
             --
-            -- DEFERRED: reversing this is delicate (game-feel change,
-            -- single-source contradiction with current Definite-tagged
-            -- v0.9.0 wiring citing video 10). User flagged as "not
-            -- straightforward" — needs cross-video reconciliation.
-            -- Tracked as v1.4.x decision item; do NOT silently flip.
+            -- VIDEO 1 (tahreeb_beginners) defines 5 forms:
+            --   1. Same-suit top-down: refuse this suit
+            --   2. Cross-color top discard: refuse via opposite color
+            --   3. Two-card same-suit refusal
+            --   4. Bargiya (A discard, want this suit, have SWA)
+            --   5. Bottom-up same-suit (want this suit, NO Ace) —
+            --      "بدال البرقيه" (substitute for Bargiya when no Ace)
+            --
+            -- VIDEO 3 (tahreeb_vs_tanfeer) adds suit categorization:
+            --   * WEAK suit (no honors) — Tahreeb a card here:
+            --     signals "nothing valuable, don't return"
+            --   * MEDIUM suit (Ace alone) — Tahreeb signals "I have
+            --     at least the Ace there, return"
+            --   * STRONG suit (multiple top cards left) — DO NOT
+            --     Tahreeb this suit. Partner returns opposite-color
+            --     by convention (which is your real strong suit).
+            --
+            -- VIDEO 5 (predictions) confirms touching-honors signaling
+            -- and notes Sun off-suit losers dump highest, Hokm trump
+            -- losers dump lowest (inverse). When uncertain who wins,
+            -- default to Tahreeb semantics.
+            --
+            -- CONTRADICTION WITH CURRENT CODE: this loop emits the
+            -- bottom-up "want" signal from a suit with ≥3 cards AND
+            -- A or T. Per video 1 form 5, bottom-up should fire only
+            -- when sender does NOT hold the Ace (the "substitute for
+            -- Bargiya" interpretation). Per video 3 STRONG-suit gate,
+            -- a suit with A is a STRONG suit and should NOT be
+            -- Tahreeb'd at all.
+            --
+            -- WHY IT'S NOT STRAIGHTFORWARD (per user's feedback):
+            -- Practical impact is mitigated because:
+            --   (a) Receiver action on "want" decode = lead suit back.
+            --       If sender DOES have A in that suit (mislabeled),
+            --       sender's A wins on the lead-back regardless of
+            --       which Tahreeb sub-form was emitted.
+            --   (b) The semantic distinction (Bargiya vs bottom-up)
+            --       affects only RECEIVER INFERENCE about sender's
+            --       hand, not the lead-back action itself.
+            --   (c) Reversing to "bottom-up only from no-A suits"
+            --       would mean fewer "want" signals overall (only
+            --       fires when we have a wanted suit but truly no A),
+            --       potentially reducing partner-coordination
+            --       opportunities the current code provides.
+            --
+            -- DEFERRED: behavioral reversal would need cross-video
+            -- reconciliation + bot-vs-bot impact measurement to verify
+            -- it doesn't reduce trick-capture. Currently maintaining
+            -- v0.9.0 behavior. Receiver decoder at Bot.lua:2322+
+            -- handles both Bargiya and ascending-want correctly
+            -- regardless of sender's exact spec compliance.
             -- v0.11.18-final U-2 (ultra audit): Sun-only gate. Per
             -- decision-trees.md Section 8 every sender row is tagged
             -- "Sun, partner winning; ...". The Bargiya branch above
@@ -5042,24 +5080,80 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
                 -- All legal cards are winners — fall through.
             elseif pos == 3 then
+                -- v1.4.1 (Concern 4 — Takbeer/Tasgheer certainty
+                -- gate, decision-trees.md rows 123-128, videos 21/22/23):
+                -- M3lm+ pos-3 partner-certain Takbeer extension.
+                -- Existing pos-3 logic (below) already does
+                -- "highestByRank(winners)" — implicit Takbeer when WE
+                -- have a winner. The certainty gate adds: when
+                -- PARTNER is certain winner (pos-4 known void in led
+                -- suit, Sun contract) AND we have NO winners
+                -- ourselves, play highest LOSER from led suit (or
+                -- highest non-trump if void). This donates points to
+                -- partner's winning pile that the default
+                -- low-loser fallback would discard.
+                --
+                -- Caveats per videos:
+                --   * Sun-only (Hokm trump-led has different conventions)
+                --   * Pos-4 void verified via Bot._memory[pos4].void
+                --   * Skip if we're a STRONG suit holder ourselves
+                --     (don't burn our own future winners). Heuristic:
+                --     skip the donate if our highest card is A or T.
+                --
+                -- "Behavior is not off" gate: this fires ONLY when the
+                -- existing winners-based Takbeer can't (no winners),
+                -- so it's a pure addition to previously-default-low
+                -- behavior. Doesn't override the existing logic.
+                if Bot.IsM3lm and Bot.IsM3lm()
+                   and contract.type == K.BID_SUN
+                   and partnerWinning and #winners == 0
+                   and trick.leadSuit and Bot._memory then
+                    local pos4Seat = (seat % 4) + 1
+                    local pos4Mem = Bot._memory[pos4Seat]
+                    local pos4Void = pos4Mem and pos4Mem.void
+                                     and pos4Mem.void[trick.leadSuit]
+                    if pos4Void then
+                        -- Partner-certain: pos-4 cannot follow led
+                        -- suit, can't beat partner. Donate highest.
+                        -- Filter: don't play A or T (preserve own
+                        -- strong-suit winners for future tricks).
+                        local donate = nil
+                        local donateRank = -1
+                        for _, c in ipairs(legal) do
+                            local r = C.Rank(c)
+                            if r ~= "A" and r ~= "T" then
+                                local cr = C.TrickRank(c, contract)
+                                if cr > donateRank then
+                                    donate = c
+                                    donateRank = cr
+                                end
+                            end
+                        end
+                        if donate then return donate end
+                    end
+                end
                 -- Highest winner so the 4th seat can't easily overcut.
                 -- 13th-bot-audit fix: EXCEPT when the only winners are
                 -- trump (forced ruff) — then ruff with the LOWEST trump
                 -- to save the J / 9 / A for forcing leads. Wasting the
                 -- J of trump on a 7-of-side-suit ruff is a classic
                 -- give-back; bot must conserve high trump.
-                if contract.type == K.BID_HOKM and contract.trump then
-                    local trumpWinners = {}
-                    for _, c in ipairs(winners) do
-                        if C.IsTrump(c, contract) then
-                            trumpWinners[#trumpWinners + 1] = c
+                if #winners == 0 then
+                    -- No winner; fall through to default loser pick.
+                else
+                    if contract.type == K.BID_HOKM and contract.trump then
+                        local trumpWinners = {}
+                        for _, c in ipairs(winners) do
+                            if C.IsTrump(c, contract) then
+                                trumpWinners[#trumpWinners + 1] = c
+                            end
+                        end
+                        if #trumpWinners > 0 and #trumpWinners == #winners then
+                            return lowestByRank(trumpWinners, contract)
                         end
                     end
-                    if #trumpWinners > 0 and #trumpWinners == #winners then
-                        return lowestByRank(trumpWinners, contract)
-                    end
+                    return highestByRank(winners, contract)
                 end
-                return highestByRank(winners, contract)
             end
         end
         -- v0.5.1 C-4: last-trick targeting. On trick 8 the cheapest

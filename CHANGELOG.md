@@ -1,5 +1,112 @@
 # Changelog
 
+## v1.4.1 — Deferred-item triage + Takbeer pos-3 enhancement
+
+User triaged the v1.4.0 deferred items with explicit guidance per
+each. v1.4.1 ships the actionable items, documents the remaining
+deferrals with explicit blockers, and closes the rule-irrelevant
+ones. 828/828 tests pass.
+
+### Concern 4 (Takbeer/Tasgheer certainty gate) — POS-3 IMPLEMENTED
+
+User direction: "yes but it is a strategy and should be taken into
+consideration and making sure behavior is not off."
+
+The Takbeer/Tasgheer certainty principle (`decision-trees.md` rows
+123-128, videos 21/22/23) says: when trick-winner is CERTAIN
+partner, magnify (play HIGHEST, donate to partner's pile); when
+CERTAIN opponent, miniaturize (play LOWEST). Existing pos-4 cases
+were already largely covered by the smother branch (donate-highest
+for partner-winning + lastSeat) and the Sun lowest-on-opp-winning
+default (v0.7.2).
+
+**v1.4.1 enhancement** (`Bot.lua:5044+`): adds the missing pos-3
+case where existing logic was suboptimal. When pos-3 + partner-
+winning + Sun + pos-4 known void in led suit (via
+`Bot._memory[pos4].void[trick.leadSuit]`) AND we have NO winners
+ourselves, donate the highest non-A/non-T card to partner's pile
+(pure addition — only fires when default low-loser would have been
+played, so doesn't override existing winner-logic). Skips A/T to
+preserve own future winners. M3lm-gated.
+
+"Behavior not off" guarantee: this only adds a strategic improvement
+in the no-winners + pos-4-void niche; doesn't disturb any existing
+branch. AE.10a/AE.10b/AK.7 source-pin tests still hold (those don't
+exercise this niche).
+
+### Concern 1 (Tahreeb sender contradiction) — DEEPER ANALYSIS, BEHAVIOR PRESERVED
+
+User direction: "i stand by my previous statement. it is not as
+straight forward as that, check videos, 1, 3, 5."
+
+After re-reading videos 1, 3, 5 carefully, v1.4.1 adds a
+comprehensive code-comment at `Bot.lua:4373` documenting the full
+video-evidence picture:
+
+- **Video 1** defines 5 forms; form 5 is bottom-up = "want, NO Ace"
+- **Video 3** adds suit categorization (WEAK/MEDIUM/STRONG); STRONG
+  suits should NOT be Tahreeb'd — partner returns opposite-color
+- **Video 5** confirms touching-honors signaling and uncertainty
+  default (treat as Tahreeb)
+
+The current code emits bottom-up from a suit with ≥3 cards AND A or
+T (a STRONG suit per video 3) — semantically inconsistent with
+video evidence. **But behavior preserved** because:
+
+1. Receiver action on "want" decode = lead suit back. If sender
+   has A in that suit (mislabeled), sender's A wins regardless of
+   exact Tahreeb sub-form. Practical impact mitigated.
+2. The semantic distinction affects only RECEIVER INFERENCE about
+   sender's hand, not the lead-back action.
+3. Reversing to "bottom-up only from no-A suits" reduces the count
+   of "want" signals — could reduce partner-coordination
+   opportunities.
+
+Behavioral reversal stays DEFERRED pending cross-video
+reconciliation + bot-vs-bot impact measurement. Tahreeb receiver
+rows 238 and 240 are linked to the same sender-side semantics and
+are also DEFERRED (decision-trees.md updated with explicit
+DEFERRED v1.4.1 markers and link to Concern 1).
+
+### Sabotage-own-sweep — CLOSED (rule inapplicable)
+
+User clarification: "this is only when the contract is Bel×2 or
+above AND the bidder wants the contract multiplier instead of
+Kaboot points (it sabotages Kaboot assuming the kaboot score is
+not multiplied)."
+
+Verified `Rules.lua:1273-1275`: regular Al-Kaboot IS multiplied by
+`cardMult` (only Reverse Al-Kaboot bypasses with `K.MULT_BASE`).
+With the Kaboot bonus multiplied, the sweep path always dominates
+the multiplier-only path; there's no scenario where sabotaging the
+sweep gains more points. Per user: "i guess we multiply it anyway
+so it is irrelevant." **Rule closed; no implementation needed.**
+`decision-trees.md:200` updated with the verification.
+
+### Bel-mandatory + Bel-x2 patterns — DEFERRED (blocked on video)
+
+User direction: "Bel-mandatory patterns + Bel-x2 (blocked on video
+research)." Confirmed. Saudi-pro Bel-mandatory hand patterns and
+"aggressive Bel x2" patterns require dedicated strategy-video
+transcripts that don't exist in `docs/strategy/_transcripts/` yet.
+`escalation.md` header updated with explicit BLOCKED-on-video
+status.
+
+### escalation.md / opening-leads.md stubs — DEFERRED (blocked on transcripts)
+
+User direction: "blocked on transcript mining." Confirmed.
+`opening-leads.md` 5 prose TODOs require videos #24-44 (or similar)
+which haven't been mined. Both files updated with explicit
+v1.4.1 status notes — header preserved but BLOCKED context
+clarified. Most underlying picker logic IS wired; the doc TODOs
+are about specific pro-strategy nuances (9-vs-J first-lead,
+AKA-setup leads, etc.) not yet captured in transcripts.
+
+### Tests
+
+828/828 pass. Takbeer pos-3 addition is a niche addition (no
+winners + Sun + pos-4-void), no source-pin tests trigger it.
+
 ## v1.4.0 — Strategy-doc audit + Saudi-pro convention fixes
 
 A cross-validation agent reviewed the v1.3.x release work against

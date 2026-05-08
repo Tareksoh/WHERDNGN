@@ -1,8 +1,20 @@
 # Escalation chain — Bel / Bel x2 / Four / Gahwa
 
-> **Stub — populate from YouTube transcripts.** This is the most
-> Saudi-specific aspect of the game; transcripts will add the most
-> value here.
+> **v1.4.1 status update**: this file is **partially populated**.
+> Threshold values are now empirically calibrated (v1.3.2 + v1.3.4
+> walkbacks anchored to corrected multiseed harness measurements).
+> The CALIBRATION-OPEN items below are **BLOCKED on video research**
+> per user direction — Saudi-pro Bel-mandatory hand patterns and
+> "aggressive Bel x2" patterns require dedicated strategy-video
+> transcripts that don't exist in `docs/strategy/_transcripts/` yet.
+> When such transcripts arrive, items in this file should be updated
+> with video-cited frequency/pattern data.
+
+> **Stub status**: header had previously read "populate from YouTube
+> transcripts" implying everything was unwired. Most prose IS now
+> populated (see `R.CanBel` Bel-100 Sun gate, escalation thresholds
+> calibrated v1.3.2-v1.3.4, Bel-fear ramp v0.6.0+, etc.). The
+> remaining gaps are explicitly tagged "BLOCKED on video" below.
 
 > **Naming convention (final):**
 > - بل (Bel) — ×2, defender opens

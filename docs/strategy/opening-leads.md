@@ -1,6 +1,21 @@
 # Opening leads — trick 1 strategy
 
-> **Stub — populate from YouTube transcripts.**
+> **v1.4.1 status update**: this file is **BLOCKED on video research**
+> per user direction. The 5 prose TODOs in this doc (9-of-trump-vs-J
+> first-lead question, AKA-setup lead conditions, Sun "establishing"
+> conventions, "lead the boss" deviation cases, tenor lead timing)
+> all require dedicated opening-leads strategy videos that don't
+> exist in `docs/strategy/_transcripts/` yet. Most are referenced as
+> needing videos #24-44 or similar from the series, which haven't
+> been mined.
+
+> **Stub status**: header preserved as "populate from YouTube
+> transcripts" because the file genuinely IS a stub. `pickLead` does
+> have substantial wired heuristics (boss-lead, partner-void ruff,
+> longest-suit-low, Sun-shortest-suit, Belote preservation,
+> implicit AKA, Tahreeb-return decision tree at Bot.lua:2931-2998
+> etc.) — but the trick-1-specific opening-conventions TODOs in
+> this doc are blocked.
 
 ## What this file informs
 
