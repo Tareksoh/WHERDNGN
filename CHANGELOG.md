@@ -1,5 +1,102 @@
 # Changelog
 
+## v1.3.4 — Saudi-pro adherence audit walkbacks (3 magnitude corrections)
+
+A meta-audit reviewed v1.3.0–v1.3.3 changes against canonical
+Saudi-pro convention (`docs/strategy/*` + cited video sources)
+rather than bot-vs-bot tournament metrics. Three magnitudes were
+flagged as **bot-vs-bot-overfit** — tuned to close synthetic-test
+gaps but without video-cited frequency justification. v1.3.4 walks
+each back toward video-justified values. The directional fixes
+remain (these are not reverts), but the magnitudes are now closer
+to canonical pro play.
+
+**Why this matters**: bot-vs-bot probes test pattern-exploitation,
+which humans don't reliably do. Heuristics tuned to fool other bots
+can drift away from canonical play that humans recognize and
+counter-play against. The goal is improving vs-human play; bot-vs-
+bot metrics were proxy evidence, not the primary signal.
+
+### HIGH — pos-2 breaker walkback (Bot.lua:4940 area)
+
+v1.3.3 extended the v1.2.1 M3lm-only 12% breaker to all Advanced+
+at 25%, motivated by closing a +24 GP/game bot-vs-bot gap. Audit:
+video #20 («تمسك اللعب») establishes the *principle* of mid-card
+wins at pos-2 but does NOT quantify a 25% rate. The magnitude was
+reverse-engineered from the bot-vs-bot probe.
+
+**Walkback**: tier-aware breaker rate. Advanced at **12%** (matches
+v1.2.1's original M3lm rate, now extended to Advanced as the
+broadening v1.3.3 attempted). M3lm/Master at **20%** (slight bump
+from 12% — pro-tier sophistication justifies somewhat more
+variance, still grounded in qualitative pro-play observation, not
+synthetic targeting).
+
+Net effect: canonical "second hand low" preserved 80–88% of the
+time vs v1.3.3's 75%. Still extends the breaker beyond v1.2.1's
+M3lm-only scope, but at video-defensible rates.
+
+### HIGH — BOT_TRIPLE_TH walkback (Constants.lua:437)
+
+v1.3.2 dropped BOT_TRIPLE_TH from 90 → 65, anchored to the
+empirical bidder p75 = 50 + jitter ±12 = jth_max 77. Audit: this
+left only a 3-point gap between BOT_BEL_TH (62) and BOT_TRIPLE_TH
+(65), inconsistent with `escalation.md` prose that says
+Triple-worthy hands need J+9+A of trump or Belote — both
+substantially stronger than Bel-worthy hands.
+
+**Walkback**: 65 → **82**. jth_max becomes 94, leaving a 17-point
+Bel→Triple spacing that better honors the relative-strength
+documented in escalation.md prose. Note: no video frequency
+citation exists for either value (escalation.md explicitly states
+video sources don't supply hand-strength thresholds); both values
+are empirical, but 82 better matches the prose-described relative
+ordering.
+
+### MED — Faranka captureRate walkback (Bot.lua:4036 area)
+
+v1.3.0 introduced the Faranka inversion: when partner shows weak
+(weakHandSignal > 2× highCardPlays, ≥3 events), boost capture rate
+0.30 → 0.85. M3lm-gated. Audit: 0.85 has no video frequency basis;
+video #20 establishes the *principle* of strong-hand-grabs-tempo
+but the specific magnitude was arbitrary.
+
+**Walkback**: 0.85 → **0.70**. Still represents a substantial
+directional shift from the 0.30 default consistent with the video
+principle, without committing to "capture 85% of the time" on a
+single-source qualitative citation. M3lm gating unchanged.
+
+### Verdict — alignment between audit and code
+
+The audit also examined and **confirmed alignment** for:
+- v1.3.3 Ace-exhaustion own-Ace fix (correctness fix, no concern)
+- v1.3.1 oppHighInferred BotMaster sampler weight 30 (properly
+  cited video #19, weight placement principled vs leadCount=1 /
+  topTouch=60)
+- v1.3.0 Faranka inversion thresholds (≥3 events, 2× ratio —
+  implementation hygiene, structurally conservative)
+- v1.3.0–v1.3.1 dead-signal bug fixes (correctness, not magnitude)
+
+These are NOT walked back.
+
+### On the residual basic_advanced gap
+
+After v1.3.4 the bot-vs-bot probe will likely show the residual
+~14 GP/game basic > advanced gap WIDEN (perhaps to 20+) because we
+restored more deterministic canonical play. **This is expected and
+correct.** Real-world play uses matched-tier games (all 4 seats
+same tier) where information balance is symmetric — the gap
+doesn't manifest. Mixed-tier games are a synthetic-test scenario
+only.
+
+### Tests
+
+828/828 pass. AE.10a (rich hand strength 161 fires Triple) and
+AE.10b (weak hand strength 21 passes Triple) both still hold at
+TH=82 — strength 161 >> jth_max 94, strength 21 << jth_min 70.
+AK.7 floor-cap test (weak m3lm hand strength ~11 with urgency
+drop) also holds — strength << jth_min.
+
 ## v1.3.3 — Tier-hierarchy probe + Advanced bot fixes + UI overflow
 
 A tier head-to-head probe revealed the bot tier system wasn't fully

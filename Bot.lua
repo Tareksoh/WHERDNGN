@@ -4033,6 +4033,16 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- little texture so the read isn't deterministic on the
             -- pattern; opp who infers «bot saw partner weak» can't
             -- bank on always-capture either.)
+            -- v1.3.4 (Saudi-pro adherence audit walkback): pre-fix
+            -- inversion captureRate was 0.85. Audit found 0.85 had no
+            -- video frequency citation — video #20 establishes the
+            -- principle (strong hand grabs tempo when partner shows
+            -- weak) but doesn't quantify how often. 0.85 was
+            -- arbitrary. Lowered to 0.70 — still represents a
+            -- substantial directional shift from default 0.30
+            -- consistent with the video principle, without committing
+            -- to "capture 85% of the time" based on a single-source
+            -- qualitative citation.
             local captureRate = 0.30
             if Bot._partnerStyle then
                 local pStyle = Bot._partnerStyle[R.Partner(seat)]
@@ -4040,7 +4050,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     local total = pStyle.weakHandSignal + pStyle.highCardPlays
                     if total >= 3
                        and pStyle.weakHandSignal > pStyle.highCardPlays * 2 then
-                        captureRate = 0.85
+                        captureRate = 0.70
                     end
                 end
             end
@@ -4937,35 +4947,39 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     end
                 end
                 if sureStopper then return sureStopper end
-                -- v1.2.1 (A3 audit) → v1.3.3 (Suspect 2 audit fix):
-                -- pos-2 binary breaker. Pre-v1.2.1 pos-2 was a 2-state
-                -- machine (sureStopper-or-duck); a careful opp reading
-                -- "pos-2 bot just ducked → no A/T of led suit" had a
-                -- fully reliable inference. v1.2.1 added a 12% M3lm-
-                -- only breaker.
+                -- v1.2.1 (A3 audit) → v1.3.3 → v1.3.4 (Saudi-pro
+                -- adherence audit walkback): pos-2 binary breaker.
+                -- Pre-v1.2.1 pos-2 was a 2-state machine
+                -- (sureStopper-or-duck); a careful opp reading "pos-2
+                -- bot just ducked → no A/T of led suit" had a fully
+                -- reliable inference. v1.2.1 added a 12% M3lm-only
+                -- breaker per video #20 «تمسك اللعب». v1.3.3 extended
+                -- to all Advanced+ at 25% to close a +24 GP/game bot-
+                -- vs-bot probe gap.
                 --
-                -- v1.3.3 expansion: empirical bot-vs-bot probe revealed
-                -- the M3lm-only / 12% setting was structurally
-                -- insufficient. In Advanced-tier matchups (M3lm flag
-                -- off) the breaker never fired, leaving the
-                -- deterministic duck telegraph intact — bots playing
-                -- against the Advanced bot could read "no A/T in led
-                -- suit" with 100% confidence, costing the Advanced bot
-                -- ~24 GP/game in forced mode head-to-head against
-                -- Basic. Extended the breaker to fire at Advanced+
-                -- (any tier above Basic) at 25% probability. M3lm and
-                -- Master inherit the higher rate too — the underlying
-                -- telegraph issue is the same and a higher rate further
-                -- obscures the signal. Per video #20 «تمسك اللعب»:
-                -- pros sometimes WIN at pos-2 with a mid-card when
-                -- meaningful points are already in the trick.
+                -- v1.3.4 walkback: the audit found 25% was bot-vs-bot
+                -- overfit — video #20 supports the EXISTENCE of mid-
+                -- card wins at pos-2 (qualitative principle) but does
+                -- NOT quantify a 25% rate; that magnitude was reverse-
+                -- engineered from the +24 GP probe finding. Walked
+                -- back to: 12% Advanced (matches v1.2.1's original
+                -- M3lm-only rate, now extended to Advanced as a
+                -- reasonable tier-broadening), 20% M3lm/Master (slight
+                -- bump from 12% — pro-tier nuance can read partner +
+                -- opp signals more, justifying somewhat more variance).
+                -- Preserves canonical "second hand low" 80-88% of the
+                -- time vs bot-vs-bot's 75% under v1.3.3.
                 if #winners >= 1 and trick.plays then
                     local hasPointCard = false
                     for _, p in ipairs(trick.plays) do
                         local pts = C.PointValue(p.card, contract) or 0
                         if pts >= 4 then hasPointCard = true; break end
                     end
-                    if hasPointCard and math.random() < 0.25 then
+                    local breakerRate = 0.12
+                    if Bot.IsM3lm and Bot.IsM3lm() then
+                        breakerRate = 0.20
+                    end
+                    if hasPointCard and math.random() < breakerRate then
                         -- Win with cheapest winner (not sureStopper-
                         -- equivalent A/T which is the obvious play).
                         return lowestByRank(winners, contract)

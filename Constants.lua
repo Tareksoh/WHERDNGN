@@ -434,15 +434,30 @@ K.BOT_BEL_TH          = 62    -- defenders bel with own strength >= TH.
                               -- jth_max 72; targets ~8% natural Bel rate
                               -- (escalation.md target). v0.11.19/0.11.20
                               -- history: 60 -> 45 -> 35 -> 62.
-K.BOT_TRIPLE_TH       = 65    -- bidder triples (×3) — needs strong hand.
-                              -- v1.3.2: 90 -> 65. The v0.11.x value of 90
-                              -- was above the realistic 8-card bidder-
-                              -- strength ceiling (p90=65 from corrected
-                              -- multiseed); structurally gated Four+Gahwa
-                              -- to 0% even when their own thresholds were
-                              -- in range. Anchored to bidder p75 (~50)
-                              -- + jitter ±12 ≈ jth_max 77; targets ~15%
-                              -- conditional-on-Bel Triple rate.
+K.BOT_TRIPLE_TH       = 82    -- bidder triples (×3) — needs strong hand.
+                              -- v1.3.4 (Saudi-pro adherence audit
+                              -- walkback): 65 -> 82. The v1.3.2
+                              -- empirical re-anchor to p75=50 +
+                              -- jitter ±12 produced jth_max=77 — only
+                              -- 3 points above BOT_BEL_TH=62, meaning
+                              -- a defender able to Bel could nearly
+                              -- always trigger bidder Triple. Per
+                              -- escalation.md mandatory-Triple
+                              -- patterns ("J+9+A of trump or
+                              -- Belote"), Triple-worthy hands sit
+                              -- meaningfully above Bel-worthy hands,
+                              -- not 3 points above. 82 puts jth_max
+                              -- at 94, leaving a 17-point Bel→Triple
+                              -- gap that better matches the prose
+                              -- description. Note: no video frequency
+                              -- citation exists for either value
+                              -- (escalation.md explicitly says video
+                              -- sources don't supply hand-strength
+                              -- thresholds); both are empirical, but
+                              -- 82 better honors the relative-spacing
+                              -- documented in prose.
+                              -- v1.3.2 history: 90 -> 65 (corrected
+                              -- v0.11.x harness-bug-driven calibration).
 K.BOT_FOUR_TH         = 80    -- defenders four (×4) — very strong hand.
                               -- v1.3.2: 110 -> 80. Above proposed Triple
                               -- band (jth_max 77) so Four still requires
