@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.5.1 — Takweesh realism fix + hidden Easter egg
+
+### Takweesh realism fix (user-reported bug)
+
+User report: "bots seem to use Takweesh before realistically knowing
+if it is valid (it is valid but they did not see the violation),
+that is not real scenario."
+
+Pre-v1.5.1: `Bot.PickTakweesh` (Bot.lua:7307+) scanned for the
+`p.illegal` flag — which is set host-side when an illegal play is
+detected with full hand info. Bot was effectively "cheating" by
+calling Takweesh on violations no human at the table could realistically
+have observed.
+
+**Fix**: added a `laterPlayedLeadSuit` realism gate. The bot now
+fires Takweesh only when:
+
+1. The play was actually illegal (host flag preserved as legality
+   verification — matches real-table behavior where the illegality
+   is real, just needs human-observable proof to call out).
+2. **AND** the violator subsequently played the led-suit in a later
+   trick (or the in-progress trick) — publicly-visible proof that
+   the violator HAD the led-suit during the original off-suit play
+   and didn't follow.
+
+If the violator successfully hides the violation (never plays the
+led-suit again that round), they get away with it — exactly matching
+real Saudi-table behavior. The realism gate naturally bounds last-
+trick scenarios: if proof appears at trick 8, only bots with
+remaining turns in trick 8 can fire Takweesh before the round
+closes (PHASE_PLAY → PHASE_SCORE transition gates `N.LocalTakweesh`
+at Net.lua:2535).
+
+### Hidden Easter egg
+
+New optional module `Easter.lua` triggers a full-screen photo +
+sound when one of a configured set of player names presses pass
+during an escalation-skip window (PHASE_DOUBLE / TRIPLE / FOUR /
+GAHWA). 10% chance per pass.
+
+**Initial targets**: Papayaga, Mants, Lamo, Scralet, Wakkata, Baalah.
+
+**Removal procedure** (documented at top of Easter.lua):
+1. Delete `Easter.lua`
+2. Remove the `Easter.lua` line from `WHEREDNGN.toc`
+
+That's it — the hook into `B.Net.LocalSkipDouble` is wrapped from
+INSIDE Easter.lua at addon load (deferred 0.5s timer ensures Net.lua
+is loaded first). No other file references the module, so deleting
+the file fully removes the behavior. To temporarily disable without
+deleting, set `EASTER_ENABLED = false` in the file.
+
+**Asset placement**: drop the photo and sound into
+`Interface\AddOns\WHEREDNGN\media\`. Default paths point at
+`easter.jpg` + `easter.mp3` (user-supplied assets are bundled in
+the `media/` folder). Adjust `PHOTO_DURATION_SECONDS` in
+Easter.lua to match the sound length.
+
+> Note on `.jpg`: WoW retail's `SetTexture` officially supports
+> `.tga` and `.blp`. `.jpg` works on most modern clients but is
+> not guaranteed. If the photo fails to display in-game, convert
+> `easter.jpg` → `easter.tga` (any image editor) and update the
+> `PHOTO` constant in `Easter.lua`. Sound `.mp3` is supported by
+> `PlaySoundFile`.
+
+**Tests**: 828/828 pass. Easter.lua is not loaded by `tests/run.py`
+(only Bot/State/Rules/BotMaster harnesses); no test impact.
+
 ## v1.5.0 — Audit-gap closures (5 new heuristics + 3 stale items closed)
 
 User instruction: bundle the 8 audit-list items into v1.5.0. Most

@@ -29,3 +29,6 @@ MinimapIcon.lua
 # Entry
 WHEREDNGN.lua
 Slash.lua
+
+# Easter egg (optional — delete file + this line to remove entirely)
+Easter.lua

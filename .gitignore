@@ -13,6 +13,11 @@ cards/__pycache__/
 .claude-flow/
 .swarm/
 
+# Audit working notes (local-only, not part of release)
+.swarm_findings/v1.4.4_*
+.swarm_findings/v1.4.6_*
+human_target_ev_audit_report.md
+
 
 # Whisper audio cache (large binaries, regeneratable)
 docs/strategy/_transcripts/whisper_audio/

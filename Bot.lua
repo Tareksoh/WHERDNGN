@@ -7313,20 +7313,69 @@ function Bot.PickTakweesh(seat)
     -- kept consistent.
     local rate = TAKWEESH_RATE_BY_TRICK[completed] or 0.95
 
-    -- Find the first illegal opposing play.
-    local function scan(plays)
-        for _, p in ipairs(plays or {}) do
-            if p.illegal and R.TeamOf(p.seat) ~= myTeam then return p end
+    -- v1.5.1 (audit fix — Takweesh realism): pre-fix scanned for
+    -- p.illegal flag (host-side full-info) and fired Takweesh
+    -- whenever an opp's illegal play was found, even if the bot
+    -- couldn't realistically OBSERVE the violation. User-reported:
+    -- "bots seem to use Takweesh before realistically knowing if it
+    -- is valid (it is valid but they did not see the violation)."
+    -- Real Takweesh requires the caller to have OBSERVED the
+    -- violation through publicly-visible play. The proof is when
+    -- the violator later plays a card of the led suit in a
+    -- subsequent trick, revealing they had it during the original
+    -- off-suit play.
+    --
+    -- Realistic-observation predicate: for an opp's off-suit play
+    -- at trick N, observation is confirmed if the same opp seat
+    -- played a card of trick N's led suit at any later trick
+    -- (or in the current in-progress trick). Card-counting via
+    -- Bot._memory[seat].played gives the human-equivalent
+    -- detection — what a vigilant Saudi-table player would track.
+    local function laterPlayedLeadSuit(violatorSeat, originalLeadSuit, fromTrickIdx)
+        if not violatorSeat or not originalLeadSuit
+           or not S.s.tricks then return false end
+        for tIdx2 = fromTrickIdx + 1, #S.s.tricks do
+            local laterTrick = S.s.tricks[tIdx2]
+            for _, p2 in ipairs(laterTrick.plays or {}) do
+                if p2.seat == violatorSeat and p2.card
+                   and C.Suit(p2.card) == originalLeadSuit then
+                    return true
+                end
+            end
         end
+        -- Also check current in-progress trick
+        if S.s.trick and S.s.trick.plays then
+            for _, p2 in ipairs(S.s.trick.plays) do
+                if p2.seat == violatorSeat and p2.card
+                   and C.Suit(p2.card) == originalLeadSuit then
+                    return true
+                end
+            end
+        end
+        return false
     end
+
+    -- Find the first realistically-observable illegal opposing play.
     local found
-    for _, t in ipairs(S.s.tricks or {}) do
-        found = scan(t.plays)
+    for tIdx, t in ipairs(S.s.tricks or {}) do
+        for _, p in ipairs(t.plays or {}) do
+            if p.illegal and R.TeamOf(p.seat) ~= myTeam then
+                -- Realism gate: was the violation later revealed
+                -- by the violator playing the led-suit in a
+                -- subsequent trick? If yes → bot can call
+                -- Takweesh from publicly-visible info. If no →
+                -- skip (the violation, while real, isn't yet
+                -- publicly proven).
+                if t.leadSuit and laterPlayedLeadSuit(p.seat, t.leadSuit, tIdx) then
+                    found = p; break
+                end
+            end
+        end
         if found then break end
     end
-    if not found and S.s.trick then
-        found = scan(S.s.trick.plays)
-    end
+    -- v1.5.1: do NOT scan in-progress trick — a violation in the
+    -- current trick has zero opportunity for "later reveal," so
+    -- the realism gate would always fail. Skip entirely.
     if not found then return nil end
 
     if math.random() < rate then return found end
