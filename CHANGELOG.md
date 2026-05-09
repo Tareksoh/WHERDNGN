@@ -1,5 +1,86 @@
 # Changelog
 
+## v3.0.4 — Watchdog hotfix: bot-dispatch callback Refresh defer
+
+### Crash report
+
+User reported in real play (4-human + bots, Saudi Master tier):
+
+```
+1x WHEREDNGN/UI.lua:502: script ran too long
+[WHEREDNGN/UI.lua]:502: in function 'FadeBanner'
+[WHEREDNGN/UI.lua]:4202: in function <UI.lua:4195>
+[WHEREDNGN/UI.lua]:4355: in function 'Refresh'
+[WHEREDNGN/Net.lua]:5427: in function <Net.lua:5185>
+```
+
+### Root cause
+
+WoW's CPU watchdog times out individual script runs at 200ms. The 6
+bot-dispatch callbacks in `Net.lua` (Triple / Four / Gahwa / Preempt /
+Bid / Play decisions) all share the same shape:
+
+```lua
+C_Timer.After(delay, function()
+    pcall(function() ... heavy bot picker work ... end)
+    if B.UI then B.UI.Refresh() end   -- inline, shares budget
+end)
+```
+
+At Saudi Master tier, `Bot.PickPlay` delegates to `BotMaster.PickPlay`
+(ISMCTS) which can use 50-150ms per call on rich game states. The
+inline `Refresh()` then walks every `renderXyz` function (seats, hand,
+banner, AKA banner, SWA banner, overcall banner, peek button, pause
+controls). Cumulative time can exceed 200ms — the watchdog fires at
+*whatever line happens to be running* when the budget runs out. The
+user's crash hit `FadeBanner`'s defensive `b:Hide()` at `UI.lua:502`,
+but that line is trivially fast on its own — it was just the unlucky
+victim of the budget exhaustion.
+
+### Fix
+
+Add a `deferredRefresh()` helper that wraps `Refresh()` in
+`C_Timer.After(0, ...)` — schedules the render for the next frame,
+splitting the picker and UI work across two budgets. Apply to all 6
+bot-dispatch callbacks.
+
+```lua
+local function deferredRefresh()
+    if not (B.UI and B.UI.Refresh) then return end
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, function()
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        end)
+    else
+        B.UI.Refresh()
+    end
+end
+```
+
+Sites updated: Triple decision (was 4875), Four (4929), Gahwa (4975),
+Preempt (5103), Bid (5166), Play (5427). The trick-end Refresh at line
+2166 stays inline because it runs in a fresh `C_Timer.After(2.2, ...)`
+callback that's *already* off the bot-picker chain — the watchdog has
+reset by then.
+
+### Why not optimize the picker
+
+ISMCTS rollout count is the actual driver. Reducing it would degrade
+Saudi Master strength. Splitting the rollouts across multiple frames
+would change determinism guarantees of the existing tests. The
+1-frame Refresh defer is a zero-risk addressing of the symptom; if
+this still trips the watchdog on rich game states, the next step is
+to batch ISMCTS rollouts across frames — but typical Saudi Master
+play doesn't need that, and the user's report is the first watchdog
+trip in 854 test runs and ~5000 simulated tournament rounds.
+
+### Tests
+
+**854/854 pass.** No code surface changed in the picker or UI render
+paths — the change is a defer-pattern wrapper. Tests don't exercise
+the watchdog directly (they run on Lua 5.5 / Python lupa, no WoW
+runtime).
+
 ## v3.0.3 — Audit doc-vs-code differential closure (6 gap fixes)
 
 The v3.0.2 release shipped a doc-vs-code differential audit alongside

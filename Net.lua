@@ -54,6 +54,30 @@ end
 N.Broadcast = broadcast
 N.Whisper   = whisper
 
+-- v3.0.4 (watchdog hotfix): bot-dispatch callbacks pile heavy CPU
+-- work (PickPlay → BotMaster.PickPlay ISMCTS rollouts at Saudi Master
+-- tier can use 50-150ms) followed by an inline `B.UI.Refresh()` that
+-- walks every renderXyz function. The cumulative time can trip WoW's
+-- 200ms script watchdog — typically surfacing as "script ran too long"
+-- at whatever trivial UI line happens to be running when the budget
+-- runs out (user-reported crash hit FadeBanner's `b:Hide()` at
+-- UI.lua:502 from a bot-play callback at Net.lua:5427).
+--
+-- Fix: defer the Refresh by one frame via `C_Timer.After(0, ...)` so
+-- the picker and UI render don't share a budget. Used ONLY in the bot
+-- dispatch callbacks (Triple/Four/Gahwa/Preempt/Bid/Play); humans-side
+-- Refresh stays inline since it doesn't follow heavy work.
+local function deferredRefresh()
+    if not (B.UI and B.UI.Refresh) then return end
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, function()
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        end)
+    else
+        B.UI.Refresh()
+    end
+end
+
 -- 14th-audit helper (scoring-vs-rules audit). Saudi rule for Sun Bel
 -- (per "نظام الدبل في لعبة البلوت"):
 --   "ولايحق للاعب ان يدبل خصمة الا بعد ان يتجاوز المئة اي 101"
@@ -4872,7 +4896,7 @@ function N.MaybeRunBot()
                         N.HostFinishDeal()
                     end
                 end
-                if B.UI then B.UI.Refresh() end
+                deferredRefresh()  -- v3.0.4 watchdog hotfix: defer to next frame
             end)
             return
         else
@@ -4926,7 +4950,7 @@ function N.MaybeRunBot()
                         N.HostFinishDeal()
                     end
                 end
-                if B.UI then B.UI.Refresh() end
+                deferredRefresh()  -- v3.0.4 watchdog hotfix: defer to next frame
             end)
             return
         else
@@ -4972,7 +4996,7 @@ function N.MaybeRunBot()
                         N.HostFinishDeal()
                     end
                 end
-                if B.UI then B.UI.Refresh() end
+                deferredRefresh()  -- v3.0.4 watchdog hotfix: defer to next frame
             end)
             return
         else
@@ -5100,7 +5124,7 @@ function N.MaybeRunBot()
                             end
                         end
                     end
-                    if B.UI then B.UI.Refresh() end
+                    deferredRefresh()  -- v3.0.4 watchdog hotfix: defer to next frame
                 end)
                 return
             else
@@ -5163,7 +5187,7 @@ function N.MaybeRunBot()
                     N._HostStepBid()
                 end
             end
-            if B.UI then B.UI.Refresh() end
+            deferredRefresh()  -- v3.0.4 watchdog hotfix: defer to next frame
         end)
         return
     end
@@ -5424,7 +5448,7 @@ function N.MaybeRunBot()
                     end
                 end
             end
-            if B.UI then B.UI.Refresh() end
+            deferredRefresh()  -- v3.0.4 watchdog hotfix: defer to next frame
         end)
         return
     end
