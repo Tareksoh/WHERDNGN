@@ -181,8 +181,16 @@ local COL = {
     txtCream   = "ffe8dec0",
     txtGold    = "ffffd055",
     txtSoft    = "ff8da095",
-    txtUs      = "ff66ff88",
-    txtThem    = "ffff7777",
+    -- v2.2.0 (audit v1.6.1 UX-60 MED): colorblind-aware team palette.
+    -- Pre-fix txtUs (mid-saturation green) and txtThem (mid-saturation
+    -- red) had similar luminance — undistinguishable to deuteranopia /
+    -- protanopia users (combined ~10% of male players). Shifted txtUs
+    -- to a brighter mint and txtThem to a desaturated coral so the
+    -- LUMINANCE differs (mint ≈0.85, coral ≈0.65) — distinguishable
+    -- by brightness even when hue is lost. Hue palette preserved for
+    -- non-colorblind users.
+    txtUs      = "ff80ffaa",   -- mint (high-luminance)
+    txtThem    = "ffe09080",   -- coral (mid-luminance)
 }
 
 -- Migrate the legacy single-axis WHEREDNGNDB.cardTheme to the split
@@ -457,6 +465,9 @@ end
 B.UI = B.UI or {}
 B.UI.SaudiName = SaudiName
 B.UI.ArabicAvailable = arabicAvailable
+-- v2.2.0 UX-43 hook: slash command /baloot sound calls this to
+-- re-sync the checkbox visual after toggling WHEREDNGNDB.sound.
+B.UI.GetMuteBtn = function() return f and f.muteBtn end
 
 -- v2.1.0 (audit v1.6.1 UX-31 LOW): banner fade helper. Wraps Show /
 -- Hide with a soft alpha animation. Falls back to Show/Hide on hosts
@@ -609,6 +620,16 @@ local function buildMain()
         WHEREDNGNDB = WHEREDNGNDB or {}
         WHEREDNGNDB.sound = self:GetChecked() and true or false
     end)
+    -- v2.2.0 (audit v1.6.1 UX-43 LOW): expose the sync-to-saved-vars
+    -- closure as a frame method so /baloot sound (slash toggle) can
+    -- bring the checkbox visual in line. Pre-fix the slash toggle
+    -- mutated WHEREDNGNDB.sound but the open window kept showing the
+    -- pre-toggle check state until the next OnShow (close/re-open).
+    function muteBtn:Sync()
+        local on = not (WHEREDNGNDB and WHEREDNGNDB.sound == false)
+        self:SetChecked(on)
+    end
+    f.muteBtn = muteBtn  -- exposed for slash-toggle re-sync
     muteBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:AddLine("WHEREDNGN sound", 1, 1, 1)
@@ -2375,7 +2396,15 @@ local function renderActions()
                     -- accepting an SWA where caller could lose is the
                     -- BENIGN outcome for the responder (the loss falls
                     -- on the caller if they're wrong).
-                    addAction("|cff66ff88Accept SWA|r",
+                    -- v2.2.0 (audit v1.6.1 UX-07 MED): Accept now also
+                    -- two-clicks (matches Deny pattern) for symmetry.
+                    -- Pre-fix Accept was single-click while Deny was
+                    -- confirm-armed — asymmetric protection. Both
+                    -- consequences are real (Accept locks the team
+                    -- into letting a possibly-bluffing claim through);
+                    -- both deserve the same misclick guard.
+                    addConfirmAction("|cff66ff88Accept SWA|r",
+                        "|cff66ff88Confirm Accept — let them claim?|r",
                         function() net().LocalSWAResp(true) end,
                         "Allow the SWA. Saudi 'nasmah' — let them claim. "
                         .. "If wrong, the loss falls on the caller.")
@@ -2498,7 +2527,28 @@ local function renderActions()
                     return
                 end
                 net().HostStartRound()
-            end)
+            end,
+            "Host: deal the next round. Locked when either team has "
+            .. "reached the cumulative target.")
+        else
+            -- v2.2.0 (audit v1.6.1 MP-62 LOW): non-host affordance at
+            -- score phase. Pre-fix non-hosts saw zero buttons during
+            -- PHASE_SCORE — host could stall indefinitely with no
+            -- way for the table to nudge them. Adds a soft "Ready"
+            -- indicator (cosmetic — doesn't actually advance the
+            -- round, but tells the host visually that everyone has
+            -- finished reading the score banner). For now just a
+            -- disabled label; future work could broadcast a "ready"
+            -- ping to the host.
+            local readyBtn = addAction("|cff999999(host advances)|r",
+                function() end,
+                "Only the host can advance to the next round. They'll "
+                .. "see your seat is no longer holding their attention.")
+            -- Keep the button visually disabled so it's clearly not
+            -- actionable.
+            if readyBtn and readyBtn.Disable then
+                readyBtn:Disable()
+            end
         end
     elseif S.s.phase == K.PHASE_GAME_END then
         if S.s.isHost then
@@ -2650,15 +2700,33 @@ local function renderHand()
             if legalSet[card] then
                 -- Gold border + bright = the "safe" play
                 b:SetBackdropBorderColor(unpack(COL.legalEdge))
+                -- v2.2.0 PJ-31: hide the warning corner-tag if present
+                -- (pool reuse from a previous illegal state).
+                if b.warnTag then b.warnTag:Hide() end
             else
                 -- Orange/red border = warning-only. Still clickable
                 -- (Saudi Takweesh rule: illegal plays go through; you
                 -- get caught if opponents call it). Keep full opacity
                 -- so it doesn't look disabled.
                 b:SetBackdropBorderColor(unpack(COL.badEdge))
+                -- v2.2.0 (audit v1.6.1 PJ-31 MED): visible "!" warning
+                -- tag in the card's top-left corner for illegal cards.
+                -- Pre-fix the orange border alone wasn't distinct
+                -- enough from cardEdge / hover-lift states — colorblind
+                -- and quick-glance players missed the warning. The
+                -- corner glyph is unmissable and reads as "stop, look".
+                if not b.warnTag then
+                    b.warnTag = b:CreateFontString(nil, "OVERLAY",
+                                                   "GameFontNormalLarge")
+                    b.warnTag:SetPoint("TOPLEFT", b, "TOPLEFT", 4, -2)
+                    b.warnTag:SetTextColor(0.95, 0.55, 0.20, 1)
+                    b.warnTag:SetText("|cffff8833!|r")
+                end
+                b.warnTag:Show()
             end
         else
             b:SetBackdropBorderColor(unpack(COL.cardEdge))
+            if b.warnTag then b.warnTag:Hide() end
         end
 
         local thisI, thisCard = i, card
@@ -3337,7 +3405,16 @@ local function renderLobby()
                 else
                     seatStr = "|cffaaaaaaavailable|r"
                 end
-                local ver = S.s.peerVersions and S.s.peerVersions[m.full]
+                -- v2.2.0 (audit v1.6.1 MP-52 LOW): peerVersions is keyed
+                -- by NORMALIZED sender (write side, Net.lua:_OnHost +
+                -- _OnLobby) but was previously read by `m.full` which
+                -- is the suffixed form. Cross-realm clients arrive as
+                -- "Name-Realm" in m.full but were normalized to "Name"
+                -- on write — read miss. Now read via NormalizeName(m.full)
+                -- to match the write key.
+                local verKey = (S.NormalizeName and S.NormalizeName(m.full))
+                               or m.full
+                local ver = S.s.peerVersions and S.s.peerVersions[verKey]
                 local verStr
                 if m.you then
                     verStr = ("|cff66ddff%s|r"):format(myVersion)
@@ -3999,9 +4076,14 @@ local function renderStatus()
     statusText:SetText(statusFor(S.s.phase))
 
     -- score (uses host-customizable team names; falls back to "Team A"/"B")
+    -- v2.2.0 (audit v1.6.1 SA-31 LOW): suffix "pts" so the raw target
+    -- number reads as a score rather than an arbitrary number.
+    -- Pre-fix "152" alone meant nothing to a new player; "152 pts"
+    -- is unambiguous. Saudi tournament displays use "بنط" (banta);
+    -- "pts" is the universal Latin gloss.
     local nA = (S.s.teamNames and S.s.teamNames.A) or "Team A"
     local nB = (S.s.teamNames and S.s.teamNames.B) or "Team B"
-    scoreText:SetText(("%s: |cff66ff66%d|r   %s: |cffff6666%d|r   /  %d"):format(
+    scoreText:SetText(("%s: |cff66ff66%d|r   %s: |cffff6666%d|r   /  %d pts"):format(
         nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0,
         S.s.target or 152))
 
@@ -4103,7 +4185,17 @@ function U.PulseTurn()
     if not tablePanel or not tablePanel.localBar then return end
     local lb = tablePanel.localBar
     if not lb.SetBackdropBorderColor then return end
-    if _pulseTicker then _pulseTicker:Cancel(); _pulseTicker = nil end
+    -- v2.2.0 (audit v1.6.1 UX-62 LOW): on cancel, force-restore the
+    -- legal-edge gold. Pre-fix a back-to-back PulseTurn call canceled
+    -- the prior ticker mid-pulse but left the border in whatever
+    -- state the last tick painted (could be alert-red), then started
+    -- a new ticker — visible flash of "stuck red border" before the
+    -- new pulse cycle ran.
+    if _pulseTicker then
+        _pulseTicker:Cancel()
+        _pulseTicker = nil
+        lb:SetBackdropBorderColor(unpack(COL.legalEdge))
+    end
     local ticks, every = 8, 0.18
     local i = 0
     local on = false

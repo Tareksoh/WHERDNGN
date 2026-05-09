@@ -1,5 +1,66 @@
 # Changelog
 
+## v2.2.0 — Polish batch 2 (12 items: UX + MP + accessibility)
+
+Continuation of the polish marathon. Closes the next batch of
+deferred audit items, focused on small UX papercuts, multiplayer
+QoL gaps, and accessibility (colorblind contrast). No bot strategy
+logic touched.
+
+### UX
+
+- **UX-07** (MED) — Accept SWA now also two-clicks (matches Deny).
+  Both consequences are real (Accept locks the team into letting
+  a possibly-bluffing claim through); both deserve the same misclick
+  guard.
+- **UX-43** (LOW) — `/baloot sound` (alias `/baloot mute`) toggles
+  audio + re-syncs the lobby checkbox visual. Pre-fix there was no
+  slash equivalent; muting required opening the window.
+- **UX-60** (MED) — Colorblind-aware team palette. `txtUs` shifted
+  to brighter mint (luminance ≈ 0.85), `txtThem` to desaturated
+  coral (≈ 0.65). Pre-fix mid-saturation green/red were
+  indistinguishable to deuteranopia / protanopia (~10% of male
+  players); now distinguishable by brightness even when hue is lost.
+- **UX-62** (LOW) — AFK pulse: on cancel, force-restore the legal-
+  edge gold. Pre-fix a back-to-back PulseTurn left the border in
+  alert-red mid-pulse before the new cycle painted over it.
+
+### Multiplayer QoL
+
+- **MP-31** (LOW) — AFK warning at T-10s now also prints an explicit
+  chat hint, in addition to the existing sound-ping + border-pulse.
+  Players AFK in another window or with sound muted can't miss
+  the visual + chat dual-channel.
+- **MP-33** (LOW) — Cancel host's AFK turn timer when a dropped
+  human's seat is replaced by a bot. Pre-fix a stale 60s timer
+  kept counting against the seat after the bot took over —
+  briefly raced against `MaybeRunBot`'s own dispatch.
+- **MP-52** (LOW) — `peerVersions` keyed by NORMALIZED sender on
+  write but read by full `Name-Realm` form in UI lobby — read miss
+  on cross-realm clients. Read-side now `S.NormalizeName(m.full)`
+  to match the write key.
+- **MP-62** (LOW) — Non-host gets a "(host advances)" disabled-
+  label affordance during PHASE_SCORE. Pre-fix non-hosts saw zero
+  buttons during score phase — host could stall indefinitely with
+  no UI cue. Cosmetic for now; future work could broadcast a
+  "ready" ping.
+
+### Player journey
+
+- **PJ-31** (MED) — Illegal-card warning: corner "!" tag overlay in
+  addition to the orange border. Pre-fix the border alone wasn't
+  distinct enough from cardEdge / hover-lift states for colorblind
+  or quick-glance players. The corner glyph is unmissable.
+
+### Saudi authenticity
+
+- **SA-31** (LOW) — Score banner: "152" → "152 pts". The raw
+  number alone meant nothing to a new player; "pts" is unambiguous.
+
+### Tests
+
+819/819 pass.
+
 ## v2.1.0 — Polish batch (16 deferred items closed)
 
 Polish-focused minor release. Closes the highest-value MEDIUM-tier

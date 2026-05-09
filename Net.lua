@@ -4255,6 +4255,15 @@ N.CancelLocalWarn = cancelLocalWarn
 local function fireLocalWarn()
     B.Sound.Try(K.SND_TURN_PING)
     if B.UI and B.UI.PulseTurn then B.UI.PulseTurn() end
+    -- v2.2.0 (audit v1.6.1 MP-31 LOW): explicit chat hint at T-10s.
+    -- Pre-fix the AFK warning was sound-ping + border-pulse only —
+    -- a player AFK in another window or zoned-out wouldn't see the
+    -- visual at all, and a muted client wouldn't hear the ping. A
+    -- single chat line goes to the always-visible chat frame so the
+    -- player can't miss it. Worst case: redundant with the pulse +
+    -- ping (already-attentive player).
+    print("|cffff7755[WHEREDNGN]|r Your turn — 10 seconds before "
+        .. "auto-action. Click the action button or hit a card.")
 end
 
 -- Arm only if the local player is the one we're actually waiting on.

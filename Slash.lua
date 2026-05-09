@@ -376,6 +376,24 @@ local function dispatch(msg)
         return
     end
 
+    -- v2.2.0 (audit v1.6.1 UX-43 LOW): /baloot sound — toggle audio.
+    -- The lobby-window checkbox already exists; this gives the slash-
+    -- only path the same affordance and re-syncs the checkbox visual
+    -- so an open window doesn't show stale state after toggling via
+    -- chat. Pre-fix there was no slash equivalent; muting required
+    -- opening the window every time.
+    if msg == "sound" or msg == "mute" or msg == "audio" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        if WHEREDNGNDB.sound == nil then WHEREDNGNDB.sound = true end
+        WHEREDNGNDB.sound = not (WHEREDNGNDB.sound == true)
+        say("sound = " .. tostring(WHEREDNGNDB.sound))
+        if B.UI and B.UI.GetMuteBtn then
+            local btn = B.UI.GetMuteBtn()
+            if btn and btn.Sync then btn:Sync() end
+        end
+        return
+    end
+
     if msg == "swa" then
         WHEREDNGNDB = WHEREDNGNDB or {}
         if WHEREDNGNDB.allowSWA == nil then WHEREDNGNDB.allowSWA = true end

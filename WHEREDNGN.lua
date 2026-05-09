@@ -525,6 +525,19 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                         L.Info("roster",
                             "seat %d replaced by bot (%s dropped mid-round)",
                             seat, short)
+                        -- v2.2.0 (audit v1.6.1 MP-33 LOW): cancel the
+                        -- host's AFK turn timer if the dropped seat
+                        -- was the active turn. Pre-fix a stale 60s
+                        -- AFK timer kept counting against the seat
+                        -- after the bot took over — would fire and
+                        -- attempt auto-action on a now-bot seat,
+                        -- creating a brief race against MaybeRunBot's
+                        -- own dispatch. Cancel here; the new bot's
+                        -- dispatch arms a fresh timer if needed.
+                        if B.State.s.turn == seat
+                           and B.Net and B.Net.CancelTurnTimer then
+                            B.Net.CancelTurnTimer()
+                        end
                         -- v2.0.0 (audit v1.6.1 MP-02/03/04 HIGH): if
                         -- the drop happened DURING an escalation
                         -- window / overcall window / SWA permission
