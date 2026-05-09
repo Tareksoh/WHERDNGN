@@ -517,6 +517,40 @@ do
     assertTrue(res.raw.A > res.raw.B, "Make: A raw > B raw")
 end
 
+-- v3.0.2 (user-reported: "melds are not counted when player has two").
+-- Regression pin for multi-meld scoring from the same seat. The
+-- scoring path uses R.SumMeldValue which sums ALL melds in the
+-- winning team's list — confirmed by tracing, and pinned here.
+do
+    -- Team A seat 1 has TWO Tierces:
+    --   - Tierce in Spades (top=9, value=20, declaredBy=1)
+    --   - Tierce in Hearts (top=K, value=20, declaredBy=1)
+    -- Team B seat 2 has ONE Tierce:
+    --   - Tierce in Diamonds (top=Q, value=20, declaredBy=2)
+    local meldA1 = { kind = "seq3", value = 20, suit = "S",
+                     top = "9", len = 3, declaredBy = 1,
+                     cards = { "7S", "8S", "9S" } }
+    local meldA2 = { kind = "seq3", value = 20, suit = "H",
+                     top = "K", len = 3, declaredBy = 1,
+                     cards = { "JH", "QH", "KH" } }
+    local meldB1 = { kind = "seq3", value = 20, suit = "D",
+                     top = "Q", len = 3, declaredBy = 2,
+                     cards = { "TD", "JD", "QD" } }
+    local sumA = R.SumMeldValue({ meldA1, meldA2 })
+    local sumB = R.SumMeldValue({ meldB1 })
+    assertEq(sumA, 40,
+             "Multi-meld: SumMeldValue sums BOTH melds from same seat")
+    assertEq(sumB, 20,
+             "Multi-meld: single meld sums to its value")
+    -- Best-meld comparison: A's best Tierce (top=K, len=3, no trump)
+    -- vs B's best Tierce (top=Q, len=3, no trump). meldRank picks
+    -- by len + topIdx — A wins since K > Q.
+    local cmp = R.CompareMelds({ meldA1, meldA2 }, { meldB1 },
+                                { type = K.BID_HOKM, trump = "C" }, 4)
+    assertEq(cmp, "A",
+             "Multi-meld: team A wins compare via best Tierce (K>Q)")
+end
+
 -- =====================================================================
 -- H. ScoreRound — sweeps (Al-Kaboot)
 -- =====================================================================

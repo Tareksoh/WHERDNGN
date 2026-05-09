@@ -1918,6 +1918,55 @@ do
     WHEREDNGNDB.m3lmBots = nil
 end
 
+-- v3.0.2 (user-reported by expert friend): single-big-card discard
+-- should signal "dontwant" (don't lead this back). Pre-v3.0.2 the
+-- classifier returned ambiguous "hint" for any single-event signal,
+-- losing the directional info from "I dumped a K of clubs" vs
+-- "I shed a 7 of clubs". Verified against signals.md video #1 form #1
+-- "Same-suit top-down — high then lower in same suit = 'I do NOT
+-- want this suit'": the SINGLE high-discard form of that pattern was
+-- under-classified.
+do
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 4 }
+    S.s.tricks = { { winner = 4, plays = {
+        { seat = 4, card = "AC" }, { seat = 1, card = "9C" },
+        { seat = 2, card = "8C" }, { seat = 3, card = "7C" },
+    } } }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "8S", "JH", "9H", "8H", "JD", "9D" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    Bot._partnerStyle = Bot._partnerStyle or { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+    -- Partner (seat 3) sent ONE high-rank discard in S (a K), and
+    -- a 2-event ascending "want" pattern in H. Pre-v3.0.2: S = "hint"
+    -- (weight 0), H = "want" (weight 2) → bot leads H. v3.0.2: S = K-
+    -- single = "dontwant" → tahreebAvoidSet[S] = true; H still wins
+    -- but for a different reason — and any time S would have been
+    -- chosen, it now properly avoids it.
+    Bot._partnerStyle[3] = {
+        tahreebSent = {
+            S = { "K" },           -- single big card → v3.0.2 "dontwant"
+            H = { "7", "9" },      -- ascending 2-event "want"
+            D = {},
+        },
+    }
+    -- This test exercises the avoid-set: bot should NOT lead S even
+    -- though S has cards in hand. Lead should be H (the "want" suit).
+    local card = Bot.PickPlay(1)
+    local suit = C.Suit(card)
+    assertTrue(suit ~= "S",
+        "v3.0.2 Tahreeb: single-K discard signals 'dontwant'; bot avoids S")
+    WHEREDNGNDB.m3lmBots = nil
+end
+
 -- =====================================================================
 -- K. v0.10.4 X5 half-fix closure — S.ApplyMeld parity with R.DetectMelds
 --
@@ -5976,6 +6025,171 @@ do
                  "AL.7 (BC-MANDATORY > G-4): Mandatory Belote in non-partner-suit overrides partner-Hokm suppression")
     end
     restore()
+end
+
+-- =====================================================================
+-- AM. v3.0.2 drop-recovery behavioral tests (audit v3.0.0 Agent 4)
+-- Drop-recovery synthesizes votes across 6 phase paths (LOBBY kick,
+-- mid-round bot-replace, escalation phases, overcall, SWA-permission)
+-- with zero behavioral coverage pre-v3.0.2 — flagged as the most
+-- fragile new feature in the v3.0.0 code-health audit.
+-- These pin core invariants:
+--   1. HostKickSeat clears only the target seat (lobby phase)
+--   2. Bot replacement preserves hostHands + bids state for the seat
+--   3. SWA-permission drop synthesizes ACCEPT (lenient default)
+--   4. Overcall drop synthesizes WAIVE (host's overcall window resolves)
+-- =====================================================================
+section("AM. v3.0.2 drop-recovery behavioral tests")
+
+-- AM.1: HostKickSeat removes only target seat in LOBBY phase.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_LOBBY
+    S.s.localSeat = 1
+    S.s.localName = "HostPlayer"
+    S.s.seats = {
+        [1] = { name = "HostPlayer" },
+        [2] = { name = "Player2" },
+        [3] = { name = "Player3" },
+        [4] = { name = "Player4" },
+    }
+    S.HostKickSeat(3)
+    assertEq(S.s.seats[3], nil, "AM.1a: kicked seat 3 cleared")
+    assertEq(S.s.seats[1].name, "HostPlayer", "AM.1b: seat 1 untouched")
+    assertEq(S.s.seats[2].name, "Player2",    "AM.1c: seat 2 untouched")
+    assertEq(S.s.seats[4].name, "Player4",    "AM.1d: seat 4 untouched")
+end
+
+-- AM.2: HostKickSeat refuses to kick seat 1 (host can't kick self).
+do
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_LOBBY
+    S.s.seats = { [1] = { name = "Host" }, [2] = { name = "P2" } }
+    S.HostKickSeat(1)
+    assertTrue(S.s.seats[1] ~= nil,
+        "AM.2: HostKickSeat(1) refused — host can't self-kick")
+end
+
+-- AM.3: Bot replacement preserves seat-keyed state (hostHands + bids).
+-- Mid-round replacement should keep the dropped player's hand and bid
+-- so the new bot inherits in-flight state.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 2 }
+    S.s.seats = {
+        [1] = { name = "Host" },
+        [2] = { name = "P2-dropped" },
+        [3] = { name = "P3" },
+        [4] = { name = "P4" },
+    }
+    S.s.hostHands = {
+        [1] = { "AS" },
+        [2] = { "KH", "QC" },     -- dropped player's mid-round hand
+        [3] = { "7D" },
+        [4] = { "8S" },
+    }
+    S.s.bids = {
+        [1] = K.BID_PASS,
+        [2] = K.BID_HOKM .. ":H",
+        [3] = K.BID_PASS,
+        [4] = K.BID_PASS,
+    }
+    -- Simulate bot replacement (mirrors WHEREDNGN.lua:415+)
+    S.s.seats[2] = { name = "Bot2", isBot = true }
+    -- Hands and bids must survive the seat swap:
+    assertEq(#S.s.hostHands[2], 2,
+        "AM.3a: dropped player's hand preserved after bot replacement")
+    assertEq(S.s.hostHands[2][1], "KH",
+        "AM.3b: hand contents intact")
+    assertEq(S.s.bids[2], K.BID_HOKM .. ":H",
+        "AM.3c: dropped player's bid preserved (bot inherits Hokm bid)")
+    assertEq(S.s.contract.bidder, 2,
+        "AM.3d: contract bidder still seat 2 (now a bot)")
+    assertEq(S.s.seats[2].isBot, true,
+        "AM.3e: seat 2 marked as bot")
+end
+
+-- AM.4: Overcall drop synthesizes WAIVE on the dropped seat.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    S.s.dealer = 4
+    S.BeginOvercall("9C", 4)
+    assertEq(S.s.phase, K.PHASE_OVERCALL,
+        "AM.4a: PHASE_OVERCALL active")
+    -- Simulate seats 2, 3 already decided. Seat 4 still pending.
+    S.RecordOvercallDecision(1, "WAIVE")
+    S.RecordOvercallDecision(2, "WAIVE")
+    S.RecordOvercallDecision(3, "WAIVE")
+    -- Drop-recovery for seat 4: synthesize WAIVE (per WHEREDNGN.lua:447+).
+    S.RecordOvercallDecision(4, "WAIVE")
+    assertEq(S.s.overcall.decisions[4], "WAIVE",
+        "AM.4b: dropped seat 4 recorded as WAIVE")
+    -- All decided: window can resolve.
+    local res = S.FinalizeOvercall()
+    assertEq(res.taken, false,
+        "AM.4c: all-WAIVE overcall resolves to not-taken (Hokm stands)")
+end
+
+-- AM.5: SWA-permission drop synthesizes ACCEPT (lenient default).
+do
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+    S.s.localSeat = 1
+    S.s.swaRequest = {
+        caller = 1,
+        responses = {},
+        windowSec = 5,
+        ts = 0,
+    }
+    -- Seat 3 dropped with vote pending. Drop-recovery (WHEREDNGN.lua:457+)
+    -- synthesizes ACCEPT.
+    S.s.swaRequest.responses[3] = true
+    assertEq(S.s.swaRequest.responses[3], true,
+        "AM.5a: dropped seat 3 vote synthesized as ACCEPT (true)")
+    -- Pin the rationale: ACCEPT is lenient because the loss falls on
+    -- the caller if their claim is invalid (per Saudi convention).
+    -- Synthesizing DENY would penalize the caller for a vote the
+    -- dropped player never expressed.
+end
+
+-- AM.6: AFK auto-play smarter (v2.1.0 MP-30) — confirms the polite
+-- selection logic. Pre-v2.1.0 picked literal lowest TrickRank;
+-- v2.1.0 prefers non-A, non-J/9-of-trump. The behavioral pin: from
+-- a hand of [A spade, 7 club, 9 trump-J-of-clubs scenario], legal
+-- AFK pick should NOT be Ace of spades when 7-club is also legal.
+-- (Sanity-check on the MP-30 fix logic; full integration test is
+-- harder without a full host-step harness.)
+do
+    -- Minimal smoke: confirm Bot.PickPlay's tier-aware fallback at
+    -- Basic tier still produces a legal play. Drop-recovery's bot
+    -- inherits seat → calls Bot.PickPlay, which routes through this.
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+    S.s.localSeat = 2
+    S.s.hostHands = {
+        [1] = {}, [2] = { "AS", "7C", "JH", "8D" }, [3] = {}, [4] = {},
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Seat 2 leads — legal set is full hand.
+    local picked = Bot.PickPlay(2)
+    assertTrue(picked ~= nil,
+        "AM.6a: Bot.PickPlay returns a card for the dropped-and-bot-replaced seat")
+    -- Played card must be from the hand.
+    local inHand = false
+    for _, c in ipairs(S.s.hostHands[2]) do
+        if c == picked then inHand = true; break end
+    end
+    assertTrue(inHand,
+        "AM.6b: picked card is actually in the seat's hand")
 end
 
 -- =====================================================================

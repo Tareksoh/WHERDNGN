@@ -1994,6 +1994,16 @@ local function clearActions()
             -- alpha/text-color closes the leak.
             b:SetScript("OnUpdate", nil)
             b:SetAlpha(1.0)
+            -- v3.0.2 (user-reported: "Pass grayed out sometimes when
+            -- all 4 are humans, regardless of seat position"). Root
+            -- cause: v2.2.0 MP-62's "(host advances)" disabled-label
+            -- affordance for non-host PHASE_SCORE called btn:Disable()
+            -- on a pooled button — but clearActions() only unset
+            -- scripts and alpha. The :Disable() state stayed sticky.
+            -- Next render reused the same pool slot for Pass / Hokm /
+            -- whatever — still disabled. Player saw greyed Pass with
+            -- no idea why. Fix: re-Enable on pool reuse.
+            if b.Enable then b:Enable() end
             local fs = b.GetFontString and b:GetFontString()
             if fs and fs.SetTextColor then
                 fs:SetTextColor(1, 1, 1)
@@ -2957,12 +2967,44 @@ end
 local function meldCardsForSeat(seat)
     local team = R.TeamOf(seat)
     local list = S.s.meldsByTeam[team] or {}
-    local best = nil
+    -- v3.0.2 (user-reported: "melds are not counted when player has
+    -- two"). The SCORING is correct (R.SumMeldValue sums all melds
+    -- per team — pinned by the v3.0.2 multi-meld test in test_rules.lua)
+    -- but this trick-2 reveal previously showed only the BEST meld's
+    -- cards — players seeing only one meld card-strip on a multi-meld
+    -- declarer assumed only one was counted.
+    --
+    -- Trade-off: v1.0.1 documented that concatenating cards across
+    -- distinct melds + truncating to the 5-slot strip produced
+    -- visually-misleading combos (e.g. "JS JH JD JC + KS" reads as
+    -- a 5-card K-J shape — illegal). v3.0.2 splits the difference:
+    -- if all the seat's meld cards fit in 5 slots, show them all
+    -- (no truncation, no misleading shape). If they don't fit, fall
+    -- back to v1.0.1's best-only — still misleading visual would be
+    -- worse than the under-display.
+    local seatMelds = {}
+    local totalCards = 0
     for _, m in ipairs(list) do
         if m.declaredBy == seat and m.cards then
-            if not best or (m.value or 0) > (best.value or 0) then
-                best = m
+            seatMelds[#seatMelds + 1] = m
+            totalCards = totalCards + #m.cards
+        end
+    end
+    if totalCards <= 5 then
+        -- All meld cards fit — show every meld.
+        local out = {}
+        for _, m in ipairs(seatMelds) do
+            for _, c in ipairs(m.cards) do
+                out[#out + 1] = c
             end
+        end
+        return out
+    end
+    -- Doesn't fit — show only best meld's cards (v1.0.1 behavior).
+    local best = nil
+    for _, m in ipairs(seatMelds) do
+        if not best or (m.value or 0) > (best.value or 0) then
+            best = m
         end
     end
     if not best then return {} end

@@ -1,5 +1,103 @@
 # Changelog
 
+## v3.0.2 — User playtest hotfix + residual hunt + behavioral test backfill
+
+User-reported in real 4-human play:
+1. **Pass button greyed out randomly** in 4-human bidding, regardless
+   of seat position
+2. **Two melds from same player not counted** (per friend's expert
+   account: equal-point melds should both score)
+3. **Tahreeb logic gap**: "when I play a different-suit big card it
+   means do not come back to me with that"
+
+### Bug 1 (Pass grayed) — pool-state leak
+
+`UI.lua:~1977-2010`. v2.2.0 MP-62 added a `(host advances)` disabled
+affordance for non-host PHASE_SCORE that called `btn:Disable()` on
+a pooled action button. `clearActions()` only cleared scripts +
+alpha + label color — the `:Disable()` state stayed sticky on pool
+reuse. Next phase's render reused the slot for Pass / Hokm /
+whatever — still disabled. Player saw greyed Pass with no idea why.
+
+**Fix**: `clearActions()` now calls `btn:Enable()` on every pool
+slot before reuse. Closes the latent leak class introduced in
+v2.2.0.
+
+### Bug 2 (multi-meld) — display gap, NOT a scoring bug
+
+Investigation traced the rule path end-to-end: `R.SumMeldValue`
+correctly sums ALL melds per team (confirmed via new regression
+pin in `test_rules.lua`). But `meldCardsForSeat` (the trick-2
+reveal) showed only the BEST meld's cards — players seeing one
+meld card-strip on a multi-meld declarer assumed only one was
+counted.
+
+**Fix** at `UI.lua:~2967-3015`: split-the-difference with v1.0.1's
+"only best" rule. If all the seat's meld cards fit in 5 slots,
+show every meld. If they don't fit, fall back to v1.0.1's
+best-only (avoids the misleading-truncation visual that v1.0.1
+specifically fixed).
+
+**Regression test** in `test_rules.lua` pins:
+- `SumMeldValue` sums BOTH equal-point melds from same seat (40 raw)
+- `CompareMelds` correctly picks team A when their best Tierce
+  beats opp's best Tierce by top rank (K > Q)
+
+### Bug 3 (Tahreeb single-big-card)
+
+`Bot.lua:~2370-2395` (`tahreebClassify`). Saudi convention per
+`signals.md` video #1 form #1: "Same-suit top-down — high then
+lower in same suit = 'I do NOT want this suit'". The TWO-card
+descending pattern was already classified as `dontwant`, but
+SINGLE high-rank discards fell through to ambiguous `hint` —
+losing the directional info from "I dumped a K of clubs"
+(intended: dontwant).
+
+**Fix**: single-event signals now classify by rank. Discard of
+**T or K** (the two highest non-Ace plain ranks) → `dontwant`.
+Q / J / 9 / 8 / 7 single discards stay `hint` (ranks where
+direction is genuinely ambiguous from a single event). A is
+already special-cased to `bargiya` / `bargiya_hint`.
+
+The forced-discard filter above the classifier already strips
+no-choice plays, so reaching this rank check implies a voluntary
+high-card dump — exactly the user's friend's "big card" signal.
+
+### Hunt for similar residual bugs
+
+After fixing the user-reported three, audited the codebase for
+similar latent classes:
+
+- **Pool-state leaks** — verified `clearActions()` now resets every
+  mutable script handler, alpha, text color, AND disabled state.
+  Hand-card pool's `warnTag` (v2.2.0 PJ-31) explicitly hidden in
+  both branches of `renderHand`. No other `:Disable()` calls land
+  on pooled action buttons.
+- **Best-only display bugs** — `meldCardsForSeat` was the only
+  "best of many" display site. Other UI displays (banner score,
+  contract chip) iterate all relevant data.
+- **Single-event ambiguous classifiers** — `tahreebClassify` was
+  the only signal classifier with a `#signals == 1` early-return.
+
+### Behavioral test backfill (Agent 4 code-health gap)
+
+The v3.0.0 meta-audit Agent 4 flagged: drop-recovery synthesizes
+votes across 6 phase paths with **zero behavioral test coverage**
+— the most fragile new feature uncovered. v3.0.2 adds 6 pins
+covering:
+
+- AM.1: `HostKickSeat` clears only target seat in lobby
+- AM.2: `HostKickSeat(1)` refused (host can't kick self)
+- AM.3: Bot replacement preserves `hostHands` + `bids` for the seat
+- AM.4: Overcall drop synthesizes WAIVE; window resolves
+- AM.5: SWA-permission drop synthesizes ACCEPT (lenient default)
+- AM.6: Bot.PickPlay returns valid in-hand card for replaced seat
+
+### Tests
+
+**839/839 pass** (was 819 — +20 new behavioral pins). Marathon's
+new feature surface is now actually exercised at the test level.
+
 ## v3.0.1 — Hotfix: meta-audit findings (10 surgical fixes)
 
 A 5-agent meta-audit swarm against v3.0.0 found 2 CRITICAL + ~15

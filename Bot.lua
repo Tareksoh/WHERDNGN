@@ -2367,7 +2367,31 @@ local function tahreebClassify(signals)
         end
         return "bargiya_hint"       -- ambiguous (possible defensive shed)
     end
-    if #signals == 1 then return "hint" end
+    -- v3.0.2 (user-reported by expert friend: "when I play a different-
+    -- suit big card it means do not come back to me with that"). Verified
+    -- against docs/strategy/signals.md video #1 form #1: "Same-suit top-
+    -- down — high then lower in same suit = 'I do NOT want this suit'".
+    -- The TWO-card pattern was already handled below ("descending →
+    -- dontwant"); the SINGLE big-card case was lost to the catch-all
+    -- "hint" return — even though the underlying signal-direction is
+    -- already there in the first event. Promote single discards of T or
+    -- K (the two highest non-Ace plain ranks) to "dontwant". A is
+    -- already special-cased above (bargiya). J / Q / 9 / 8 / 7 stay
+    -- "hint" — those are mid-or-low ranks where direction is genuinely
+    -- ambiguous from a single event. The forced filter above already
+    -- strips no-choice discards, so reaching this point implies a
+    -- voluntary high-card dump.
+    if #signals == 1 then
+        local plain = K.RANK_PLAIN
+        local r = plain[signals[1]] or 0
+        local rK = plain["K"] or 0
+        if r >= rK then
+            -- T or K (in plain rank, T is highest non-Ace at index 7,
+            -- K at index 6). A would have routed to bargiya above.
+            return "dontwant"
+        end
+        return "hint"
+    end
     -- Compare rank-order indices using K.RANK_PLAIN (the non-trump
     -- ordering: 7<8<9<J<Q<K<T<A). Tahreeb signals are in non-trump
     -- discards, so plain ranking applies. A 2+-event sequence that's
