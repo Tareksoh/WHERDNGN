@@ -240,14 +240,24 @@ This is the AKA-receiver convention generalized — partner uses
 
 When you must follow suit but are losing the trick:
 
-- **Sun (off-trump) losers** dump **HIGHEST**. "If they had a
-  smaller they'd play it."
-- **Hokm (trump) losers** dump **LOWEST**. "If they had a bigger
-  they'd save it."
+- **Sun (off-trump) losers** dump **SMALLEST** (Tasgheer
+  convention). Per video #05's تصغير: "drop the smallest you
+  legally can — keep highs for later capture." This is the
+  Saudi receiver-side read; pre-v0.7.2 the bot used HIGHEST
+  here (the v0.5.11 over-correction), but tournament play
+  validated SMALLEST as the canonical convention. See
+  `decision-trees.md` Section 4 row "Tasgheer."
+- **Hokm (trump) losers** dump **LOWEST**. "If they had a
+  bigger they'd save it."
 
-These are **opposite rules in opposite contexts** — a critical
-Saudi Baloot quirk. When extracting reads from observed plays,
-condition on contract type and led-suit-vs-trump.
+Both rules **agree on direction** in their respective
+contexts — keep highs for capture, dump lows when forced. The
+"opposite-rules" framing in older transcripts referred to
+*Takbeer* (partner-winning) vs *Tasgheer* (opp-winning), not
+to Sun vs Hokm: in the partner-winning Takbeer case, you DO
+dump high to acknowledge the win. When extracting reads from
+observed plays, condition on **partner-vs-opp winner** AND
+contract type.
 
 ### Trump count (Hokm)
 

@@ -2385,10 +2385,28 @@ local function tahreebClassify(signals)
         local plain = K.RANK_PLAIN
         local r = plain[signals[1]] or 0
         local rK = plain["K"] or 0
+        local r9 = plain["9"] or 0
         if r >= rK then
             -- T or K (in plain rank, T is highest non-Ace at index 7,
             -- K at index 6). A would have routed to bargiya above.
             return "dontwant"
+        end
+        -- v3.0.3 GAP-01 (audit doc-vs-code differential, mirror of
+        -- v3.0.2 single-big-card fix). Per signals.md video #1 form 5
+        -- + decision-trees.md:222: "Bottom-up same-suit — low first,
+        -- higher next = 'I want this suit (and don't have its Ace)'".
+        -- Single-low (7/8/9) has the SAME informational content as the
+        -- FIRST event of the canonical low-then-higher sequence — the
+        -- partner just hasn't had a second chance to confirm. Demoting
+        -- to "want_hint" (lower confidence than confirmed "want") with
+        -- weight 1 (parity with bargiya_hint) preserves the directional
+        -- read while letting confirmed multi-event "want" (weight 2)
+        -- and confirmed "bargiya" (weight 3) dominate when present.
+        -- J/Q remain "hint" because mid-rank singles are genuinely
+        -- ambiguous (no top-down vs bottom-up disambiguation possible
+        -- without context tracking).
+        if r <= r9 then
+            return "want_hint"
         end
         return "hint"
     end
@@ -2700,11 +2718,13 @@ local function pickLead(legal, contract, seat)
                         --   bargiya       (confirmed invite): 3
                         --   want                            : 2
                         --   bargiya_hint  (ambiguous, single A): 1
+                        --   want_hint     (single-low, v3.0.3): 1
                         --     — lower than "want" so multi-event signals
-                        --     dominate the single-Ace ambiguous case.
+                        --     dominate the single-event ambiguous cases.
                         local score = (cls == "bargiya"      and 3)
                                    or (cls == "want"         and 2)
                                    or (cls == "bargiya_hint" and 1)
+                                   or (cls == "want_hint"    and 1)
                                    or 0
                         if score > bestScore then
                             best, bestScore, bestFlavor = su, score, cls
@@ -2791,12 +2811,16 @@ local function pickLead(legal, contract, seat)
                             local cls = tahreebClassify(osignals[su])
                             local sigList = osignals[su]
                             if cls == "bargiya" or cls == "want"
-                               or cls == "bargiya_hint" then
+                               or cls == "bargiya_hint" or cls == "want_hint" then
                                 -- Base classify weight (factor 3 +
                                 -- bargiya quality):
+                                -- v3.0.3 GAP-01: include want_hint so
+                                -- single-low opp signals also feed the
+                                -- avoid-set (mirror of bargiya_hint).
                                 local w = (cls == "bargiya"      and 3)
                                        or (cls == "want"         and 2)
                                        or (cls == "bargiya_hint" and 1)
+                                       or (cls == "want_hint"    and 1)
                                        or 0
                                 -- Factor 2: rank of highest event
                                 -- (A=3, T/K=2, others=1).
@@ -2900,7 +2924,8 @@ local function pickLead(legal, contract, seat)
         --     trick when fewer cards remain.
         --   * bargiya_hint / want / endgame → keep the pref (low-conf
         --     hint AND endgame both want the immediate lead-back).
-        if tahreebPrefSuit and tahreebPrefFlavor == "bargiya" then
+        if tahreebPrefSuit and (tahreebPrefFlavor == "bargiya"
+                                or tahreebPrefFlavor == "bargiya_hint") then
             local handSize = #legal  -- pickLead's `legal` is the full
                                      -- hand (no must-follow constraint)
             -- v1.2.1 (J.4 audit fix): محشور-proxy bargiya skips the
@@ -2909,7 +2934,34 @@ local function pickLead(legal, contract, seat)
             -- A immediately. The "burn 1-2 tricks first" advice is
             -- for ambiguous 2-event bargiya, NOT for cornered-A
             -- single-event sends. Receiver should lead-back NOW.
-            if handSize >= 5 and not tahreebPrefMahshour then
+            -- v3.0.3 GAP-05 (audit doc-vs-code differential): apply
+            -- the same phase-split to bargiya_hint flavor (single-A
+            -- ambiguous between invite and defensive shed). The phase
+            -- rationale ("≥5 cards in hand → opening, burn 1-2 own
+            -- tricks first; ≤4 cards → endgame, lead back NOW") is
+            -- per signals.md:189-198 — applies to BOTH confirmed
+            -- bargiya and the lower-confidence single-A hint, with
+            -- the same علاج (cure) of waiting until endgame to lead
+            -- back. Pre-v3.0.3 only confirmed bargiya was phase-split;
+            -- bargiya_hint always led back immediately, which over-
+            -- committed on ambiguous defensive-shed cases at >=5-card
+            -- hand size. Also: void-in-Bargiya'd-suit exception
+            -- (signals.md:198) — if we're VOID in the suggested suit,
+            -- we can't lead it anyway, so the phase-split doesn't
+            -- change the outcome (caller must pick another suit) but
+            -- preserve the pref so downstream "ruff if cornered"
+            -- logic can still see it. The standard lead path falls
+            -- through to longest-non-trump if pref-suit lead is not
+            -- feasible.
+            local prefSuitVoid = true
+            for _, c in ipairs(legal) do
+                if C.Suit(c) == tahreebPrefSuit then
+                    prefSuitVoid = false
+                    break
+                end
+            end
+            if handSize >= 5 and not tahreebPrefMahshour
+               and not prefSuitVoid then
                 tahreebPrefSuit = nil
             end
         end
@@ -3438,13 +3490,61 @@ local function pickLead(legal, contract, seat)
                 end
             end
         end
-        local t
-        if #trumpCandidates > 0 then
-            t = highestByRank(trumpCandidates, contract)
-        else
-            t = highestTrump(legal, contract)
+        -- v3.0.3 GAP-03 (audit doc-vs-code differential): Hokm trump
+        -- non-consecutive preserve at LEAD time. Per decision-trees.md
+        -- Section 4 + glossary.md "Takbeer/Tasgheer" (Hokm rule): when
+        -- holding non-consecutive top trumps (gap of 2+ in
+        -- K.RANK_TRUMP_HOKM order — e.g., J(8) + A(6) with no 9(7), or
+        -- J(8) + T(5) with no 9(7)/A(6)), do NOT lead the highest;
+        -- preserve it and lead a SIDE suit first. The opp will burn
+        -- middle trump chasing our top, and the preserved top trump
+        -- becomes a guaranteed re-entry. This rule was already wired
+        -- in pickFollow trump-winners (Bot.lua:5670-5679); this is
+        -- the symmetric lead-side gate. Only fires when:
+        --   • Hokm contract (already in bidder-team Hokm branch)
+        --   • #trumpCandidates >= 2 (need a top-2 to compare)
+        --   • Top-2 ranks are non-consecutive (gap >= 2)
+        --   • We have at least one non-trump in hand (so falling
+        --     through to side-suit lead is feasible)
+        --   • Trick 1 only (the "preserve" benefit is greatest at
+        --     game start; later tricks the trump pool may already
+        --     be partially drawn and the inversion can hurt).
+        local nonConsecTrumpSkip = false
+        if contract.type == K.BID_HOKM and #trumpCandidates >= 2
+           and S.s.tricks and #S.s.tricks == 0 then
+            local sorted = {}
+            for _, c in ipairs(trumpCandidates) do
+                sorted[#sorted + 1] = c
+            end
+            table.sort(sorted, function(a, b)
+                return (K.RANK_TRUMP_HOKM[C.Rank(a)] or 0) >
+                       (K.RANK_TRUMP_HOKM[C.Rank(b)] or 0)
+            end)
+            local topR  = K.RANK_TRUMP_HOKM[C.Rank(sorted[1])] or 0
+            local nextR = K.RANK_TRUMP_HOKM[C.Rank(sorted[2])] or 0
+            if topR - nextR >= 2 then
+                local hasNonTrump = false
+                for _, c in ipairs(legal) do
+                    if not C.IsTrump(c, contract) then
+                        hasNonTrump = true
+                        break
+                    end
+                end
+                if hasNonTrump then
+                    nonConsecTrumpSkip = true
+                end
+            end
         end
-        if t then return t end
+        local t
+        if not nonConsecTrumpSkip then
+            if #trumpCandidates > 0 then
+                t = highestByRank(trumpCandidates, contract)
+            else
+                t = highestTrump(legal, contract)
+            end
+            if t then return t end
+        end
+        -- Fall through to defender-style side-suit lead below.
     end
 
     -- Defenders / bidder's partner / Sun lead: don't burn high cards.
@@ -6303,6 +6403,51 @@ local function pickFollow(legal, hand, trick, contract, seat)
             local secondR = C.TrickRank(sorted[2], contract)
             if secondR - lowR <= 3 then
                 return sorted[2]
+            end
+        end
+    end
+
+    -- v3.0.3 GAP-09 (audit doc-vs-code differential, DEFERRED v1.4.1
+    -- per code comment). Per decision-trees.md:238 + signals.md:79-80
+    -- "biggest mistake in Baloot — playing absolute lowest" — when
+    -- partner has Tahreeb'd a suit (positive: want / want_hint /
+    -- bargiya / bargiya_hint) AND we are now following on that same
+    -- suit AND we have no winner, the high-return is our only
+    -- contribution. Send HIGHEST in-suit (not LOWEST) to confirm
+    -- "I tried, here's my best in your suit." Partner reads our top
+    -- as the ceiling on what we hold — a decision-relevant signal
+    -- vs the noise of "always lowest." M3lm-gated (Tahreeb sender
+    -- side is M3lm-only, so receiver discipline matches). Only fires
+    -- when:
+    --   • leadSuit is set (we are following, not leading)
+    --   • all `legal` cards are in leadSuit (we have the suit, not
+    --     ruffing in trump or freely discarding when void+partner-
+    --     winning)
+    --   • partner is bot (only bots emit Tahreeb signals)
+    --   • partner Tahreeb'd this suit positively
+    -- The "no winner" precondition is implicit — by reaching this
+    -- final fallthrough, prior winner-cashing branches already
+    -- declined. M3lm gating preserves Basic/Advanced behavior.
+    if Bot.IsM3lm and Bot.IsM3lm() and trick.leadSuit
+       and Bot._partnerStyle and #legal >= 2 then
+        local p = R.Partner(seat)
+        if Bot.IsBotSeat and Bot.IsBotSeat(p) then
+            local pStyle = Bot._partnerStyle[p]
+            local sigs = pStyle and pStyle.tahreebSent
+            local sigList = sigs and sigs[trick.leadSuit]
+            local cls = sigList and tahreebClassify(sigList) or nil
+            if cls == "want" or cls == "want_hint"
+               or cls == "bargiya" or cls == "bargiya_hint" then
+                local allInLed = true
+                for _, c in ipairs(legal) do
+                    if C.Suit(c) ~= trick.leadSuit then
+                        allInLed = false
+                        break
+                    end
+                end
+                if allInLed then
+                    return highestByRank(legal, contract)
+                end
             end
         end
     end

@@ -137,7 +137,7 @@ docs conflated them under "Takweesh"; that conflation was wrong.
 | Penalty | Phase | Trigger | Outcome |
 |---|---|---|---|
 | **Kasho (كاشو)** | **Pre-bid** | Procedural error during deal (mis-cut, dropped card, mis-deal) | **Redeal**, no points awarded |
-| **Qaid (قيد)** | **Post-bid** | Illegal play during round (failed must-follow, failed must-ruff, undeclared meld, observed cheat, **verbal slip about held cards** (تَوْضِيح لَعِب), false AKA per J-069) | Non-offending team scores **26 raw (Sun) / 16 raw (Hokm)** + their **own** melds; **offending team FORFEITS their own melds** (per Source H H-36.12 + PDF 02 K-04 «المشتري مشروعه فايد» — "the buyer's meld is forfeited"); ×multiplier applies on Bel/Bel-x2. v0.10.1 user arbitration; see asymmetry doctrine note below. |
+| **Qaid (قيد)** | **Post-bid** | Illegal play during round (failed must-follow, failed must-ruff, undeclared meld, observed cheat, **verbal slip about held cards** (تَوْضِيح لَعِب), false AKA per J-069) | Non-offending team scores **26 gp (Sun) / 16 gp (Hokm)** + their **own** melds; **offending team FORFEITS their own melds** (per Source H H-36.12 + PDF 02 K-04 «المشتري مشروعه فايد» — "the buyer's meld is forfeited"); ×multiplier applies on Bel/Bel-x2. The 26/16 figures are *game points* after div10: Sun handTotal 130 × Sun mult 2 = 260 raw → 26 gp; Hokm handTotal 162 × 1 = 162 raw → 16 gp. The code in `Net.HostResolveTakweesh` awards `handTotal × cardMult` raw and the standard `(x+5)/10` div10 produces 26/16 gp exactly. v0.10.1 user arbitration; see asymmetry doctrine note below. |
 
 #### Doctrine note — meld asymmetry between regular fail and Qaid
 
@@ -170,7 +170,8 @@ reading). Historical CHANGELOG entry: v0.10.1 M1.
 "Takweesh" during pre-bid invokes Kasho mechanics. Post-bid illegal
 plays are accused via Takweesh and *resolved* via Qaid. Existing
 `K.MSG_TAKWEESH` + `K.MSG_TAKWEESH_OUT` cover the call/outcome
-flow; the score side currently lacks the 26/16 split.
+flow; the score side correctly produces the 26/16 gp split via
+`handTotal × cardMult ÷ 10` (verified v3.0.3 GAP-06 audit closure).
 
 **Trigger discipline (video #36):** bot-side Takweesh calls should
 be restricted to **explicit triggers only** — failed-follow-suit,

@@ -1967,6 +1967,51 @@ do
     WHEREDNGNDB.m3lmBots = nil
 end
 
+-- v3.0.3 GAP-01 (audit doc-vs-code differential, mirror of v3.0.2):
+-- single-LOW-card discard (7/8/9) should signal "want_hint" (low
+-- confidence pointer to "I want this suit, no Ace"), per signals.md
+-- video #1 form 5 + decision-trees.md:222. Pre-v3.0.3 the classifier
+-- returned ambiguous "hint" for any non-A non-(K/T) single event,
+-- losing the directional information that the doc says is present
+-- (just at lower confidence than the multi-event variant).
+do
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 4 }
+    S.s.tricks = { { winner = 4, plays = {
+        { seat = 4, card = "AC" }, { seat = 1, card = "9C" },
+        { seat = 2, card = "8C" }, { seat = 3, card = "7C" },
+    } } }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "8S", "JH", "9H", "8H", "JD", "9D" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    Bot._partnerStyle = Bot._partnerStyle or { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+    -- Partner (seat 3) sent ONE low-rank discard in S (a 7) — pre-
+    -- v3.0.3 this was "hint" (weight 0). v3.0.3 fix: single-7/8/9 is
+    -- "want_hint" (weight 1). With H empty and D empty, the only
+    -- non-zero score should be S (single-low → want_hint), so the
+    -- bot SHOULD prefer to lead S (the suit partner hinted at).
+    Bot._partnerStyle[3] = {
+        tahreebSent = {
+            S = { "7" },           -- single low card → v3.0.3 "want_hint"
+            H = {},
+            D = {},
+        },
+    }
+    local card = Bot.PickPlay(1)
+    local suit = C.Suit(card)
+    assertEq(suit, "S",
+        "v3.0.3 GAP-01: single-low (7) discard signals 'want_hint'; bot leads S")
+    WHEREDNGNDB.m3lmBots = nil
+end
+
 -- =====================================================================
 -- K. v0.10.4 X5 half-fix closure — S.ApplyMeld parity with R.DetectMelds
 --
@@ -6190,6 +6235,108 @@ do
     end
     assertTrue(inHand,
         "AM.6b: picked card is actually in the seat's hand")
+end
+
+-- =====================================================================
+-- AN. v3.0.3 audit doc-vs-code differential fixes (source-pins)
+--
+-- The v3.0.3 release closes 6 audit gaps surfaced by the doc-vs-code
+-- differential audit. Source-pin tests guard against silent regression
+-- of each gap-fix by pinning a unique substring per fix.
+-- =====================================================================
+section("AN. v3.0.3 audit doc-vs-code differential fixes")
+
+-- AN.1 GAP-01: Tahreeb single-low → "want_hint"
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.0%.3 GAP%-01") ~= nil,
+        "AN.1a (GAP-01): Bot.lua contains v3.0.3 GAP-01 marker")
+    assertTrue(botSrc:find('return "want_hint"') ~= nil,
+        "AN.1b (GAP-01): tahreebClassify returns 'want_hint' for single-low")
+    assertTrue(botSrc:find('cls == "want_hint"') ~= nil,
+        "AN.1c (GAP-01): receiver score table includes want_hint weight")
+end
+
+-- AN.2 GAP-02: SWA 5+-cards mandatory permission
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find("v3%.0%.3 GAP%-02") ~= nil,
+        "AN.2a (GAP-02): Net.lua contains v3.0.3 GAP-02 marker")
+    assertTrue(netSrc:find("handCount >= 5") ~= nil,
+        "AN.2b (GAP-02): needPerm gate force-enables at handCount >= 5")
+end
+
+-- AN.3 GAP-03: Hokm trump non-consecutive at pickLead
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.0%.3 GAP%-03") ~= nil,
+        "AN.3a (GAP-03): Bot.lua contains v3.0.3 GAP-03 marker")
+    assertTrue(botSrc:find("nonConsecTrumpSkip") ~= nil,
+        "AN.3b (GAP-03): pickLead has non-consecutive trump preserve gate")
+end
+
+-- AN.4 GAP-05: Bargiya phase-split extends to bargiya_hint + void exception
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.0%.3 GAP%-05") ~= nil,
+        "AN.4a (GAP-05): Bot.lua contains v3.0.3 GAP-05 marker")
+    assertTrue(botSrc:find('tahreebPrefFlavor == "bargiya_hint"') ~= nil,
+        "AN.4b (GAP-05): phase-split applies to bargiya_hint flavor")
+    assertTrue(botSrc:find("prefSuitVoid") ~= nil,
+        "AN.4c (GAP-05): void-in-suit exception preserves pref")
+end
+
+-- AN.5 GAP-09: Tahreeb receiver high-card-return discipline
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.0%.3 GAP%-09") ~= nil,
+        "AN.5a (GAP-09): Bot.lua contains v3.0.3 GAP-09 marker")
+    assertTrue(botSrc:find("biggest mistake in Baloot") ~= nil,
+        "AN.5b (GAP-09): comment cites doc rationale")
+end
+
+-- AN.6 GAP-07: signals.md off-trump dump direction corrected
+do
+    local sigSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/docs/strategy/signals.md"):read("*a")
+    assertTrue(sigSrc:find("dump %*%*SMALLEST%*%*") ~= nil,
+        "AN.6 (GAP-07): signals.md says 'dump SMALLEST' for Sun off-trump losers")
+end
+
+-- AN.7 (behavioral): GAP-01 weight is dominated by confirmed "want"
+-- (multi-event ascending). Verify the score-priority order:
+-- bargiya(3) > want(2) > {bargiya_hint, want_hint}(1) > hint(0).
+do
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 4 }
+    S.s.tricks = { { winner = 4, plays = {
+        { seat = 4, card = "AC" }, { seat = 1, card = "9C" },
+        { seat = 2, card = "8C" }, { seat = 3, card = "7C" },
+    } } }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "8S", "JH", "9H", "8H", "JD", "9D" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    Bot._partnerStyle = Bot._partnerStyle or { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+    -- Partner: S=single-7 (want_hint, weight 1), H=2-event ascending
+    -- (want, weight 2). want should dominate want_hint → bot picks H.
+    Bot._partnerStyle[3] = {
+        tahreebSent = {
+            S = { "7" },           -- single low → want_hint (weight 1)
+            H = { "7", "9" },      -- ascending → want (weight 2)
+            D = {},
+        },
+    }
+    local card = Bot.PickPlay(1)
+    assertEq(C.Suit(card), "H",
+        "AN.7 (GAP-01 weight order): want(2) dominates want_hint(1)")
+    WHEREDNGNDB.m3lmBots = nil
 end
 
 -- =====================================================================

@@ -96,7 +96,7 @@ be voluntarily declared; nothing auto-escalates. Gahwa is terminal
 | كبوت | Al-Kaboot — bidder team sweeps all 8 tricks | `K.AL_KABOOT_HOKM`=250, `K.AL_KABOOT_SUN`=220, `K.LAST_TRICK_BONUS`=10 | Pursuit logic in `pickLead` trick-8 branch (Bot.lua:953). **Per video #15:** pursuit should trigger as early as **trick 3** when hand-shape is Kaboot-feasible, not only at trick 8. Currently only trick-8 is wired. |
 | الكبوت المقلوب | **Reverse Al-Kaboot** — defenders sweep all 8 against bidder | **Proposed `K.AL_KABOOT_REVERSE = 88`** (single-source from video #16, confirm before wiring). Qualifies only when bidder was trick-1 leader. | New `R.ScoreRound` branch needed; not currently scored. |
 | كاشو | Kasho — light pre-bid penalty | Procedural error during deal → redeal, no points. NOT the same as Qaid. | Currently not modeled in code; player-only edge case. |
-| القيد | Qaid — heavy post-bid penalty | Illegal play during round → 26 raw (Sun) / 16 raw (Hokm) + melds to non-offending team, ×multiplier on Bel/Bel-x2. | `K.MSG_TAKWEESH_OUT` carries the call result; score side `(not yet wired)`. |
+| القيد | Qaid — heavy post-bid penalty | Illegal play during round → 26 gp (Sun) / 16 gp (Hokm) + own melds × meldMult to non-offending team; offender forfeits own melds; ×multiplier on Bel/Bel-x2. (26/16 are *game points* after div10: code awards `handTotal × cardMult` = 260 raw Sun / 162 raw Hokm, then `(x+5)/10` = 26 / 16 gp.) | `K.MSG_TAKWEESH_OUT` carries the call result; score side wired in `Net.HostResolveTakweesh` (v0.10.1+; doc terminology corrected v3.0.3 GAP-06). |
 | بلوت | "Baloot!" fanfare on a successful bid making | `K.SND_BALOOT` | Sound cue, no decision logic |
 
 **SWA rules (Saudi-specific):**

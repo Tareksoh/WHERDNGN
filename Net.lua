@@ -3252,8 +3252,17 @@ function N.LocalSWA()
     -- can still Takweesh during the window if they spot an illegal
     -- play; bots auto-accept.
     -- Toggle the permission requirement via WHEREDNGNDB.swaRequiresPermission.
+    -- v3.0.3 GAP-02 (audit doc-vs-code differential): per video #35
+    -- «ما تساوي بدون ما تستاذن مستحيل يمشونها» (CLAUDE.md:64-76 +
+    -- decision-trees.md:207 + endgame.md:191-198), 5+-card SWA is
+    -- MANDATORY permission — Saudi convention does not let a 5+-card
+    -- claim pass without explicit opp consent. The toggle below was
+    -- intended for the ≤4-card UX shortcut; it was never supposed to
+    -- bypass the canonical 5+-card mandate. Force-enable permission
+    -- when handCount >= 5 regardless of the toggle.
     local handCount = #(S.s.hand or {})
-    local needPerm = (WHEREDNGNDB == nil)
+    local needPerm = (handCount >= 5)
+                  or (WHEREDNGNDB == nil)
                   or (WHEREDNGNDB.swaRequiresPermission ~= false)
     -- Defensive: clear any stale SWA banner from earlier in the round
     -- before we send the new claim so no flicker / wrong-state UI.

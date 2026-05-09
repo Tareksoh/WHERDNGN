@@ -1,5 +1,208 @@
 # Changelog
 
+## v3.0.3 — Audit doc-vs-code differential closure (6 gap fixes)
+
+The v3.0.2 release shipped a doc-vs-code differential audit alongside
+a tournament regression. Audit surfaced 6 actionable gaps where Saudi
+strategy docs and bot code diverged. v3.0.3 closes them surgically
+without touching scoring or escalation paths.
+
+### GAP-01 (CONTRADICTORY → fixed): Tahreeb single-low → "want_hint"
+
+`Bot.lua` `tahreebClassify`. Mirror of the v3.0.2 single-big-card fix.
+Per `signals.md` video #1 form 5 + `decision-trees.md:222`:
+
+> Bottom-up same-suit — low first, higher next = "I want this suit
+> (and don't have its Ace)". 70/25/5 prior on first event.
+
+The single-low-card variant has the same informational content as the
+*first event* of the canonical low-then-higher sequence. Pre-v3.0.3 the
+classifier returned ambiguous `"hint"` for any single-low (7/8/9) — the
+same loss-of-information class v3.0.2 closed for single-high. Now:
+
+- Single 7/8/9 → `"want_hint"` (low confidence; weight 1, parity with
+  `bargiya_hint`).
+- Single J/Q → still `"hint"` (mid-rank singles are genuinely
+  ambiguous without context tracking).
+- Single T/K (v3.0.2) → `"dontwant"`.
+- Single A → `"bargiya"` / `"bargiya_hint"`.
+
+Receiver score table updated to weight `want_hint` = 1 for both partner
+pref-suit selection and opp avoid-set scoring. Confirmed `"want"`
+(weight 2) and `"bargiya"` (weight 3) still dominate when present.
+
+### GAP-02 (HIGH/MISSING → fixed): SWA 5+-cards mandatory permission
+
+`Net.lua:LocalSWA`. Per `CLAUDE.md:64-76` + video #35 verbatim
+«ما تساوي بدون ما تستاذن مستحيل يمشونها» («you cannot SWA without
+asking permission, it's impossible they'd let it pass»):
+
+5+-card SWA is **mandatory permission** — Saudi convention does not
+let a 5+-card claim pass without explicit opp consent. Pre-v3.0.3 the
+`WHEREDNGNDB.swaRequiresPermission = false` toggle bypassed permission
+at *any* hand size, including 5+. The toggle was intended for the
+≤4-card UX shortcut.
+
+**Fix** (1-line addition):
+
+```lua
+local needPerm = (handCount >= 5)
+              or (WHEREDNGNDB == nil)
+              or (WHEREDNGNDB.swaRequiresPermission ~= false)
+```
+
+5+-card claims now force-enable permission regardless of toggle state.
+≤4-card paths remain user-toggleable.
+
+### GAP-03 (HIGH/MISSING → fixed): Hokm trump non-consecutive at LEAD
+
+`Bot.lua:pickLead` bidder-team Hokm trump branch. Per
+`decision-trees.md` Section 4 + `glossary.md` Takbeer/Tasgheer Hokm
+rule:
+
+> When holding non-consecutive top trumps (gap of 2+ in
+> `K.RANK_TRUMP_HOKM` order), preserve top — lead a side suit first.
+
+The rule was wired in `pickFollow` trump-winners (`Bot.lua:5670-5679`)
+but the symmetric LEAD-side gate was missing. Bidder leading with
+J + A of trump (no 9 or T between) would top-down J first; opp could
+then over-cut with the missing 9/T and capture our preserved A.
+
+**Fix**: trick-1 only (the inversion benefit decays as the trump pool
+draws); when top-2 trump candidates have gap ≥ 2 in
+`K.RANK_TRUMP_HOKM`, fall through to the side-suit lead path. Trick 1
+gating prevents drift from triggering this in mid/late-round states
+where trump structure has shifted.
+
+### GAP-05 (HIGH/PARTIAL → fixed): Bargiya phase-split + void exception
+
+`Bot.lua` Bargiya receiver phase-split. Per `signals.md:189-198`:
+
+> Endgame (≤4 cards): lead the Bargiya'd suit immediately.
+> Opening / mid-round (≥5 cards): burn 1-2 of your own tricks first.
+> Void in the Bargiya'd suit: lead it anyway — partner expects you
+> to attempt regardless.
+
+Pre-v3.0.3 the phase-split downgrade applied ONLY to confirmed
+`"bargiya"` flavor; `"bargiya_hint"` (single-A ambiguous) bypassed
+the split, leading back immediately even at handSize ≥ 5. The void-
+in-suit exception was missing entirely — bot would clear `pref` on
+≥5-card hand even when void in the suit.
+
+**Fix**: extend the phase-split to BOTH `bargiya` and `bargiya_hint`.
+Add a `prefSuitVoid` check that preserves the pref when we have no
+cards in the suggested suit (downstream lead path will fall through
+to longest-non-trump).
+
+### GAP-07 (MEDIUM/CONTRADICTORY → doc fix): signals.md off-trump dump
+
+`docs/strategy/signals.md:243-246`. Doc said:
+
+> Sun (off-trump) losers dump **HIGHEST**.
+
+Code does **SMALLEST** per `Bot.lua:6310` (Tasgheer convention). The
+v0.5.11 over-correction (HIGHEST) was reverted in v0.7.2 to match
+video #05's تصغير; `decision-trees.md:111` is correct. `signals.md`
+hadn't been updated.
+
+**Fix**: rewrite the section to align with code + decision-trees.md
++ video #05 («تصغير»). Reframe the "opposite rules" framing to refer
+to *Takbeer (partner-winning) vs Tasgheer (opp-winning)*, NOT to
+Sun-vs-Hokm.
+
+### GAP-09 (MEDIUM/MISSING → fixed): Tahreeb receiver high-card-return
+
+`Bot.lua:pickFollow` final-fallthrough discipline. Per
+`decision-trees.md:238` + `signals.md:79-80`:
+
+> "biggest mistake in Baloot" — receiver of a Tahreeb signal,
+> following on the wanted suit with no winner, plays absolute
+> lowest. Send your **highest available** card back to partner —
+> the high return is your only contribution.
+
+Pre-v3.0.3 the `lowestByRank(legal, contract)` final fallback fired
+unconditionally. M3lm-gated fix (Tahreeb sender side is M3lm-only,
+so receiver discipline matches): when partner Tahreeb'd this suit
+positively (`want` / `want_hint` / `bargiya` / `bargiya_hint`) AND
+all `legal` cards are in the led suit (we're following, not ruffing
+or discarding), return `highestByRank(legal, contract)` instead.
+
+### GAP-10: verified existing gate sufficient (no fix)
+
+Audit flagged `topTouchSignal` write-site as missing the
+"winnerSeatSoFar == myTeamSeat" gate. Investigation: actual write at
+`Bot.lua:540-610` already gates on `lead.seat == R.Partner(seat) AND
+lead.rank == "A"` (or AKA), which is a STRICTER form of partner-team-
+winning. The audit's cite of "Bot.lua:2869+" was a Bargiya block, not
+the touching-honors block — audit was inaccurate. Existing gate
+correctly suppresses false positives in opp-led trick scenarios.
+
+### GAP-06 (CONTRADICTORY → doc fix): Qaid 26/16 terminology
+
+Audit flagged Qaid penalty as 26/16-split-vs-full-handTotal contradiction.
+Investigation traced the math:
+
+| Contract | code path | result |
+|---|---|---|
+| **Sun**  | `cardA = 130; cardMult = 2; rawA = 260; addA = floor((260+5)/10)` | **26 gp** |
+| **Hokm** | `cardA = 162; cardMult = 1; rawA = 162; addA = floor((162+5)/10)` | **16 gp** |
+
+The code in `Net.HostResolveTakweesh` produces exactly 26 gp Sun / 16 gp
+Hokm — matching every transcript and the doc's intent. The discrepancy
+was **doc terminology**: `saudi-rules.md:140` and `glossary.md:99` used
+the word "raw" when they meant *game points after div10*. The Net.lua
+comment at line 2806-2810 had it right all along ("= 26 Sun / 16 Hokm
+in game points after div10").
+
+**Doc fix**: replaced "26 raw / 16 raw" with "26 gp / 16 gp" in
+`saudi-rules.md` Qaid table row and `glossary.md` القيد entry, plus
+inline math note showing the derivation. Updated `saudi-rules.md:173`
+("score side currently lacks the 26/16 split") to reflect that the
+split IS correctly wired — only the doc terminology was off.
+
+No code change. Audit's GAP-06 finding was a misread of `cardA = handTotal`
+without tracing through `× cardMult ÷ 10`.
+
+### Tests
+
+**854/854 pass** (was 840 — +14 new pins). New section `AN`:
+
+- AN.1 (3 pins): GAP-01 source markers + return type + score table
+- AN.2 (2 pins): GAP-02 source marker + handCount gate
+- AN.3 (2 pins): GAP-03 source marker + nonConsecTrumpSkip gate
+- AN.4 (3 pins): GAP-05 source marker + bargiya_hint flavor + void
+- AN.5 (2 pins): GAP-09 source marker + doc-rationale comment
+- AN.6 (1 pin): GAP-07 signals.md doc-fix verification
+- AN.7 (1 behavioral): GAP-01 weight order — confirmed `want` (2)
+  dominates `want_hint` (1) when both signals are present
+
+Plus an additional behavioral pin (line ~1970-2012) exercising
+single-low → `want_hint` end-to-end via `Bot.PickPlay`.
+
+### Why these specifically
+
+The audit found 95 rules total, 18 MISSING, 5 CONTRADICTORY. The 6
+shipped here were:
+
+- **CONTRADICTORY** with surgical fixes (GAP-01, GAP-07).
+- **HIGH severity / MISSING** with trivial-to-surgical fixes (GAP-02,
+  GAP-03, GAP-05).
+- **MEDIUM severity / MISSING** matching a `DEFERRED v1.4.1` flag in
+  the code that was now actionable (GAP-09).
+
+The remaining gaps are either DEFERRED-pending-research, LOW severity,
+or arbitration-needed (GAP-06).
+
+### Tournament
+
+Pre-fix: v3.0.2 multi-seed 100×100 tournament showed ~5-7 gp swings
+vs v0.5.1 May-8 baseline, consistent with intended bot-strategy
+improvements (anti-prediction work). No concerning regressions.
+
+v3.0.3 changes are surgical Tahreeb-receiver / SWA-rule / pickLead
+edge cases — none in the hot path of trick-1 strategy or scoring.
+Tournament re-run can be deferred to v3.1.
+
 ## v3.0.2 — User playtest hotfix + residual hunt + behavioral test backfill
 
 User-reported in real 4-human play:
