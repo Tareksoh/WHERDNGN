@@ -1,5 +1,90 @@
 # Changelog
 
+## v3.0.7 — Comprehensive Saudi-rules audit closure (4-agent parallel sweep)
+
+User asked for "one last extensive audit" against Saudi Baloot rules,
+covering all small errors found since v0.11.0. Four parallel agents
+ran focused audits:
+
+### Audit results
+
+| Agent | Scope | Findings |
+|---|---|---|
+| **Saudi-rules canonical** | 25 canonical Saudi Baloot rules vs code | All 25 ✓ ALIGNED, 1 doc-acknowledged DEFERRED (Round-1 Bel restriction). **0 deviations.** |
+| **Sender/receiver pairs** | All `Bot._partnerStyle` ledger keys + signal pickers | 1 false alarm (Tanfeer N-1 vs N-3 confusion), 2 false alarms (weakHandSignal/highCardPlays — readers ARE active at `Bot.lua:3851` + `4540`). 1 known-acknowledged DEAD-WRITE (`leadCount`, doc-acknowledged at `glossary.md:194`). **0 real bugs.** |
+| **Doc-vs-code numerical** | Strategy docs vs `Constants.lua` and Lua code | **5 stale doc claims** (this fix). |
+| **Test-pin drift** | Every `botSrc:find(...)`-style source-pin in test suite | All 16 pins verified clean. **0 drift.** |
+
+### Verified false alarms (no fix needed)
+
+- **Tanfeer "MISALIGNED"**: agent confused N-1 (our-side sender at
+  `Bot.lua:6367-6430`) with N-3 (opp-side receiver at `Bot.lua:2814+`).
+  These are intentionally opposite perspectives — different roles in
+  the same convention. Verified by reading the actual code paths.
+- **weakHandSignal/highCardPlays "DEAD-READ"**: agent traced the
+  ratio computation (`Bot.lua:3847-3850` + `4536-4539`) but missed
+  the downstream consumers. `forceOwnInitiative` flag (line 3851) is
+  read at `Bot.lua:3876, 4014, 4106` to gate Sun-shortest-suit and
+  prefer A/T-suit leads. `captureRate += 0.40` (line 4540) is consumed
+  in the Faranka decision. Both signals are **fully wired**.
+- **leadCount "DEAD-WRITE"**: known/acknowledged in `glossary.md:194`
+  ("DEAD WRITE — suit-lead frequency, written by `OnPlayObserved`,
+  read nowhere"). Cleanup deferred; not a Saudi-rule issue.
+
+### Real fixes — `glossary.md` doc updates
+
+Code is correct; only the doc was stale.
+
+#### Stale escalation thresholds (`glossary.md:41-44`)
+
+Four bot escalation thresholds had been re-tuned over multiple
+releases without the glossary table being updated:
+
+| Constant | Doc claim | Code reality | Re-tune origin |
+|---|---|---|---|
+| `K.BOT_BEL_TH` | 60 | **62** | v1.3.2 (anchor against corrected harness) |
+| `K.BOT_TRIPLE_TH` | 90 | **82** | v1.3.4 walkback (Codex audit) |
+| `K.BOT_FOUR_TH` | 110 | **80** | v1.3.2 calibration |
+| `K.BOT_GAHWA_TH` | 135 | **95** | v1.3.2 re-anchor (8-card eval window) |
+
+Picker line numbers were also stale (showed `1908`/`1938`/`1982`;
+actual `6982`/`7313`/`7385`/`7469`). Fixed.
+
+#### Reverse Al-Kaboot status (`glossary.md:97`)
+
+Doc said:
+> Proposed `K.AL_KABOOT_REVERSE = 88` (single-source from video #16,
+> confirm before wiring). New `R.ScoreRound` branch needed; not
+> currently scored.
+
+This was true pre-v1.0.12 but stale ever since. Code reality:
+- `K.AL_KABOOT_REVERSE = 880` (raw; `= 88` game points after div10)
+- Wired in `Rules.lua:976-1017` with full 4-condition gate (Sun +
+  dealer-right + bidder held A + defender swept)
+- cardMult-immune; defenders' melds × meldMult per «بالمشاريع»
+- v1.0.12 + reaffirmed by v3.0.2 audit
+
+Doc updated to reflect reality.
+
+### Tests
+
+**858/858 pass.** Doc-only changes; no code surface modified.
+
+### Verdict
+
+After 4 parallel agent audits covering 25 Saudi rules + sender/receiver
+pairs + numerical/terminological consistency + test-pin integrity, the
+v3.0.6 codebase is **fully aligned with Saudi Baloot conventions**. The
+only issues found were doc terminology, all in `glossary.md`. No code
+fixes shipped because no code-level deviations exist.
+
+The recurring agent false-alarm pattern (calling alive code "dead") is
+a known characteristic of read-only audits — they trace assignments
+without always tracing downstream consumers across hundreds of lines.
+Verification by direct code-read caught all three false positives. Future
+audits should ask the agent to follow each "dead" finding through to
+ALL consumers before flagging.
+
 ## v3.0.6 — GAP-01 sender-intent alignment
 
 ### What user asked

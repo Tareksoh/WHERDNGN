@@ -38,10 +38,10 @@ docs; use code identifiers in code.** This table is the bridge.
 
 | Saudi name | Multiplier | Constants | Window | Picker (line) |
 |---|---|---|---|---|
-| بل (Bel) — "double" | ×2 | `K.MSG_DOUBLE = "X"`, `K.MULT_BEL = 2`, `K.BOT_BEL_TH = 60` | defenders' window after bid | `Bot.PickDouble` (see C-Xref-05 for current line) |
-| بل×2 (Bel x2) — "double-the-double" | ×3 | `K.MSG_TRIPLE`, `K.MULT_TRIPLE`=3, `K.BOT_TRIPLE_TH`=90, `K.PHASE_TRIPLE` | bidder team's window after Bel | `Bot.PickTriple` (Bot.lua:1908) |
-| فور (Four) — English loan-word | ×4 | `K.MSG_FOUR`, `K.MULT_FOUR`=4, `K.BOT_FOUR_TH`=110, `K.PHASE_FOUR` | defenders' window after Bel x2 | `Bot.PickFour` (Bot.lua:1938) |
-| قهوة (Gahwa / Coffee) | match-win | `K.MSG_GAHWA`, `K.BOT_GAHWA_TH`=135, `K.PHASE_GAHWA` | bidder team's terminal | `Bot.PickGahwa` (Bot.lua:1982) |
+| بل (Bel) — "double" | ×2 | `K.MSG_DOUBLE = "X"`, `K.MULT_BEL = 2`, `K.BOT_BEL_TH = 62` (v1.3.2 calibration) | defenders' window after bid | `Bot.PickDouble` (Bot.lua:6982) |
+| بل×2 (Bel x2) — "double-the-double" | ×3 | `K.MSG_TRIPLE`, `K.MULT_TRIPLE`=3, `K.BOT_TRIPLE_TH`=82 (v1.3.4 walkback), `K.PHASE_TRIPLE` | bidder team's window after Bel | `Bot.PickTriple` (Bot.lua:7313) |
+| فور (Four) — English loan-word | ×4 | `K.MSG_FOUR`, `K.MULT_FOUR`=4, `K.BOT_FOUR_TH`=80 (v1.3.2 calibration), `K.PHASE_FOUR` | defenders' window after Bel x2 | `Bot.PickFour` (Bot.lua:7385) |
+| قهوة (Gahwa / Coffee) | match-win | `K.MSG_GAHWA`, `K.BOT_GAHWA_TH`=95 (v1.3.2 re-anchor), `K.PHASE_GAHWA` | bidder team's terminal | `Bot.PickGahwa` (Bot.lua:7469) |
 
 **Shared decision helpers used by all four pickers above:**
 - `escalationStrength(seat, hand, contract)` — Bot.lua:1884
@@ -94,7 +94,7 @@ be voluntarily declared; nothing auto-escalates. Gahwa is terminal
 | سوا | SWA — slam-with-ace, claim all remaining tricks | `K.MSG_SWA`, `K.MSG_SWA_REQ`, `K.MSG_SWA_RESP`, `K.SWA_TIMEOUT_SEC`=5 | `Bot.PickSWA` (Bot.lua:2120); `Net.HostResolveSWA`, `Net.MaybeRunBot` SWA branch (Net.lua:~3535); state at `S.s.swaRequest` |
 | تكويش | **Takweesh — DUAL MEANING:** (a) Call illegal-play penalty → invokes Kasho (pre-bid) or Qaid (post-bid). (b) Bid-override sense: "compete with partner's bid by buying yourself" (per video #29). | `K.MSG_TAKWEESH`, `K.MSG_TAKWEESH_OUT` cover meaning (a). Meaning (b) is bid-decision logic — `Bot.PickBid` should NOT bid against partner's strong contract unless specific exceptions hold (per video #29). | Net.lua handlers; player-initiated only for (a). |
 | كبوت | Al-Kaboot — bidder team sweeps all 8 tricks | `K.AL_KABOOT_HOKM`=250, `K.AL_KABOOT_SUN`=220, `K.LAST_TRICK_BONUS`=10 | Pursuit logic in `pickLead` trick-8 branch (Bot.lua:953). **Per video #15:** pursuit should trigger as early as **trick 3** when hand-shape is Kaboot-feasible, not only at trick 8. Currently only trick-8 is wired. |
-| الكبوت المقلوب | **Reverse Al-Kaboot** — defenders sweep all 8 against bidder | **Proposed `K.AL_KABOOT_REVERSE = 88`** (single-source from video #16, confirm before wiring). Qualifies only when bidder was trick-1 leader. | New `R.ScoreRound` branch needed; not currently scored. |
+| الكبوت المقلوب | **Reverse Al-Kaboot** — defenders sweep all 8 against bidder | `K.AL_KABOOT_REVERSE = 880` raw (= 88 game points after div10), cardMult-immune, defenders' melds × meldMult per «بالمشاريع». Wired v1.0.12 with 4-condition gate (Sun + dealer-right + bidder held A + defender swept). | `R.ScoreRound` reverse-AK branch (Rules.lua:976-1017); fully scored. |
 | كاشو | Kasho — light pre-bid penalty | Procedural error during deal → redeal, no points. NOT the same as Qaid. | Currently not modeled in code; player-only edge case. |
 | القيد | Qaid — heavy post-bid penalty | Illegal play during round → 26 gp (Sun) / 16 gp (Hokm) + own melds × meldMult to non-offending team; offender forfeits own melds; ×multiplier on Bel/Bel-x2. (26/16 are *game points* after div10: code awards `handTotal × cardMult` = 260 raw Sun / 162 raw Hokm, then `(x+5)/10` = 26 / 16 gp.) | `K.MSG_TAKWEESH_OUT` carries the call result; score side wired in `Net.HostResolveTakweesh` (v0.10.1+; doc terminology corrected v3.0.3 GAP-06). |
 | بلوت | "Baloot!" fanfare on a successful bid making | `K.SND_BALOOT` | Sound cue, no decision logic |
