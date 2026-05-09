@@ -256,8 +256,31 @@ function N._HostMaybeAutoBelote(seat, card)
     for _, t in ipairs(S.s.tricks or {}) do scan(t.plays) end
     if S.s.trick then scan(S.s.trick.plays) end
     if kPlayed and qPlayed then
-        S.ApplyBeloteAnnounce(seat)
-        N.SendBelote(seat)
+        -- v2.3.0 (audit v1.6.1 BF-15 MED): defer the BALOOT! cue by
+        -- ~1.0s so it doesn't stack on top of the card-play SFX +
+        -- trump-cut cue + any winner-glow audio that fired in the
+        -- same beat. Pre-fix the auto-announce ran synchronously
+        -- with the play resolution — three voice/sound cues firing
+        -- in <200ms produced a muddy overlap. The 1.0s delay lets
+        -- the play's own audio finish before the BALOOT! voice
+        -- starts. Self-cancels if the contract changes mid-delay
+        -- (extremely rare — contract is locked by trick-1 always
+        -- and BALOOT only fires post-Hokm; defensive guard only).
+        if C_Timer and C_Timer.After then
+            C_Timer.After(1.0, function()
+                if not S.s.isHost then return end
+                if not S.s.contract or S.s.contract.type ~= K.BID_HOKM then
+                    return
+                end
+                if S.s.beloteAnnounced
+                   and S.s.beloteAnnounced[seat] then return end
+                S.ApplyBeloteAnnounce(seat)
+                N.SendBelote(seat)
+            end)
+        else
+            S.ApplyBeloteAnnounce(seat)
+            N.SendBelote(seat)
+        end
     end
 end
 
@@ -4725,6 +4748,28 @@ function N.MaybeRunBot()
                     local effOpen = (not isSun) and wantOpen
                     S.ApplyDouble(belSeat, effOpen)
                     N.SendDouble(belSeat, effOpen)
+                    -- v2.3.0 (audit v1.6.1 BF-32 LOW): partner-bot
+                    -- Bel reason hint. When a bot-partner fires Bel
+                    -- and the local human is on the same team, print
+                    -- a short chat line explaining the call's mood
+                    -- — confident (open) vs scoreboard-pressure
+                    -- (closed). Helps the human partner decide
+                    -- whether to support with their own escalation.
+                    -- Bots get nothing (they consume their teammate's
+                    -- decision via the wire + shared style ledger).
+                    pcall(function()
+                        local me = S.s.localSeat
+                        if not me or not S.s.seats then return end
+                        if me == belSeat then return end
+                        if R.TeamOf(me) ~= R.TeamOf(belSeat) then return end
+                        local meInfo = S.s.seats[me]
+                        if meInfo and meInfo.isBot then return end
+                        local mood = effOpen
+                            and "|cffaaffaaopen — confident, expects partner support|r"
+                            or "|cffffaa55closed — locking in ×2, no chain|r"
+                        print(("|cff66ff88[WHEREDNGN]|r Partner Bel'd "
+                               .. "(%s)"):format(mood))
+                    end)
                     belFired = true
                     if isSun or not effOpen then
                         N.HostFinishDeal()

@@ -5100,10 +5100,20 @@ do
 end
 
 -- AJ.8 (B#7 tooltip rename): "Beled / Tripled" → "Doubled / Tripled".
+-- v2.3.0 (audit v1.6.1 PJ-54 + SA-20 cascade): test updated to match
+-- the second rename "Doubled / Tripled" → "Bel'd / Bel x3'd". The
+-- v1.0.2 rename moved away from Saudi names ("Beled" sounded like
+-- a typo); v1.7.0 SA-20 + v2.3.0 PJ-54 restored Saudi-aligned names
+-- using the canonical romanized forms ("Bel" / "Bel x3"). Either
+-- the v1.0.2 wording OR the v2.3.0+ wording is acceptable.
 do
     local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
-    assertTrue(uiSrc:find("Doubled / Tripled") ~= nil,
-               "AJ.8a (B#7): M3lm tooltip uses 'Doubled / Tripled'")
+    assertTrue(uiSrc:find("Doubled / Tripled") ~= nil
+               or uiSrc:find("Bel'd / Bel x3'd") ~= nil,
+               "AJ.8a (B#7+v2.3.0): M3lm tooltip uses 'Doubled / Tripled' OR 'Bel'd / Bel x3'd'")
+    -- "Beled" specifically was the awkward pre-v1.0.2 form — reject
+    -- it regardless of v2.3.0's revert. Saudi-aligned new form is
+    -- "Bel'd" with the apostrophe, which doesn't substring-match.
     assertTrue(uiSrc:find("Beled / Tripled") == nil,
                "AJ.8b (B#7): no remaining 'Beled / Tripled' string")
 end

@@ -1027,7 +1027,10 @@ local function buildLobby()
         "Bots use human-style heuristics: partner-bid reads, "
             .. "AKA self-call, position-aware play, score-position "
             .. "threshold modifiers. Host only — affects bots in "
-            .. "this game.")
+            .. "this game.\n\n"
+            .. "|cff999999Tier 2/5. Higher tiers (M3lm / Fzloky / "
+            .. "Saudi Master) STRICTLY EXTEND this layer — checking "
+            .. "any of them activates Advanced too.|r")
     lobbyPanel.m3lmCheck = makeBotDifficultyCheck(
         "M3lm", 86, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.m3lmBots end,
@@ -1037,7 +1040,9 @@ local function buildLobby()
             .. "the game (trump aggression, Bel frequency), uses "
             .. "match-point urgency for finer score-position calls, "
             .. "and ramps escalations faster when partner has already "
-            .. "Doubled / Tripled.")
+            .. "Bel'd / Bel x3'd.\n\n"
+            .. "|cff999999Tier 3/5. Strictly EXTENDS Advanced (auto-on). "
+            .. "Higher tiers (Fzloky / Saudi Master) extend this in turn.|r")
     lobbyPanel.fzlokyCheck = makeBotDifficultyCheck(
         "Fzloky", 64, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.fzlokyBots end,
@@ -1046,7 +1051,9 @@ local function buildLobby()
             .. "off-suit discard as a high/low suit-preference "
             .. "signal: a high discard (A/T/K) means \"lead this\", "
             .. "a low discard (7/8) means \"avoid this\". Bot biases "
-            .. "lead choice accordingly.")
+            .. "lead choice accordingly.\n\n"
+            .. "|cff999999Tier 4/5. Strictly EXTENDS Advanced + M3lm "
+            .. "(both auto-on). Saudi Master extends this further.|r")
     lobbyPanel.saudiMasterCheck = makeBotDifficultyCheck(
         "Saudi Master", 42, true,
         function() return WHEREDNGNDB and WHEREDNGNDB.saudiMasterBots end,
@@ -1056,7 +1063,9 @@ local function buildLobby()
             .. "with bidding history + observed plays + voids, then "
             .. "for each candidate card simulates the rest of the "
             .. "round across all worlds. Picks the card with the "
-            .. "best aggregate outcome. ~150 ms per move.")
+            .. "best aggregate outcome. ~150 ms per move.\n\n"
+            .. "|cff999999Tier 5/5 (top). Strictly EXTENDS Advanced + "
+            .. "M3lm + Fzloky (all auto-on). No higher tier.|r")
 
     -- Theme cycle buttons. Two independent axes the user can mix and
     -- match: card style (face / back art) and felt theme (table felt
@@ -1606,7 +1615,14 @@ local function buildTable()
     local SWA_CARD_W, SWA_CARD_H, SWA_CARD_GAP = 36, 52, 4
     local swaBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
     swaBanner:SetSize(280, 100)  -- v0.5.4: was 38; +62 for card row
-    swaBanner:SetPoint("TOP", centerPad, "TOP", 0, -32)
+    -- v2.3.0 (audit v1.6.1 UX-23 MED): banner Y offset shifted from
+    -- -32 to -68 so the card row at the bottom of the banner no
+    -- longer overlaps the top trick-card slot at centerCards.top
+    -- (+58 from centre, 90 tall → top edge at +103). Pre-fix the
+    -- SWA card row at y≈-92 collided with the trick-card. Frame
+    -- level (centerPad+50) keeps banner-on-top when overlap is
+    -- unavoidable, but spatial separation is cleaner.
+    swaBanner:SetPoint("TOP", centerPad, "TOP", 0, -68)
     setBackdrop(swaBanner, true,
         { 0.10, 0.07, 0.04, 0.94 }, { 1.0, 0.85, 0.30, 1 }, 8, "solid")
     swaBanner:SetFrameLevel(centerPad:GetFrameLevel() + 50)
@@ -2014,9 +2030,17 @@ local function renderActions()
                     -- to "حكم Hokm" with Arabic font present, "Hokm"
                     -- otherwise. Same for Sun below. Suit glyph stays
                     -- universal cards.
+                    -- v2.3.0 (audit v1.6.1 PJ-25 MED): tooltip now
+                    -- mentions the trump rank-order quirk so new
+                    -- players don't misplay J-of-trump (highest!) or
+                    -- 9-of-trump (second-highest, NOT a Carre).
                     addAction(SaudiName("HOKM").." "..K.SUIT_GLYPH[flippedSuit], function()
                         net().LocalBid(K.BID_HOKM..":"..flippedSuit)
-                    end, "Take the contract with this suit as Hokm (trump). Round-1 Hokm is locked to the up-card suit.")
+                    end, "Take the contract with this suit as Hokm (trump). "
+                        .. "Round-1 Hokm is locked to the up-card suit.\n\n"
+                        .. "|cffaaaaaaSaudi quirk: in trump suit only, "
+                        .. "rank order is J > 9 > A > T > K > Q > 8 > 7. "
+                        .. "Four 9s do NOT form a Carre.|r")
                 end
 
                 -- Ashkal (Saudi rule): converts the contract to Sun
@@ -2068,10 +2092,19 @@ local function renderActions()
                 -- Kawesh: 5-card hand of only 7/8/9 → annul & redeal.
                 -- Available throughout round 1 to the qualifying player.
                 if C.IsKaweshHand(S.s.hand) then
+                    -- v2.3.0 (audit v1.6.1 PJ-13 MED): expanded tooltip
+                    -- with the Saudi rule context. "Annul and redeal"
+                    -- alone didn't explain WHY it's allowed; new
+                    -- players might think it's a cheat / cheap escape
+                    -- rather than a canonical rule.
                     addAction("|cffff8800Kawesh|r", function() net().LocalKawesh() end,
-                        "Annul this deal and redeal. Available when your "
-                        .. "5-card initial hand contains only 7/8/9s — "
-                        .. "structurally unwinnable.")
+                        "Saudi rule: annul this deal and redeal from a "
+                        .. "fresh shuffle. Available ONLY when your initial "
+                        .. "5-card hand contains exclusively 7s, 8s, and "
+                        .. "9s (no J/9-of-trump value, no Aces, no Tens) — "
+                        .. "structurally unwinnable. The button only "
+                        .. "shows when you're eligible. Saudi name: "
+                        .. "Kawesh / Saneen.")
                 end
             else
                 -- Round 2: 3 Hokm buttons (excluding the flipped suit) + Sun
@@ -2259,7 +2292,12 @@ local function renderActions()
                             .. "Use when the bid card revealed makes Sun "
                             .. "stronger than Hokm.")
                     end
-                    addAction("|cff999999WLA (waive)|r" .. rTag,
+                    -- v2.3.0 (audit v1.6.1 SA-23 LOW): normalized
+                    -- to lowercase "wla" for consistency with the
+                    -- bidding-phase button + how Saudi players type
+                    -- in chat. Pre-fix mixed "WLA (waive)" in overcall
+                    -- vs "wla" in bidding. Tooltip carries the gloss.
+                    addAction("|cff999999wla|r" .. rTag,
                         function() net().LocalOvercall("WAIVE") end,
                         "Decline. Saudi 'wla' — keep your current Hokm.")
                 else
@@ -2271,7 +2309,12 @@ local function renderActions()
                             .. "your hand is stronger as Sun than the bidder's "
                             .. "declared Hokm.")
                     end
-                    addAction("|cff999999WLA (waive)|r" .. rTag,
+                    -- v2.3.0 (audit v1.6.1 SA-23 LOW): normalized
+                    -- to lowercase "wla" for consistency with the
+                    -- bidding-phase button + how Saudi players type
+                    -- in chat. Pre-fix mixed "WLA (waive)" in overcall
+                    -- vs "wla" in bidding. Tooltip carries the gloss.
+                    addAction("|cff999999wla|r" .. rTag,
                         function() net().LocalOvercall("WAIVE") end,
                         "Decline. Saudi 'wla' — let the Hokm contract stand.")
                 end
@@ -2283,7 +2326,7 @@ local function renderActions()
                 elseif alreadyDecided == "TAKE" then
                     label = "|cff66ddffTook as Sun|r — waiting for others"
                 elseif alreadyDecided == "WAIVE" then
-                    label = "|cff999999Waived (WLA)|r — waiting for others"
+                    label = "|cff999999Waived (wla)|r — waiting for others"
                 else
                     -- v1.5.3: TAKE_HOKM_* labels removed (cross-trump
                     -- take is no longer accepted upstream). Any stale
@@ -4128,7 +4171,13 @@ local function renderStatus()
     end
 
     -- round
-    roundText:SetText(S.s.roundNumber > 0 and ("Round %d"):format(S.s.roundNumber) or "")
+    -- v2.3.0 (audit v1.6.1 SA-33 LOW): "Round %d" → "Round %d" with
+    -- a soft grey tint and "·" separator from the score chip so the
+    -- round counter reads as ancillary metadata, not a primary
+    -- score line. Same data, less visual weight.
+    roundText:SetText(S.s.roundNumber > 0
+        and ("|cffaaaaaaRound %d|r"):format(S.s.roundNumber)
+        or "")
 end
 
 -- ----------------------------------------------------------------------

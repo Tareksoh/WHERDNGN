@@ -1,5 +1,61 @@
 # Changelog
 
+## v2.3.0 — Polish batch 3 (10 items: bot feel + UI + Saudi auth)
+
+Continuation of the polish marathon. No bot strategy logic touched.
+
+### Bot feel
+
+- **BF-15** (MED) — BALOOT! auto-fire now defers ~1s after the
+  triggering card play. Pre-fix the cue stacked on top of card-play
+  SFX + trump-cut + winner-glow audio in the same beat — muddy
+  overlap. The 1s pause lets play audio finish before the BALOOT
+  voice starts.
+- **BF-32** (LOW) — Partner-bot Bel reason chat hint. When a
+  bot-partner fires Bel and the local human is on the same team,
+  prints a chat line tagging the call's mood: "open — confident,
+  expects partner support" vs "closed — locking in ×2, no chain".
+  Helps the human decide whether to escalate.
+
+### UX
+
+- **UX-23** (MED) — SWA banner Y offset shifted from -32 to -68 so
+  the card row no longer overlaps the top trick-card slot.
+- **UX-71/72** — deferred (centerCards fade requires bigger refactor;
+  low-value relative to risk).
+
+### Player journey
+
+- **PJ-54** (LOW) — Bot-tier checkboxes now mention the strict-
+  extension property in tooltips ("Tier 3/5. Strictly EXTENDS
+  Advanced (auto-on). Higher tiers extend this in turn."). Pre-fix
+  the inheritance chain was hidden — players checking M3lm without
+  Advanced got the M3lm bonuses but not the Advanced layer.
+- **PJ-13** (MED) — Kawesh tooltip expanded with the rule context.
+  "Annul + redeal" alone didn't explain WHY it's allowed; new
+  players might think it's a cheat.
+- **PJ-25** (MED) — Hokm bid button tooltip mentions the trump
+  rank-order quirk ("J > 9 > A > T > K > Q > 8 > 7. Four 9s do NOT
+  form a Carre."). Pre-fix this quirk was only in `/baloot rules`
+  output — players who skipped that never learned it.
+
+### Saudi authenticity
+
+- **SA-23** (LOW) — `WLA` case normalized to lowercase `wla`
+  consistently. Pre-fix mixed `WLA (waive)` in overcall vs `wla`
+  in bidding. Lowercase matches how Saudi players actually type
+  it in chat.
+- **SA-33** (LOW) — Round counter visual: `"Round %d"` → soft-grey
+  tinted so it reads as ancillary metadata, not a primary score
+  line.
+
+### Tests
+
+819/819 pass. AJ.8 source-pin test updated to accept either v1.0.2
+("Doubled / Tripled") OR v2.3.0 ("Bel'd / Bel x3'd") wording in
+the M3lm tooltip — both are valid wirings, the v2.3.0 form is
+Saudi-aligned per CLAUDE.md mandate.
+
 ## v2.2.0 — Polish batch 2 (12 items: UX + MP + accessibility)
 
 Continuation of the polish marathon. Closes the next batch of
