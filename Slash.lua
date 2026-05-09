@@ -8,7 +8,7 @@ local L = B.Log
 local function say(msg) print("|cff66ddffWHEREDNGN|r " .. tostring(msg)) end
 
 local function help()
-    say("commands:")
+    say("commands (shorthand: /blt):")
     print("  /baloot              - toggle window")
     print("  /baloot host         - start hosting a new game (solo OK; fill empty with bots)")
     print("  /baloot join         - accept a pending host invite")
@@ -34,6 +34,8 @@ local function help()
     print("  /baloot history [N]  - dump last N round-result rows (default 20)")
     print("  /baloot history clear - wipe round-result history")
     print("  /baloot history off / on - toggle telemetry capture (default on)")
+    print("  /baloot leave        - graceful exit (non-host); host sees you as dropped")
+    print("  /baloot stats        - lifetime W/L + bidder stats (cross-session)")
     print("  /baloot rules        - Saudi Baloot quick-reference cheat-sheet")
     print("  /baloot help         - show this command list")
 end
@@ -82,6 +84,37 @@ local function dispatch(msg)
 
     if msg == "rules" or msg == "rule" or msg == "ref" then
         rules()
+        return
+    end
+
+    -- v2.1.0 (audit v1.6.1 PJ-40 MED): lifetime stats readout.
+    if msg == "stats" or msg == "stat" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        local s = WHEREDNGNDB.stats or {}
+        local games = s.gamesPlayed or 0
+        local wins  = s.gamesWon or 0
+        local taken = s.contractsTaken or 0
+        local made  = s.contractsMade or 0
+        local swing = s.biggestSwing or 0
+        local winPct = (games > 0) and (wins * 100 / games) or 0
+        local madePct = (taken > 0) and (made * 100 / taken) or 0
+        say("lifetime stats:")
+        print(("  games played: %d   wins: %d   (%.1f%% win rate)"):format(
+            games, wins, winPct))
+        print(("  contracts taken: %d   made: %d   (%.1f%% make rate)"):format(
+            taken, made, madePct))
+        print(("  biggest single-game point swing: %d"):format(swing))
+        return
+    end
+
+    if msg == "stats clear" or msg == "stats reset" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        WHEREDNGNDB.stats = {
+            gamesPlayed = 0, gamesWon = 0,
+            contractsTaken = 0, contractsMade = 0,
+            biggestSwing = 0,
+        }
+        say("lifetime stats wiped")
         return
     end
 
@@ -172,6 +205,22 @@ local function dispatch(msg)
             StaticPopup_Show("WHEREDNGN_RESET_CONFIRM")
             return
         end
+        -- v2.1.0 (audit v1.6.1 MP-71 MED): if we're host AND we have
+        -- a gameID (active or lobby), broadcast a final teardown
+        -- ping so remote clients can clear their pendingHost +
+        -- exit any sticky lobby state. Pre-fix the host reset wiped
+        -- their own state but never told remotes — the lobby ticker
+        -- stops, but remotes hold pendingHost forever (until the
+        -- 45s heartbeat timeout from v1.8.0 MP-21 fires). Faster
+        -- recovery via explicit host-gone flag in a final MSG_LOBBY
+        -- with empty botMask + name list.
+        if B.State and B.State.s and B.State.s.isHost and B.State.s.gameID
+           and B.Net and B.Net.SendLobby then
+            -- Empty seat array signals "host's gone" to remotes;
+            -- remotes' _OnLobby clears pendingHost when they see
+            -- empty seats from a known host.
+            B.Net.SendLobby({}, B.State.s.gameID)
+        end
         if B._lobbyTicker then B._lobbyTicker:Cancel(); B._lobbyTicker = nil end
         -- 9th-audit fix: invalidate any in-flight 3s redeal timer so
         -- it doesn't fire after the reset and spawn a ghost round.
@@ -190,6 +239,36 @@ local function dispatch(msg)
         B.State.SetLocalName(GetUnitName("player", true))
         if B.UI then B.UI.Refresh() end
         say("reset")
+        return
+    end
+
+    if msg == "leave" or msg == "quit" then
+        -- v2.1.0 (audit v1.6.1 MP-61 MED): graceful exit for non-host.
+        -- Pre-fix the only way for a non-host to exit was /baloot
+        -- reset, which silently dropped them with no notification to
+        -- the table. /baloot leave does the same teardown locally
+        -- but also pings the host's GROUP_ROSTER_UPDATE recovery
+        -- path (Mid-round drop -> bot replace) by leaving the
+        -- party — same effect as a real disconnect, but explicit.
+        if B.State.s.isHost then
+            say("you are the host — use /baloot reset to wipe the game")
+            return
+        end
+        if B.State.s.phase == K.PHASE_IDLE then
+            say("not in a game")
+            return
+        end
+        -- Local teardown (mirror /baloot reset's body, no host-specific
+        -- ticker cleanup since we're not hosting).
+        B._redealGen = (B._redealGen or 0) + 1
+        if B.Net then
+            if B.Net.CancelTurnTimer then B.Net.CancelTurnTimer() end
+            if B.Net.CancelLocalWarn then B.Net.CancelLocalWarn() end
+        end
+        B.State.Reset()
+        B.State.SetLocalName(GetUnitName("player", true))
+        if B.UI then B.UI.Refresh() end
+        say("left the game (host's table sees you as dropped — bot fills in)")
         return
     end
 

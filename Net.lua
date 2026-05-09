@@ -910,6 +910,29 @@ function N._OnLobby(sender, gameID, names, botMask, hostVersion)
     -- demote the host into IDLE. Same defensive class as the
     -- _OnResyncRes guard added in 0aa496f.
     if S.s.isHost then return end
+    -- v2.1.0 (audit v1.6.1 MP-71 MED): host-gone signal. When the
+    -- host calls /baloot reset, they broadcast a final MSG_LOBBY
+    -- with empty/all-empty `names` to tell remotes "I'm done".
+    -- Remote clients see an all-empty seat list from a known host
+    -- and tear down their pendingHost + reset to IDLE. Faster than
+    -- waiting for the 45s heartbeat timeout (v1.8.0 MP-21).
+    local allEmpty = true
+    if names then
+        for _, n in ipairs(names) do
+            if n and n ~= "" then allEmpty = false; break end
+        end
+    end
+    if allEmpty and (fromHost(sender) or
+                     (S.s.pendingHost and S.s.pendingHost.gameID == gameID)) then
+        S.s.pendingHost = nil
+        S.s.hostName    = nil
+        if S.Reset then S.Reset() end
+        if B.State.SetLocalName then
+            B.State.SetLocalName(GetUnitName("player", true))
+        end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
     -- 4th-audit X9-3 fix: tighten host adoption. Previously any peer
     -- who broadcast MSG_LOBBY first could claim hostName when our
     -- pendingHost was unset (e.g., post-/reload before we got a
@@ -4359,10 +4382,41 @@ function N._HostTurnTimeout(seat, kind)
             end
         end
         if #legal == 0 then return end
-        local best, bestRank = legal[1], math.huge
+        -- v2.1.0 (audit v1.6.1 MP-30 MED): AFK auto-play picks a
+        -- "polite" card rather than the literal lowest TrickRank.
+        -- Pre-fix the heuristic was "lowest in legal" — mathematically
+        -- safe but tactically rude: it would dump an Ace if Ace was
+        -- the only legal card, OR if a side-suit Ace happened to have
+        -- a lower TrickRank than other legal cards in some edge case.
+        -- The Saudi-table convention for "an AFK player should give"
+        -- is: throw the lowest NON-Ace, NON-J-of-trump if available;
+        -- only burn an A or J-of-trump if the legal set is forced.
+        local best, bestRank = nil, math.huge
+        local trump = S.s.contract.trump
+        local function isHighValue(card)
+            local r = C.Rank(card)
+            if r == "A" then return true end
+            if trump and C.Suit(card) == trump
+               and (r == "J" or r == "9") then
+                return true   -- J/9 of trump are tactically critical
+            end
+            return false
+        end
+        -- Prefer non-high-value legal cards.
         for _, c in ipairs(legal) do
-            local r = C.TrickRank(c, S.s.contract)
-            if r < bestRank then best, bestRank = c, r end
+            if not isHighValue(c) then
+                local r = C.TrickRank(c, S.s.contract)
+                if r < bestRank then best, bestRank = c, r end
+            end
+        end
+        -- Fallback: if every legal card is high-value, pick the
+        -- lowest-rank high-value (e.g., side A < trump J).
+        if not best then
+            best, bestRank = legal[1], math.huge
+            for _, c in ipairs(legal) do
+                local r = C.TrickRank(c, S.s.contract)
+                if r < bestRank then best, bestRank = c, r end
+            end
         end
         -- 50-agent playtest audit fix: AFK auto-play during trick 1
         -- previously skipped meld declaration entirely. The Saudi

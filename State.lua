@@ -1955,6 +1955,20 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
         B.Bot.OnRoundEnd(s.contract, bidderMade)
     end
 
+    -- v2.1.0 (audit v1.6.1 PJ-40 MED): bump per-round stats when the
+    -- LOCAL seat was the bidder. Wrapped in pcall + WHEREDNGNDB
+    -- nil-check so missing saved-vars can't crash round resolution.
+    pcall(function()
+        if not WHEREDNGNDB or type(WHEREDNGNDB.stats) ~= "table" then return end
+        if not s.localSeat or not s.contract or not s.contract.bidder then return end
+        if s.contract.bidder ~= s.localSeat then return end
+        local stats = WHEREDNGNDB.stats
+        stats.contractsTaken = (stats.contractsTaken or 0) + 1
+        if bidderMade then
+            stats.contractsMade = (stats.contractsMade or 0) + 1
+        end
+    end)
+
     -- v0.8.3 Telemetry export: append per-round outcome to the
     -- persistent history table for offline analysis. Cap at 200
     -- rows to keep SavedVariables size bounded — drops oldest when
@@ -2102,6 +2116,27 @@ function S.ApplyGameEnd(winnerTeam)
     end
     s.phase = K.PHASE_GAME_END
     s.winner = winnerTeam
+    -- v2.1.0 (audit v1.6.1 PJ-40 MED): persistent stats bump on game
+    -- end. Idempotence guard above ensures we never double-count
+    -- under loopback / duplicate broadcasts. Wrapped in pcall +
+    -- WHEREDNGNDB nil-check so a missing saved-vars table can't
+    -- crash the game-end transition.
+    pcall(function()
+        if not WHEREDNGNDB or type(WHEREDNGNDB.stats) ~= "table" then return end
+        if not s.localSeat then return end          -- spectator
+        local stats = WHEREDNGNDB.stats
+        stats.gamesPlayed = (stats.gamesPlayed or 0) + 1
+        local localTeam = R.TeamOf(s.localSeat)
+        if localTeam == winnerTeam then
+            stats.gamesWon = (stats.gamesWon or 0) + 1
+        end
+        local cumA = (s.cumulative and s.cumulative.A) or 0
+        local cumB = (s.cumulative and s.cumulative.B) or 0
+        local swing = math.abs(cumA - cumB)
+        if swing > (stats.biggestSwing or 0) then
+            stats.biggestSwing = swing
+        end
+    end)
 end
 
 -- -- Host-only computation -------------------------------------------

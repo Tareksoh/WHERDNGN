@@ -1,5 +1,89 @@
 # Changelog
 
+## v2.1.0 — Polish batch (16 deferred items closed)
+
+Polish-focused minor release. Closes the highest-value MEDIUM-tier
+deferred items from the v1.6.1 audit. No bot strategy logic touched.
+
+### Track 1 — Discoverability
+
+- **PJ-04** (MED) — Blizz interface-options registration. Addon now
+  shows up under Esc → Options → AddOns. Modern (10.0+) Settings
+  API + legacy InterfaceOptions_AddCategory shim. Panel has a
+  description + "Open WHEREDNGN window" button.
+- **PJ-07** (LOW) — `/baloot help` mentions `/blt` shorthand.
+- **SA-22** (LOW) — Pre-empt button: dropped "(Pre-empt)" English
+  parenthetical. Saudi players know what قبلك means; non-Saudi
+  players get the explanation in the tooltip.
+- **PJ-70** (LOW) — Pause/peek glyphs replaced. Peek "?" → "↺"
+  (anticlockwise revert, universal "look back" glyph). Pause "II"
+  → "‖" (Unicode pause, renders consistently across font scales).
+
+### Track 2 — Visual polish
+
+- **UX-30** (MED) — `turnGlow` tint shifted from gold-on-gold (visual
+  mush against legalEdge cards) to soft cyan. Active-seat indicator
+  no longer competes visually with the warm legal-edge gold.
+- **UX-33** (MED) — SWA banner countdown: when timer hits 0, shows
+  "approving…" / "resolving…" instead of frozen "0s".
+- **UX-31** (LOW) — AKA banner fade-in/out. New `B.UI.FadeBanner(b,
+  duration, hide?)` helper wraps Show/Hide with `UIFrameFadeIn` /
+  `UIFrameFadeOut`. Banner snap-on/snap-off replaced with smooth
+  0.25s alpha animation.
+- **UX-42** (LOW) — Illegal-card border tint shifted from deep-red
+  (visually identical to Takweesh-warning border) to warning-orange.
+  More accurate semantics: orange = "warning, not error" (Saudi
+  Takweesh ALLOWS illegal plays — you just risk getting caught).
+- **UX-05** (LOW) — BALOOT! pulse only first 5s after appearance,
+  then settles to static gold + clears `OnUpdate`. Pre-fix the
+  always-pulsing yellow added persistent visual chatter.
+
+### Track 3 — Multiplayer QoL
+
+- **MP-61** (MED) — `/baloot leave` (alias `/baloot quit`) — graceful
+  exit for non-host. Routes through the same teardown as `/baloot
+  reset` for non-hosts; host's GROUP_ROSTER_UPDATE recovery (v1.8.0
+  MP-01) sees the exit as a drop and replaces with bot.
+- **MP-71** (MED) — Host-gone signal. When host calls `/baloot reset`,
+  broadcasts a final `MSG_LOBBY` with empty seat array — remotes
+  see "all-empty seats from a known host" and immediately tear down
+  pendingHost + reset to IDLE. Pre-fix remotes held the sticky
+  lobby until the 45s heartbeat timeout (v1.8.0 MP-21) fired.
+- **MP-30** (MED) — AFK auto-play smarter. Pre-fix picked literal
+  lowest TrickRank — could dump an Ace if Ace happened to be lowest
+  in some edge case. Now prefers non-high-value cards (excludes A
+  and J/9-of-trump) when any are legal; only burns A or J-of-trump
+  if the legal set is forced. More polite "I'm AFK" play.
+- **MP-53** (MED) — `GROUP_ROSTER_UPDATE` drop detection now uses
+  `S.NormalizeName` for cross-realm fallback. Pre-fix strict
+  `shortName` match could miss a still-present cross-realm peer
+  whose `UnitName` format differed from the seat record. Mirrors
+  the v1.8.0 MP-50 fix to `HostHandleJoin`.
+
+### Track 4 — Stats & engagement
+
+- **PJ-40** (MED) — Persistent lifetime stats. New `WHEREDNGNDB.stats`
+  subtable: `gamesPlayed` / `gamesWon` / `contractsTaken` /
+  `contractsMade` / `biggestSwing`. Bumped on game-end +
+  round-end. Forward-compatible schema (missing fields default to
+  0). Surfaced via `/baloot stats` (alias `/baloot stat`).
+  `/baloot stats clear` wipes the table.
+- **PJ-43** (MED) — Game-end gets "Stats" + "History" buttons next
+  to the host's "New Game" button. Non-hosts (who previously had
+  ZERO actions at game-end) now see at least the Stats button.
+  History only shows when telemetry is enabled and there's data.
+- **SA-32** (MED) — Contract banner: dropped "Contract:" Latin
+  prefix. Visual context (e.g. "HOKM ♠ by PlayerName" at top of
+  table) is self-explanatory; the prefix added cognitive load
+  without new info.
+
+### Tests
+
+819/819 pass. One test (U.6 source-pin for `_OnLobby`'s name cap)
+got its scan window bumped from 3000 to 5000 chars — MP-71's
+host-gone block was inserted before the existing cap logic. Cap
+itself is unchanged.
+
 ## v2.0.2 — Hotfix: Arabic glyphs render as boxes in tooltips
 
 User-reported in playtest: tooltips and slash output showed `□□□`

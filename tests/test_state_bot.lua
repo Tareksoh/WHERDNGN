@@ -2751,11 +2751,15 @@ do
 end
 
 -- U.6 (NetU-06): _OnLobby caps name length.
+-- v2.1.0: window bumped from 3000 to 5000 chars — MP-71 fix added a
+-- host-gone empty-seat detection block at the top of _OnLobby that
+-- pushed the existing name-cap logic past the original 3000-char
+-- window. Cap logic itself is unchanged.
 do
     local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
     local fnStart = netSrc:find("function N%._OnLobby")
     if fnStart then
-        local body = netSrc:sub(fnStart, fnStart + 3000)
+        local body = netSrc:sub(fnStart, fnStart + 5000)
         assertTrue(body:find("n:sub%(1, 64%)") ~= nil,
                    "U.6 (NetU-06): _OnLobby caps each name at 64 chars")
     end

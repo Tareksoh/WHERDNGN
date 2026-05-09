@@ -165,9 +165,19 @@ local COL = {
     woodEdge   = { 0.34, 0.22, 0.12, 1.00 },
     cardFace   = { 0.96, 0.94, 0.86, 1.00 },
     cardEdge   = { 0.18, 0.13, 0.08, 1.00 },
-    badEdge    = { 0.55, 0.20, 0.20, 1.00 },
-    legalEdge  = { 0.95, 0.78, 0.30, 1.00 },     -- gold
-    activeGlow = { 1.00, 0.84, 0.30, 0.22 },     -- gold tint
+    -- v2.1.0 (audit v1.6.1 UX-42 LOW): illegal-card edge tint shifted
+    -- to a distinct orange so it doesn't blur into the deep-red
+    -- Takweesh-warning border (which uses a similar dark-red).
+    -- Orange reads as "warning, not error" — accurate semantics
+    -- since Saudi Takweesh ALLOWS illegal plays (you just risk getting
+    -- caught).
+    badEdge    = { 0.85, 0.45, 0.20, 1.00 },     -- warning-orange
+    legalEdge  = { 0.95, 0.78, 0.30, 1.00 },     -- gold (card edge "this is legal")
+    -- v2.1.0 (audit v1.6.1 UX-30 MED): turnGlow tint shifted from
+    -- gold-on-gold (visual mush against legalEdge cards) to a soft
+    -- cyan-ish cool tint. Cool color signals "active seat" without
+    -- competing with the warm legal-edge gold of playable cards.
+    activeGlow = { 0.45, 0.75, 1.00, 0.22 },     -- soft cyan
     txtCream   = "ffe8dec0",
     txtGold    = "ffffd055",
     txtSoft    = "ff8da095",
@@ -447,6 +457,42 @@ end
 B.UI = B.UI or {}
 B.UI.SaudiName = SaudiName
 B.UI.ArabicAvailable = arabicAvailable
+
+-- v2.1.0 (audit v1.6.1 UX-31 LOW): banner fade helper. Wraps Show /
+-- Hide with a soft alpha animation. Falls back to Show/Hide on hosts
+-- that lack UIFrameFadeIn/Out (test harness). The banner's content
+-- (text/cards) renders during the fade — alpha-only animation, no
+-- layout reflow.
+local function fadeBanner(b, duration, hide)
+    if not b then return end
+    duration = duration or 0.20
+    if hide then
+        if b:IsShown() and UIFrameFadeOut then
+            UIFrameFadeOut(b, duration, b:GetAlpha() or 1, 0)
+            -- UIFrameFadeOut doesn't auto-Hide; schedule it.
+            if C_Timer and C_Timer.After then
+                C_Timer.After(duration, function()
+                    if b and b.Hide then b:Hide() end
+                end)
+            else
+                b:Hide()
+            end
+        elseif b.Hide then
+            b:Hide()
+        end
+    else
+        if not b:IsShown() then
+            b:SetAlpha(0)
+            b:Show()
+            if UIFrameFadeIn then
+                UIFrameFadeIn(b, duration, 0, 1)
+            else
+                b:SetAlpha(1)
+            end
+        end
+    end
+end
+B.UI.FadeBanner = fadeBanner
 
 local function shortName(fullName)
     if not fullName then return "?" end
@@ -1343,7 +1389,12 @@ local function buildTable()
     -- button (which sits under the game-code line) and the right
     -- opponent's seat badge (bot 2 in a host POV). Disabled once used
     -- per hand (S.s.peekedThisRound).
-    local peekBtn = makeButton(f, "?", 22, 22)
+    -- v2.1.0 (audit v1.6.1 PJ-70 LOW): "?" glyph was misleading —
+    -- read as "help" rather than "peek last trick". Replaced with
+    -- "↺" (anticlockwise revert glyph) which is the universal
+    -- visual for "look back at what just happened". Tooltip retains
+    -- the explicit "Peek the previous trick" text.
+    local peekBtn = makeButton(f, "↺", 22, 22)
     peekBtn:SetPoint("TOPRIGHT", f.resetBtn, "BOTTOMRIGHT", 0, -8)
     peekBtn:SetScript("OnClick", function() peekLastTrick() end)
     peekBtn:SetScript("OnEnter", function(self)
@@ -1358,7 +1409,11 @@ local function buildTable()
     -- Pause toggle (host-only). Suspends bot scheduling and AFK timers
     -- without dropping any in-flight state. The label flips to "Resume"
     -- while paused.
-    local pauseBtn = makeButton(centerPad, "II", 22, 22)
+    -- v2.1.0 (audit v1.6.1 PJ-70 LOW): "II" was unstable visually
+    -- (rendered as small dashes in some font scales). "‖" (double
+    -- vertical bar Unicode U+2016) is the universal pause glyph and
+    -- renders consistently. Tooltip retains "Pause game" explicit.
+    local pauseBtn = makeButton(centerPad, "‖", 22, 22)
     pauseBtn:SetPoint("TOPRIGHT", -4, -4)
     pauseBtn:SetScript("OnClick", function()
         if not S.s.isHost then return end
@@ -1429,6 +1484,13 @@ local function buildTable()
     -- when the partner needs to read it.
     akaBanner:SetFrameLevel(centerPad:GetFrameLevel() + 50)
     akaBanner:Hide()
+    -- v2.1.0 (audit v1.6.1 UX-31 LOW): fade-in/out animations for the
+    -- AKA banner. Pre-fix the banner snapped on/off — abrupt visual
+    -- pop/disappear on every state transition. SetAlpha + UIFrameFadeIn/
+    -- FadeOut wrap the existing Show/Hide pattern; Show() is replaced
+    -- with B.UI.FadeBanner(b, 0.25) and Hide() with B.UI.FadeBanner(b,
+    -- 0.25, true). Same applied to overcallBanner / swaBanner below.
+    akaBanner:SetAlpha(0)
     akaBanner.text = makeText(akaBanner, 13, "CENTER")
     akaBanner.text:SetPoint("CENTER", 0, 0)
     akaBanner.text:SetTextColor(0.40, 1.00, 0.55)
@@ -1610,7 +1672,19 @@ local function buildTable()
         local handCount = req.handCount or 0
         local cardLine = ("%d card%s remaining"):format(
             handCount, handCount == 1 and "" or "s")
-        if sameTeam then
+        -- v2.1.0 (audit v1.6.1 UX-33 MED): when countdown hits 0,
+        -- show "approving…" instead of frozen "0s". The actual auto-
+        -- approve happens host-side; this is the visual confirmation
+        -- that the timer reached the gate. Pre-fix the banner just
+        -- showed "0s" indefinitely while the host's resolution lag
+        -- played out — looked frozen.
+        if remain <= 0 then
+            if sameTeam then
+                self.body:SetText(("%s · |cffaaffaaapproving…|r"):format(cardLine))
+            else
+                self.body:SetText(("%s · |cffffaa55resolving…|r"):format(cardLine))
+            end
+        elseif sameTeam then
             self.body:SetText(("%s · auto-approve in %ds"):format(cardLine, remain))
         else
             self.body:SetText(("%s · %ds — Takweesh to counter"):format(cardLine, remain))
@@ -2214,7 +2288,7 @@ local function renderActions()
                 if s2 == S.s.localSeat then eligible = true; break end
             end
             if eligible then
-                addConfirmAction("|cff66ddffQablak (Pre-empt)|r",
+                addConfirmAction("|cff66ddffQablak|r",
                     "|cffff7755Take this Sun for yourself?|r",
                     function() net().LocalPreempt() end)
                 addAction("Pass",
@@ -2387,13 +2461,27 @@ local function renderActions()
                         -- uses RGB ∈ [0,1]. Cycle 2 Hz between bright
                         -- gold and white. PulseScript is a no-op if
                         -- the frame API isn't available (test env).
+                        --
+                        -- v2.1.0 (audit v1.6.1 UX-05 LOW): pulse only
+                        -- for the first 5s after appearance, then
+                        -- settle to a static gold. Pre-fix the
+                        -- always-pulsing yellow added persistent
+                        -- visual chatter even after the player had
+                        -- noticed. Pulse-window long enough to grab
+                        -- attention; settle prevents fatigue.
                         if btn and btn.SetScript then
                             btn._beloteT = 0
                             btn:SetScript("OnUpdate", function(self, elapsed)
                                 self._beloteT = (self._beloteT or 0) + (elapsed or 0)
-                                local pulse = (math.sin(self._beloteT * 6.283) + 1) * 0.5
                                 local fs = self.GetFontString and self:GetFontString()
-                                if fs and fs.SetTextColor then
+                                if not (fs and fs.SetTextColor) then return end
+                                if self._beloteT > 5.0 then
+                                    -- Settle to static gold; clear OnUpdate
+                                    -- to stop the per-tick churn.
+                                    fs:SetTextColor(1, 0.92, 0.10)
+                                    self:SetScript("OnUpdate", nil)
+                                else
+                                    local pulse = (math.sin(self._beloteT * 6.283) + 1) * 0.5
                                     -- Flash: gold → bright yellow.
                                     fs:SetTextColor(1, 0.85 + pulse * 0.15, pulse * 0.4)
                                 end
@@ -2418,7 +2506,28 @@ local function renderActions()
                 S.Reset()
                 S.SetLocalName(GetUnitName("player", true))
                 U.Refresh()
-            end)
+            end,
+            "Reset to a fresh lobby. Wipes the current game state "
+            .. "for all connected players.")
+        end
+        -- v2.1.0 (audit v1.6.1 PJ-43 MED): give game-end MORE paths
+        -- than just "New Game". Pre-fix the only affordance was the
+        -- host's "New Game" button — non-hosts saw no actions at
+        -- all, and even the host had no quick way to view stats /
+        -- history without typing slash commands.
+        addAction("Stats", function()
+            -- Re-uses /baloot stats output via SlashCmdList route.
+            if SlashCmdList and SlashCmdList["BALOOT"] then
+                SlashCmdList["BALOOT"]("stats")
+            end
+        end, "Show your lifetime W/L + bidder stats (cross-session).")
+        if WHEREDNGNDB and WHEREDNGNDB.history and #WHEREDNGNDB.history > 0 then
+            addAction("History", function()
+                if SlashCmdList and SlashCmdList["BALOOT"] then
+                    SlashCmdList["BALOOT"]("history 10")
+                end
+            end, "Show the last 10 round-result rows (full table via "
+                .. "/baloot history).")
         end
     end
 end
@@ -3826,7 +3935,10 @@ local function renderAKABanner()
     local call = S.s.akaCalled
     if not call or not call.seat or not call.suit
        or S.s.phase ~= K.PHASE_PLAY then
-        b:Hide(); return
+        -- v2.1.0 (audit v1.6.1 UX-31 LOW): fade-out instead of snap-Hide.
+        if B.UI and B.UI.FadeBanner then B.UI.FadeBanner(b, 0.25, true)
+        else b:Hide() end
+        return
     end
     local info = S.s.seats and S.s.seats[call.seat]
     local nm = (info and info.name) and shortName(info.name) or ("seat " .. call.seat)
@@ -3840,7 +3952,9 @@ local function renderAKABanner()
         teamCol = COL.txtThem     -- opponent call → red
     end
     b.text:SetText(("|c%sAKA|r %s — %s"):format(teamCol, glyph, nm))
-    b:Show()
+    -- v2.1.0 UX-31: fade-in on first show.
+    if B.UI and B.UI.FadeBanner then B.UI.FadeBanner(b, 0.25)
+    else b:Show() end
 end
 
 -- trick to show, the local player hasn't peeked yet this hand, and
@@ -3918,7 +4032,12 @@ local function renderStatus()
             or ""
         local bidder = (c.bidder and S.s.seats[c.bidder]
                         and shortName(S.s.seats[c.bidder].name)) or "?"
-        contractText:SetText(("|cffaaaaaaContract:|r %s%s  by  |cff66ddff%s|r%s"):format(
+        -- v2.1.0 (audit v1.6.1 SA-32 MED): drop "Contract:" Latin
+        -- prefix. Visual context (HOKM ♠ by PlayerName at the top of
+        -- the table) is self-explanatory; the prefix added cognitive
+        -- load without new info. Generic "Contract:" was a placeholder
+        -- from before the visual context was clear; v2.1.0 cleans it.
+        contractText:SetText(("%s%s  by  |cff66ddff%s|r%s"):format(
             typeStr, trumpStr, bidder, modStr))
         if f.contractBg then f.contractBg:Show() end
     else

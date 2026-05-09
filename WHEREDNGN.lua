@@ -58,6 +58,23 @@ local DEFAULTS = {
     -- Saudi rule. ON by default. Disable for groups that prefer the
     -- simpler "first non-pass wins" Sun resolution.
     preemptOnAce = true,
+    -- v2.1.0 (audit v1.6.1 PJ-40 MED): persistent lifetime stats.
+    -- Pre-fix the addon had no engagement loop — every game's
+    -- numbers vanished when the game ended. Now WHEREDNGNDB.stats
+    -- accumulates across sessions: games played/won/lost (as a team
+    -- member), contracts taken/made/failed (as the bidder), biggest
+    -- single-game point swing seen. Mutated by HostFinishDeal /
+    -- HostEndGame / ApplyGameEnd; surfaced via /baloot stats.
+    --
+    -- Schema is forward-compatible: new fields default to 0 in
+    -- ensureDB; missing fields don't crash readers.
+    stats = {
+        gamesPlayed   = 0,    -- total finished games (incl. losses)
+        gamesWon      = 0,    -- finished games where local team won
+        contractsTaken = 0,   -- times local seat was the bidder
+        contractsMade  = 0,   -- bidder + made the contract
+        biggestSwing   = 0,   -- biggest single-game cumulative delta
+    },
 }
 
 local function ensureDB()
@@ -69,6 +86,14 @@ local function ensureDB()
     if type(WHEREDNGNDB) ~= "table" then WHEREDNGNDB = {} end
     for k, v in pairs(DEFAULTS) do
         if WHEREDNGNDB[k] == nil then WHEREDNGNDB[k] = v end
+    end
+    -- v2.1.0 PJ-40: stats subtable forward-compat. If saved DB is
+    -- from a pre-v2.1.0 install, stats will be nil; if from a
+    -- partial install (some keys present, others added later),
+    -- defaults fill in. Defensive against type corruption too.
+    if type(WHEREDNGNDB.stats) ~= "table" then WHEREDNGNDB.stats = {} end
+    for k, v in pairs(DEFAULTS.stats) do
+        if WHEREDNGNDB.stats[k] == nil then WHEREDNGNDB.stats[k] = v end
     end
 end
 
@@ -134,6 +159,52 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
             L.Warn("init", "failed to register addon prefix %s", K.PREFIX)
         end
         if B.MinimapIcon and B.MinimapIcon.Show then B.MinimapIcon.Show() end
+        -- v2.1.0 (audit v1.6.1 PJ-04 MED): register a Blizz interface-
+        -- options category so the addon shows up in the Esc → Options
+        -- → AddOns tree. Pre-fix the addon was discoverable only via
+        -- the minimap icon or /baloot — players who reach for the
+        -- standard Esc → Options path saw nothing. The panel is
+        -- minimal (clicking it opens the WHEREDNGN window) since the
+        -- real settings are in /baloot subcommands; the registration
+        -- is purely for findability.
+        if Settings and Settings.RegisterCanvasLayoutCategory then
+            -- Modern (10.0+) Settings API: build a tiny canvas with a
+            -- description + open-window button.
+            local panel = CreateFrame("Frame")
+            panel.name = "Loot & Baloot (WHEREDNGN)"
+            local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+            title:SetPoint("TOPLEFT", 16, -16)
+            title:SetText("Loot & Baloot")
+            local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+            desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+            desc:SetWidth(560)
+            desc:SetJustifyH("LEFT")
+            desc:SetText("Saudi Baloot card game over party addon channel.\n\n"
+                .. "Settings live in slash commands:\n"
+                .. "  /baloot help    — full command list\n"
+                .. "  /baloot rules   — Saudi Baloot quick reference\n"
+                .. "  /baloot host    — start hosting a game\n"
+                .. "  /baloot join    — accept a pending invite")
+            local openBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+            openBtn:SetSize(180, 24)
+            openBtn:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -16)
+            openBtn:SetText("Open WHEREDNGN window")
+            openBtn:SetScript("OnClick", function()
+                if B.UI and B.UI.Toggle then B.UI.Toggle() end
+            end)
+            local cat = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+            Settings.RegisterAddOnCategory(cat)
+        elseif InterfaceOptions_AddCategory then
+            -- Legacy (pre-10.0) compatibility shim.
+            local panel = CreateFrame("Frame")
+            panel.name = "Loot & Baloot (WHEREDNGN)"
+            local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+            desc:SetPoint("TOPLEFT", 16, -16)
+            desc:SetWidth(560)
+            desc:SetJustifyH("LEFT")
+            desc:SetText("Saudi Baloot — Type /baloot help for commands.")
+            InterfaceOptions_AddCategory(panel)
+        end
         -- v1.7.0 (audit v1.6.1 PJ-01): one-shot welcome on first launch.
         -- Pre-fix the addon was completely silent on first install — new
         -- users had to discover `/baloot` or the minimap icon by guess.
@@ -395,11 +466,35 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
         for seat = 2, 4 do
             local info = B.State.s.seats[seat]
             if info and info.name and not info.isBot then
+                -- v2.1.0 (audit v1.6.1 MP-53 MED): match seated names
+                -- via S.NormalizeName so cross-realm party-N units
+                -- (which arrive as bare "Name" without realm suffix)
+                -- correctly compare against seat records that may
+                -- carry "Name-Realm". Pre-fix the strict shortName
+                -- match could miss a still-present cross-realm peer
+                -- whose UnitName format differed from the seat record.
                 local short = info.name:match("^([^%-]+)") or info.name
+                local seatedNorm = (B.State.NormalizeName
+                                    and B.State.NormalizeName(info.name))
+                                    or info.name
                 local found = false
                 for i = 1, 4 do
                     local u = "party" .. i
-                    if UnitExists(u) and UnitName(u) == short then found = true; break end
+                    if UnitExists(u) then
+                        local uname = UnitName(u)
+                        if uname == short then
+                            found = true; break
+                        end
+                        -- Defense-in-depth: also compare normalized
+                        -- forms in case UnitName returns a suffixed
+                        -- variant on cross-realm clients.
+                        if uname and B.State.NormalizeName then
+                            local unameNorm = B.State.NormalizeName(uname)
+                            if unameNorm == seatedNorm then
+                                found = true; break
+                            end
+                        end
+                    end
                 end
                 if not found then
                     L.Warn("roster", "seat %d (%s) left the group", seat, short)
