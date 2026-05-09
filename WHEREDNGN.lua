@@ -304,6 +304,35 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
         -- Welcome prints once, then sets WHEREDNGNDB.welcomed = true so
         -- it never repeats. Mentions the minimap icon and `/baloot help`
         -- as the two discovery surfaces.
+        -- v3.0.1 (audit v3.0.0 HIGH#1): wire the v1.8.0 MP-21 host-
+        -- alive heartbeat watchdog into a real consumer. Pre-v3.0.1
+        -- N.IsHostLikelyGone() existed but no caller — heartbeat
+        -- detection was structurally undelivered. Now: a 10s ticker
+        -- checks when we're a non-host in an active game; on first
+        -- detection of host-gone, print a chat warning. Self-clears
+        -- the warned flag once the host comes back (heartbeat
+        -- resumes).
+        if C_Timer and C_Timer.NewTicker then
+            local warned = false
+            C_Timer.NewTicker(10, function()
+                if not B.Net or not B.Net.IsHostLikelyGone then return end
+                if B.State.s.isHost then warned = false; return end
+                if B.State.s.phase == K.PHASE_IDLE
+                   or B.State.s.phase == K.PHASE_LOBBY then
+                    warned = false; return
+                end
+                local gone = B.Net.IsHostLikelyGone()
+                if gone and not warned then
+                    warned = true
+                    print("|cffff5544[WHEREDNGN]|r |cffffd055Host appears "
+                        .. "to be gone|r — no heartbeat for "
+                        .. "45+ seconds. The game may be stalled. "
+                        .. "Try /baloot reset to return to idle.")
+                elseif not gone then
+                    warned = false   -- reset once heartbeat resumes
+                end
+            end)
+        end
         if not WHEREDNGNDB.welcomed then
             print("|cff66ddff[WHEREDNGN]|r Welcome to Loot & Baloot — "
                 .. "Saudi Baloot for WoW. Click the |cffffffffminimap icon|r "

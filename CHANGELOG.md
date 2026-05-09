@@ -1,5 +1,122 @@
 # Changelog
 
+## v3.0.1 — Hotfix: meta-audit findings (10 surgical fixes)
+
+A 5-agent meta-audit swarm against v3.0.0 found 2 CRITICAL + ~15
+HIGH-severity issues, including several **flagship fixes that were
+structurally undelivered or broken by later layered fixes**. v3.0.1
+addresses the worst.
+
+### CFI-01 (CRITICAL) — `/baloot reset` popup OnAccept missed MP-71
+
+`UI.lua:656-680` (popup `OnAccept`). v2.1.0's MP-71 fix added a
+host-gone broadcast (empty `MSG_LOBBY`) on `/baloot reset`, but the
+broadcast lived in `Slash.lua` BEFORE the popup-show check. When
+host was mid-round, the slash command routed through the popup —
+which never reached the broadcast logic. Result: remotes held
+sticky lobby for up to 45s waiting for heartbeat-timeout. The popup
+also never called `StopHostHeartbeat`. Fix: mirror both into the
+popup's `OnAccept`.
+
+### REG-04 (HIGH) — "New Game" button at game-end same issue
+
+`UI.lua:2540+`. The host's "New Game" button at game-end also called
+`S.Reset()` directly without the MP-71 broadcast or heartbeat stop.
+Fix: same as CFI-01.
+
+### HIGH#3 — AKA partner-hint never fires for solo-host bot partners
+
+`Net.lua:4002-4080`. v2.0.0 BF-30's chat hint was inline in
+`_OnAKA`, which has a `fromSelf(sender)` short-circuit at the top
+— meaning host's OWN bot AKAs (the dominant solo-host scenario)
+never reached the hint. Extracted into `N._AKAPartnerHint(seat,
+suit)` helper called from BOTH `_OnAKA` (remote) AND the
+`SendAKA` site in MaybeRunBot's bot-dispatch path (host-loopback).
+
+### HIGH#2 — Arabic-font probe pcall return-value bug
+
+`UI.lua:434-460`. v2.0.0 SA-01's font probe used `local ok =
+pcall(probe.SetFont, …); _arabicAvailable = (ok == true)`. But
+`pcall` returns `(ok, retval)`; `SetFont` returns `true` on font
+load, `false` if file missing. The probe set `_arabicAvailable`
+based on whether `pcall` itself succeeded (always, when dispatched)
+— never the actual font-load result. Result: on installs without
+the font file, `_arabicAvailable` was stuck `true`, `SaudiName`
+returned Arabic glyphs, the engine fell back to a default font
+that lacked Arabic, and buttons rendered as boxes (the v2.0.2
+hotfix's exact failure mode survived). Fix: capture the SECOND
+pcall return value.
+
+### HIGH#1 — `IsHostLikelyGone` watchdog had no UI consumer
+
+`Net.lua:3231` defined the function; nothing called it. v1.8.0
+MP-21's heartbeat detection was structurally undelivered. v3.0.1
+adds a 10-second ticker in `WHEREDNGN.lua:PLAYER_LOGIN` that checks
+`IsHostLikelyGone()` for non-host clients in active games and
+prints a chat warning ONCE on first detection (with auto-clear when
+heartbeat resumes).
+
+### CFI-02 (HIGH) — Escalation rung delays bypassed tier multiplier
+
+`Net.lua:4824, 4877, 4928, 4974`. v1.8.0 BF-01 introduced
+`botDelay(base, difficulty)` for tier-aware pacing. v2.0.0 BF-06/50
+added per-rung delays (`BOT_DELAY_TRIPLE/FOUR/GAHWA`) but used
+`C_Timer.After(BOT_DELAY_*, ...)` directly — bypassing `botDelay`.
+Net effect: Saudi Master and Basic both fired escalation rungs at
+exactly 3.4/3.7/4.2s; BF-01's tier-pacing contract was lost on the
+most narrative decisions. Fix: route all 4 sites through
+`botDelay(BOT_DELAY_*, difficulty)`. Gahwa marked "hard" for the
++0.6s match-stake weight.
+
+### REG-02 (HIGH) — `bindConfirm` didn't restore button width on click-confirm
+
+`UI.lua:1937-1977`. v2.0.0 UX-04 introduced auto-resize on confirm-
+arm to fit the longer prompt label. The auto-disarm path (timer
+fire) restored 90px width; the click-confirm path called `disarm()`
+then `fire()` but never restored width. Pooled buttons stayed at
+220px after a confirm-fire, leaking into the next phase's action
+panel layout. Fix: add `btn:SetWidth(90)` to the shared `disarm()`.
+
+### PM-09 (HIGH) — Dead Reset tooltip override
+
+`UI.lua:716-728`. The Reset button had `setLobbyTooltip` wired with
+the v2.0.0 host-broadcast warning, then a SECOND `OnEnter` handler
+immediately overrode it with a less informative v1.x message. The
+v2.0.0 tooltip body was permanently dead code. Fix: remove the
+override block.
+
+### PM-12 (HIGH) — `WLA (decline)` missed in v2.3.0 case normalization
+
+`UI.lua:1623`. v2.3.0 SA-23 normalized "WLA" → "wla" everywhere,
+but missed one tooltip body. Fix: lowercase.
+
+### PM-01/02 (HIGH) — TAKWEESH button had no tooltip
+
+`UI.lua:2468`. The most consequential accusation button in Saudi
+Baloot had ZERO tooltip — its sibling SWA at line ~2487 had full
+prose. Critical asymmetry on a paired-button row. Fix: full TAKWEESH
+explanation matching SWA's depth (mechanic, outcome, penalty,
+"only when sure" warning).
+
+### Tests
+
+819/819 pass.
+
+### Audit reports committed
+
+```
+.swarm_findings/v3.0.0_audit_regression_hunter.md  (Agent 1, 14 findings)
+.swarm_findings/v3.0.0_audit_new_features.md       (Agent 2, 21 findings)
+.swarm_findings/v3.0.0_audit_cross_fix.md          (Agent 3, 12 findings)
+.swarm_findings/v3.0.0_audit_code_health.md        (Agent 4, 28 findings)
+.swarm_findings/v3.0.0_audit_polish_meta.md        (Agent 5, 26 findings)
+```
+
+Total: 101 findings in the meta-audit; v3.0.1 closes 10 highest-
+impact items. Remaining ~90 are mix of LOW polish + items deferred
+for verification + items needing playtest signal. The audit reports
+are committed as historical record (not gitignored).
+
 ## v3.0.0 — Architectural release: Settings panel + lobby kick + polish
 
 Major version bump. The headline changes are the proper Settings

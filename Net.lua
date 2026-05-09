@@ -4047,33 +4047,36 @@ function N._OnAKA(sender, seat, suit, replayFlag)
     -- side but the wire path didn't, leaving a mispredict window.
     if S.s.trick and S.s.trick.plays and #S.s.trick.plays > 0 then return end
     S.ApplyAKA(seat, suit)
-    -- v2.0.0 (audit v1.6.1 BF-30 HIGH): partner-signal transparency.
-    -- Pre-fix the AKA banner was the ONLY visible partner signal —
-    -- and even it just said "AKA <suit> — <name>" with no explanation
-    -- of what the local human partner should DO. Now print a chat
-    -- hint when the bot is YOUR partner: explain that they hold the
-    -- boss in this suit and you should not over-trump. Opp-bot AKA
-    -- prints a different hint ("opp claims boss in <suit>"). Bots
-    -- get nothing — they read the signal via Bot._memory directly.
+    if N._AKAPartnerHint then N._AKAPartnerHint(seat, suit) end
+end
+
+-- v3.0.1 (audit v3.0.0 HIGH#3): extract the BF-30 partner-signal chat
+-- hint into a callable helper. Pre-v3.0.1 the hint was inline in
+-- _OnAKA, which has a `fromSelf(sender)` short-circuit at the top —
+-- meaning host's OWN bot AKAs (the dominant solo-host scenario) never
+-- reached the hint. The hint is now called from BOTH _OnAKA (remote
+-- AKAs) AND the bot-dispatch SendAKA site (host's own bot AKAs), so
+-- the hint fires regardless of who's hosting.
+function N._AKAPartnerHint(seat, suit)
     local me = S.s.localSeat
-    if me and me ~= seat
-       and not (S.s.seats and S.s.seats[me] and S.s.seats[me].isBot) then
-        local glyph = K.SUIT_GLYPH and K.SUIT_GLYPH[suit] or suit
-        local info = S.s.seats and S.s.seats[seat]
-        local nm = (info and info.name)
-                   and ((info.name:match("^([^%-]+)")) or info.name)
-                   or ("seat " .. seat)
-        if R.TeamOf(seat) == R.TeamOf(me) then
-            print(("|cff66ff88[WHEREDNGN]|r |cffffd055%s|r (partner) "
-                   .. "called AKA %s — they hold the boss in this suit. "
-                   .. "Don't over-trump if %s is led; let them win it."
-                   ):format(nm, glyph, glyph))
-        else
-            print(("|cffff8855[WHEREDNGN]|r |cffffd055%s|r (opp) "
-                   .. "called AKA %s — they claim the boss in this suit. "
-                   .. "Their partner won't trump %s tricks."
-                   ):format(nm, glyph, glyph))
-        end
+    if not me or me == seat then return end
+    -- Only print for human local players. Bots read signals via memory.
+    if S.s.seats and S.s.seats[me] and S.s.seats[me].isBot then return end
+    local glyph = K.SUIT_GLYPH and K.SUIT_GLYPH[suit] or suit
+    local info = S.s.seats and S.s.seats[seat]
+    local nm = (info and info.name)
+               and ((info.name:match("^([^%-]+)")) or info.name)
+               or ("seat " .. seat)
+    if R.TeamOf(seat) == R.TeamOf(me) then
+        print(("|cff66ff88[WHEREDNGN]|r |cffffd055%s|r (partner) "
+               .. "called AKA %s — they hold the boss in this suit. "
+               .. "Don't over-trump if %s is led; let them win it."
+               ):format(nm, glyph, glyph))
+    else
+        print(("|cffff8855[WHEREDNGN]|r |cffffd055%s|r (opp) "
+               .. "called AKA %s — they claim the boss in this suit. "
+               .. "Their partner won't trump %s tricks."
+               ):format(nm, glyph, glyph))
     end
 end
 
@@ -4818,7 +4821,11 @@ function N.MaybeRunBot()
     if S.s.phase == K.PHASE_TRIPLE and S.s.contract then
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
-            C_Timer.After(BOT_DELAY_TRIPLE, function()
+            -- v3.0.1 (audit v3.0.0 CFI-02): route through botDelay so
+            -- BF-01 tier multiplier applies. Pre-fix raw constant
+            -- bypassed tier scaling; Saudi Master + Basic both fired
+            -- at exactly 3.4s.
+            C_Timer.After(botDelay(BOT_DELAY_TRIPLE, "normal"), function()
                 local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
@@ -4871,7 +4878,8 @@ function N.MaybeRunBot()
         local defSeat = S.s.contract.doublerSeat
                          or ((S.s.contract.bidder % 4) + 1)
         if isBotSeat(defSeat) then
-            C_Timer.After(BOT_DELAY_FOUR, function()
+            -- v3.0.1 CFI-02: tier mult via botDelay.
+            C_Timer.After(botDelay(BOT_DELAY_FOUR, "normal"), function()
                 local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
@@ -4922,7 +4930,9 @@ function N.MaybeRunBot()
     if S.s.phase == K.PHASE_GAHWA and S.s.contract then
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
-            C_Timer.After(BOT_DELAY_GAHWA, function()
+            -- v3.0.1 CFI-02: Gahwa is "hard" difficulty (terminal
+            -- match-stake decision); +0.6s on top of tier mult.
+            C_Timer.After(botDelay(BOT_DELAY_GAHWA, "hard"), function()
                 local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
@@ -4968,7 +4978,8 @@ function N.MaybeRunBot()
     if S.s.phase == K.PHASE_PREEMPT and S.s.preemptEligible then
         for _, seat in ipairs(S.s.preemptEligible) do
             if isBotSeat(seat) then
-                C_Timer.After(BOT_DELAY_BEL, function()
+                -- v3.0.1 CFI-02: tier mult via botDelay (preempt path).
+                C_Timer.After(botDelay(BOT_DELAY_BEL, "normal"), function()
                     -- Re-re-audit X1 fix: track per-step flags so the
                     -- recovery branch knows what already happened and
                     -- doesn't double-emit / contradict earlier sends.
@@ -5310,6 +5321,14 @@ function N.MaybeRunBot()
                     if akaSuit then
                         S.ApplyAKA(seat, akaSuit)
                         N.SendAKA(seat, akaSuit)
+                        -- v3.0.1 (audit v3.0.0 HIGH#3): BF-30 partner
+                        -- hint also fires for host's own bot AKAs.
+                        -- Pre-fix the hint was only inside _OnAKA
+                        -- which fromSelf-rejects host-loopback —
+                        -- defeats BF-30 in solo-host scenarios.
+                        if N._AKAPartnerHint then
+                            N._AKAPartnerHint(seat, akaSuit)
+                        end
                     elseif B.Bot.PickAKANoise then
                         -- v1.2.2 (HIGH-1 audit fix): noise-AKA emission
                         -- wiring. v1.2.1 introduced Bot.PickAKANoise
@@ -5325,6 +5344,9 @@ function N.MaybeRunBot()
                         if noiseSuit then
                             S.ApplyAKA(seat, noiseSuit)
                             N.SendAKA(seat, noiseSuit)
+                            if N._AKAPartnerHint then
+                                N._AKAPartnerHint(seat, noiseSuit)
+                            end
                         end
                     end
                 end

@@ -437,10 +437,21 @@ local function arabicAvailable()
         return false
     end
     -- Probe: create an off-screen FontString and try SetFont.
+    -- v3.0.1 (audit v3.0.0 HIGH#2): pcall returns (ok, retval). The
+    -- SetFont method itself returns `true` if the font file loaded,
+    -- `false` if it couldn't be opened. Pre-fix `_arabicAvailable =
+    -- (ok == true)` set to true whenever pcall didn't error — i.e.,
+    -- whenever the call dispatched (always). Result: on installs
+    -- WITHOUT the font file present, _arabicAvailable was stuck
+    -- true — SaudiName returned the Arabic glyph entry, the engine
+    -- silently fell back to a default font that lacks Arabic, and
+    -- buttons rendered as boxes (the v2.0.2 hotfix's exact failure
+    -- mode survived). Now check the SECOND return value (the actual
+    -- SetFont result) so the probe correctly detects font absence.
     local probe = f:CreateFontString(nil, "BACKGROUND", "GameFontNormal")
     if probe then
-        local ok = pcall(probe.SetFont, probe, K.ARABIC_FONT, 12, "")
-        _arabicAvailable = (ok == true)
+        local ok, setOk = pcall(probe.SetFont, probe, K.ARABIC_FONT, 12, "")
+        _arabicAvailable = (ok == true) and (setOk == true)
         probe:Hide()
         probe:SetText("")
     end
@@ -654,6 +665,25 @@ local function buildMain()
         button1      = "Reset",
         button2      = "Cancel",
         OnAccept     = function()
+            -- v3.0.1 (audit v3.0.0 CFI-01 CRITICAL): mirror Slash.lua
+            -- reset's MP-71 host-gone broadcast + heartbeat stop on
+            -- the popup-accept path. Pre-fix the slash command had
+            -- the broadcast guarded behind the popup branch (so it
+            -- only fired on the bypass-popup path), and the popup
+            -- itself only did local teardown — the most common reset
+            -- path (host-mid-round) silently skipped both. Remotes
+            -- waited 45s for heartbeat-timeout. Now both the popup
+            -- and the slash bypass route through the same teardown.
+            if B.State and B.State.s and B.State.s.isHost
+               and B.State.s.gameID
+               and B.Net and B.Net.SendLobby then
+                -- Empty seat array: remotes' _OnLobby treats this as
+                -- host-gone signal (v2.1.0 MP-71). Drops sticky lobby.
+                B.Net.SendLobby({}, B.State.s.gameID)
+            end
+            if B.Net and B.Net.StopHostHeartbeat then
+                B.Net.StopHostHeartbeat()
+            end
             if B._lobbyTicker then
                 B._lobbyTicker:Cancel()
                 B._lobbyTicker = nil
@@ -683,19 +713,16 @@ local function buildMain()
     resetBtn:SetScript("OnClick", function()
         StaticPopup_Show("WHEREDNGN_RESET_CONFIRM")
     end)
-    -- v2.0.0 (audit v1.6.1 PJ-06): lobby/window control button tooltips.
+    -- v2.0.0 (audit v1.6.1 PJ-06): lobby/window control button tooltip.
+    -- v3.0.1 (audit v3.0.0 PM-09): removed dead-code override block.
+    -- Pre-fix setLobbyTooltip wired the host-broadcast-reset warning,
+    -- then a SECOND OnEnter handler immediately overrode it with a
+    -- less informative message (older v1.x text). The setLobbyTooltip
+    -- body was permanently dead. Single tooltip now wins.
     setLobbyTooltip(resetBtn, "Reset",
         "Wipe local game state and return to idle. If you are the "
         .. "HOST mid-round, this also kicks all other players out of "
         .. "the game (a confirm prompt is shown first).")
-    resetBtn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("Reset WHEREDNGN", 1, 1, 1)
-        GameTooltip:AddLine("Same as |cffaaaaaa/baloot reset|r — clears the game"
-            .. " state and returns to idle.", 0.85, 0.85, 0.85, true)
-        GameTooltip:Show()
-    end)
-    resetBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     f.resetBtn = resetBtn
 
     -- Minimal-background toggle (bottom-left). Hides the outer green
@@ -1590,7 +1617,7 @@ local function buildTable()
         "Saudi rule: 5 seconds after a Hokm bid, anyone may upgrade "
         .. "the contract to Sun (no-trump, ×2 multiplier). Bidder "
         .. "can self-upgrade; non-bidders can take it as their own "
-        .. "Sun. WLA (decline) is the safe default.")
+        .. "Sun. wla (decline) is the safe default.")
     overcallBanner._tickAccum = 0
     overcallBanner._lastRemain = nil
     overcallBanner:SetScript("OnUpdate", function(self, elapsed)
@@ -1911,6 +1938,13 @@ local function bindConfirm(btn, normalLabel, armedLabel, fire)
         btn.armed = false
         if btn.armedTk then btn.armedTk:Cancel(); btn.armedTk = nil end
         btn:SetText(normalLabel)
+        -- v3.0.1 (audit v3.0.0 REG-02): restore default 90px width on
+        -- disarm. Pre-fix only the AUTO-disarm path (timer fire)
+        -- restored width; the CLICK-confirm path called disarm() then
+        -- fire() but never restored width — pooled buttons stayed at
+        -- 220px after a confirm-fire, leaking into the next phase's
+        -- action panel layout.
+        btn:SetWidth(90)
     end
     btn:SetScript("OnClick", function()
         if btn.armed then
@@ -2431,9 +2465,22 @@ local function renderActions()
         -- full handTotal × mult going to the OTHER team — easy to fire
         -- by mistake from the always-visible action bar otherwise.
         if S.s.phase == K.PHASE_PLAY and S.s.localSeat then
+            -- v3.0.1 (audit v3.0.0 PM-01/02 HIGH): TAKWEESH tooltip
+            -- added. Pre-fix the button was prominently visible
+            -- with no explanation — sibling SWA at line ~2487 had
+            -- full prose tooltip but TAKWEESH (the most consequential
+            -- accusation in Saudi Baloot) had nothing. Critical
+            -- asymmetry on a paired-button row.
             addConfirmAction("|cffff5555TAKWEESH|r",
                 "|cffff5555TAKWEESH? again to confirm|r",
-                function() net().LocalTakweesh() end)
+                function() net().LocalTakweesh() end,
+                "TAKWEESH — accuse the most recent illegal play "
+                .. "(Saudi 'tikweesh', accusation of foul). If the "
+                .. "play was actually illegal AND the violator later "
+                .. "showed they had the led suit (publicly observable "
+                .. "proof), the offending team takes a ~30-pt qaid "
+                .. "penalty. Wrong call costs YOUR team the same "
+                .. "penalty. Use only when you're sure.")
             -- SWA (سوا) — claim-the-rest. Saudi-table convention:
             -- ≤3 cards = instant, 4+ cards requires opponent
             -- permission (handled by N.LocalSWA branch). Toggle the
@@ -2629,6 +2676,17 @@ local function renderActions()
     elseif S.s.phase == K.PHASE_GAME_END then
         if S.s.isHost then
             addAction("New Game", function()
+                -- v3.0.1 (audit v3.0.0 REG-04 HIGH): broadcast host-
+                -- gone teardown so remotes don't hold a sticky
+                -- GAME_END banner waiting for the 45s heartbeat
+                -- timeout. Mirrors the v3.0.1 CFI-01 fix on the
+                -- popup-Reset path.
+                if S.s.gameID and net().SendLobby then
+                    net().SendLobby({}, S.s.gameID)
+                end
+                if net().StopHostHeartbeat then
+                    net().StopHostHeartbeat()
+                end
                 S.Reset()
                 S.SetLocalName(GetUnitName("player", true))
                 U.Refresh()
