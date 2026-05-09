@@ -1,5 +1,59 @@
 # Changelog
 
+## v2.0.1 — Hotfix: BF-10 "thinking…" indicator crash on bot turn
+
+User-reported in-game error on `HostStartRound` (first refresh after
+v2.0.0 ship):
+
+```
+1x FontString:GetScript(): Doesn't have a "OnUpdate" script
+[WHEREDNGN/UI.lua]:2818
+```
+
+### Root cause
+
+The v1.8.0 BF-10 "thinking…" indicator at `UI.lua:~2808-2822`
+attached `SetScript("OnUpdate", …)` directly to a **FontString**.
+WoW FontStrings only support a small set of scripts (OnEnter / OnLeave
+via the parent frame); they do NOT support OnUpdate. Only Frame-
+derived objects do. The crash didn't surface until v2.0.0 because
+the test harness doesn't exercise CreateFrame / SetScript paths;
+the bug was latent in v1.8.0/1.8.1 but only triggered in-game when
+the active seat was a bot AND the host's UI tried to render the
+thinking indicator.
+
+### Fix
+
+`UI.lua:~2808-2837`. Replaced the FontString-with-OnUpdate with a
+wrapper Frame that holds the FontString. OnUpdate now lives on the
+Frame and cycles the inner FontString's alpha each tick:
+
+```lua
+b.thinkBox = CreateFrame("Frame", nil, b.frame)
+b.thinkBox:SetSize(80, 14)
+b.thinkBox:SetPoint("BOTTOM", b.frame, "BOTTOM", 0, 4)
+b.thinkBox.label = b.thinkBox:CreateFontString(
+    nil, "OVERLAY", "GameFontNormalSmall")
+b.thinkBox.label:SetAllPoints(b.thinkBox)
+b.thinkBox:SetScript("OnUpdate", function(self, elapsed)
+    self._t = (self._t or 0) + (elapsed or 0)
+    local pulse = (math.sin(self._t * 4.4) + 1) * 0.5
+    if self.label and self.label.SetAlpha then
+        self.label:SetAlpha(0.55 + pulse * 0.40)
+    end
+end)
+```
+
+The else-branch hides both `thinkText` (legacy v1.8.0 field, in case
+saved state somehow persisted) and `thinkBox` (new v2.0.1 field).
+
+### Tests
+
+819/819 pass. The crash was unreachable from the test harness, so
+the bug slipped through every prior ship — the in-game `CreateFrame`
++ `SetScript` paths are stubs in `tests/run.py`. Future BF-10-class
+work should manually verify in-game.
+
 ## v2.0.0 — Major release: deferred-items marathon
 
 Major version bump: closes the v1.6.1 audit's remaining HIGH-severity

@@ -2805,31 +2805,44 @@ local function renderSeats()
                 -- actually running the bot's decision timer).
                 if info and info.isBot and S.s.isHost
                    and (S.s.turnKind == "bid" or S.s.turnKind == "play") then
-                    if not b.thinkText then
-                        b.thinkText = b.frame:CreateFontString(nil, "OVERLAY",
-                                                                "GameFontNormalSmall")
-                        b.thinkText:SetPoint("BOTTOM", b.frame, "BOTTOM", 0, 4)
-                        b.thinkText:SetTextColor(0.4, 0.8, 1, 0.9)
-                        -- Soft fade-cycle via OnUpdate so the indicator
-                        -- visibly animates ("breathes") rather than
-                        -- looking like a static label that might be
-                        -- frozen UI. ~0.7Hz cycle.
-                        b.thinkText._t = 0
-                        b.thinkText:SetScript("OnUpdate", function(self, elapsed)
+                    -- v2.0.1 fix: WoW FontStrings don't support
+                    -- SetScript("OnUpdate", …) — only Frame-derived
+                    -- objects do. The original v1.8.0 BF-10 code
+                    -- attached the pulse OnUpdate directly to the
+                    -- FontString and crashed on first Show. Now wrap
+                    -- the label in a tiny Frame; OnUpdate lives on
+                    -- the Frame, which cycles the inner FontString's
+                    -- alpha each tick.
+                    if not b.thinkBox then
+                        b.thinkBox = CreateFrame("Frame", nil, b.frame)
+                        b.thinkBox:SetSize(80, 14)
+                        b.thinkBox:SetPoint("BOTTOM", b.frame, "BOTTOM", 0, 4)
+                        b.thinkBox._t = 0
+                        b.thinkBox.label = b.thinkBox:CreateFontString(
+                            nil, "OVERLAY", "GameFontNormalSmall")
+                        b.thinkBox.label:SetAllPoints(b.thinkBox)
+                        b.thinkBox.label:SetTextColor(0.4, 0.8, 1, 0.9)
+                        b.thinkBox:SetScript("OnUpdate", function(self, elapsed)
                             self._t = (self._t or 0) + (elapsed or 0)
                             local pulse = (math.sin(self._t * 4.4) + 1) * 0.5
-                            self:SetAlpha(0.55 + pulse * 0.40)
+                            if self.label and self.label.SetAlpha then
+                                self.label:SetAlpha(0.55 + pulse * 0.40)
+                            end
                         end)
                     end
-                    b.thinkText:SetText("|cff66ddffthinking…|r")
-                    b.thinkText:Show()
-                elseif b.thinkText then
-                    b.thinkText:Hide()
+                    b.thinkBox.label:SetText("|cff66ddffthinking…|r")
+                    b.thinkBox:Show()
+                elseif b.thinkBox then
+                    b.thinkBox:Hide()
                 end
             else
                 b.turnGlow:Hide()
                 b.frame:SetBackdropBorderColor(unpack(COL.woodEdge))
+                -- v2.0.1: thinkText was the v1.8.0 FontString; v2.0.1
+                -- wraps it in thinkBox. Hide both for back-compat in
+                -- case state was persisted across the upgrade.
                 if b.thinkText then b.thinkText:Hide() end
+                if b.thinkBox then b.thinkBox:Hide() end
             end
         end
     end
