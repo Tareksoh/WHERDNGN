@@ -1,5 +1,116 @@
 # Changelog
 
+## v3.0.6 — GAP-01 sender-intent alignment
+
+### What user asked
+
+> could you check if this also made bots behave the same way? to give
+> hint in the same logic? GAP-01 (CONTRADICTORY): Tahreeb single-low
+> → "want_hint" classifier (Bot.lua tahreebClassify)
+
+A great catch. The v3.0.3 fix added a *receiver-side* rule
+(single-7/8/9 → `"want_hint"`) but didn't audit whether the *sender
+side* was emitting signals consistent with that rule.
+
+### What the audit found
+
+Bot SENDERS emit single-low discards through TWO distinct paths:
+
+| Path | Site | Conditions | Sender intent |
+|---|---|---|---|
+| **A. Bottom-up "want"** | `Bot.lua:4842-4866` | 3+ card suit, no A AND no T | "I want this suit, no Ace" |
+| **B. T-4 dump-larger** | `Bot.lua:4886-4902` | 2-card no-honor doubleton (J/Q/9/8 highest) | "Descending = dontwant" |
+
+Path A's lowest-rank discard: receiver correctly reads `"want_hint"`
+on the first event (consistent with sender intent). ✓
+
+Path B's first discard is the LARGER of the doubleton — when that
+larger card is **9** (from a 9+x doubleton) or **8** (from 8+7), the
+receiver under v3.0.3 reads single-9 / single-8 as `"want_hint"` —
+but the sender's intent was descending = `"dontwant"`. The full
+2-event descending sequence resolves to `"dontwant"`, but if the bot
+gets only ONE Tahreeb opportunity in the round (1 partner-winning
+trick where it's void in led), the receiver's first-event
+interpretation is **opposite** of what the sender meant.
+
+### Fix
+
+Track sender's pre-discard suit-size on the FIRST event of any signal
+in a suit. Gate the `want_hint` return on that size ≥ 3.
+
+**`Bot.OnPlayObserved`** (~line 753+): record `list.lenAtFirstDiscard`
+on the first event in a suit, mirroring the existing `lenAtAce`
+recorder for Bargiya:
+
+```lua
+if S.s.isHost and S.s.hostHands and S.s.hostHands[seat] then
+    if not list.lenAtFirstDiscard then
+        local preLen = 0
+        for _, c in ipairs(S.s.hostHands[seat]) do
+            if C.Suit(c) == cardSuit then preLen = preLen + 1 end
+        end
+        list.lenAtFirstDiscard = preLen + 1   -- pre-discard length
+    end
+end
+```
+
+**`tahreebClassify`** (the v3.0.3 single-low branch): require
+`lenAtFirstDiscard >= 3` before promoting to `"want_hint"`. Otherwise
+fall back to `"hint"` (the conservative single-event read pre-v3.0.3):
+
+```lua
+if r <= r9 then
+    local lenAtFirst = signals.lenAtFirstDiscard or 0
+    if lenAtFirst >= 3 then
+        return "want_hint"
+    end
+    return "hint"   -- T-4 doubleton territory or unknown size
+end
+```
+
+**Filtered-view preservation**: when the forced-discard filter rebuilds
+the signals list, preserve `lenAtFirstDiscard` only if the filtered
+first-event still matches the original first-event (parallel to
+existing `lenAtAce` preservation).
+
+### Why "≥3" specifically
+
+- 3+ no-A no-T suit: classic bottom-up "want" sender shape
+  (`Bot.lua:4845`). Receiver intent matches sender intent.
+- 2-card doubleton: T-4 dump-larger territory (`Bot.lua:4888`). Even
+  if the larger is 9 or 8 (mapping to "want_hint" by rank), the
+  sender's intent is "dontwant." Receiver reverts to "hint" and
+  waits for a 2nd event.
+- 1-card singleton: forced discard, already filtered out by the
+  forced-flag mechanism above.
+
+### Behavior on non-bot senders
+
+Humans don't have a `lenAtFirstDiscard` tracker (we can't observe
+their pre-play hand). When the receiver is reading a HUMAN partner's
+discard, `lenAtFirstDiscard` will be missing → falls back to "hint."
+This is a regression vs v3.0.3-v3.0.5 for human-emitted single-low
+signals, but **correct**: we don't know if the human meant "want"
+(3+ in suit) or "dontwant" (2-card doubleton dump). Conservative
+"hint" until a 2nd event clarifies.
+
+The host bot DOES record `lenAtFirstDiscard` for ALL seats including
+human seats, since the host has `S.s.hostHands[seat]` for every
+player. So host-side reads of human single-low signals are still
+correctly gated.
+
+### Tests
+
+**858/858 pass** (was 854 — +4 new pins):
+
+- AN.1c, AN.7: existing v3.0.3 tests updated to set
+  `lenAtFirstDiscard = 3` in fixtures (since the test fixtures
+  emulate the bottom-up sender path)
+- AN.8 (3 source-pins): v3.0.6 sender-intent doc + tracker existence
+  + classifier gate
+- AN.9 (1 behavioral): T-4 doubleton case (lenAtFirstDiscard=2)
+  must NOT classify as "want_hint" — verifies the gate fires correctly
+
 ## v3.0.5 — Watchdog hotfix #2: lower ISMCTS time budget below watchdog
 
 ### Crash report (continued)

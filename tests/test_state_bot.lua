@@ -2000,7 +2000,13 @@ do
     -- bot SHOULD prefer to lead S (the suit partner hinted at).
     Bot._partnerStyle[3] = {
         tahreebSent = {
-            S = { "7" },           -- single low card → v3.0.3 "want_hint"
+            -- v3.0.6 follow-up: lenAtFirstDiscard = 3 emulates the
+            -- bottom-up "want" sender path (3+ no-A no-T suit). A
+            -- bare single-7 without this field would be ambiguous
+            -- with the T-4 dump-larger path (2-card doubleton),
+            -- which the v3.0.6 classifier conservatively maps to
+            -- "hint" instead of "want_hint."
+            S = { "7", lenAtFirstDiscard = 3 },
             H = {},
             D = {},
         },
@@ -2008,7 +2014,7 @@ do
     local card = Bot.PickPlay(1)
     local suit = C.Suit(card)
     assertEq(suit, "S",
-        "v3.0.3 GAP-01: single-low (7) discard signals 'want_hint'; bot leads S")
+        "v3.0.3 GAP-01: single-low (7) from 3+ suit signals 'want_hint'; bot leads S")
     WHEREDNGNDB.m3lmBots = nil
 end
 
@@ -6332,14 +6338,75 @@ do
     -- (want, weight 2). want should dominate want_hint → bot picks H.
     Bot._partnerStyle[3] = {
         tahreebSent = {
-            S = { "7" },           -- single low → want_hint (weight 1)
-            H = { "7", "9" },      -- ascending → want (weight 2)
+            -- v3.0.6: both fixtures need lenAtFirstDiscard >= 3 to
+            -- pass the sender-intent gate (single-low only counts
+            -- as "want_hint" when sender held 3+ in suit; otherwise
+            -- the signal is ambiguous with T-4 dump-larger).
+            S = { "7",      lenAtFirstDiscard = 3 },
+            H = { "7", "9", lenAtFirstDiscard = 4 },
             D = {},
         },
     }
     local card = Bot.PickPlay(1)
     assertEq(C.Suit(card), "H",
         "AN.7 (GAP-01 weight order): want(2) dominates want_hint(1)")
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- AN.8 v3.0.6 sender-intent gate: single-low signal from a 2-card
+-- doubleton (T-4 dump-larger sender) should NOT be classified as
+-- "want_hint" — that's a sender-intent mismatch (T-4 = "dontwant",
+-- not "want"). The classifier requires lenAtFirstDiscard >= 3 to
+-- promote a single-low to "want_hint"; absent or <3 falls back to
+-- "hint" (ambiguous, weight 0).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.0%.6 SENDER%-INTENT alignment") ~= nil,
+        "AN.8a (v3.0.6): tahreebClassify documents sender-intent gate")
+    assertTrue(botSrc:find("lenAtFirstDiscard") ~= nil,
+        "AN.8b (v3.0.6): lenAtFirstDiscard tracker exists")
+    assertTrue(botSrc:find("if lenAtFirst >= 3 then") ~= nil,
+        "AN.8c (v3.0.6): want_hint gated on suit-size >= 3")
+end
+
+-- AN.9 (behavioral): with lenAtFirstDiscard = 2 (T-4 doubleton case),
+-- the same single-7 fixture that fired "want_hint" in AN.7 must now
+-- classify as "hint" (weight 0) and the bot must NOT preferentially
+-- lead S over a neutral suit. We verify by giving S a 2-card-shaped
+-- signal AND H a confirmed "want": bot must still lead H. (Same as
+-- AN.7 but S signal demoted to "hint".)
+do
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 4 }
+    S.s.tricks = { { winner = 4, plays = {
+        { seat = 4, card = "AC" }, { seat = 1, card = "9C" },
+        { seat = 2, card = "8C" }, { seat = 3, card = "7C" },
+    } } }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "8S", "JH", "9H", "8H", "JD", "9D" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    Bot._partnerStyle = Bot._partnerStyle or { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+    Bot._partnerStyle[3] = {
+        tahreebSent = {
+            -- S: single-7 from 2-card doubleton (T-4 dump territory).
+            -- v3.0.6 classifies as "hint" (weight 0), NOT "want_hint".
+            S = { "7",      lenAtFirstDiscard = 2 },
+            -- H: ascending 2-event "want" (weight 2). Should win.
+            H = { "7", "9", lenAtFirstDiscard = 4 },
+            D = {},
+        },
+    }
+    local card = Bot.PickPlay(1)
+    assertEq(C.Suit(card), "H",
+        "AN.9 (v3.0.6): T-4 doubleton single-7 demoted to 'hint'; want(H) still wins")
     WHEREDNGNDB.m3lmBots = nil
 end
 

@@ -750,6 +750,39 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
                     -- numeric array of ranks backward-compatible.
                     -- Computed BEFORE the rank append so #list reads
                     -- the pre-record count for the Ace-first guard.
+                    --
+                    -- v3.0.6 follow-up to GAP-01 receiver fix: also
+                    -- record `lenAtFirstDiscard` for ANY rank on the
+                    -- first event in a suit. The v3.0.3 single-low
+                    -- "want_hint" rule fires for any single 7/8/9
+                    -- discard, but the bot SENDER emits low cards
+                    -- through TWO distinct paths:
+                    --   (a) bottom-up "want" sender (Bot.lua:4842+):
+                    --       lowest from a 3+ no-A no-T suit. Intent:
+                    --       "want this suit, no Ace." Single event
+                    --       reads as "want_hint" — correct.
+                    --   (b) T-4 dump-larger sender (Bot.lua:4886+):
+                    --       LARGER first from a 2-card no-honor
+                    --       doubleton. Intent: "descending = dontwant."
+                    --       Single event of 9 (or 8 from 8+7) would
+                    --       be mis-read as "want_hint" — sender's
+                    --       suit-size was 2, not 3+.
+                    -- Stash `lenAtFirstDiscard` so the classifier can
+                    -- distinguish: only return "want_hint" when
+                    -- sender held ≥3 cards in the suit at discard time.
+                    if S.s.isHost and S.s.hostHands and S.s.hostHands[seat] then
+                        if not list.lenAtFirstDiscard then
+                            local preLen = 0
+                            for _, c in ipairs(S.s.hostHands[seat]) do
+                                if C.Suit(c) == cardSuit then
+                                    preLen = preLen + 1
+                                end
+                            end
+                            -- ApplyPlay already removed the discarded
+                            -- card; add 1 back for pre-discard length.
+                            list.lenAtFirstDiscard = preLen + 1
+                        end
+                    end
                     if C.Rank(card) == "A" and #list == 0
                        and S.s.isHost and S.s.hostHands and S.s.hostHands[seat] then
                         local preLen = 0
@@ -2315,10 +2348,16 @@ local function tahreebClassify(signals)
         end
         if #filtered == 0 then return nil end
         if #filtered ~= #signals then
-            -- Replace with filtered view; preserve lenAtAce only if
-            -- the first non-forced event matches the original first.
+            -- Replace with filtered view; preserve lenAtAce and
+            -- lenAtFirstDiscard only if the first non-forced event
+            -- matches the original first. Both fields describe the
+            -- sender's pre-discard suit-size at the very first signal
+            -- event; if forced filtering changes which event is "first",
+            -- the size no longer applies to the new first event.
             filtered.lenAtAce = (filtered[1] == signals[1])
                                  and signals.lenAtAce or nil
+            filtered.lenAtFirstDiscard = (filtered[1] == signals[1])
+                                 and signals.lenAtFirstDiscard or nil
             signals = filtered
         end
     end
@@ -2405,8 +2444,33 @@ local function tahreebClassify(signals)
         -- J/Q remain "hint" because mid-rank singles are genuinely
         -- ambiguous (no top-down vs bottom-up disambiguation possible
         -- without context tracking).
+        --
+        -- v3.0.6 SENDER-INTENT alignment: gate "want_hint" on the
+        -- sender's pre-discard suit-size. Bot SENDERS emit low cards
+        -- via TWO paths:
+        --   (a) bottom-up "want" arm (Bot.lua:4842+) discards lowest
+        --       from a 3+ no-A no-T suit. Intent: "want this suit"
+        --       → single-low correctly reads as "want_hint".
+        --   (b) T-4 dump-larger arm (Bot.lua:4886+) discards LARGER
+        --       first from a 2-card no-honor doubleton. Intent:
+        --       "descending = dontwant" (full pattern needs 2 events).
+        --       Single 9 from 9+7 doubleton — or single 8 from 8+7 —
+        --       would mis-read as "want_hint" without this gate.
+        -- The recorder host-side stashes `lenAtFirstDiscard` (Bot.lua
+        -- ~755-770) so the classifier can require ≥3 cards held in
+        -- the suit at discard time before promoting to "want_hint".
+        -- When `lenAtFirstDiscard` is missing (non-host clients,
+        -- pre-v3.0.6 fixtures, human discards we can't observe),
+        -- fall back to "hint" — the conservative read.
         if r <= r9 then
-            return "want_hint"
+            local lenAtFirst = signals.lenAtFirstDiscard or 0
+            if lenAtFirst >= 3 then
+                return "want_hint"
+            end
+            -- Sender held only 1-2 cards (T-4 dump territory) or
+            -- size unknown → ambiguous single event, default to
+            -- "hint" until a 2nd event disambiguates direction.
+            return "hint"
         end
         return "hint"
     end
