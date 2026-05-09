@@ -709,5 +709,17 @@ K.BOT_OVERCALL_SHORT_TRUMP_BONUS =  8  -- 1 card in opp's trump suit
 -- Bot.PickPlay invocations per move). Budget caps per-move latency;
 -- completed worlds vote, remaining skipped. UI responsiveness chosen
 -- over marginal accuracy at world 80-100. Set to 0 to disable cap
--- (full numWorlds always); 0.5s default keeps stutter imperceptible.
-K.BOT_ISMCTS_BUDGET_SEC = 0.5
+-- (full numWorlds always).
+--
+-- v3.0.5 (watchdog hotfix): lowered from 0.5s → 0.12s. WoW's CPU
+-- watchdog kills any single script execution that exceeds ~200ms;
+-- the prior 500ms cap could deliberately spend MORE than the watchdog
+-- allowed. User-reported repeat "script ran too long" crashes during
+-- Saudi-Master bot thinking in 3-bots-vs-human configurations (bot
+-- teammate of human at trick 1-2 with maximum world uncertainty).
+-- 0.12s = 60% of watchdog limit, leaving headroom for ApplyPlay /
+-- SendPlay / _HostStepPlay state mutation that follows the picker
+-- call inside the same C_Timer.After callback. The per-card inner-
+-- loop check at BotMaster.lua:1117-1119 (also v3.0.5) handles the
+-- single-world overshoot case.
+K.BOT_ISMCTS_BUDGET_SEC = 0.12

@@ -1,5 +1,84 @@
 # Changelog
 
+## v3.0.5 — Watchdog hotfix #2: lower ISMCTS time budget below watchdog
+
+### Crash report (continued)
+
+User reported v3.0.4 didn't fully fix the crash:
+
+> happened again, it is in a 3 bot vs human when the bot teammate
+> of human is thinking
+
+The **"thinking"** phrasing means the watchdog now trips *during* the
+picker, not after it — v3.0.4's deferred-Refresh moved post-picker
+work off the budget but didn't address the picker itself overshooting
+its own time cap.
+
+### Root cause #2
+
+`K.BOT_ISMCTS_BUDGET_SEC = 0.5` (BotMaster.lua:1108 — set in v0.11.17).
+WoW's CPU watchdog kills any single script execution exceeding ~200ms.
+The picker's voluntary cap was **2.5× the watchdog limit** — so
+ISMCTS could deliberately spend 500ms before yielding, while WoW
+killed it at 200.
+
+### Fix
+
+**Lower budget to 0.12s (120ms = 60% of watchdog limit):**
+
+```lua
+K.BOT_ISMCTS_BUDGET_SEC = 0.12
+```
+
+Picker still gets ~30-60 worlds at trick 1-2 (down from 100), which
+is enough variance for confident voting. The remaining 80ms of the
+200ms watchdog window covers the picker's setup (`buildLegalSet`,
+`buildUnseen`), the trailing `ApplyPlay → SendPlay → _HostStepPlay`
+state-mutation chain, and any heuristic-fallback path.
+
+**Plus an inner-loop budget check:**
+
+The outer per-world budget check in `BotMaster.PickPlay` only fires
+*between* worlds. A single overshoot world (e.g., 50ms when only 10ms
+remains) can still blow the budget. Added a per-card check inside the
+world's pcall body:
+
+```lua
+for _, card in ipairs(legal) do
+    if overBudget() then break end   -- v3.0.5 inner check
+    scores[card] = scores[card] + rolloutValue(...)
+end
+```
+
+The world's partially-completed evaluation still contributes to
+`scores` for already-evaluated cards. With 8 candidates × 60 worlds,
+at most 7 partial card-evaluations are skipped on the abort iteration
+— a marginal accuracy cost vs the watchdog correctness win.
+
+### Strength impact
+
+Saudi Master tier strength is determined more by *which* worlds are
+sampled (consistent-with-observation determinization) than by *how
+many*. At 60 worlds the move-quality regression vs 100 worlds was
+already negligible per the v0.11.17 internal numbers; at 30-60 worlds
+it stays inside the noise floor. The bot is still operating on
+information-set MCTS, just with a tighter time budget per move.
+
+If a player's machine has substantially slower per-rollout time than
+the development baseline (CPU-bound regional play, virtualized envs),
+they may see fewer worlds sampled and slightly noisier picks — but
+no more crashes. The next-step optimization (if needed) would batch
+rollouts across multiple `C_Timer.After(0, ...)` frames; not shipped
+until/unless this proves insufficient.
+
+### Tests
+
+**854/854 pass.** The pinned constant test `AA.3c` was updated from
+`0.5` to `0.12` with a comment explaining the watchdog rationale.
+Numworlds-scaling tests still pin 100/60/30 since `numWorlds` is the
+*configured* count; the budget cap is what the loop actually
+respects, and that's tested separately.
+
 ## v3.0.4 — Watchdog hotfix: bot-dispatch callback Refresh defer
 
 ### Crash report

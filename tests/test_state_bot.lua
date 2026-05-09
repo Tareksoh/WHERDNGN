@@ -3455,8 +3455,12 @@ do
                "AA.3a (B2): BotMaster references K.BOT_ISMCTS_BUDGET_SEC")
     assertTrue(bmSrc:find("BM%._lastWorldsCompleted") ~= nil,
                "AA.3b (B2): BotMaster tracks _lastWorldsCompleted for diag")
-    assertEq(K.BOT_ISMCTS_BUDGET_SEC, 0.5,
-             "AA.3c (B2): K.BOT_ISMCTS_BUDGET_SEC = 0.5s default")
+    -- v3.0.5 watchdog hotfix: lowered from 0.5s → 0.12s. WoW's CPU
+    -- watchdog kills any single script execution >200ms; 0.5s could
+    -- deliberately overshoot. 0.12s = 60% of watchdog limit with
+    -- headroom for trailing state-mutation calls.
+    assertEq(K.BOT_ISMCTS_BUDGET_SEC, 0.12,
+             "AA.3c (B2/v3.0.5): K.BOT_ISMCTS_BUDGET_SEC = 0.12s (watchdog hotfix)")
 end
 
 -- AA.4 (B3) — bidderHoldsBidcard helper exists

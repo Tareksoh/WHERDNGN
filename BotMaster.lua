@@ -1105,16 +1105,28 @@ function BM.PickPlay(seat)
     -- worlds vote, remaining worlds skipped. Saudi Master move
     -- responsiveness > marginal accuracy gained from world 80-100.
     local startedAt = (GetTime and GetTime()) or 0
-    local budgetSec = (K and K.BOT_ISMCTS_BUDGET_SEC) or 0.5
+    local budgetSec = (K and K.BOT_ISMCTS_BUDGET_SEC) or 0.12
     local worldsCompleted = 0
+    -- v3.0.5 (watchdog hotfix): outer per-world budget check + inner
+    -- per-card-rollout budget check. The outer check would let a
+    -- single overshoot world (e.g., 50ms when remaining budget is
+    -- 10ms) push us over the watchdog. The inner check breaks out of
+    -- the per-card loop when budget is exhausted; the world's partial
+    -- evaluation still contributes to scores for cards already
+    -- evaluated. Hardstop variable lifts the budget check above the
+    -- pcall — `break` from inside the pcall is local to the closure
+    -- and wouldn't escape the outer loop.
+    local function nowSec() return (GetTime and GetTime()) or 0 end
+    local function overBudget()
+        return budgetSec > 0 and (nowSec() - startedAt) > budgetSec
+    end
     for w = 1, numWorlds do
-        if budgetSec > 0 and (GetTime and GetTime() or 0) - startedAt > budgetSec then
-            break
-        end
+        if overBudget() then break end
         local ok, err = pcall(function()
             local world = sampleConsistentDeal(seat, unseen)
             if world then
                 for _, card in ipairs(legal) do
+                    if overBudget() then break end
                     scores[card] = scores[card]
                                   + rolloutValue(seat, card, world, S.s.contract)
                 end
