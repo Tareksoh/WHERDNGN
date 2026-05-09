@@ -123,6 +123,7 @@ local function reset()
     s.lastRoundResult       = nil
     s.lastRoundDelta        = nil
     s.takweeshResult        = nil
+    s.takweeshReview        = nil
     s.swaResult             = nil
     s.swaRequest            = nil
     s.swaDenied             = nil
@@ -237,6 +238,12 @@ local TRANSIENT_FIELDS = {
     -- Takweesh result banner is also transient — its display lifetime
     -- ends when the next round starts (handled by ApplyStart).
     takweeshResult = true,
+    -- v3.0.8: Takweesh review struct is also transient. The 8-second
+    -- review window is wall-clock-driven (C_Timer.After); restoring
+    -- it after /reload would either fire stale or expire instantly.
+    -- Better to drop on save and let the auto-resolve timer (which
+    -- continues to run on host) finish the resolution.
+    takweeshReview = true,
     -- AKA call banner is per-trick; its lifetime ends with the trick.
     -- We rebuild s.playedCardsThisRound from s.tricks on resync, so
     -- both fields are transient w.r.t. SaveSession.
@@ -568,6 +575,7 @@ function S.ApplyResyncSnapshot(gameID, payload)
     s.akaCalled             = nil
     s.lastTrick             = nil
     s.takweeshResult        = nil
+    s.takweeshReview        = nil
     s.swaResult             = nil
     s.swaRequest            = nil
     s.swaDenied             = nil
@@ -911,6 +919,7 @@ function S.ApplyStart(roundNumber, dealer)
     s.redealing    = nil
     -- Last hand's takweesh / SWA banners cleared at next round.
     s.takweeshResult = nil
+    s.takweeshReview = nil  -- v3.0.8
     s.swaResult      = nil
     -- 8th-audit fix: also clear in-flight SWA request. If a round was
     -- abandoned mid-vote (e.g., Kawesh redeal during opponents' SWA

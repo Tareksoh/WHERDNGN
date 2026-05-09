@@ -6369,6 +6369,93 @@ do
         "AN.8c (v3.0.6): want_hint gated on suit-size >= 3")
 end
 
+-- =====================================================================
+-- AO. v3.0.8 Takweesh review phase (cards-reveal + host approval)
+--
+-- Per video #36 verbatim: caller must "throw cards face-up to reveal
+-- proof. Verbal call without revealing is invalid." v3.0.8 adds an
+-- 8-second review phase between MSG_TAKWEESH and resolution. In games
+-- with >1 human player, the host gets manual Approve/Reject buttons;
+-- timeout defaults to auto-validate via the rule engine's p.illegal
+-- scan (the pre-v3.0.8 behavior).
+-- =====================================================================
+
+-- AO.1 — Constants pinned
+do
+    assertEq(K.PHASE_TAKWEESH_REVIEW, "takweesh_review",
+        "AO.1a (v3.0.8): K.PHASE_TAKWEESH_REVIEW = 'takweesh_review'")
+    assertEq(K.TAKWEESH_REVIEW_SEC, 8,
+        "AO.1b (v3.0.8): K.TAKWEESH_REVIEW_SEC = 8 (per user spec)")
+    assertEq(K.MSG_TAKWEESH_REVIEW, "kr",
+        "AO.1c (v3.0.8): K.MSG_TAKWEESH_REVIEW wire tag = 'kr'")
+end
+
+-- AO.2 — Net.lua source-pins for the review flow
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find("function N%.HostBeginTakweeshReview") ~= nil,
+        "AO.2a (v3.0.8): N.HostBeginTakweeshReview defined")
+    assertTrue(netSrc:find("function N%.HostApproveTakweesh") ~= nil,
+        "AO.2b (v3.0.8): N.HostApproveTakweesh defined")
+    assertTrue(netSrc:find("function N%.HostRejectTakweesh") ~= nil,
+        "AO.2c (v3.0.8): N.HostRejectTakweesh defined")
+    assertTrue(netSrc:find("function N%._OnTakweeshReview") ~= nil,
+        "AO.2d (v3.0.8): N._OnTakweeshReview wire handler defined")
+    assertTrue(netSrc:find("HostResolveTakweesh%(callerSeat, hostDecision%)") ~= nil,
+        "AO.2e (v3.0.8): HostResolveTakweesh takes hostDecision arg")
+    assertTrue(netSrc:find('hostDecision == true') ~= nil,
+        "AO.2f (v3.0.8): hostDecision == true branch exists")
+    assertTrue(netSrc:find('hostDecision == false') ~= nil,
+        "AO.2g (v3.0.8): hostDecision == false branch exists")
+end
+
+-- AO.3 — State.lua: takweeshReview is transient
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    assertTrue(stateSrc:find("takweeshReview = true") ~= nil,
+        "AO.3a (v3.0.8): takweeshReview in TRANSIENT_FIELDS")
+    assertTrue(stateSrc:find("s%.takweeshReview = nil") ~= nil,
+        "AO.3b (v3.0.8): takweeshReview cleared in ApplyStart")
+end
+
+-- AO.4 — UI.lua: takweesh review banner + multi-human gate
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    assertTrue(uiSrc:find("renderTakweeshReviewBanner") ~= nil,
+        "AO.4a (v3.0.8): renderTakweeshReviewBanner function exists")
+    assertTrue(uiSrc:find("tablePanel%.takweeshBanner") ~= nil,
+        "AO.4b (v3.0.8): takweeshBanner attached to tablePanel")
+    assertTrue(uiSrc:find("HostApproveTakweesh") ~= nil,
+        "AO.4c (v3.0.8): UI button calls HostApproveTakweesh")
+    assertTrue(uiSrc:find("HostRejectTakweesh") ~= nil,
+        "AO.4d (v3.0.8): UI button calls HostRejectTakweesh")
+    assertTrue(uiSrc:find("humanCount > 1") ~= nil,
+        "AO.4e (v3.0.8): multi-human gate (humans > 1) for host buttons")
+    assertTrue(uiSrc:find("S%.s%.localSeat ~= rv%.caller") ~= nil,
+        "AO.4f (v3.0.8): host can't approve own call (caller != host gate)")
+end
+
+-- AO.5 — HostBeginTakweeshReview body contains the expected setup
+-- (source-pin only — test harness doesn't load Net.lua at runtime).
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- Sets phase to review
+    assertTrue(netSrc:find("S%.s%.phase = K%.PHASE_TAKWEESH_REVIEW") ~= nil,
+        "AO.5a (v3.0.8): HostBeginTakweeshReview sets PHASE_TAKWEESH_REVIEW")
+    -- Stashes encoded hand for reveal
+    assertTrue(netSrc:find("encodedHand%s+= encoded") ~= nil,
+        "AO.5b (v3.0.8): review struct includes encoded hand for reveal")
+    -- Schedules auto-resolve timer at K.TAKWEESH_REVIEW_SEC
+    assertTrue(netSrc:find("K%.TAKWEESH_REVIEW_SEC") ~= nil,
+        "AO.5c (v3.0.8): auto-resolve timer uses K.TAKWEESH_REVIEW_SEC")
+    -- Broadcasts MSG_TAKWEESH_REVIEW
+    assertTrue(netSrc:find("K%.MSG_TAKWEESH_REVIEW") ~= nil,
+        "AO.5d (v3.0.8): broadcasts MSG_TAKWEESH_REVIEW with caller hand")
+    -- Idempotence guard against double-fire
+    assertTrue(netSrc:find("if S%.s%.takweeshReview then return end") ~= nil,
+        "AO.5e (v3.0.8): idempotence guard against double-trigger")
+end
+
 -- AN.9 (behavioral): with lenAtFirstDiscard = 2 (T-4 doubleton case),
 -- the same single-7 fixture that fired "want_hint" in AN.7 must now
 -- classify as "hint" (weight 0) and the bot must NOT preferentially

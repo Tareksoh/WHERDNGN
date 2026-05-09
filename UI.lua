@@ -1795,6 +1795,123 @@ local function buildTable()
     end)
     tablePanel.swaBanner = swaBanner
 
+    -- v3.0.8: Takweesh REVIEW banner. Per video #36 «throw cards
+    -- face-up to reveal proof» — caller's hand displayed for 8s
+    -- while host (in multi-human games) decides Approve/Reject;
+    -- timeout defaults to auto-validate via rule-engine scan.
+    -- Modeled after swaBanner but taller (8 cards possible vs SWA's 4)
+    -- and with optional Approve/Reject button row.
+    local takweeshBanner = CreateFrame("Frame", nil, centerPad, "BackdropTemplate")
+    takweeshBanner:SetSize(380, 150)
+    takweeshBanner:SetPoint("TOP", centerPad, "TOP", 0, -68)
+    setBackdrop(takweeshBanner, true,
+        { 0.16, 0.04, 0.04, 0.96 }, { 1.0, 0.40, 0.30, 1 }, 8, "solid")
+    takweeshBanner:SetFrameLevel(centerPad:GetFrameLevel() + 60)
+    takweeshBanner:Hide()
+    takweeshBanner.title = makeText(takweeshBanner, 13, "CENTER")
+    takweeshBanner.title:SetPoint("TOP", 0, -4)
+    takweeshBanner.title:SetTextColor(1.00, 0.55, 0.40)
+    takweeshBanner.body = makeText(takweeshBanner, 11, "CENTER")
+    takweeshBanner.body:SetPoint("TOP", takweeshBanner.title, "BOTTOM", 0, -2)
+    takweeshBanner.body:SetTextColor(0.95, 0.92, 0.85)
+    takweeshBanner.subtext = makeText(takweeshBanner, 10, "CENTER")
+    takweeshBanner.subtext:SetPoint("TOP", takweeshBanner.body, "BOTTOM", 0, -1)
+    takweeshBanner.subtext:SetTextColor(0.85, 0.85, 0.70)
+
+    -- Card-face row: caller may have up to 8 cards remaining; build 8 slots.
+    takweeshBanner.cardSlots = {}
+    for i = 1, 8 do
+        local slot = makeCardFace(takweeshBanner, SWA_CARD_W, SWA_CARD_H)
+        slot.frame:SetFrameLevel(takweeshBanner:GetFrameLevel() + 1)
+        slot.frame:Hide()
+        takweeshBanner.cardSlots[i] = slot
+    end
+    takweeshBanner.layoutCards = function(self, n)
+        n = math.max(0, math.min(n or 0, 8))
+        local total = (n > 0) and (n * SWA_CARD_W + (n - 1) * SWA_CARD_GAP) or 0
+        local startX = -(total / 2) + (SWA_CARD_W / 2)
+        for i, slot in ipairs(self.cardSlots) do
+            if i <= n then
+                slot.frame:ClearAllPoints()
+                slot.frame:SetPoint("BOTTOM", self, "BOTTOM",
+                    startX + (i - 1) * (SWA_CARD_W + SWA_CARD_GAP), 30)
+                slot.frame:Show()
+            else
+                slot.frame:Hide()
+            end
+        end
+    end
+    takweeshBanner.populateCards = function(self, encodedHand)
+        local cards = (encodedHand and C.DecodeHand)
+            and C.DecodeHand(encodedHand) or {}
+        self:layoutCards(#cards)
+        for i, slot in ipairs(self.cardSlots) do
+            setCardSlot(slot, cards[i])
+        end
+    end
+
+    -- Approve / Reject buttons (host-only, multi-human gate).
+    -- Anchored bottom-left and bottom-right of the banner.
+    local function makeReviewBtn(parent, label, onClick)
+        local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+        btn:SetSize(72, 22)
+        setBackdrop(btn, true, { 0.10, 0.10, 0.10, 0.92 },
+            COL.legalEdge or { 1, 1, 1, 1 }, 6, "solid")
+        local txt = makeText(btn, 11, "CENTER")
+        txt:SetPoint("CENTER", 0, 0)
+        txt:SetText(label)
+        btn.text = txt
+        btn:SetScript("OnEnter", function(s)
+            s:SetBackdropColor(0.18, 0.18, 0.18, 0.96)
+        end)
+        btn:SetScript("OnLeave", function(s)
+            s:SetBackdropColor(0.10, 0.10, 0.10, 0.92)
+        end)
+        btn:SetScript("OnClick", onClick)
+        return btn
+    end
+    takweeshBanner.approveBtn = makeReviewBtn(takweeshBanner, "|cff55ff55Approve|r",
+        function()
+            if B.Net and B.Net.HostApproveTakweesh then
+                B.Net.HostApproveTakweesh()
+            end
+        end)
+    takweeshBanner.approveBtn:SetPoint("BOTTOMLEFT", takweeshBanner, "BOTTOMLEFT", 8, 6)
+    takweeshBanner.approveBtn:Hide()
+    takweeshBanner.rejectBtn = makeReviewBtn(takweeshBanner, "|cffff5555Reject|r",
+        function()
+            if B.Net and B.Net.HostRejectTakweesh then
+                B.Net.HostRejectTakweesh()
+            end
+        end)
+    takweeshBanner.rejectBtn:SetPoint("BOTTOMRIGHT", takweeshBanner, "BOTTOMRIGHT", -8, 6)
+    takweeshBanner.rejectBtn:Hide()
+
+    -- Self-ticking countdown (parallel to swaBanner pattern).
+    takweeshBanner._tickAccum = 0
+    takweeshBanner._lastEnc   = nil
+    takweeshBanner:SetScript("OnUpdate", function(self, elapsed)
+        self._tickAccum = (self._tickAccum or 0) + (elapsed or 0)
+        if self._tickAccum < 0.33 then return end
+        self._tickAccum = 0
+        if S.s.paused then return end
+        local rv = S.s.takweeshReview
+        if not rv or not rv.caller
+           or S.s.phase ~= K.PHASE_TAKWEESH_REVIEW then
+            self:Hide(); self._lastEnc = nil; return
+        end
+        local windowSec = rv.windowSec or K.TAKWEESH_REVIEW_SEC or 8
+        local now = (GetTime and GetTime()) or 0
+        local elapsed2 = (rv.ts and now and (now - rv.ts)) or 0
+        local remain = math.max(0, math.ceil(windowSec - elapsed2))
+        if remain <= 0 then
+            self.subtext:SetText("|cffffaa55resolving…|r")
+        else
+            self.subtext:SetText(("|cffaaaaaa%ds remaining|r"):format(remain))
+        end
+    end)
+    tablePanel.takweeshBanner = takweeshBanner
+
     -- BALOOT! / contract result banner with full breakdown (shown
     -- during PHASE_SCORE / PHASE_GAME_END). Title at top, then per-team
     -- breakdown lines, multiplier, Belote, and final delta.
@@ -4150,6 +4267,72 @@ local function renderOvercallBanner()
     b:Show()
 end
 
+-- v3.0.8: Takweesh REVIEW banner renderer. Per video #36 the caller's
+-- hand is shown face-up to all seats during the 8-second review window,
+-- with optional Approve/Reject buttons for the host in multi-human
+-- games (the host acts as الجلسة arbiter when there's more than one
+-- human at the table; in bot-only or single-human cases the timeout
+-- auto-validates via the rule-engine's `p.illegal` scan).
+local function renderTakweeshReviewBanner()
+    local b = tablePanel and tablePanel.takweeshBanner
+    if not b then return end
+    local rv = S.s.takweeshReview
+    if not rv or not rv.caller or S.s.phase ~= K.PHASE_TAKWEESH_REVIEW then
+        b:Hide()
+        if b.cardSlots then
+            for _, slot in ipairs(b.cardSlots) do slot.frame:Hide() end
+        end
+        if b.approveBtn then b.approveBtn:Hide() end
+        if b.rejectBtn then b.rejectBtn:Hide() end
+        b._lastEnc = nil
+        return
+    end
+    local info = S.s.seats and S.s.seats[rv.caller]
+    local nm = (info and info.name) and shortName(info.name)
+                or ("seat " .. rv.caller)
+    -- Title: who called.
+    b.title:SetText(("|cffff5544TAKWEESH|r — %s reveals proof"):format(nm))
+    -- Body: alleged illegal play (or "no proof found").
+    if rv.illegalSeat and rv.illegalCard then
+        local infoOff = S.s.seats and S.s.seats[rv.illegalSeat]
+        local nmOff = (infoOff and infoOff.name) and shortName(infoOff.name)
+                       or ("seat " .. rv.illegalSeat)
+        local r = (#(rv.illegalCard) >= 1) and C.Rank(rv.illegalCard) or "?"
+        local s = (#(rv.illegalCard) >= 2) and C.Suit(rv.illegalCard) or "?"
+        local glyph = K.SUIT_GLYPH[s] or s
+        local rankG = C.RankGlyph(r) or r
+        b.body:SetText(("alleging %s played %s%s — %s"):format(
+            nmOff, rankG, glyph, rv.illegalReason or "illegal play"))
+    else
+        b.body:SetText("|cffaaaaaano scan-flagged illegal play|r")
+    end
+    -- Cards: caller's remaining hand (the "proof" reveal).
+    if b.populateCards and b._lastEnc ~= rv.encodedHand then
+        b._lastEnc = rv.encodedHand
+        b:populateCards(rv.encodedHand)
+    end
+    -- Approve / Reject buttons: only when local seat is host AND there
+    -- are >1 humans at the table AND the host is not the caller (the
+    -- caller can't validate their own call). Per user spec: in single-
+    -- human or bot-only games, no approval — just timeout auto-validate.
+    local showHostButtons = false
+    if S.s.isHost then
+        local humanCount = 0
+        for i = 1, 4 do
+            local seatInfo = S.s.seats and S.s.seats[i]
+            if seatInfo and not seatInfo.isBot then
+                humanCount = humanCount + 1
+            end
+        end
+        if humanCount > 1 and S.s.localSeat ~= rv.caller then
+            showHostButtons = true
+        end
+    end
+    if b.approveBtn then b.approveBtn:SetShown(showHostButtons) end
+    if b.rejectBtn  then b.rejectBtn:SetShown(showHostButtons)  end
+    b:Show()
+end
+
 local function renderSWABanner()
     local b = tablePanel and tablePanel.swaBanner
     if not b then return end
@@ -4354,6 +4537,7 @@ function U.Refresh()
         renderBanner()
         renderAKABanner()
         renderSWABanner()
+        renderTakweeshReviewBanner()  -- v3.0.8
         renderOvercallBanner()
         renderPeekButton()
         renderPauseControls()

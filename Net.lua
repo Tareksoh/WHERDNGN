@@ -738,6 +738,11 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnGameEnd(sender, fields[2])
     elseif tag == K.MSG_TAKWEESH then
         N._OnTakweesh(sender, tonumber(fields[2]))
+    elseif tag == K.MSG_TAKWEESH_REVIEW then
+        -- v3.0.8: review-phase broadcast carries caller's encoded hand
+        -- + alleged-illegal-play details for client-side display.
+        N._OnTakweeshReview(sender, tonumber(fields[2]), fields[3],
+                            tonumber(fields[4]) or 0, fields[5], fields[6])
     elseif tag == K.MSG_TAKWEESH_OUT then
         N._OnTakweeshOut(sender, tonumber(fields[2]),
                          fields[3] == "1", tonumber(fields[4]),
@@ -2730,7 +2735,9 @@ function N.LocalTakweesh()
     if S.s.phase ~= K.PHASE_PLAY then return end
     if not S.s.localSeat or not S.s.contract then return end
     broadcast(("%s;%d"):format(K.MSG_TAKWEESH, S.s.localSeat))
-    if S.s.isHost then N.HostResolveTakweesh(S.s.localSeat) end
+    -- v3.0.8: route through review phase (cards-reveal proof window
+    -- per video #36 + optional host approval in multi-human games).
+    if S.s.isHost then N.HostBeginTakweeshReview(S.s.localSeat) end
 end
 
 function N._OnTakweesh(sender, callerSeat)
@@ -2742,7 +2749,144 @@ function N._OnTakweesh(sender, callerSeat)
     -- host's HostResolveTakweesh does its own phase check + scan, so this
     -- is purely about preventing forged calls on someone else's behalf.)
     if not authorizeSeat(callerSeat, sender) then return end
-    if S.s.isHost then N.HostResolveTakweesh(callerSeat) end
+    -- v3.0.8: route through review phase.
+    if S.s.isHost then N.HostBeginTakweeshReview(callerSeat) end
+end
+
+-- v3.0.8: Takweesh review phase. Per video #36 verbatim: "Caller
+-- announces qaid AND must throw cards face-up to reveal proof.
+-- Verbal call without revealing is invalid." This is the canonical
+-- Saudi anti-abuse mechanism — false callers expose their hand
+-- publicly, paying the social/strategic cost beyond just the gp.
+--
+-- Flow:
+--   1. Caller presses Takweesh button → MSG_TAKWEESH broadcast
+--   2. Host runs N.HostBeginTakweeshReview here:
+--      - scans plays for `p.illegal` flag (objective rule-engine result)
+--      - broadcasts MSG_TAKWEESH_REVIEW with caller's encoded hand +
+--        alleged-illegal-play info (or "no proof" sentinel)
+--      - sets phase = PHASE_TAKWEESH_REVIEW; clients display 8s banner
+--      - schedules an 8-second timer that auto-resolves via the rule
+--        engine's scan result (current pre-v3.0.8 behavior)
+--   3. In multi-human games, host can manually approve/reject within
+--      the 8s window via UI buttons → calls N.HostResolveTakweesh with
+--      the explicit decision; cancels the auto-resolve timer.
+--   4. N.HostResolveTakweesh handles all three resolution paths
+--      (auto-via-scan, host-approved, host-rejected) with identical
+--      Saudi-canonical scoring (16/26 gp + meld forfeit).
+function N.HostBeginTakweeshReview(callerSeat)
+    if not S.s.isHost or not S.s.contract then return end
+    if S.s.phase ~= K.PHASE_PLAY then return end
+    -- Idempotence guard: rapid double-click or simultaneous calls
+    -- shouldn't double-trigger review. The phase guard above plus
+    -- the takweeshReview-non-nil guard below catches both.
+    if S.s.takweeshReview then return end
+    -- Cancel any pending turn timer; reveal phase suspends play.
+    N.CancelTurnTimer()
+    -- Scan plays for objective rule-engine illegal flag (same logic
+    -- as the original HostResolveTakweesh; just executed earlier so
+    -- the result can be displayed during review for the host).
+    local callerTeam = R.TeamOf(callerSeat)
+    local function scanIllegal(plays)
+        for _, p in ipairs(plays or {}) do
+            if p.illegal and R.TeamOf(p.seat) ~= callerTeam then return p end
+        end
+    end
+    local foundIllegal
+    for _, t in ipairs(S.s.tricks or {}) do
+        foundIllegal = scanIllegal(t.plays)
+        if foundIllegal then break end
+    end
+    if not foundIllegal and S.s.trick then
+        foundIllegal = scanIllegal(S.s.trick.plays)
+    end
+    -- Encode caller's remaining hand for the cards-reveal display.
+    local callerHand = (S.s.hostHands and S.s.hostHands[callerSeat]) or {}
+    local encoded = C.EncodeHand(callerHand)
+    -- Stash review state on host. Includes everything needed to
+    -- render the banner AND to resolve later (avoid re-scanning plays
+    -- after the review timer fires; prior tricks could in theory
+    -- have additional plays appended, but PHASE_TAKWEESH_REVIEW
+    -- suspends turn dispatch so that's defensive only).
+    S.s.takweeshReview = {
+        caller       = callerSeat,
+        encodedHand  = encoded,
+        illegalSeat  = foundIllegal and foundIllegal.seat or nil,
+        illegalCard  = foundIllegal and foundIllegal.card or nil,
+        illegalReason = foundIllegal and (foundIllegal.illegalReason or "illegal play") or nil,
+        ts           = (GetTime and GetTime()) or 0,
+        windowSec    = K.TAKWEESH_REVIEW_SEC or 8,
+    }
+    S.s.phase = K.PHASE_TAKWEESH_REVIEW
+    -- Broadcast review-start to all clients.
+    broadcast(("%s;%d;%s;%d;%s;%s"):format(K.MSG_TAKWEESH_REVIEW,
+        callerSeat,
+        encoded or "",
+        S.s.takweeshReview.illegalSeat or 0,
+        S.s.takweeshReview.illegalCard or "",
+        S.s.takweeshReview.illegalReason or ""))
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+    -- Auto-resolve timer: if neither Approve nor Reject fires within
+    -- the window, default to current behavior (auto-validate via the
+    -- rule engine's scan result, no host override).
+    if C_Timer and C_Timer.After then
+        local sealedCaller = callerSeat
+        local sealedTs = S.s.takweeshReview.ts
+        C_Timer.After(K.TAKWEESH_REVIEW_SEC or 8, function()
+            -- Re-check: if the review struct was cleared (host already
+            -- approved/rejected, or game was reset), do nothing.
+            if not S.s.takweeshReview then return end
+            if S.s.takweeshReview.ts ~= sealedTs then return end
+            if S.s.takweeshReview.caller ~= sealedCaller then return end
+            -- Timeout → auto-validate (hostDecision = nil).
+            N.HostResolveTakweesh(sealedCaller, nil)
+        end)
+    end
+end
+
+function N._OnTakweeshReview(sender, callerSeat, encodedHand, illegalSeat, card, reason)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    if S.s.isHost then return end          -- host already has the struct
+    if not callerSeat or callerSeat < 1 or callerSeat > 4 then return end
+    if illegalSeat and (illegalSeat < 0 or illegalSeat > 4) then return end
+    -- Mirror review state onto receiver clients so their UI can render
+    -- the same banner. The `caught` outcome is unknown until host
+    -- resolves; banner shows the alleged illegal play (or "no proof").
+    S.s.takweeshReview = {
+        caller       = callerSeat,
+        encodedHand  = encodedHand or "",
+        illegalSeat  = (illegalSeat and illegalSeat > 0) and illegalSeat or nil,
+        illegalCard  = (card and card ~= "") and card or nil,
+        illegalReason = (reason and reason ~= "") and reason or "illegal play",
+        ts           = (GetTime and GetTime()) or 0,
+        windowSec    = K.TAKWEESH_REVIEW_SEC or 8,
+    }
+    S.s.phase = K.PHASE_TAKWEESH_REVIEW
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+
+-- Host-only manual approval/rejection of Takweesh (in multi-human
+-- games). Wired to UI buttons in UI.lua. Each call cancels the
+-- auto-resolve timer by clearing the review struct's `ts` field
+-- (the timer's sealed-ts check above will then no-op).
+function N.HostApproveTakweesh()
+    if not S.s.isHost then return end
+    if S.s.phase ~= K.PHASE_TAKWEESH_REVIEW then return end
+    if not S.s.takweeshReview then return end
+    local caller = S.s.takweeshReview.caller
+    -- Mark resolved so the auto-resolve timer no-ops.
+    S.s.takweeshReview.ts = -1
+    N.HostResolveTakweesh(caller, true)
+end
+
+function N.HostRejectTakweesh()
+    if not S.s.isHost then return end
+    if S.s.phase ~= K.PHASE_TAKWEESH_REVIEW then return end
+    if not S.s.takweeshReview then return end
+    local caller = S.s.takweeshReview.caller
+    S.s.takweeshReview.ts = -1
+    N.HostResolveTakweesh(caller, false)
 end
 
 function N._OnTakweeshOut(sender, callerSeat, caught, illegalSeat, card, reason)
@@ -2790,9 +2934,14 @@ function N._OnTakweeshOut(sender, callerSeat, caught, illegalSeat, card, reason)
     end
 end
 
-function N.HostResolveTakweesh(callerSeat)
+function N.HostResolveTakweesh(callerSeat, hostDecision)
     if not S.s.isHost or not S.s.contract then return end
-    if S.s.phase ~= K.PHASE_PLAY then return end
+    -- v3.0.8: phase guard widened. Resolution can fire from PHASE_PLAY
+    -- (legacy direct-call entry, kept for backward compat in case any
+    -- caller bypasses the review phase) OR PHASE_TAKWEESH_REVIEW (the
+    -- new default entry after BeginReview).
+    if S.s.phase ~= K.PHASE_PLAY
+       and S.s.phase ~= K.PHASE_TAKWEESH_REVIEW then return end
     -- Idempotence: a rapid double-click on the Takweesh button could
     -- reach here twice. The phase guard above handles re-entry from the
     -- second call (since the first sets phase=SCORE), but only after the
@@ -2812,7 +2961,15 @@ function N.HostResolveTakweesh(callerSeat)
     local callerTeam = R.TeamOf(callerSeat)
     local oppTeam = (callerTeam == "A") and "B" or "A"
 
-    -- Find any illegal play by a member of the opposing team.
+    -- v3.0.8: hostDecision tri-state controls winner determination:
+    --   nil          → auto-validate via rule-engine scan (default,
+    --                  matches pre-v3.0.8 behavior; fires on review
+    --                  timeout or direct-call entry)
+    --   true         → host approved (الجلسة override): caller wins
+    --   false        → host rejected (الجلسة override): caller loses
+    -- The objective scan still runs in all paths so the wire payload
+    -- can carry the alleged-illegal-play details (or "approved by
+    -- host" / "rejected by host" sentinels for the override paths).
     local function scanIllegal(plays)
         for _, p in ipairs(plays or {}) do
             if p.illegal and R.TeamOf(p.seat) ~= callerTeam then return p end
@@ -2836,9 +2993,25 @@ function N.HostResolveTakweesh(callerSeat)
     --     OWN declared melds × mult to their pile.
     --   • Belote independent +20 raw to its played-out K+Q holder.
     -- Same for both branches; the only thing that flips is which
-    -- team is the winner (caught → caller's; not caught → opp).
+    -- team is the winner.
+    --
+    -- v3.0.8 winnerTeam logic:
+    --   * hostDecision == true  → callerTeam (الجلسة approved)
+    --   * hostDecision == false → oppTeam   (الجلسة rejected)
+    --   * hostDecision == nil   → foundIllegal and callerTeam or oppTeam
+    --                             (rule-engine objective scan, current)
     local c = S.s.contract
-    local winnerTeam = foundIllegal and callerTeam or oppTeam
+    local winnerTeam
+    if hostDecision == true then
+        winnerTeam = callerTeam
+    elseif hostDecision == false then
+        winnerTeam = oppTeam
+    else
+        winnerTeam = foundIllegal and callerTeam or oppTeam
+    end
+    -- Clear review struct now that we're committed to resolution.
+    -- Subsequent UI refreshes will see PHASE_SCORE without the banner.
+    S.s.takweeshReview = nil
 
     local handTotal = (c.type == K.BID_SUN) and K.HAND_TOTAL_SUN or K.HAND_TOTAL_HOKM
     -- v1.0.9 D HIGH-1 (PDF §5-6 cap-at-Bel for melds): split multiplier
@@ -2965,20 +3138,39 @@ function N.HostResolveTakweesh(callerSeat)
     -- fallback.
     S.s.lastRoundResult = nil
     S.s.trick = nil
-    if foundIllegal then
+    -- v3.0.8: takweeshResult.caught is "caller-team won" (true) vs
+    -- "caller-team lost" (false). With hostDecision overrides, the
+    -- mapping is decoupled from foundIllegal:
+    --   * hostDecision == true  → caught = true (host approved call)
+    --   * hostDecision == false → caught = false (host rejected call)
+    --   * hostDecision == nil   → caught = (foundIllegal ~= nil) (scan)
+    local resolvedCaught
+    if hostDecision == true then
+        resolvedCaught = true
+    elseif hostDecision == false then
+        resolvedCaught = false
+    else
+        resolvedCaught = (foundIllegal ~= nil)
+    end
+    if resolvedCaught then
         S.s.takweeshResult = {
             caller    = callerSeat,
-            offender  = foundIllegal.seat,
-            card      = foundIllegal.card,
-            reason    = foundIllegal.illegalReason or "illegal play",
+            offender  = foundIllegal and foundIllegal.seat or nil,
+            card      = foundIllegal and foundIllegal.card or nil,
+            reason    = foundIllegal and (foundIllegal.illegalReason or "illegal play")
+                        or (hostDecision == true and "approved by host (الجلسة)"
+                                                  or "illegal play"),
             caught    = true,
             ts        = (GetTime and GetTime()) or 0,
+            hostDecision = hostDecision,
         }
     else
         S.s.takweeshResult = {
             caller    = callerSeat,
             caught    = false,
+            reason    = (hostDecision == false and "rejected by host (الجلسة)") or nil,
             ts        = (GetTime and GetTime()) or 0,
+            hostDecision = hostDecision,
         }
     end
     N.SendRound(addA, addB, totA, totB)
@@ -2991,28 +3183,46 @@ function N.HostResolveTakweesh(callerSeat)
         if not info or not info.name then return "?" end
         return info.name:match("^([^%-]+)") or info.name
     end
-    if foundIllegal then
-        local card = foundIllegal.card or ""
-        local r = (#card >= 1) and C.Rank(card) or "?"
-        local s = (#card >= 2) and C.Suit(card) or "?"
-        local glyph = K.SUIT_GLYPH[s] or s
-        local rankG = C.RankGlyph(r) or r
-        local reason = foundIllegal.illegalReason or "illegal play"
-        print(("|cffff0000TAKWEESH!|r %s caught %s playing %s%s — %s."):format(
-            shortN(callerSeat), shortN(foundIllegal.seat),
-            rankG, glyph, reason))
+    -- v3.0.8: print outcome with hostDecision context.
+    if resolvedCaught then
+        if foundIllegal then
+            local card = foundIllegal.card or ""
+            local r = (#card >= 1) and C.Rank(card) or "?"
+            local s = (#card >= 2) and C.Suit(card) or "?"
+            local glyph = K.SUIT_GLYPH[s] or s
+            local rankG = C.RankGlyph(r) or r
+            local reason = foundIllegal.illegalReason or "illegal play"
+            print(("|cffff0000TAKWEESH!|r %s caught %s playing %s%s — %s."):format(
+                shortN(callerSeat), shortN(foundIllegal.seat),
+                rankG, glyph, reason))
+        else
+            -- hostDecision == true with no scan-found illegal → الجلسة
+            -- override path. Caller wins on the host's judgment alone.
+            print(("|cffff0000TAKWEESH!|r %s — call approved by host (الجلسة override)."):format(
+                shortN(callerSeat)))
+        end
     else
-        print(("|cffff0000TAKWEESH!|r %s called incorrectly. Penalty applied."):format(
-            shortN(callerSeat)))
+        if hostDecision == false then
+            print(("|cffff0000TAKWEESH!|r %s — call rejected by host (الجلسة)."):format(
+                shortN(callerSeat)))
+        else
+            print(("|cffff0000TAKWEESH!|r %s called incorrectly. Penalty applied."):format(
+                shortN(callerSeat)))
+        end
     end
     -- Wire format extended: caught/illegalSeat/card/reason.
     -- "{tag};{caller};{caught};{offender};{card};{reason}"
+    -- v3.0.8: caught reflects resolvedCaught (hostDecision-aware).
+    -- offender / card / reason still come from foundIllegal scan when
+    -- available; otherwise carry sentinel values for the override paths.
     broadcast(("%s;%d;%s;%d;%s;%s"):format(K.MSG_TAKWEESH_OUT,
         callerSeat,
-        foundIllegal and "1" or "0",
+        resolvedCaught and "1" or "0",
         foundIllegal and foundIllegal.seat or 0,
         foundIllegal and foundIllegal.card or "",
-        foundIllegal and (foundIllegal.illegalReason or "") or ""))
+        foundIllegal and (foundIllegal.illegalReason or "")
+            or (hostDecision == true and "approved by host"
+                or (hostDecision == false and "rejected by host" or ""))))
 
     -- v0.10.5 MED-2: shared R.GameEndWinner with Qaid-context
     -- adapter. The Takweesh winner team (winnerTeam) wins the
@@ -5232,7 +5442,14 @@ function N.MaybeRunBot()
                 -- and we never schedule the play.
                 if B.Bot.PickTakweesh and B.Bot.PickTakweesh(seat) then
                     broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
-                    N.HostResolveTakweesh(seat)
+                    -- v3.0.8: route bot-initiated Takweesh through the
+                    -- review phase too. Reveal-cards step is harmless
+                    -- for bots (no privacy) but maintains uniform UX —
+                    -- humans see the bot's "alleged illegal" claim with
+                    -- the same 8s deliberation window. Auto-resolve via
+                    -- rule-engine scan (no host approval since bot-host
+                    -- has no UI button to press).
+                    N.HostBeginTakweeshReview(seat)
                     return
                 end
                 -- v0.5.1 C-2: bot-initiated SWA. If the bot holds an

@@ -1,5 +1,126 @@
 # Changelog
 
+## v3.0.8 — Takweesh anti-abuse: cards-reveal + الجلسة host approval
+
+### Problem
+
+False Takweesh as sweep-stop was a real exploit. With 16-50 gp false-call
+penalty vs 25-100 gp denied Kaboot bonus, defenders behind in score had
+positive expected value calling Takweesh against a near-sweeping bidder
+even with no actual illegal play. Math:
+
+| Scenario | Defender's loss |
+|---|---|
+| Let Hokm Bel'd Kaboot finish | bidder gets 50 gp + own melds × 2 |
+| False Takweesh, bidder wins via Qaid | bidder gets 32 gp + own melds × 2 |
+| **"Saving" via false call** | **~18 gp** |
+
+### Fix (canonical Saudi, NOT a number-based escalation)
+
+Per video #36 verbatim:
+
+> Caller announces qaid AND **must throw cards face-up to reveal proof.
+> Verbal call without revealing is invalid.** Procedural rule — proof
+> requirement prevents casual / strategic false calls.
+
+This is the actual Saudi anti-abuse mechanism. The reveal IS the
+deterrent — false callers expose their hand publicly, paying a
+strategic / social cost beyond just the gp.
+
+### Implementation
+
+#### New phase: `PHASE_TAKWEESH_REVIEW`
+
+When Takweesh is called, the round enters an 8-second review phase
+before resolution. During the review:
+
+- All seats see the caller's remaining hand face-up in a banner
+- Alleged illegal play is shown (or "no scan-flagged illegal play")
+- A countdown ticks from 8s down
+
+Constants added:
+- `K.PHASE_TAKWEESH_REVIEW = "takweesh_review"`
+- `K.TAKWEESH_REVIEW_SEC = 8` (per user spec, not 5)
+- `K.MSG_TAKWEESH_REVIEW = "kr"` (wire tag for broadcast-with-hand)
+
+#### Net.lua flow change
+
+The old direct path was:
+```
+LocalTakweesh → MSG_TAKWEESH → HostResolveTakweesh (synchronous)
+```
+
+The new path:
+```
+LocalTakweesh → MSG_TAKWEESH → HostBeginTakweeshReview
+   → MSG_TAKWEESH_REVIEW (caller's hand + alleged illegal)
+   → PHASE_TAKWEESH_REVIEW (8s window)
+   → [host clicks Approve/Reject in multi-human games]
+   →    OR auto-resolve via 8s timeout (rule-engine scan)
+   → HostResolveTakweesh(callerSeat, hostDecision)
+```
+
+`HostResolveTakweesh` gained an optional `hostDecision` parameter:
+
+| `hostDecision` | Winner | Reason |
+|---|---|---|
+| `nil` (timeout) | scan-determined (current behavior) | rule-engine `p.illegal` flag |
+| `true` | callerTeam | الجلسة approved |
+| `false` | oppTeam | الجلسة rejected |
+
+Same Saudi-canonical scoring (16/26 gp + meld forfeit) regardless of
+which path resolved. **No invented numerical escalation.**
+
+#### Option B: host approval banner (multi-human only)
+
+Per user spec, host approval shows ONLY when:
+- `S.s.isHost` (we're the game host)
+- `humanCount > 1` (more than one human at the table)
+- `S.s.localSeat ~= rv.caller` (host can't approve own call)
+
+Otherwise the buttons are hidden and the 8-second timeout fires
+auto-validate (current pre-v3.0.8 behavior). In bot-only or
+single-human games, the review still runs but resolves automatically.
+
+#### UI.lua: `renderTakweeshReviewBanner`
+
+New banner (380×150) with:
+- Title: "TAKWEESH — [caller] reveals proof"
+- Body: alleged illegal play details (or "no scan-flagged illegal")
+- 8 card slots showing caller's encoded hand face-up
+- Self-ticking countdown subtext
+- Approve / Reject buttons (gated as above)
+
+Wired into `Refresh()` between `renderSWABanner` and
+`renderOvercallBanner`. Auto-hides outside `PHASE_TAKWEESH_REVIEW`.
+
+### Why the reveal is the deterrent
+
+In bot-only games, the reveal is meaningless (no privacy). The
+existing 16-50 gp scoring penalty + bot trigger discipline already
+deter the bot from false calls.
+
+In multi-human games:
+1. Human caller's hand is exposed publicly to all seats
+2. Opps see strategic info for the next round (though re-deal makes
+   this less impactful in Baloot specifically)
+3. Social cost (الجلسة) — repeated false calls = visible reputation
+4. Host gets a clean Approve/Reject to override the rule engine in
+   borderline cases (the actual الجلسة arbiter role)
+
+The penalty stays at canonical Saudi 16/26 gp — fixing the **process**,
+not the **scoring rule**. Saudi convention preserved.
+
+### Tests
+
+**881/881 pass** (was 858 — +23 new pins). New section AO covers:
+
+- AO.1 (3 pins): constants `K.PHASE_TAKWEESH_REVIEW`, `K.TAKWEESH_REVIEW_SEC=8`, `K.MSG_TAKWEESH_REVIEW="kr"`
+- AO.2 (7 pins): Net.lua functions + handler + hostDecision parameter
+- AO.3 (2 pins): State.lua transient field + ApplyStart clear
+- AO.4 (6 pins): UI banner + multi-human gate + caller≠host gate
+- AO.5 (5 pins): HostBeginTakweeshReview body invariants
+
 ## v3.0.7 — Comprehensive Saudi-rules audit closure (4-agent parallel sweep)
 
 User asked for "one last extensive audit" against Saudi Baloot rules,

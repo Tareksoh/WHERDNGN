@@ -231,6 +231,14 @@ K.PHASE_FOUR     = "four"        -- Triple happened, defenders' window for Four 
 K.PHASE_GAHWA    = "gahwa"       -- Four happened, bidder's window for Gahwa (match-win)
 K.PHASE_DEAL3    = "deal3"       -- final 3 cards out, optional meld declarations
 K.PHASE_PLAY     = "play"        -- trick play
+K.PHASE_TAKWEESH_REVIEW = "takweesh_review"  -- v3.0.8: 8s reveal window
+                                 -- when a Takweesh call is mid-arbitration.
+                                 -- Caller's hand is broadcast face-up to
+                                 -- all seats; host (in multi-human games)
+                                 -- can manually Approve/Reject; timeout
+                                 -- defaults to auto-validate via the rule
+                                 -- engine's `p.illegal` flag scan. Returns
+                                 -- to PHASE_SCORE on resolution.
 K.PHASE_SCORE    = "score"       -- showing score, host advances to next round
 K.PHASE_GAME_END = "gameend"
 
@@ -288,6 +296,14 @@ K.MSG_SKIP_FOR   = "v"  -- defender voted skip on four window
 K.MSG_SKIP_GHW   = "w"  -- bidder voted skip on gahwa window
 K.MSG_TAKWEESH     = "k"  -- player calls Takweesh (catches an illegal play)
 K.MSG_TAKWEESH_OUT = "z"  -- host's outcome: caught or false-call
+-- v3.0.8 (anti-abuse procedural reveal). Per video #36 verbatim:
+-- "Caller announces qaid AND must throw cards face-up to reveal proof.
+-- Verbal call without revealing is invalid." The reveal step + 8s
+-- review window are the canonical Saudi anti-abuse mechanism.
+K.MSG_TAKWEESH_REVIEW = "kr" -- host broadcasts review-start with caller's
+                          -- encoded hand + alleged-illegal-play details.
+                          -- Payload: callerSeat;encodedHand;illegalSeat;
+                          -- card;reason (illegalSeat=0 if no proof found).
 K.MSG_KAWESH       = "a"  -- player calls Kawesh/Saneen (5-card 7/8/9 annul)
 K.MSG_PAUSE        = "p"  -- host pauses/unpauses; payload "1" or "0"
 K.MSG_HEARTBEAT    = "~"  -- v1.8.0: host-alive heartbeat broadcast every
@@ -446,6 +462,15 @@ K.CARD_ANIM_SEC       = 0.18  -- duration of the card-land scale+fade animation
 -- now need only inspect the displayed claim and decide whether to
 -- counter via Takweesh; explicit Deny still works as a manual cancel.
 K.SWA_TIMEOUT_SEC     = 5
+
+-- v3.0.8: Takweesh review window. Per video #36 the caller must
+-- "throw cards face-up to reveal proof"; the addon shows the caller's
+-- hand for K.TAKWEESH_REVIEW_SEC seconds before resolution. In games
+-- with >1 human player, the host also gets manual Approve/Reject
+-- buttons during this window (8s timeout = auto-validate via rule
+-- engine, current pre-v3.0.8 behavior). The reveal IS the deterrent
+-- per Saudi convention — false callers expose their hand publicly.
+K.TAKWEESH_REVIEW_SEC = 8
 
 -- v0.7 Sun-overcall window. After any Hokm bid resolves (R1 or R2),
 -- the host opens a 5-second window during which:
