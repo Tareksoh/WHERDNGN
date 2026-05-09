@@ -155,6 +155,23 @@ local function dispatch(msg)
     end
 
     if msg == "reset" then
+        -- v2.0.0 (audit v1.6.1 MP-22 HIGH): if we're host mid-round,
+        -- /baloot reset wipes the game for ALL connected players
+        -- without warning. The UI Reset button (UI.lua:543) goes
+        -- through StaticPopup_Show("WHEREDNGN_RESET_CONFIRM") for
+        -- exactly this reason — but the slash command bypassed the
+        -- guard. Now slash routes through the same popup if we're
+        -- host with a non-IDLE/non-LOBBY phase. `/baloot reset force`
+        -- bypasses the popup for users who actually need the old
+        -- behavior (e.g. recovering from a stuck state).
+        local isHostMidGame = B.State and B.State.s and B.State.s.isHost
+            and B.State.s.phase ~= K.PHASE_IDLE
+            and B.State.s.phase ~= K.PHASE_LOBBY
+            and B.State.s.phase ~= K.PHASE_GAME_END
+        if isHostMidGame and StaticPopup_Show then
+            StaticPopup_Show("WHEREDNGN_RESET_CONFIRM")
+            return
+        end
         if B._lobbyTicker then B._lobbyTicker:Cancel(); B._lobbyTicker = nil end
         -- 9th-audit fix: invalidate any in-flight 3s redeal timer so
         -- it doesn't fire after the reset and spawn a ghost round.
@@ -173,6 +190,22 @@ local function dispatch(msg)
         B.State.SetLocalName(GetUnitName("player", true))
         if B.UI then B.UI.Refresh() end
         say("reset")
+        return
+    end
+
+    if msg == "reset force" then
+        -- v2.0.0 MP-22 escape hatch: bypass the host-mid-round popup
+        -- for users recovering from stuck state.
+        if B._lobbyTicker then B._lobbyTicker:Cancel(); B._lobbyTicker = nil end
+        B._redealGen = (B._redealGen or 0) + 1
+        if B.Net then
+            if B.Net.CancelTurnTimer then B.Net.CancelTurnTimer() end
+            if B.Net.CancelLocalWarn then B.Net.CancelLocalWarn() end
+        end
+        B.State.Reset()
+        B.State.SetLocalName(GetUnitName("player", true))
+        if B.UI then B.UI.Refresh() end
+        say("reset (forced)")
         return
     end
 

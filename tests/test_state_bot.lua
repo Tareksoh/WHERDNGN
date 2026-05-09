@@ -4464,10 +4464,15 @@ end
 -- AF.5 — UI R1 Sun button hidden when anySun=true
 do
     local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
-    -- The `addAction("Sun", ...)` call should be wrapped in
-    -- `if not anySun then ... end` for the R1 branch.
-    assertTrue(uiSrc:find('if not anySun then\n%s+addAction%("Sun"') ~= nil,
-               "AF.5 (user-reported UI): R1 Sun button gated on `not anySun`")
+    -- The R1 Sun button should be wrapped in `if not anySun then ... end`.
+    -- v2.0.0 (audit v1.6.1 SA-21): the literal "Sun" label was replaced
+    -- by SaudiName("SUN") which resolves to "Sun" without Arabic font
+    -- present and "صن Sun" with the font. Test now matches either
+    -- form — both are valid v2.0.0 wirings.
+    assertTrue(
+        uiSrc:find('if not anySun then\n%s+addAction%("Sun"') ~= nil
+        or uiSrc:find('if not anySun then\n%s+addAction%(SaudiName%("SUN"%)') ~= nil,
+        "AF.5 (user-reported UI): R1 Sun button gated on `not anySun`")
 end
 
 print("=== Section AG: v1.0.0 Cluster 1+2 (meld awareness + defender play) ===")

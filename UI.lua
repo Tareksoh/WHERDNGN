@@ -386,6 +386,68 @@ local function makeButton(parent, label, w, h)
     return b
 end
 
+-- v2.0.0 (audit v1.6.1 PJ-06): tooltip helper for direct-makeButton
+-- call sites (lobby + control buttons that don't go through addAction).
+-- Mirrors the GameTooltip pattern at the muteBtn checkbox.
+local function setLobbyTooltip(btn, headline, body)
+    if not btn then return end
+    btn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:AddLine(headline, 1, 1, 1)
+        if body then GameTooltip:AddLine(body, 0.85, 0.85, 0.85, true) end
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+-- v2.0.0 (audit v1.6.1 SA-01 HIGH): Arabic-font availability detection
+-- and romanized↔Arabic name resolution. Probes K.ARABIC_FONT once at
+-- first call: creates a throwaway FontString and tries SetFont. If
+-- SetFont returns true (font loadable), Arabic strings are rendered
+-- correctly and the helper returns the Arabic form. If false (file
+-- missing or unsupported by client), falls back to the romanized form.
+-- Cached after first probe so we don't re-test on every call.
+--
+-- The helper is safe under EVERY existing call site — passing an
+-- unknown key returns the key unchanged (no crash, no formatting
+-- glitch).
+local _arabicProbed, _arabicAvailable = false, false
+local function arabicAvailable()
+    if _arabicProbed then return _arabicAvailable end
+    _arabicProbed = true
+    if not K.ARABIC_FONT or not f or not f.CreateFontString then
+        return false
+    end
+    -- Probe: create an off-screen FontString and try SetFont.
+    local probe = f:CreateFontString(nil, "BACKGROUND", "GameFontNormal")
+    if probe then
+        local ok = pcall(probe.SetFont, probe, K.ARABIC_FONT, 12, "")
+        _arabicAvailable = (ok == true)
+        probe:Hide()
+        probe:SetText("")
+    end
+    return _arabicAvailable
+end
+
+local function SaudiName(key)
+    local entry = K.SAUDI_NAMES and K.SAUDI_NAMES[key]
+    if not entry then return key end
+    if arabicAvailable() then
+        -- Return both forms — Arabic primary, romanized parenthetical
+        -- for readers who don't read Arabic. Format: "حكم Hokm" so
+        -- the visual emphasis is on the Saudi term but the Latin
+        -- gloss stays for cross-language groups.
+        return ("%s |cff999999%s|r"):format(entry[2], entry[1])
+    end
+    return entry[1]   -- romanized only
+end
+
+-- Expose for other modules (e.g. Slash.lua /baloot rules to surface
+-- Arabic terms when font is available).
+B.UI = B.UI or {}
+B.UI.SaudiName = SaudiName
+B.UI.ArabicAvailable = arabicAvailable
+
 local function shortName(fullName)
     if not fullName then return "?" end
     return (fullName:match("^([^%-]+)") or fullName)
@@ -402,6 +464,15 @@ local function buildMain()
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
+    -- v2.0.0 (audit v1.6.1 UX-24 MED): register with UISpecialFrames so
+    -- pressing Escape closes the window (matches the WoW convention
+    -- for every other movable, dismissable UI panel — chat config,
+    -- macro window, dressing room, etc.). Pre-fix you had to click
+    -- the X or `/baloot toggle` to dismiss, which players reach for
+    -- after the WoW reflex of "press Escape" fails.
+    if UISpecialFrames then
+        table.insert(UISpecialFrames, "WHEREDNGNFrame")
+    end
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
@@ -545,6 +616,11 @@ local function buildMain()
     resetBtn:SetScript("OnClick", function()
         StaticPopup_Show("WHEREDNGN_RESET_CONFIRM")
     end)
+    -- v2.0.0 (audit v1.6.1 PJ-06): lobby/window control button tooltips.
+    setLobbyTooltip(resetBtn, "Reset",
+        "Wipe local game state and return to idle. If you are the "
+        .. "HOST mid-round, this also kicks all other players out of "
+        .. "the game (a confirm prompt is shown first).")
     resetBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:AddLine("Reset WHEREDNGN", 1, 1, 1)
@@ -773,6 +849,9 @@ local function buildLobby()
         end
         net().HostStartRound()
     end)
+    setLobbyTooltip(hostStartBtn, "Start Round",
+        "Host: deal cards and begin round 1. Requires all 4 seats "
+        .. "filled (humans + bots).")
 
     local hostNewBtn = makeButton(lobbyPanel, "Host Game", 120, 26)
     hostNewBtn:SetPoint("BOTTOM", 0, 12)
@@ -808,6 +887,10 @@ local function buildLobby()
             U.Refresh()
         end
     end)
+    setLobbyTooltip(hostNewBtn, "Host Game",
+        "Become the host of a new Saudi Baloot game. Broadcasts an "
+        .. "invite to your party. Solo hosting is fine — fill empty "
+        .. "seats with bots before starting.")
 
     -- Fill empty seats with bots
     local fillBotsBtn = makeButton(lobbyPanel, "Fill Bots", 120, 26)
@@ -821,6 +904,10 @@ local function buildLobby()
         end
     end)
     lobbyPanel.fillBotsBtn = fillBotsBtn
+    setLobbyTooltip(fillBotsBtn, "Fill Bots",
+        "Host: claim every empty seat with a bot. Bots play at the "
+        .. "tier you've selected (Basic / Advanced / M3lm / Fzloky / "
+        .. "Saudi Master).")
 
     -- Bot difficulty selector. Two checkboxes stacked just above the
     -- Fill Bots button: "Advanced" (functional) and "M3lm" (greyed —
@@ -1038,6 +1125,10 @@ local function buildLobby()
             net().SendJoin(S.s.pendingHost.gameID)
         end
     end)
+    setLobbyTooltip(joinBtn, "Join",
+        "Accept a pending Saudi Baloot invite. Active only when "
+        .. "another player has invited you (chat line + popup will "
+        .. "have appeared). One join request per game.")
 end
 
 -- ----------------------------------------------------------------------
@@ -1291,6 +1382,13 @@ local function buildTable()
     pauseOverlay:SetAllPoints(centerPad)
     pauseOverlay:SetFrameStrata("DIALOG")
     setBackdrop(pauseOverlay, true, { 0, 0, 0, 0.55 }, COL.legalEdge, 12, "solid")
+    -- v2.0.0 (audit v1.6.1 UX-22 MED): block click pass-through. Pre-
+    -- fix the overlay was visible but didn't capture mouse — clicks
+    -- went through to cards / banners / buttons beneath it, which
+    -- silently no-op'd downstream (UI.lua:2426 hand-card paused
+    -- check, etc.). Capturing mouse here makes the pause "real" —
+    -- the overlay swallows clicks instead of leaking through.
+    pauseOverlay:EnableMouse(true)
     pauseOverlay:Hide()
     pauseOverlay.title = makeText(pauseOverlay, 28, "CENTER")
     pauseOverlay.title:SetPoint("CENTER", 0, 8)
@@ -1334,6 +1432,13 @@ local function buildTable()
     akaBanner.text = makeText(akaBanner, 13, "CENTER")
     akaBanner.text:SetPoint("CENTER", 0, 0)
     akaBanner.text:SetTextColor(0.40, 1.00, 0.55)
+    -- v2.0.0 (audit v1.6.1 PJ-21 HIGH): tooltip explains the AKA cue.
+    akaBanner:EnableMouse(true)
+    setLobbyTooltip(akaBanner, "AKA (إكَهْ) — partner signal",
+        "Caller holds the highest live card in this suit. Their "
+        .. "partner shouldn't over-trump — let them win this suit. "
+        .. "Saudi-only signal; the only explicit partner-coordination "
+        .. "call in Saudi Baloot.")
     tablePanel.akaBanner = akaBanner
 
     -- v0.7 Sun-overcall countdown banner. Visible during the 5-sec
@@ -1353,6 +1458,14 @@ local function buildTable()
     overcallBanner.body = makeText(overcallBanner, 11, "CENTER")
     overcallBanner.body:SetPoint("TOP", overcallBanner.title, "BOTTOM", 0, -2)
     overcallBanner.body:SetTextColor(0.95, 0.95, 0.95)
+    -- v2.0.0 (audit v1.6.1 PJ-23 HIGH): tooltip explains the overcall
+    -- window so new players know what the 5-second countdown means.
+    overcallBanner:EnableMouse(true)
+    setLobbyTooltip(overcallBanner, "Sun-overcall window",
+        "Saudi rule: 5 seconds after a Hokm bid, anyone may upgrade "
+        .. "the contract to Sun (no-trump, ×2 multiplier). Bidder "
+        .. "can self-upgrade; non-bidders can take it as their own "
+        .. "Sun. WLA (decline) is the safe default.")
     overcallBanner._tickAccum = 0
     overcallBanner._lastRemain = nil
     overcallBanner:SetScript("OnUpdate", function(self, elapsed)
@@ -1421,6 +1534,13 @@ local function buildTable()
     swaBanner.body = makeText(swaBanner, 11, "CENTER")
     swaBanner.body:SetPoint("TOP", swaBanner.title, "BOTTOM", 0, -2)
     swaBanner.body:SetTextColor(0.95, 0.95, 0.85)
+    -- v2.0.0 (audit v1.6.1 PJ-24 HIGH): tooltip explains SWA mechanic.
+    swaBanner:EnableMouse(true)
+    setLobbyTooltip(swaBanner, "SWA (سوا) — claim the rest",
+        "Caller asserts they will win every remaining trick. With "
+        .. "<=3 cards left it's auto-allowed; with 4+ cards opps "
+        .. "must vote (Accept = let them claim, Deny = demand proof). "
+        .. "If the claim fails, caller's team takes a ~30-pt penalty.")
 
     -- Card-face row (max 4 cards — SWA fires at <=4 remaining). Slots
     -- are pre-built once and shown/hidden + repositioned per refresh.
@@ -1655,8 +1775,23 @@ local function bindConfirm(btn, normalLabel, armedLabel, fire)
         else
             btn.armed = true
             btn:SetText(armedLabel)
+            -- v2.0.0 (audit v1.6.1 UX-04 HIGH): auto-resize on arm.
+            -- Pre-fix the 90px fixed-width button truncated long
+            -- armed-confirm labels (e.g. "Confirm Bel x3 (closed)?",
+            -- "Confirm Deny — caller's invalid claim costs them
+            -- ~30 pts; if Deny is wrong..."). Now measures the FontString
+            -- and grows the button to fit (capped at 220 to avoid
+            -- overflowing the action panel). Resets on disarm.
+            local fs = btn.GetFontString and btn:GetFontString()
+            if fs and fs.GetStringWidth then
+                local w = fs:GetStringWidth() + 20
+                if w > 90 and w < 220 then btn:SetWidth(w) end
+            end
             if btn.armedTk then btn.armedTk:Cancel() end
-            btn.armedTk = C_Timer.NewTimer(CONFIRM_WINDOW_SEC, disarm)
+            btn.armedTk = C_Timer.NewTimer(CONFIRM_WINDOW_SEC, function()
+                disarm()
+                btn:SetWidth(90)  -- restore default on auto-disarm
+            end)
         end
     end)
 end
@@ -1780,7 +1915,11 @@ local function renderActions()
 
                 -- Hokm-on-flipped: available only if no prior bid.
                 if flippedSuit and not anyBidYet then
-                    addAction("Hokm "..K.SUIT_GLYPH[flippedSuit], function()
+                    -- v2.0.0 (audit v1.6.1 SA-21): SaudiName resolves
+                    -- to "حكم Hokm" with Arabic font present, "Hokm"
+                    -- otherwise. Same for Sun below. Suit glyph stays
+                    -- universal cards.
+                    addAction(SaudiName("HOKM").." "..K.SUIT_GLYPH[flippedSuit], function()
                         net().LocalBid(K.BID_HOKM..":"..flippedSuit)
                     end, "Take the contract with this suit as Hokm (trump). Round-1 Hokm is locked to the up-card suit.")
                 end
@@ -1825,7 +1964,7 @@ local function renderActions()
                 -- design at HostAdvanceBidding line 2023). Now hidden
                 -- when anySun=true.
                 if not anySun then
-                    addAction("Sun", function() net().LocalBid(K.BID_SUN) end,
+                    addAction(SaudiName("SUN"), function() net().LocalBid(K.BID_SUN) end,
                         "Take the contract as Sun (no-trump). Saudi rule: "
                         .. "Sun overcalls Hokm, hand total is 130 with a "
                         .. "×2 multiplier baked in (260 effective).")
@@ -1841,6 +1980,9 @@ local function renderActions()
                 end
             else
                 -- Round 2: 3 Hokm buttons (excluding the flipped suit) + Sun
+                -- v2.0.0 SA-21: "H ♠" stays compact even with SaudiName
+                -- because "حكم ♠" is too wide for round-2's 3 buttons +
+                -- Sun on one row. Use the Latin-only short form here.
                 for _, suit in ipairs(K.SUITS) do
                     if suit ~= flippedSuit then
                         local s2 = suit
@@ -1850,7 +1992,7 @@ local function renderActions()
                             .. "Round-2 Hokm can be any non-up-card suit.")
                     end
                 end
-                addAction("Sun", function() net().LocalBid(K.BID_SUN) end,
+                addAction(SaudiName("SUN"), function() net().LocalBid(K.BID_SUN) end,
                     "Take the contract as Sun (no-trump, ×2 multiplier).")
             end
         end
@@ -2853,6 +2995,26 @@ local function renderCenter()
             local slot = centerCards.bid
             slot.frame:Show()
             setCardSlot(slot, S.s.bidCard)
+            -- v2.0.0 (audit v1.6.1 PJ-10 HIGH): label the bid card so
+            -- new players know what the centre card represents.
+            -- Pre-fix the up-card was rendered with no caption — a
+            -- new player saw a single card sitting in the middle of
+            -- the table with no idea why. Now adds "Bid card" label
+            -- above the slot during DEAL1 (round-1 bidding only —
+            -- round-2 has all-suit-options so the bid card is no
+            -- longer the trump constraint).
+            if not slot.bidLabel then
+                slot.bidLabel = slot.frame:CreateFontString(
+                    nil, "OVERLAY", "GameFontNormalSmall")
+                slot.bidLabel:SetPoint("BOTTOM", slot.frame, "TOP", 0, 4)
+                slot.bidLabel:SetTextColor(0.85, 0.85, 0.55, 1)
+            end
+            if S.s.phase == K.PHASE_DEAL1 then
+                slot.bidLabel:SetText("|cffd0c055Bid card|r")
+                slot.bidLabel:Show()
+            else
+                slot.bidLabel:Hide()
+            end
         end
         return
     end
@@ -3519,7 +3681,15 @@ local function renderBanner()
     elseif not r.bidderMade then
         setOutcome(oppT)  -- contract failed → defenders win
         banner:SetBackdropBorderColor(0.95, 0.30, 0.20, 1)
-        banner.title:SetText("|cffff5544BALOOT!|r contract failed" .. yaMrw7(bidT))
+        -- v2.0.0 (audit v1.6.1 SA-25 HIGH): "BALOOT!" is a Saudi
+        -- success-only call (the K+Q-of-trump fanfare for a made
+        -- contract). Pre-fix the addon used "BALOOT!" to herald a
+        -- contract FAILURE — semantically inverted; reads as a bug
+        -- to a Saudi player. Replaced with "TAH!" (طاح — "crashed,
+        -- went down") which is the canonical Saudi loss-banter for
+        -- a failed contract. Romanized only — no Arabic glyphs since
+        -- WoW fonts can't render them (per CLAUDE.md ceiling).
+        banner.title:SetText("|cffff5544TAH!|r contract failed" .. yaMrw7(bidT))
     else
         setOutcome(bidT)  -- contract made → bidder team wins
         banner:SetBackdropBorderColor(0.30, 0.85, 0.45, 1)

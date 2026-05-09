@@ -430,6 +430,54 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                         L.Info("roster",
                             "seat %d replaced by bot (%s dropped mid-round)",
                             seat, short)
+                        -- v2.0.0 (audit v1.6.1 MP-02/03/04 HIGH): if
+                        -- the drop happened DURING an escalation
+                        -- window / overcall window / SWA permission
+                        -- window, the dropped player owed a vote
+                        -- that will never come. Soft-locks the round.
+                        -- Now: synthesize the missing vote
+                        -- immediately based on phase. The
+                        -- newly-installed bot at this seat would
+                        -- have made these decisions per the existing
+                        -- Bot.PickDouble / Bot.PickOvercall paths;
+                        -- we re-invoke them to get a clean answer.
+                        local phase = B.State.s.phase
+                        if phase == K.PHASE_DOUBLE
+                           or phase == K.PHASE_TRIPLE
+                           or phase == K.PHASE_FOUR
+                           or phase == K.PHASE_GAHWA then
+                            -- Rerun the bot dispatcher to pick up the
+                            -- dropped seat's escalation decision.
+                            -- MaybeRunBot's belPending walk handles
+                            -- the now-bot seat correctly.
+                            if B.Net and B.Net.MaybeRunBot then
+                                B.Net.MaybeRunBot()
+                            end
+                        elseif phase == K.PHASE_OVERCALL then
+                            -- Synthesize a default WAIVE for the
+                            -- dropped seat. The overcall window's
+                            -- AllDecided check unblocks once we
+                            -- record the missing vote.
+                            if B.State.RecordOvercallDecision
+                               and B.State.s.overcall then
+                                B.State.RecordOvercallDecision(seat, "WAIVE")
+                                if B.Net and B.Net._OvercallAllDecided
+                                   and B.Net._OvercallAllDecided() then
+                                    if B.Net._HostResolveOvercall then
+                                        B.Net._HostResolveOvercall()
+                                    end
+                                end
+                            end
+                        elseif B.State.s.swaRequest
+                               and B.State.s.swaRequest.responses
+                               and B.State.s.swaRequest.caller ~= seat then
+                            -- Mid-SWA-permission drop: synthesize an
+                            -- ACCEPT for the dropped seat (lenient
+                            -- default — the loss falls on the caller
+                            -- if they're wrong, so accepting is the
+                            -- low-risk answer for the AFK voter).
+                            B.State.s.swaRequest.responses[seat] = true
+                        end
                         -- Kick MaybeRunBot in case it's the dropped
                         -- seat's turn right now.
                         if B.Net and B.Net.MaybeRunBot then

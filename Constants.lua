@@ -35,6 +35,51 @@ K.SUIT_COLOR_ONCARD = {
 -- WoW and includes them. Use this for any FontString that renders cards.
 K.CARD_FONT = "Fonts\\ARIALN.TTF"
 
+-- v2.0.0 (audit v1.6.1 SA-01 HIGH): optional Arabic font for in-game
+-- rendering of Saudi terms (حكم / صن / بل / فور / قهوة / بلوت / etc).
+-- WoW's bundled fonts (Arial Narrow / Frizz / Skurri / Morpheus) lack
+-- the Arabic Unicode block, so direct «بل» renders as boxes. Bundling
+-- a free Arabic font (e.g. Noto Naskh Arabic or Amiri) at the path
+-- below unlocks real Arabic glyphs.
+--
+-- USAGE:
+-- 1. Download Noto Naskh Arabic Regular (Google Fonts, OFL-licensed,
+--    free for redistribution): https://fonts.google.com/noto/specimen/Noto+Naskh+Arabic
+-- 2. Save the .ttf file as:
+--    Interface\AddOns\WHEREDNGN\fonts\NotoNaskhArabic-Regular.ttf
+-- 3. /reload — UI auto-detects the font's presence and starts using it
+--    for the SaudiName helper at UI.lua. If the file is absent, the
+--    helper transparently falls back to the existing romanized labels
+--    (Bel / Bel x2 / Four / Gahwa).
+--
+-- The default value below is a path; the actual font-loading is in
+-- UI.lua via the SaudiName helper, which uses pcall(SetFont, ...) to
+-- detect availability without raising errors when the file is missing.
+K.ARABIC_FONT = "Interface\\AddOns\\WHEREDNGN\\fonts\\NotoNaskhArabic-Regular.ttf"
+
+-- Cached romanized↔Arabic Saudi term map. Used by UI.SaudiName(key)
+-- which returns the Arabic form when ARABIC_FONT is loadable, the
+-- romanized form otherwise. Keys mirror code identifiers; values are
+-- {romanized, arabic} pairs.
+K.SAUDI_NAMES = {
+    HOKM      = { "Hokm",     "حكم"   },
+    SUN       = { "Sun",      "صن"    },
+    PASS      = { "Pass",     "بَسْ"  },
+    WLA       = { "wla",      "ولا"   },
+    BEL       = { "Bel",      "بل"    },
+    BEL_X2    = { "Bel x2",   "بل×2"  },
+    BEL_X3    = { "Bel x3",   "بل×3"  },
+    FOUR      = { "Four",     "فور"   },
+    GAHWA     = { "Gahwa",    "قهوة"  },
+    BALOOT    = { "BALOOT!",  "بلوت!" },
+    AKA       = { "AKA",      "إكَهْ" },
+    SWA       = { "SWA",      "سوا"   },
+    ASHKAL    = { "Ashkal",   "إشكل"  },
+    KAWESH    = { "Kawesh",   "كاوش"  },
+    QABLAK    = { "Qablak",   "قبلك"  },
+    TAH       = { "TAH!",     "طاح!"  },
+}
+
 -- -- Card points -------------------------------------------------------
 -- HOKM trump: J=20, 9=14, A=11, 10=10, K=4, Q=3, 8/7=0  (sum 62)
 -- HOKM off-trump and SUN all suits: A=11, 10=10, K=4, Q=3, J=2, 9/8/7=0 (sum 30/suit)

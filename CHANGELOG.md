@@ -1,5 +1,135 @@
 # Changelog
 
+## v2.0.0 — Major release: deferred-items marathon
+
+Major version bump: closes the v1.6.1 audit's remaining HIGH-severity
+deferred items + the Arabic-font infrastructure (SA-01) that was the
+biggest open authenticity question. 19 audit items shipped across 4
+internal batches. **No bot strategy logic touched — every ship of
+v1.7.0 / 1.8.0 / 1.8.1 / 1.9.x scoped strategy fixes is preserved.**
+
+### Batch 1 — UX quick wins
+
+- **PJ-02** (HIGH) — Silent host invite → chat line + sound cue when a
+  new host invites you. `Net.lua:_OnHost`.
+- **PJ-06** (HIGH) — Lobby button tooltips: Reset / Host Game / Fill
+  Bots / Start Round / Join. New helper `setLobbyTooltip(btn, …)`
+  for direct-makeButton call sites that don't go through `addAction`.
+- **PJ-10** (HIGH) — Bid card label: shows "Bid card" caption above
+  the up-card during `PHASE_DEAL1` so new players know what the
+  centre card represents.
+- **PJ-21/23/24** (HIGH) — AKA / Sun-overcall / SWA banner tooltips
+  via the same `setLobbyTooltip` helper. Each explains the mechanic
+  + Saudi term in one sentence.
+- **PJ-30** (HIGH) — Illegal-play warning surfaces a `UIErrorsFrame`
+  banner (red top-of-screen, like "Not enough mana") + sound chime
+  in addition to the existing chat line. Pre-fix the chat-only
+  warning was easy to miss in busy combat or general chat.
+- **UX-04** (HIGH) — `addConfirmAction` auto-resizes button width on
+  arm to fit the longer confirm-prompt label (capped at 220px).
+  Restores default 90px on disarm. Pre-fix long armed labels
+  ("Confirm Bel x3 (closed)?", "Confirm Deny — caller's invalid
+  claim costs them ~30 pts; if Deny is wrong…") truncated.
+- **UX-22** (MED) — `pauseOverlay:EnableMouse(true)`. Pre-fix the
+  pause overlay was visible but didn't capture clicks — they passed
+  through to cards/banners beneath, silently no-op'd downstream.
+- **UX-24** (MED) — Window registered with `UISpecialFrames` so
+  pressing Escape closes it (matches the WoW convention for every
+  other movable, dismissable UI panel).
+- **SA-25** (HIGH) — Failed-contract banner: "BALOOT!" → "TAH!"
+  (طاح — "crashed/went down"). Pre-fix the addon used "BALOOT!"
+  to herald a contract FAILURE; semantically inverted ("BALOOT!"
+  is the success-only K+Q-of-trump fanfare). "TAH!" is the
+  canonical Saudi loss-banter for a failed contract.
+
+### Batch 2 — Multiplayer drop-recovery hardening
+
+- **MP-02/03/04** (HIGH) — Drop during `PHASE_DOUBLE/TRIPLE/FOUR/
+  GAHWA` / `PHASE_OVERCALL` / SWA-permission window now triggers
+  phase-specific recovery in addition to the v1.8.0 bot-fill seat
+  swap. Escalation phases re-invoke `MaybeRunBot` so the
+  newly-installed bot at the dropped seat picks up its decision.
+  Overcall synthesizes a default `WAIVE` for the dropped vote.
+  SWA-permission synthesizes an `ACCEPT` (lenient — loss falls on
+  caller if wrong). Round stays playable through any drop.
+- **MP-22** (HIGH) — `/baloot reset` mid-round (host) now routes
+  through the existing `WHEREDNGN_RESET_CONFIRM` popup. Pre-fix the
+  slash command bypassed the guard that the UI Reset button used.
+  New `/baloot reset force` subcommand for users actually needing
+  to recover from stuck state.
+- **MP-60** (HIGH) — Version mismatch chat warning when host's
+  announced version differs from local. Pre-fix `peerVersions` was
+  tracked in state but never surfaced — incompatible peers played
+  together with subtle wire-protocol divergence (e.g., a v0.8
+  client emitting TAKE_HOKM that v1.5.3+ silently rejects).
+
+### Batch 3 — Bot feel + transparency
+
+- **BF-06/50** (HIGH) — Per-rung escalation pacing.
+  `BOT_DELAY_TRIPLE = 3.4s`, `BOT_DELAY_FOUR = 3.7s`, `BOT_DELAY_GAHWA
+  = 4.2s` (was all `BOT_DELAY_BEL = 3.2s`). Saudi pros pause longer
+  on terminal rungs — Gahwa especially weighs match-stake. Stair-
+  steps the wait for proper escalation drama.
+- **BF-20** (HIGH) — Overcall stagger: bot decisions no longer fire
+  synchronously at window-open time. Each bot's decision now lands
+  at a randomized 0.4-3.2s offset within the 5s window. Pre-fix the
+  human saw "decided" instantly + 4.9s of "nothing happening"
+  anxiety; now bots feel like they're thinking it over independently.
+- **BF-30** (HIGH) — Partner-signal transparency for AKA. When the
+  bot fires AKA AND the local human is the bot's PARTNER, prints a
+  green chat hint explaining the signal + what action to take
+  ("Partner suggests don't over-trump <suit>"). Opp-bot AKA prints
+  an orange hint ("Opp claims boss in <suit>; their partner won't
+  trump <suit>"). Bots get nothing — they read signals via memory.
+
+### Batch 4 — Saudi authenticity (Arabic font infrastructure)
+
+- **SA-01** (HIGH) — Optional Arabic font support. New
+  `K.ARABIC_FONT = "Interface\\AddOns\\WHEREDNGN\\fonts\\NotoNaskhArabic-Regular.ttf"`
+  + `K.SAUDI_NAMES` map (romanized↔Arabic for HOKM/SUN/BEL/FOUR/
+  GAHWA/AKA/SWA/ASHKAL/KAWESH/QABLAK/BALOOT/TAH/PASS/WLA).
+
+  New `B.UI.SaudiName(key)` helper auto-detects font availability via
+  pcall(probe.SetFont, …): returns "حكم Hokm" with font present,
+  "Hokm" without. Cached after first probe; opt-in at every call
+  site. Drop the .ttf in `Interface\AddOns\WHEREDNGN\fonts\` and
+  `/reload` to enable.
+
+  **To enable Arabic glyphs**:
+  1. Download Noto Naskh Arabic Regular (Google Fonts, OFL-licensed):
+     https://fonts.google.com/noto/specimen/Noto+Naskh+Arabic
+  2. Save as `Interface\AddOns\WHEREDNGN\fonts\NotoNaskhArabic-Regular.ttf`
+  3. `/reload` — UI auto-detects + uses it.
+
+- **SA-11** — Already addressed in v1.7.0 via tooltips that mention
+  Saudi terms (e.g., Pass tooltip says "Saudi: «بَسْ»"). No
+  additional changes.
+- **SA-21** (HIGH) — Wired `SaudiName` at the highest-visibility bid
+  buttons (R1 Hokm, R1 Sun, R2 Sun). With Arabic font: "حكم Hokm ♠"
+  / "صن Sun". Without: "Hokm ♠" / "Sun" (unchanged behavior).
+
+### Tests
+
+819/819 pass. One test (AF.5 in test_state_bot.lua) was updated to
+match either the legacy `addAction("Sun"` literal OR the new
+`addAction(SaudiName("SUN")` form — both valid v2.0.0 wirings.
+
+### v1.6.1 audit cycle: closed
+
+| Track | Items closed | Closed in |
+|---|---|---|
+| Saudi authenticity | SA-20, SA-03, SA-30, SA-25, SA-01, SA-11, SA-21 (7 of ~8 HIGH) | v1.7.0 + v2.0.0 |
+| Tooltip layer | 18 wired sites (action panel + lobby + banners) | v1.7.0 + v2.0.0 |
+| Player journey | PJ-01, PJ-02, PJ-06, PJ-10, PJ-21, PJ-23, PJ-24, PJ-30, PJ-50, PJ-51 | v1.7.0 + v2.0.0 |
+| Bot feel | BF-01, BF-05, BF-06, BF-10, BF-11, BF-20, BF-30, BF-40, BF-50 | v1.8.0 + v2.0.0 |
+| Multiplayer QoL | MP-01, MP-02, MP-03, MP-04, MP-21, MP-22, MP-50, MP-60 | v1.8.0 + v2.0.0 |
+| UI/UX | UX-13, UX-21, UX-04, UX-22, UX-24 | v1.8.1 + v2.0.0 |
+
+Total: **~33 audit items closed** across the v1.6.1 audit-driven
+release cycle (v1.7.0 → v2.0.0). Remaining items are all MEDIUM/LOW
+polish or items that need user input (e.g. font choice, voice
+re-recording).
+
 ## v1.8.1 — Polish hotfix (audit v1.6.1 batch 3, marathon completion)
 
 Third and final release of the v1.6.1 audit-driven marathon. Closes

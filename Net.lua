@@ -825,6 +825,25 @@ function N._OnHost(sender, gameID, version)
     if version and version ~= "" then
         local skey = (S.NormalizeName and S.NormalizeName(sender)) or sender
         S.s.peerVersions[skey] = version
+        -- v2.0.0 (audit v1.6.1 MP-60 HIGH): visible warning on
+        -- version mismatch. Pre-fix peerVersions was tracked in state
+        -- but never surfaced — incompatible peers could play together
+        -- with subtle wire-protocol divergence (e.g. a v0.8 client
+        -- emitting TAKE_HOKM that v1.5.3+ silently rejects). Now
+        -- prints a chat warning when the host announces a version
+        -- different from ours, so the user knows to /reload after
+        -- updating, or the host should match versions before starting.
+        local myVersion = K.GetAddonVersion and K.GetAddonVersion() or "?"
+        if version ~= myVersion and version ~= "?" and myVersion ~= "?"
+           and not S.s._versionWarnedFor then
+            S.s._versionWarnedFor = version
+            local short = (sender and sender:match("^([^%-]+)")) or sender
+            print(("|cffff5544[WHEREDNGN]|r |cffffd055%s|r is on "
+                   .. "version |cffffd055%s|r; you are on |cffffd055%s|r. "
+                   .. "Some features may behave differently. Update both "
+                   .. "clients to the same version for the best experience."
+                   ):format(tostring(short or "?"), version, myVersion))
+        end
     end
     if S.s.isHost then return end
     -- Accept host announcements during any "passive" phase: IDLE, LOBBY,
@@ -838,7 +857,25 @@ function N._OnHost(sender, gameID, version)
        and p ~= K.PHASE_SCORE and p ~= K.PHASE_GAME_END then
         return
     end
+    -- v2.0.0 (audit v1.6.1 PJ-02 HIGH): surface incoming host invite.
+    -- Pre-fix `pendingHost` was set silently — invitee saw no chat
+    -- line, no popup, no minimap blink. New users wouldn't know they
+    -- were invited. Now prints a clear chat line on FIRST invite from
+    -- this host (subsequent identical announces don't re-print to
+    -- avoid spam).
+    local isNewInvite = (not S.s.pendingHost)
+                        or S.s.pendingHost.gameID ~= gameID
     S.s.pendingHost = { name = sender, gameID = gameID }
+    if isNewInvite then
+        local short = (sender and sender:match("^([^%-]+)")) or sender
+        print(("|cff66ddff[WHEREDNGN]|r |cffffd055%s|r invited you to "
+               .. "Saudi Baloot. Type |cffffffff/baloot join|r or click "
+               .. "the |cffffffffJoin|r button in the lobby to accept."
+               ):format(tostring(short or "?")))
+        if B.Sound and B.Sound.Try and K.SND_TURN_PING then
+            B.Sound.Try(K.SND_TURN_PING)
+        end
+    end
     log("Info", "host announce from %s gameID=%s ver=%s",
         sender, tostring(gameID), tostring(version))
 end
@@ -1444,20 +1481,64 @@ function N._HostBeginOvercallWindow()
     if not S.BeginOvercall then return false end
     if not S.BeginOvercall(S.s.bidCard, S.s.dealer) then return false end
     N.SendOvercallOpen()
-    -- Bots act immediately (their Bot.PickOvercall is deterministic
-    -- given hand + thresholds; no need to wait 5s for them). Humans
-    -- get the full 5s.
-    for seat = 1, 4 do
-        if S.IsSeatBot and S.IsSeatBot(seat)
-           and B.Bot and B.Bot.PickOvercall then
-            local d = B.Bot.PickOvercall(seat)
-            if d and S.RecordOvercallDecision
-               and S.RecordOvercallDecision(seat, d) then
-                N.SendOvercallDecision(seat, d)
+    -- v2.0.0 (audit v1.6.1 BF-20 HIGH): stagger bot overcall decisions
+    -- across the 5s window instead of firing them all instantly.
+    -- Pre-fix every bot decided synchronously at window-open time —
+    -- bots showed "decided" 0.1s after the banner appeared while
+    -- humans still had ~4.9s of "nothing happening" anxiety. Now
+    -- each bot's decision fires at a randomized offset within the
+    -- first ~3.5s of the window (leaving humans the final ~1.5s of
+    -- breathing room before the timeout closes the window). Decisions
+    -- still ALL get made — same outcome — just paced like real
+    -- players "thinking it over". Falls back to synchronous if
+    -- C_Timer is unavailable (test harness).
+    local pickOvercall = B.Bot and B.Bot.PickOvercall
+    if pickOvercall and C_Timer and C_Timer.After then
+        for seat = 1, 4 do
+            if S.IsSeatBot and S.IsSeatBot(seat) then
+                local thisSeat = seat
+                -- Random offset 0.4s-3.2s; varies per bot per call so
+                -- the 4 bots feel independent rather than synchronized.
+                local offset = 0.4 + (math.random() * 2.8)
+                C_Timer.After(offset, function()
+                    -- Self-check: bots may have changed seats (drop
+                    -- recovery) or the window may have closed (5s
+                    -- timeout fired first / human already triggered
+                    -- resolve). Bail safely on either.
+                    if not S.s.isHost then return end
+                    if S.s.phase ~= K.PHASE_OVERCALL then return end
+                    if not S.s.overcall then return end
+                    if not (S.IsSeatBot and S.IsSeatBot(thisSeat)) then return end
+                    -- Don't double-decide.
+                    if S.s.overcall.decisions
+                       and S.s.overcall.decisions[thisSeat] then return end
+                    local d = pickOvercall(thisSeat)
+                    if d and S.RecordOvercallDecision
+                       and S.RecordOvercallDecision(thisSeat, d) then
+                        N.SendOvercallDecision(thisSeat, d)
+                        if N._OvercallAllDecided
+                           and N._OvercallAllDecided() then
+                            N._HostResolveOvercall()
+                        end
+                        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                    end
+                end)
+            end
+        end
+    else
+        -- No C_Timer: fallback to synchronous (test harness path).
+        for seat = 1, 4 do
+            if S.IsSeatBot and S.IsSeatBot(seat) and pickOvercall then
+                local d = pickOvercall(seat)
+                if d and S.RecordOvercallDecision
+                   and S.RecordOvercallDecision(seat, d) then
+                    N.SendOvercallDecision(seat, d)
+                end
             end
         end
     end
-    -- Did all 4 already decide? (All-bots table.)
+    -- Did all 4 already decide? (All-bots, synchronous path only.
+    -- Staggered path resolves itself when the last bot's timer fires.)
     if N._OvercallAllDecided() then
         N._HostResolveOvercall()
         return true
@@ -2529,8 +2610,24 @@ function N.LocalPlay(card)
     if S.s.contract then
         local ok, why = R.IsLegalPlay(card, S.s.hand, S.s.trick, S.s.contract, S.s.localSeat, S.s.akaCalled)
         if not ok then
-            print(("|cffffaa00WHEREDNGN|r warning: this play is illegal (%s). Opponents can call Takweesh.")
-                :format(why or "?"))
+            -- v2.0.0 (audit v1.6.1 PJ-30 HIGH): illegal-play warning
+            -- was chat-only — easily missed in busy combat / general
+            -- chat. Surface a UIErrorsFrame banner (the same red
+            -- top-of-screen banner WoW uses for "Not enough mana" /
+            -- "Out of range") so the player can't miss it. Chat line
+            -- preserved as a permanent record they can scroll back to.
+            local msg = ("WHEREDNGN: this play is illegal (%s). "
+                       .. "Opponents can call Takweesh."):format(why or "?")
+            print("|cffffaa00WHEREDNGN|r warning: this play is illegal "
+                .. ("(%s). Opponents can call Takweesh."):format(why or "?"))
+            if UIErrorsFrame and UIErrorsFrame.AddMessage then
+                UIErrorsFrame:AddMessage(msg, 1.0, 0.4, 0.1, 1.0, 4.0)
+            end
+            if B.Sound and B.Sound.Try then
+                -- WoW's default error chime; widely recognized as
+                -- "the system rejected your action".
+                B.Sound.Try(847)  -- SOUNDKIT.IG_PLAYER_INVITE_DECLINE
+            end
         end
     end
     if not S.s.meldsDeclared[S.s.localSeat] then
@@ -3904,6 +4001,34 @@ function N._OnAKA(sender, seat, suit, replayFlag)
     -- side but the wire path didn't, leaving a mispredict window.
     if S.s.trick and S.s.trick.plays and #S.s.trick.plays > 0 then return end
     S.ApplyAKA(seat, suit)
+    -- v2.0.0 (audit v1.6.1 BF-30 HIGH): partner-signal transparency.
+    -- Pre-fix the AKA banner was the ONLY visible partner signal —
+    -- and even it just said "AKA <suit> — <name>" with no explanation
+    -- of what the local human partner should DO. Now print a chat
+    -- hint when the bot is YOUR partner: explain that they hold the
+    -- boss in this suit and you should not over-trump. Opp-bot AKA
+    -- prints a different hint ("opp claims boss in <suit>"). Bots
+    -- get nothing — they read the signal via Bot._memory directly.
+    local me = S.s.localSeat
+    if me and me ~= seat
+       and not (S.s.seats and S.s.seats[me] and S.s.seats[me].isBot) then
+        local glyph = K.SUIT_GLYPH and K.SUIT_GLYPH[suit] or suit
+        local info = S.s.seats and S.s.seats[seat]
+        local nm = (info and info.name)
+                   and ((info.name:match("^([^%-]+)")) or info.name)
+                   or ("seat " .. seat)
+        if R.TeamOf(seat) == R.TeamOf(me) then
+            print(("|cff66ff88[WHEREDNGN]|r |cffffd055%s|r (partner) "
+                   .. "called AKA %s — they hold the boss in this suit. "
+                   .. "Don't over-trump if %s is led; let them win it."
+                   ):format(nm, glyph, glyph))
+        else
+            print(("|cffff8855[WHEREDNGN]|r |cffffd055%s|r (opp) "
+                   .. "called AKA %s — they claim the boss in this suit. "
+                   .. "Their partner won't trump %s tricks."
+                   ):format(nm, glyph, glyph))
+        end
+    end
 end
 
 -- Resync request (broadcast). Only the host responds, and only if the
@@ -4397,7 +4522,16 @@ end
 -- chains — BF-11).
 local BOT_DELAY_BID  = 1.6   -- base; scaled at dispatch
 local BOT_DELAY_PLAY = 1.2   -- base; scaled at dispatch
-local BOT_DELAY_BEL  = 3.2   -- raised from 1.4s (BF-11 voice-cue floor)
+local BOT_DELAY_BEL    = 3.2   -- raised from 1.4s (BF-11 voice-cue floor)
+-- v2.0.0 (audit v1.6.1 BF-06/50 HIGH): per-rung escalation pacing.
+-- Pre-fix every rung used the same BOT_DELAY_BEL — Bel and Gahwa
+-- (terminal match-stake) felt identically weighted. Saudi pros
+-- pause LONGER on terminal rungs (Gahwa especially — it's match-
+-- making-or-breaking). New constants stair-step the wait so the
+-- escalation chain has dramatic build-up rather than four equal beats.
+local BOT_DELAY_TRIPLE = 3.4   -- bidder's response — slight pause
+local BOT_DELAY_FOUR   = 3.7   -- defender's counter — bigger stakes
+local BOT_DELAY_GAHWA  = 4.2   -- bidder's terminal — most weight
 
 -- Tier-aware multiplier. Returns a scalar applied to base delays.
 local function botDelayTierMult()
@@ -4576,7 +4710,7 @@ function N.MaybeRunBot()
     if S.s.phase == K.PHASE_TRIPLE and S.s.contract then
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
-            C_Timer.After(BOT_DELAY_BEL, function()
+            C_Timer.After(BOT_DELAY_TRIPLE, function()
                 local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
@@ -4629,7 +4763,7 @@ function N.MaybeRunBot()
         local defSeat = S.s.contract.doublerSeat
                          or ((S.s.contract.bidder % 4) + 1)
         if isBotSeat(defSeat) then
-            C_Timer.After(BOT_DELAY_BEL, function()
+            C_Timer.After(BOT_DELAY_FOUR, function()
                 local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
@@ -4680,7 +4814,7 @@ function N.MaybeRunBot()
     if S.s.phase == K.PHASE_GAHWA and S.s.contract then
         local bidder = S.s.contract.bidder
         if isBotSeat(bidder) then
-            C_Timer.After(BOT_DELAY_BEL, function()
+            C_Timer.After(BOT_DELAY_GAHWA, function()
                 local applied, skipSent = false, false
                 local ok, err = pcall(function()
                     if S.s.paused then return end
