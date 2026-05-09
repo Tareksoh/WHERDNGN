@@ -245,6 +245,11 @@ K.MSG_TAKWEESH     = "k"  -- player calls Takweesh (catches an illegal play)
 K.MSG_TAKWEESH_OUT = "z"  -- host's outcome: caught or false-call
 K.MSG_KAWESH       = "a"  -- player calls Kawesh/Saneen (5-card 7/8/9 annul)
 K.MSG_PAUSE        = "p"  -- host pauses/unpauses; payload "1" or "0"
+K.MSG_HEARTBEAT    = "~"  -- v1.8.0: host-alive heartbeat broadcast every
+                          -- HOST_HEARTBEAT_SEC. Payload: empty. Remotes
+                          -- watchdog and surface a "host gone" warning
+                          -- after HOST_HEARTBEAT_TIMEOUT_SEC of silence
+                          -- (audit v1.6.1 MP-21 CRITICAL).
 K.MSG_TEAMS        = "t"  -- host broadcasts custom team names; payload teamA;teamB
 K.MSG_AKA          = "e"  -- partner-coordination signal in Hokm: caller
                           -- holds the highest unplayed card in a non-trump
@@ -412,6 +417,17 @@ K.SWA_TIMEOUT_SEC     = 5
 -- Bot tier gating: only M3lm+ bots act on the overcall (Basic /
 -- Advanced auto-WAIVE — this is a tournament-strategy nuance).
 K.OVERCALL_TIMEOUT_SEC = 5
+
+-- v1.8.0 host-alive heartbeat (audit v1.6.1 MP-21 CRITICAL). Pre-fix
+-- there was no host-alive signal — when the host crashed or quit, the
+-- 3 remaining clients stared at a frozen UI forever with no indication
+-- the host was gone. Host now broadcasts MSG_HEARTBEAT every
+-- HOST_HEARTBEAT_SEC. Remotes track the last-seen heartbeat timestamp
+-- and surface a warning banner if HOST_HEARTBEAT_TIMEOUT_SEC elapses
+-- with no signal. The timeout is generous (45s) — well above any
+-- legitimate slow-server stall but well below "I've been waiting forever".
+K.HOST_HEARTBEAT_SEC          = 15  -- broadcast cadence
+K.HOST_HEARTBEAT_TIMEOUT_SEC  = 45  -- 3 missed heartbeats before alert
 
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung

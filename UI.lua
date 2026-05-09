@@ -2628,9 +2628,41 @@ local function renderSeats()
             if S.s.turn == seat then
                 b.turnGlow:Show()
                 b.frame:SetBackdropBorderColor(unpack(COL.legalEdge))
+                -- v1.8.0 (audit v1.6.1 BF-10 CRITICAL): "Thinking…"
+                -- indicator on bot-active seats. Pre-fix the turnGlow
+                -- was identical for bot-thinking and human-AFK — players
+                -- couldn't tell whether to wait or reload. Adds a
+                -- soft-cycling "thinking" suffix to the count text only
+                -- when the active seat is a bot AND we're locally on
+                -- host (so the indicator only shows on the machine
+                -- actually running the bot's decision timer).
+                if info and info.isBot and S.s.isHost
+                   and (S.s.turnKind == "bid" or S.s.turnKind == "play") then
+                    if not b.thinkText then
+                        b.thinkText = b.frame:CreateFontString(nil, "OVERLAY",
+                                                                "GameFontNormalSmall")
+                        b.thinkText:SetPoint("BOTTOM", b.frame, "BOTTOM", 0, 4)
+                        b.thinkText:SetTextColor(0.4, 0.8, 1, 0.9)
+                        -- Soft fade-cycle via OnUpdate so the indicator
+                        -- visibly animates ("breathes") rather than
+                        -- looking like a static label that might be
+                        -- frozen UI. ~0.7Hz cycle.
+                        b.thinkText._t = 0
+                        b.thinkText:SetScript("OnUpdate", function(self, elapsed)
+                            self._t = (self._t or 0) + (elapsed or 0)
+                            local pulse = (math.sin(self._t * 4.4) + 1) * 0.5
+                            self:SetAlpha(0.55 + pulse * 0.40)
+                        end)
+                    end
+                    b.thinkText:SetText("|cff66ddffthinking…|r")
+                    b.thinkText:Show()
+                elseif b.thinkText then
+                    b.thinkText:Hide()
+                end
             else
                 b.turnGlow:Hide()
                 b.frame:SetBackdropBorderColor(unpack(COL.woodEdge))
+                if b.thinkText then b.thinkText:Hide() end
             end
         end
     end

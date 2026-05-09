@@ -699,6 +699,10 @@ function N.HandleMessage(prefix, message, channel, sender)
         N._OnKawesh(sender, tonumber(fields[2]))
     elseif tag == K.MSG_PAUSE then
         N._OnPause(sender, fields[2])
+    elseif tag == K.MSG_HEARTBEAT then
+        -- v1.8.0 (MP-21): host-alive heartbeat. Bumps the last-seen
+        -- timestamp for the remote watchdog.
+        N._OnHeartbeat(sender)
     elseif tag == K.MSG_TEAMS then
         N._OnTeams(sender, fields[2], fields[3])
     elseif tag == K.MSG_AKA then
@@ -2166,6 +2170,10 @@ end
 
 function N.HostStartRound()
     if not S.s.isHost then return end
+    -- v1.8.0 MP-21: arm the host-alive heartbeat on first round start.
+    -- Idempotent — safe to call repeatedly across rounds. Stops itself
+    -- when isHost becomes false or phase returns to IDLE/LOBBY.
+    if N.StartHostHeartbeat then N.StartHostHeartbeat() end
     -- Rotate dealer from the CURRENT s.dealer (not from roundNumber).
     -- This correctly handles redeals which may have advanced s.dealer
     -- mid-round without bumping roundNumber. At game start, roundNumber
@@ -3015,6 +3023,72 @@ function N._OnTeams(sender, teamA, teamB)
     if not fromHost(sender) then return end
     if S.s.isHost then return end
     S.ApplyTeamNames(teamA, teamB)
+end
+
+-- ---------------------------------------------------------------------
+-- Host-alive heartbeat (v1.8.0 — audit v1.6.1 MP-21 CRITICAL)
+-- ---------------------------------------------------------------------
+-- Pre-fix: when the host crashed or quit mid-game, the 3 remaining
+-- clients stared at a frozen UI forever with no signal that the host
+-- was gone. Fix: host broadcasts MSG_HEARTBEAT every 15s; remotes
+-- track the last-seen timestamp and surface a warning banner if
+-- 45s elapses with no signal (3 missed heartbeats).
+--
+-- The heartbeat is a single-byte payload-less message, very cheap on
+-- the addon-message channel. Only fires while we're an active host
+-- with a non-IDLE phase. Stopped on host quit / addon unload via the
+-- existing `paused` and `isHost` guards.
+
+N._heartbeatTk = nil           -- repeating timer handle (host)
+N._lastHeartbeatAt = nil       -- GetTime() of last host heartbeat (remote)
+
+function N.StartHostHeartbeat()
+    if not S.s.isHost then return end
+    if N._heartbeatTk then return end   -- idempotent
+    if not (C_Timer and C_Timer.NewTicker) then return end
+    local cadence = K.HOST_HEARTBEAT_SEC or 15
+    N._heartbeatTk = C_Timer.NewTicker(cadence, function()
+        -- Self-stop guards: lost host status, idle/lobby phase, or
+        -- not in a group anymore.
+        if not S.s.isHost or S.s.phase == K.PHASE_IDLE
+           or S.s.phase == K.PHASE_LOBBY or not IsInGroup() then
+            N.StopHostHeartbeat()
+            return
+        end
+        broadcast(K.MSG_HEARTBEAT)
+    end)
+end
+
+function N.StopHostHeartbeat()
+    if N._heartbeatTk and N._heartbeatTk.Cancel then
+        N._heartbeatTk:Cancel()
+    end
+    N._heartbeatTk = nil
+end
+
+function N._OnHeartbeat(sender)
+    if fromSelf(sender) then return end
+    if not fromHost(sender) then return end
+    if S.s.isHost then return end
+    N._lastHeartbeatAt = (GetTime and GetTime()) or 0
+end
+
+-- Returns seconds since last host heartbeat (or nil if no heartbeat
+-- ever received yet). UI reads this to decide whether to surface the
+-- "host gone" warning. Designed to be called every UI.Refresh.
+function N.SecondsSinceHostHeartbeat()
+    if S.s.isHost then return nil end       -- not applicable
+    if S.s.phase == K.PHASE_IDLE
+       or S.s.phase == K.PHASE_LOBBY then return nil end
+    if not N._lastHeartbeatAt then return nil end
+    local now = (GetTime and GetTime()) or 0
+    return now - N._lastHeartbeatAt
+end
+
+function N.IsHostLikelyGone()
+    local secs = N.SecondsSinceHostHeartbeat()
+    if not secs then return false end
+    return secs > (K.HOST_HEARTBEAT_TIMEOUT_SEC or 45)
 end
 
 -- AKA call from the wire. Soft signal — we apply locally regardless of
@@ -4297,10 +4371,86 @@ end
 -- Bot pacing. The bid voice cue (~0.6s for the Saud "بَسْ"/"حكم"/etc)
 -- has to finish before the next bot acts, otherwise rapid all-pass
 -- rounds produce a "passpasspass" run that doesn't line up with the
--- visual turn pointer. 1.6s gives the announcement room to breathe.
-local BOT_DELAY_BID  = 1.6
-local BOT_DELAY_PLAY = 1.2
-local BOT_DELAY_BEL  = 1.4   -- Bel/Triple/Four/Gahwa also have voice cues
+-- visual turn pointer.
+--
+-- v1.8.0 (audit v1.6.1 BF-01/05/11/40-50): variable delays. Pre-fix
+-- every bot decision used flat 1.6s/1.2s/1.4s regardless of decision
+-- difficulty or tier. Result: a Saudi Master with a 4-Aces forced
+-- auto-Sun took the same 1.6s as a Basic-tier random pass; a Bel x3
+-- counter took the same 1.4s as a forced-skip. Saudi pros pause on
+-- hard plays and snap on easy ones — that's the *feel* dimension.
+--
+-- Helpers below scale base delays by:
+--   - Tier multiplier: higher tiers think longer on hard decisions
+--     (Saudi Master 1.3×, Fzloky 1.15×, M3lm 1.0×, Advanced 0.85×,
+--     Basic 0.7×). Lower tiers act faster — they don't have the
+--     decision tree depth to justify pausing.
+--   - Difficulty bump: forced/trivial decisions get a -0.4s shave;
+--     borderline/hard decisions get a +0.6s extension. The
+--     classification heuristic is per-call (e.g., 4-Aces hand or
+--     hand with no J = trivial bid; partner already escalated +
+--     marginal strength = hard escalation).
+--
+-- Voice cue length floor is also enforced: BOT_DELAY_BEL must be
+-- >= ~3s to avoid cue stacking (the Bel/Triple/Four/Gahwa MP3s are
+-- ~3s each and pre-fix 1.4s caused mid-word clipping in escalation
+-- chains — BF-11).
+local BOT_DELAY_BID  = 1.6   -- base; scaled at dispatch
+local BOT_DELAY_PLAY = 1.2   -- base; scaled at dispatch
+local BOT_DELAY_BEL  = 3.2   -- raised from 1.4s (BF-11 voice-cue floor)
+
+-- Tier-aware multiplier. Returns a scalar applied to base delays.
+local function botDelayTierMult()
+    if not WHEREDNGNDB then return 1.0 end
+    if WHEREDNGNDB.saudiMasterBots then return 1.30 end
+    if WHEREDNGNDB.fzlokyBots      then return 1.15 end
+    if WHEREDNGNDB.m3lmBots        then return 1.00 end
+    if WHEREDNGNDB.advancedBots    then return 0.85 end
+    return 0.70   -- Basic — quick reflexes, no deep thought
+end
+
+-- Bid-difficulty classifier. Returns "trivial" / "normal" / "hard".
+-- Cheap heuristics — must not duplicate the bot's full decision tree.
+local function botBidDifficulty(seat)
+    if not S.s.hostHands or not S.s.hostHands[seat] then return "normal" end
+    local hand = S.s.hostHands[seat]
+    -- Trivial: 4-Aces forced auto-Sun (decision is locked).
+    local aces = 0
+    for _, c in ipairs(hand) do if c:sub(1,1) == "A" then aces = aces + 1 end end
+    if aces >= 4 then return "trivial" end
+    -- Trivial: hand has no J of any suit AND no Ace pair — almost
+    -- certainly a forced pass.
+    local hasJ = false
+    for _, c in ipairs(hand) do if c:sub(1,1) == "J" then hasJ = true; break end end
+    if not hasJ and aces < 2 then return "trivial" end
+    -- Hard: 3 aces (Sun decision is borderline-vs-Ashkal) or known
+    -- Belote-pair shape (K+Q same suit) which forces a delicate call.
+    if aces >= 3 then return "hard" end
+    return "normal"
+end
+
+-- Play-difficulty classifier. # of legal plays + lead/follow context.
+-- Singleton-legal = trivial; rich legal set in trick 1 / trick 8 = hard.
+local function botPlayDifficulty(seat, legalCount)
+    if not legalCount or legalCount <= 1 then return "trivial" end
+    if legalCount >= 5 then
+        -- Trick 1 with full hand or trick 8 endgame both count as hard.
+        local trickN = (S.s.tricks and #S.s.tricks or 0) + 1
+        if trickN == 1 or trickN >= 7 then return "hard" end
+    end
+    return "normal"
+end
+
+-- Apply tier mult + difficulty offset, clamped to [0.5s, 4.0s] so
+-- we never freeze the table or fire instantly.
+local function botDelay(base, difficulty)
+    local d = base * botDelayTierMult()
+    if     difficulty == "trivial" then d = d - 0.4
+    elseif difficulty == "hard"    then d = d + 0.6 end
+    if d < 0.5 then d = 0.5 end
+    if d > 4.0 then d = 4.0 end
+    return d
+end
 
 local function isBotSeat(seat)
     return S.s.isHost and seat and S.s.seats[seat] and S.s.seats[seat].isBot
@@ -4707,7 +4857,9 @@ function N.MaybeRunBot()
     if (S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID)
        and S.s.turn and S.s.turnKind == "bid" and isBotSeat(S.s.turn) then
         local seat = S.s.turn
-        C_Timer.After(BOT_DELAY_BID, function()
+        -- v1.8.0 (BF-01): tier+difficulty-aware delay (was flat 1.6s).
+        local bidDelay = botDelay(BOT_DELAY_BID, botBidDifficulty(seat))
+        C_Timer.After(bidDelay, function()
             -- Audit fix: pcall to prevent a Bot.PickBid error from
             -- freezing the bid loop. Recovery: force-pass.
             local ok, err = pcall(function()
@@ -4758,7 +4910,17 @@ function N.MaybeRunBot()
     if S.s.phase == K.PHASE_PLAY
        and S.s.turn and S.s.turnKind == "play" and isBotSeat(S.s.turn) then
         local seat = S.s.turn
-        C_Timer.After(BOT_DELAY_PLAY, function()
+        -- v1.8.0 (BF-05): tier+difficulty-aware delay (was flat 1.2s).
+        -- Cheap proxy: hand size as approximation of legal-set size.
+        -- Overestimates when must-follow/must-trump apply, but that's
+        -- fine — forced-follow has FEWER legal cards anyway. We just
+        -- want a coarse "borderline trick 1 lead vs singleton must-
+        -- follow" classifier.
+        local hand = S.s.hostHands and S.s.hostHands[seat]
+        local approxLegal = hand and #hand or 0
+        local playDelay = botDelay(BOT_DELAY_PLAY,
+                                   botPlayDifficulty(seat, approxLegal))
+        C_Timer.After(playDelay, function()
             -- Audit fix: pcall the play body. A Bot.PickPlay /
             -- BotMaster.PickPlay / PickMelds error otherwise leaves
             -- the bot's turn permanently — bots have no AFK timer

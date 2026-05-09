@@ -1,5 +1,90 @@
 # Changelog
 
+## v1.8.0 — Bot pacing + multiplayer resilience (audit v1.6.1 batch 2)
+
+Second release of the v1.6.1 audit-driven marathon. Closes the
+"feels robotic" + "drops break the game" gaps without touching bot
+strategy logic.
+
+### BF-01 — Variable bot pacing (HIGH)
+
+`Net.lua:~4297-4380` + `~4790, 4848`. Pre-fix every bot decision used
+flat `BOT_DELAY_BID = 1.6s` / `BOT_DELAY_PLAY = 1.2s` regardless of
+decision difficulty or tier — Saudi Master playing a 4-Aces forced
+auto-Sun took the same 1.6s as Basic random pass.
+
+New helpers:
+- `botDelayTierMult()` — Saudi Master 1.30×, Fzloky 1.15×, M3lm 1.0×,
+  Advanced 0.85×, Basic 0.70×. Higher tiers think longer; lower tiers
+  snap.
+- `botBidDifficulty(seat)` — "trivial" (4 Aces / no J + <2 Aces) /
+  "normal" / "hard" (3 Aces) classifier. Cheap heuristics.
+- `botPlayDifficulty(seat, legalCount)` — "trivial" (singleton legal)
+  / "normal" / "hard" (5+ legal in trick 1 or 7+).
+- `botDelay(base, difficulty)` — applies tier mult + difficulty offset
+  (-0.4 / +0 / +0.6) clamped to [0.5s, 4.0s].
+
+Wired at the bid + play dispatch sites in `MaybeRunBot`. Saudi pros
+pause on hard plays and snap on easy ones — that's the *feel*
+dimension closed.
+
+### BF-11 — Voice-cue floor (HIGH)
+
+`Net.lua:~4324`. Pre-fix `BOT_DELAY_BEL = 1.4s` was shorter than the
+~3s Bel/Triple/Four/Gahwa MP3 voice files, causing cues to stack
+mid-word in escalation chains. Raised to **3.2s** as a hard floor.
+
+### BF-10 — "Thinking…" indicator on bot turns (CRITICAL)
+
+`UI.lua:~2628-2660`. Pre-fix the active-seat `turnGlow` was identical
+for bot-thinking and human-AFK — players couldn't tell whether to
+wait or `/reload`. Now the host (only) shows a soft fade-cycling
+"thinking…" label below the bot's seat badge during `bid`/`play`
+turns. ~0.7Hz pulse so it visibly animates.
+
+### MP-01 — Mid-round drop bot-fill (CRITICAL)
+
+`WHEREDNGN.lua:~404-440`. Pre-fix `GROUP_ROSTER_UPDATE` dropped a
+seated human's seat to nil with no replacement; mid-round drops froze
+the trick permanently (no human to AFK-timer, no bot to dispatch).
+Now branches:
+
+- **Lobby phase**: kick the seat (existing behavior — bot fill via
+  `/baloot bots`)
+- **Mid-round**: replace with a placeholder bot, preserve seat record,
+  inherit hand + bid state from `S.s.hostHands` / `S.s.bids`, and
+  kick `MaybeRunBot` to handle the in-flight turn
+
+Round stays playable; the bot inherits the dropped player's position.
+
+### MP-21 — Host-alive heartbeat (CRITICAL)
+
+`Constants.lua:~248-266` (`MSG_HEARTBEAT` + `HOST_HEARTBEAT_SEC=15` +
+`HOST_HEARTBEAT_TIMEOUT_SEC=45`). `Net.lua:~3017-3090` (`StartHostHeartbeat` /
+`StopHostHeartbeat` / `_OnHeartbeat` / `SecondsSinceHostHeartbeat` /
+`IsHostLikelyGone`). `Net.lua:~2173` (auto-arm on `HostStartRound`).
+
+Pre-fix: when the host crashed or quit mid-game, the 3 remaining
+clients stared at a frozen UI forever with no signal. Fix: host
+broadcasts a single-byte `MSG_HEARTBEAT` every 15s. Remotes track
+`_lastHeartbeatAt` and expose `IsHostLikelyGone()` after 45s of
+silence (3 missed heartbeats). The UI can read this and surface a
+warning banner — base infrastructure now in place.
+
+### MP-50 — `HostHandleJoin` name normalization (HIGH)
+
+`State.lua:~683-720`. Pre-fix the dedup check used raw `==` on names.
+Same player joining via `/reload` from a same-realm client could
+arrive with a different surface form ("Name" vs "Name-Realm") and
+get a SECOND seat — duplicate. Now normalizes both sides via
+`S.NormalizeName` before comparing, matching the receive-side
+pattern at `Net.lua:741-748`.
+
+### Tests
+
+819/819 pass. All v1.8.0 changes are pacing constants, UI indicators,
+host-side recovery, and lobby plumbing — no game logic touched.
+
 ## v1.7.0 — Saudi authenticity + tooltips + onboarding (audit v1.6.1 batch 1)
 
 First release of the v1.6.1 audit-driven marathon (3 releases: v1.7.0

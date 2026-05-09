@@ -680,12 +680,33 @@ function S.HostBeginLobby()
 end
 
 -- Host receives a join request for our game.
+--
+-- v1.8.0 (audit v1.6.1 MP-50 HIGH): name-normalization fix. Pre-fix
+-- the dedup check (`info.name == name`) used raw equality, but WoW's
+-- CHAT_MSG_ADDON sender format isn't guaranteed: same-realm peers
+-- can arrive as just "Name" while cross-realm arrive as "Name-Realm".
+-- Same player joining via `/reload` after a brief disconnect could
+-- pass the dedup check (different surface form), getting a SECOND
+-- seat — duplicate. The normSender helper at Net.lua:741 was already
+-- defensively normalizing receive-side; HostHandleJoin missed the
+-- analogous send-side gate. Now normalize both sides before
+-- comparing. Same fix shape as the v0.11.x XR2-* and 8th-audit
+-- name-normalization fixes throughout Net.lua.
 function S.HostHandleJoin(name)
     if not s.isHost or s.phase ~= K.PHASE_LOBBY then return end
     if not name or name == s.localName then return end
+    local nname = (S.NormalizeName and S.NormalizeName(name)) or name
+    if nname == ((S.NormalizeName and S.NormalizeName(s.localName))
+                 or s.localName) then
+        return  -- normalized self-match; ignore
+    end
     -- already seated?
     for _, info in pairs(s.seats) do
-        if info and info.name == name then return end
+        if info and info.name then
+            local seated = (S.NormalizeName and S.NormalizeName(info.name))
+                           or info.name
+            if seated == nname then return end
+        end
     end
     -- find first empty seat (2..4)
     for seat = 2, 4 do

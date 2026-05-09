@@ -403,7 +403,39 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                 end
                 if not found then
                     L.Warn("roster", "seat %d (%s) left the group", seat, short)
-                    B.State.HostKickSeat(seat)
+                    -- v1.8.0 (audit v1.6.1 MP-01 CRITICAL): when a
+                    -- seated human drops mid-game, replace them with a
+                    -- bot so the round can continue. Pre-fix
+                    -- HostKickSeat just dropped the seat to nil — the
+                    -- next time the dispatcher hit that seat's turn, it
+                    -- would freeze permanently (no human to AFK-timer,
+                    -- no bot to dispatch). Replacing with a bot keeps
+                    -- the round playable; the bot inherits the
+                    -- in-flight state (hand if dealt, bid if cast).
+                    -- Lobby/pre-deal disconnect = kick (bot fill via
+                    -- the existing /baloot bots flow); mid-round
+                    -- disconnect = bot replace.
+                    if B.State.s.phase == K.PHASE_LOBBY then
+                        B.State.HostKickSeat(seat)
+                    else
+                        -- Mid-round: replace with bot, preserve the
+                        -- isBot flag so MaybeRunBot picks it up. Hand
+                        -- and bid state already live in S.s.hostHands
+                        -- and S.s.bids keyed by seat — they survive
+                        -- the seat-record swap.
+                        local placeholder = "Bot" .. seat
+                        B.State.s.seats[seat] = {
+                            name = placeholder, isBot = true,
+                        }
+                        L.Info("roster",
+                            "seat %d replaced by bot (%s dropped mid-round)",
+                            seat, short)
+                        -- Kick MaybeRunBot in case it's the dropped
+                        -- seat's turn right now.
+                        if B.Net and B.Net.MaybeRunBot then
+                            B.Net.MaybeRunBot()
+                        end
+                    end
                     if B.UI then B.UI.Refresh() end
                     if B.Net then B.Net.SendLobby(B.State.s.seats, B.State.s.gameID) end
                 end
