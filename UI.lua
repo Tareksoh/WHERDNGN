@@ -1672,6 +1672,19 @@ local function clearActions()
             -- doesn't show on a button repurposed for a new action.
             b:SetScript("OnEnter", nil)
             b:SetScript("OnLeave", nil)
+            -- v1.8.1 (audit v1.6.1 UX-13 CRITICAL): clear OnUpdate too.
+            -- The BALOOT! pulse OnUpdate (UI.lua:~2230) was set on a
+            -- pooled button but never cleared on pool reuse — a button
+            -- repurposed for a different action in a later phase kept
+            -- pulsing its label color forever, fighting whatever the
+            -- new phase wanted to display. Clearing OnUpdate + resetting
+            -- alpha/text-color closes the leak.
+            b:SetScript("OnUpdate", nil)
+            b:SetAlpha(1.0)
+            local fs = b.GetFontString and b:GetFontString()
+            if fs and fs.SetTextColor then
+                fs:SetTextColor(1, 1, 1)
+            end
         end
     end
     actionUsed = 0
@@ -2413,6 +2426,18 @@ local function renderHand()
         b:SetScript("OnClick", function()
             if S.s.phase ~= K.PHASE_PLAY then return end
             if not S.IsMyTurn() then return end
+            -- v1.8.1 (audit v1.6.1 UX-21 HIGH): paused-state gate.
+            -- Pre-fix the click was rejected silently downstream by
+            -- N.LocalPlay's `S.s.paused` check at Net.lua:~2300, but
+            -- the user got NO visible feedback — they thought their
+            -- click landed and just sat waiting. Gate here AND surface
+            -- a chat message so they know to /baloot status or ask the
+            -- host to unpause.
+            if S.s.paused then
+                print("|cff66ddff[WHEREDNGN]|r Game is paused — wait for "
+                    .. "host to resume.")
+                return
+            end
             -- DO NOT gate on legalSet. LocalPlay warns the player
             -- privately and lets the card through; that's the whole
             -- point of Takweesh.

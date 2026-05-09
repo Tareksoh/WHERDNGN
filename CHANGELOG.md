@@ -1,5 +1,66 @@
 # Changelog
 
+## v1.8.1 — Polish hotfix (audit v1.6.1 batch 3, marathon completion)
+
+Third and final release of the v1.6.1 audit-driven marathon. Closes
+the remaining surgical fixes — UI cleanup, missing slash subcommand.
+No bot strategy logic touched.
+
+### UX-13 — BALOOT! pulse leak (CRITICAL)
+
+`UI.lua:~1664-1693`. Pre-fix the BALOOT! button's `OnUpdate` (which
+pulses the label color via `fs:SetTextColor` to draw attention) was
+set on a pooled action-button but `clearActions()` only nilled
+`OnClick` — `OnUpdate` survived the pool reuse. A button repurposed
+for a different action in a later phase (e.g., a "Skip" button slot
+that previously held BALOOT!) kept pulsing its label color forever,
+fighting whatever the new phase wanted to display.
+
+`clearActions()` now nils `OnUpdate` and resets `SetAlpha(1.0)` +
+label color to white, fully neutralizing pool entries before reuse.
+
+### UX-21 — Hand-card OnClick paused-state gate (HIGH)
+
+`UI.lua:~2426-2445`. Pre-fix click was rejected silently downstream
+by `N.LocalPlay`'s `S.s.paused` check at `Net.lua:~2300`, but the
+user got NO visible feedback — they thought the click landed and sat
+waiting. Now gates locally and prints a chat hint:
+
+```
+[WHEREDNGN] Game is paused — wait for host to resume.
+```
+
+### PJ-5X — `/baloot swaperm` slash subcommand (HIGH)
+
+`Slash.lua:~226-245`. Pre-fix `swaRequiresPermission` was referenced
+as a real config knob in `WHEREDNGN.lua:54` (`DEFAULTS`) and
+`Net.lua:~3040` (gate), with the comment in `DEFAULTS` saying
+"toggle via /baloot swaperm" — but the dispatch table had no entry.
+Typing `/baloot swaperm` was a no-op. Wired now:
+
+```
+/baloot swaperm  - toggle SWA permission requirement for 4+ cards
+```
+
+Listed in `/baloot help` output.
+
+### Tests
+
+819/819 pass. All v1.8.1 changes are UI cleanup + slash dispatch
+plumbing — no game logic touched.
+
+### v1.6.1 audit marathon: complete
+
+| Release | Track | Items closed |
+|---|---|---|
+| v1.7.0 | Saudi authenticity + tooltips + onboarding | 5 (SA-20, SA-03, SA-30, tooltip layer + ~15 wired sites, first-launch + 2 slash subcommands) |
+| v1.8.0 | Bot pacing + multiplayer resilience | 6 (BF-01, BF-10, BF-11, MP-01, MP-21, MP-50) |
+| v1.8.1 | Polish hotfix | 3 (UX-13, UX-21, PJ-5X) |
+
+14 audit items closed across 3 releases. 819/819 tests pass at every
+ship. No bot strategy logic touched — v1.5.0/1.5.1/1.5.3/1.6.0
+strategy fixes preserved.
+
 ## v1.8.0 — Bot pacing + multiplayer resilience (audit v1.6.1 batch 2)
 
 Second release of the v1.6.1 audit-driven marathon. Closes the

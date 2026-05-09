@@ -19,6 +19,7 @@ local function help()
     print("  /baloot fzloky       - toggle Fzloky (signal-aware) tier (host only)")
     print("  /baloot saudimaster  - toggle Saudi Master (ISMCTS) tier (host only)")
     print("  /baloot swa          - toggle SWA claim-the-rest (default on; off = tournament mode)")
+    print("  /baloot swaperm      - toggle SWA permission requirement for 4+ cards (default on)")
     print("  /baloot preempt      - toggle Triple-on-Ace pre-emption (default on)")
     print("  /baloot start        - host: start the round once lobby is full")
     print("  /baloot debug        - toggle debug logging")
@@ -268,6 +269,28 @@ local function dispatch(msg)
         if WHEREDNGNDB.allowSWA == nil then WHEREDNGNDB.allowSWA = true end
         WHEREDNGNDB.allowSWA = not WHEREDNGNDB.allowSWA
         say("SWA (سوا claim-the-rest) = " .. tostring(WHEREDNGNDB.allowSWA))
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
+
+    -- v1.8.1 (audit v1.6.1 PJ-5X HIGH): /baloot swaperm subcommand.
+    -- Pre-fix `swaRequiresPermission` was a real config knob referenced
+    -- in WHEREDNGN.lua:54 (DEFAULTS) and Net.lua:~3040 (gate site), but
+    -- the slash dispatch had no entry for it — typing /baloot swaperm
+    -- was a no-op even though the comment in DEFAULTS said "toggle via
+    -- /baloot swaperm". Now wired:
+    if msg == "swaperm" or msg == "swapermission" then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        if WHEREDNGNDB.swaRequiresPermission == nil then
+            WHEREDNGNDB.swaRequiresPermission = true
+        end
+        WHEREDNGNDB.swaRequiresPermission = not WHEREDNGNDB.swaRequiresPermission
+        if WHEREDNGNDB.swaRequiresPermission then
+            say("SWA permission required for 4+ cards (Saudi default)")
+        else
+            say("SWA permission DISABLED — all SWA calls instant "
+                .. "(house-rule mode)")
+        end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end
