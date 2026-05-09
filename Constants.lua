@@ -474,6 +474,13 @@ K.OVERCALL_TIMEOUT_SEC = 5
 K.HOST_HEARTBEAT_SEC          = 15  -- broadcast cadence
 K.HOST_HEARTBEAT_TIMEOUT_SEC  = 45  -- 3 missed heartbeats before alert
 
+-- v3.0 (audit v1.6.1 UX-35 LOW): UI pulse cadence pulled out as
+-- constants. Pre-fix the AFK turn-warn pulse hardcoded `8 ticks ×
+-- 0.18s = 1.4s` inline; not configurable and not documented as a
+-- product knob. Now exposed for tunability + clarity. Same defaults.
+K.UI_AFK_PULSE_TICKS  = 8
+K.UI_AFK_PULSE_PERIOD = 0.18
+
 -- Bot AI thresholds (raw "strength score" units; see Bot.lua for the
 -- per-suit and Sun strength formulas). Tuned for the canonical 4-rung
 -- ×2/×3/×4/match-win economy (post-v0.1.34 escalation rewrite).

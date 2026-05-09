@@ -167,42 +167,135 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
         -- minimal (clicking it opens the WHEREDNGN window) since the
         -- real settings are in /baloot subcommands; the registration
         -- is purely for findability.
-        if Settings and Settings.RegisterCanvasLayoutCategory then
-            -- Modern (10.0+) Settings API: build a tiny canvas with a
-            -- description + open-window button.
+        -- v3.0 (audit v1.6.1 PJ-04 follow-up + PJ-52 MED): real
+        -- Settings panel with checkboxes for every persistent
+        -- WHEREDNGNDB toggle. Pre-v3.0 the panel was a description-
+        -- only stub that pointed at slash commands. Now players can
+        -- toggle bot tier, rules, sound, etc. without leaving the
+        -- options menu.
+        local function buildSettingsPanel()
             local panel = CreateFrame("Frame")
             panel.name = "Loot & Baloot (WHEREDNGN)"
+
             local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
             title:SetPoint("TOPLEFT", 16, -16)
-            title:SetText("Loot & Baloot")
+            title:SetText("Loot & Baloot — Saudi Baloot")
+
             local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-            desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+            desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
             desc:SetWidth(560)
             desc:SetJustifyH("LEFT")
-            desc:SetText("Saudi Baloot card game over party addon channel.\n\n"
-                .. "Settings live in slash commands:\n"
-                .. "  /baloot help    — full command list\n"
-                .. "  /baloot rules   — Saudi Baloot quick reference\n"
-                .. "  /baloot host    — start hosting a game\n"
-                .. "  /baloot join    — accept a pending invite")
+            desc:SetText("All toggles below mirror /baloot subcommands. "
+                .. "Click the minimap icon to open the game window. "
+                .. "Type |cffffffff/baloot help|r in chat for the full "
+                .. "command list.")
+
             local openBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
             openBtn:SetSize(180, 24)
-            openBtn:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -16)
+            openBtn:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -10)
             openBtn:SetText("Open WHEREDNGN window")
             openBtn:SetScript("OnClick", function()
                 if B.UI and B.UI.Toggle then B.UI.Toggle() end
             end)
+
+            -- Helper to create a labeled checkbox bound to a
+            -- WHEREDNGNDB key. Cascading effect: clicking M3lm checks
+            -- Advanced too (visual feedback that strict-extension is
+            -- happening; the actual logic is in Bot.IsAdvanced /
+            -- IsM3lm which already check parents).
+            local lastCb
+            local function makeCheck(key, label, tooltip, anchor)
+                local cb = CreateFrame("CheckButton", nil, panel,
+                                       "InterfaceOptionsCheckButtonTemplate")
+                if anchor then
+                    cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, 2)
+                else
+                    cb:SetPoint("TOPLEFT", openBtn, "BOTTOMLEFT", 0, -16)
+                end
+                cb.Text:SetText(label)
+                cb:SetScript("OnShow", function(self)
+                    self:SetChecked(WHEREDNGNDB and WHEREDNGNDB[key])
+                end)
+                cb:SetScript("OnClick", function(self)
+                    WHEREDNGNDB = WHEREDNGNDB or {}
+                    WHEREDNGNDB[key] = self:GetChecked() and true or false
+                end)
+                if tooltip then
+                    cb:SetScript("OnEnter", function(self)
+                        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                        GameTooltip:AddLine(label, 1, 1, 1)
+                        GameTooltip:AddLine(tooltip, 0.85, 0.85, 0.85, true)
+                        GameTooltip:Show()
+                    end)
+                    cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                end
+                return cb
+            end
+
+            -- Section: bot tiers
+            local sec1 = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+            sec1:SetPoint("TOPLEFT", openBtn, "BOTTOMLEFT", 0, -16)
+            sec1:SetText("|cffffd055Bot tiers|r (cumulative — higher tiers extend lower)")
+            local advCb = makeCheck("advancedBots", "Advanced bots",
+                "Human-style heuristics: partner-bid reads, position-aware play. "
+                .. "Tier 2/5.",
+                sec1)
+            advCb:SetPoint("TOPLEFT", sec1, "BOTTOMLEFT", 0, -2)
+            local m3lmCb  = makeCheck("m3lmBots", "M3lm (master)",
+                "Pro tier: opponent style ledger, match-point urgency. "
+                .. "Tier 3/5. Strictly extends Advanced.", advCb)
+            local fzlokyCb = makeCheck("fzlokyBots", "Fzloky (signal-aware)",
+                "Reads partner's discard signals to bias lead choice. "
+                .. "Tier 4/5. Strictly extends M3lm.", m3lmCb)
+            makeCheck("saudiMasterBots", "Saudi Master (ISMCTS)",
+                "Top tier: monte-carlo opponent-hand sampling, ~150ms/move. "
+                .. "Tier 5/5. Strictly extends Fzloky.", fzlokyCb)
+
+            -- Section: Saudi rules
+            local sec2 = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+            sec2:SetPoint("TOPLEFT", title, "TOPLEFT", 320, -90)
+            sec2:SetText("|cffffd055Saudi rule toggles|r")
+            local swaCb = makeCheck("allowSWA", "SWA (claim-the-rest)",
+                "Saudi-table sociable rule: caller asserts they win every "
+                .. "remaining trick. Off = strict tournament mode.", sec2)
+            swaCb:SetPoint("TOPLEFT", sec2, "BOTTOMLEFT", 0, -2)
+            local swaPermCb = makeCheck("swaRequiresPermission",
+                "SWA permission for 4+ cards",
+                "Saudi default: 4+ card SWA needs opps' permission. "
+                .. "Off = house rule of all-SWA-instant.", swaCb)
+            makeCheck("preemptOnAce", "Triple-on-Ace pre-emption",
+                "Round-2 Sun on Ace bid card lets earlier seats claim. "
+                .. "Saudi rule. Off = simpler 'first non-pass wins'.",
+                swaPermCb)
+
+            -- Section: misc
+            local sec3 = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+            sec3:SetPoint("TOPLEFT", sec2, "TOPLEFT", 0, -160)
+            sec3:SetText("|cffffd055Misc|r")
+            local soundCb = makeCheck("sound", "Sound enabled",
+                "Master toggle for card play SFX, voice cues, fanfares. "
+                .. "Same effect as the lobby-window checkbox.", sec3)
+            soundCb:SetPoint("TOPLEFT", sec3, "BOTTOMLEFT", 0, -2)
+            makeCheck("debug", "Debug logging",
+                "Verbose log output. /baloot log dumps the buffer.",
+                soundCb)
+
+            local footer = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+            footer:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 16, 16)
+            footer:SetText("|cff999999Numeric settings (game target, "
+                .. "cards/felt theme): see /baloot help. "
+                .. "Lifetime stats: /baloot stats.|r")
+
+            return panel
+        end
+
+        if Settings and Settings.RegisterCanvasLayoutCategory then
+            local panel = buildSettingsPanel()
             local cat = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
             Settings.RegisterAddOnCategory(cat)
         elseif InterfaceOptions_AddCategory then
-            -- Legacy (pre-10.0) compatibility shim.
-            local panel = CreateFrame("Frame")
-            panel.name = "Loot & Baloot (WHEREDNGN)"
-            local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-            desc:SetPoint("TOPLEFT", 16, -16)
-            desc:SetWidth(560)
-            desc:SetJustifyH("LEFT")
-            desc:SetText("Saudi Baloot — Type /baloot help for commands.")
+            -- Legacy (pre-10.0) compatibility shim with same checkbox layout.
+            local panel = buildSettingsPanel()
             InterfaceOptions_AddCategory(panel)
         end
         -- v1.7.0 (audit v1.6.1 PJ-01): one-shot welcome on first launch.

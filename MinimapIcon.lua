@@ -14,8 +14,15 @@ B.MinimapIcon = B.MinimapIcon or {}
 local M = B.MinimapIcon
 local K = B.K
 
+-- v3.0 (audit v1.6.1 UX-53 LOW): minimap radius now derives from
+-- the actual minimap size at runtime, with the prior hardcoded 80
+-- as a sensible-default cap. Pre-fix the 80px radius clipped on
+-- minimaps smaller than ~80px (some HUD addons shrink the minimap)
+-- — the icon would land off-screen. Reading Minimap:GetWidth() at
+-- positionButton time + clamping keeps the icon visible under
+-- arbitrary scaling.
 local DEFAULT_ANGLE = 200      -- degrees, 0 = right, 90 = top
-local RADIUS        = 80       -- distance from minimap center
+local RADIUS        = 80       -- distance from minimap center (default)
 
 local btn
 
@@ -23,8 +30,11 @@ local function positionButton()
     if not btn or not Minimap then return end
     local angle = (WHEREDNGNDB and WHEREDNGNDB.minimapAngle) or DEFAULT_ANGLE
     local rad = math.rad(angle)
-    local x = math.cos(rad) * RADIUS
-    local y = math.sin(rad) * RADIUS
+    -- v3.0 UX-53: derive radius from actual minimap size; clamp.
+    local mw = Minimap.GetWidth and Minimap:GetWidth() or 140
+    local r = math.min(RADIUS, (mw or 140) * 0.55)
+    local x = math.cos(rad) * r
+    local y = math.sin(rad) * r
     btn:ClearAllPoints()
     btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
 end

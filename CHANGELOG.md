@@ -1,5 +1,96 @@
 # Changelog
 
+## v3.0.0 — Architectural release: Settings panel + lobby kick + polish
+
+Major version bump. The headline changes are the proper Settings
+panel under Esc → Options (replacing the v2.0.0 description-only
+stub) and lobby-time host kick UI. Plus polish on minimap radius,
+AFK pulse constants, and a `/baloot config` shortcut.
+
+### PJ-04 follow-up + PJ-52 — Settings panel with toggles
+
+`WHEREDNGN.lua:~155-260`. Pre-v3.0 the Esc → Options → AddOns
+entry for WHEREDNGN was a description-only stub pointing at slash
+commands. Players reaching for the standard WoW settings flow saw
+no toggles. Now: a proper canvas panel with checkboxes for every
+persistent `WHEREDNGNDB` toggle, organized into three sections:
+
+- **Bot tiers** (cumulative): Advanced / M3lm / Fzloky / Saudi Master
+- **Saudi rule toggles**: SWA, SWA-permission, Triple-on-Ace pre-empt
+- **Misc**: Sound, Debug logging
+
+Each checkbox has a tooltip explaining the toggle + its tier-
+inheritance property (matching the v2.3.0 PJ-54 lobby tooltips).
+Numeric settings (game target, card/felt themes) remain in slash
+commands — surfaced via the panel footer. Modern (10.0+) Settings
+API + legacy `InterfaceOptions_AddCategory` shim for older clients.
+
+### PJ-53 — `/baloot config` shortcut
+
+`Slash.lua`. Opens the Settings panel directly (modern
+`Settings.OpenToCategory` + legacy `InterfaceOptionsFrame_OpenToCategory`
+fallback with the known double-call workaround). Pre-fix players
+had to navigate Esc → Options → AddOns by hand. Aliases:
+`/baloot settings`, `/baloot options`.
+
+### MP-41 — Lobby kick button
+
+`UI.lua:~880-915`. Pre-fix the only way to remove a player was
+waiting for them to `/baloot reset` or leave the party — host had
+no graceful "out you go" path. Now seats 2-4 get a "✕" kick button
+on the right edge of the lobby row, host-only + lobby-phase only +
+hidden when the seat is empty. Click → `S.HostKickSeat(seat)` +
+re-broadcast. Kicked client sees their seat clear on the next
+`MSG_LOBBY`.
+
+### UX-35 — AFK pulse constants
+
+`Constants.lua` + `UI.lua`. Pre-fix the AFK turn-warn pulse
+hardcoded `8 ticks × 0.18s` inline. Now exposed as
+`K.UI_AFK_PULSE_TICKS` / `K.UI_AFK_PULSE_PERIOD` with the same
+defaults — tunable + documented.
+
+### UX-53 — Minimap radius adapts to actual size
+
+`MinimapIcon.lua`. Pre-fix the hardcoded `RADIUS = 80` clipped on
+minimaps smaller than ~80px (some HUD addons shrink the minimap)
+— the icon would land off-screen. Now derives from
+`Minimap:GetWidth() × 0.55`, clamped at 80, so the icon always
+stays visible regardless of minimap scaling.
+
+### Tests
+
+819/819 pass.
+
+### What's deferred to v3.1+
+
+Honestly: items I tried and found too risky / restructure-heavy
+for a single release:
+
+- **BF-13/14** — AKA + trump-cut voice cue spacing (needs deferred
+  broadcast restructure)
+- **BF-22/23** — Bot dispatch separator + preempt cascade pacing
+- **BF-52/62** — "Considering Bel" hover + late-recovery surface
+  (need new UI infrastructure)
+- **UX-71/72** — peekLastTrick + bid-card phase-advance fade
+  (need centerCards alpha animation framework)
+- **UX-32** — Overcall banner refresh throttle (already self-
+  throttles via 0.33s tick — verified, no change needed)
+- **UX-61/70/73** — Chat color match + animation polish (subjective;
+  playtest first)
+- **PJ-14/42** — Round-2 wla label, game-end styling per outcome
+  (subjective)
+- **MP-70** — Host-race resolution protocol (real protocol work,
+  not a quick fix)
+- **MP-05/23/51/72/73** — Mostly already-addressed-in-prior-fixes
+  or rare-edge — fix-on-encounter
+- **Round replay (PJ-41)** — full feature, v3.x+ work
+
+These represent ~15 more polish items but each requires either
+restructure work or playtest signal to know what matters. v3.0.0
+caps the marathon at the cleanly-tractable polish; further work
+should be playtest-driven.
+
 ## v2.3.0 — Polish batch 3 (10 items: bot feel + UI + Saudi auth)
 
 Continuation of the polish marathon. No bot strategy logic touched.

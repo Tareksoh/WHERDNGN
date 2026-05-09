@@ -34,6 +34,7 @@ local function help()
     print("  /baloot history [N]  - dump last N round-result rows (default 20)")
     print("  /baloot history clear - wipe round-result history")
     print("  /baloot history off / on - toggle telemetry capture (default on)")
+    print("  /baloot config       - open the Settings panel (Esc → Options → AddOns)")
     print("  /baloot leave        - graceful exit (non-host); host sees you as dropped")
     print("  /baloot stats        - lifetime W/L + bidder stats (cross-session)")
     print("  /baloot rules        - Saudi Baloot quick-reference cheat-sheet")
@@ -79,6 +80,31 @@ local function dispatch(msg)
 
     if msg == "help" or msg == "?" or msg == "h" then
         help()
+        return
+    end
+
+    -- v3.0 (audit v1.6.1 PJ-53 LOW): /baloot config opens the
+    -- WHEREDNGN settings panel under Esc → Options → AddOns. Pre-fix
+    -- there was no shortcut — players had to navigate the menu by
+    -- hand. The Settings API exposes a per-category open helper.
+    if msg == "config" or msg == "settings" or msg == "options" then
+        -- Modern (10.0+): Settings.OpenToCategory wants the category ID
+        -- returned by RegisterAddOnCategory. We saved it; if Settings
+        -- is unavailable, fall back to InterfaceOptionsFrame_OpenToCategory
+        -- with the panel name.
+        if Settings and Settings.OpenToCategory then
+            -- Without the cached ID, fall back to opening top-level
+            -- AddOns; users see the addon highlighted on first reach.
+            Settings.OpenToCategory("Loot & Baloot (WHEREDNGN)")
+        elseif InterfaceOptionsFrame_OpenToCategory then
+            -- Legacy. Some clients require two calls due to a
+            -- known Blizzard bug.
+            InterfaceOptionsFrame_OpenToCategory("Loot & Baloot (WHEREDNGN)")
+            InterfaceOptionsFrame_OpenToCategory("Loot & Baloot (WHEREDNGN)")
+        else
+            say("Settings panel not available on this client; "
+                .. "use /baloot help.")
+        end
         return
     end
 

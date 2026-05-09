@@ -903,6 +903,39 @@ local function buildLobby()
             sw:SetScript("OnLeave", function() GameTooltip:Hide() end)
             lobbyPanel.swapBtns[i] = sw
         end
+        -- v3.0 (audit v1.6.1 MP-41 MED): Kick button on seats 2-4
+        -- (host can't kick themselves). Lobby-phase only. Pre-fix
+        -- the only way to remove a player was waiting for them to
+        -- /baloot reset / leave the party — host had no graceful
+        -- "no thanks, you're out" path. Kick removes the seat
+        -- record + re-broadcasts the lobby; the kicked client sees
+        -- their seat go away on next MSG_LOBBY.
+        if i >= 2 then
+            local kb = makeButton(row, "✕", 22, 22)
+            kb:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            local kSeat = i
+            kb:SetScript("OnClick", function()
+                if not S.s.isHost then return end
+                if S.s.phase ~= K.PHASE_LOBBY then return end
+                if not S.s.seats or not S.s.seats[kSeat] then return end
+                S.HostKickSeat(kSeat)
+                if net().SendLobby then
+                    net().SendLobby(S.s.seats, S.s.gameID)
+                end
+                U.Refresh()
+            end)
+            kb:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+                GameTooltip:AddLine(("Kick seat %d"):format(kSeat), 1, 0.5, 0.5)
+                GameTooltip:AddLine("Host only. Lobby phase only. "
+                    .. "The kicked player sees their seat clear on "
+                    .. "the next lobby broadcast. Replace with bot "
+                    .. "via Fill Bots.", 0.85, 0.85, 0.85, true)
+                GameTooltip:Show()
+            end)
+            kb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            row.kickBtn = kb
+        end
     end
 
     -- Host or Join buttons
@@ -3337,6 +3370,16 @@ local function renderLobby()
         else
             txt:SetText("|cff666666(empty)|r")
         end
+        -- v3.0 MP-41: kick button visibility. Show only on host
+        -- during lobby phase, only on occupied seats >= 2.
+        local row = lobbyPanel.seatRows[i]
+        if row and row.kickBtn then
+            local canKick = S.s.isHost
+                and S.s.phase == K.PHASE_LOBBY
+                and i >= 2
+                and info ~= nil
+            row.kickBtn:SetShown(canKick)
+        end
     end
     hostStartBtn:SetShown(S.s.isHost and S.LobbyFull())
     -- Fill Bots only useful for host while in lobby with empty seats
@@ -4245,7 +4288,9 @@ function U.PulseTurn()
         _pulseTicker = nil
         lb:SetBackdropBorderColor(unpack(COL.legalEdge))
     end
-    local ticks, every = 8, 0.18
+    -- v3.0 (audit v1.6.1 UX-35 LOW): cadence pulled to K.UI_AFK_PULSE_*
+    local ticks, every = K.UI_AFK_PULSE_TICKS or 8,
+                         K.UI_AFK_PULSE_PERIOD or 0.18
     local i = 0
     local on = false
     _pulseTicker = C_Timer.NewTicker(every, function()
