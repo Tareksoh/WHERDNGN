@@ -134,6 +134,20 @@ f:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
             L.Warn("init", "failed to register addon prefix %s", K.PREFIX)
         end
         if B.MinimapIcon and B.MinimapIcon.Show then B.MinimapIcon.Show() end
+        -- v1.7.0 (audit v1.6.1 PJ-01): one-shot welcome on first launch.
+        -- Pre-fix the addon was completely silent on first install — new
+        -- users had to discover `/baloot` or the minimap icon by guess.
+        -- Welcome prints once, then sets WHEREDNGNDB.welcomed = true so
+        -- it never repeats. Mentions the minimap icon and `/baloot help`
+        -- as the two discovery surfaces.
+        if not WHEREDNGNDB.welcomed then
+            print("|cff66ddff[WHEREDNGN]|r Welcome to Loot & Baloot — "
+                .. "Saudi Baloot for WoW. Click the |cffffffffminimap icon|r "
+                .. "to host or join a game. Type |cffffffff/baloot help|r "
+                .. "for commands or |cffffffff/baloot rules|r for a Saudi-rules "
+                .. "cheat-sheet.")
+            WHEREDNGNDB.welcomed = true
+        end
         -- Restore an in-progress session that was persisted on the
         -- previous /reload or logout. If no session is present (or it's
         -- too old / from a finished game) RestoreSession returns false

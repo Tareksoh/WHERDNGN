@@ -1,5 +1,109 @@
 # Changelog
 
+## v1.7.0 — Saudi authenticity + tooltips + onboarding (audit v1.6.1 batch 1)
+
+First release of the v1.6.1 audit-driven marathon (3 releases: v1.7.0
+Saudi+tooltips+onboarding, v1.8.0 bot pacing+multiplayer resilience,
+v1.8.1 polish hotfix). Closes the most-impactful UI/interaction gaps
+without touching bot strategy logic — v1.5.0/1.5.1/1.5.3/1.6.0
+strategy fixes all preserved.
+
+### SA-20 — Re-Saudi-fy escalation rung labels (CRITICAL)
+
+`UI.lua:~1828, 1846, 1849-1851, 1866-1869, 1882-1885, 3253-3258,
+3374-3379, 3556-3561`. v1.0.2's user-requested rename had flipped
+the Saudi-flavored escalation labels (Bel / Bel x2 / Four / Gahwa)
+to English (Double x2 / Triple x3 / Four / Gahwa). The audio cues
+still said «بل» but the buttons said "Double x2" — direct doc-vs-
+code violation of `CLAUDE.md:56` mandate "Saudi names in player-
+visible text". v1.7.0 reverts the visible labels to romanized Saudi:
+
+- "Double x2" → "Bel x2"
+- "Double & open / closed" → "Bel & open / closed"
+- "Triple x3 (open / closed)" → "Bel x3 (open / closed)"
+- "Four & open / closed (x4)" → unchanged (already Saudi loan-word)
+- "Gahwa (match-win)" → unchanged (already Saudi)
+- "Double forbidden (Sun >=100)" → "Bel forbidden (Sun >=100)"
+
+Round-end / contract-banner mod chips updated to match. Internal
+phase / message names (`PHASE_DOUBLE`, `LocalDouble`, `MSG_DOUBLE`)
+unchanged — pure UI-string change.
+
+**Note**: "Saudi names" here means **romanized Saudi**, NOT Arabic
+glyphs. WoW's bundled fonts (Arial Narrow / Frizz / Skurri) don't
+include the Arabic Unicode block, so direct «بل» glyphs render as
+empty boxes.
+
+### SA-03 — Belote glyph dynamic per trump suit (HIGH)
+
+`UI.lua:3262, 3385`. Pre-fix the Belote score line hardcoded `♥`
+regardless of contract trump — K+Q-of-spades Belote on a Hokm-Spades
+contract showed "Belote (K+Q ♥)". Now reads `K.SUIT_GLYPH[trump]`.
+
+### SA-30 — Match-end winner/loser branch (HIGH)
+
+`UI.lua:3148`. Pre-fix the match-end title `8amt!! go play something
+else` was shown to BOTH teams. "غامت" (8amt) is Saudi loser-banter;
+firing it at the winner reads as either confusing or condescending.
+Now branches on `localTeam == winner`:
+
+- Winners: "ya batal — match win!" (يا بطل — champion)
+- Losers: "8amt!! go play something else" (current line, kept)
+
+### Tooltip layer for action buttons (CRITICAL — PJ + UX)
+
+`UI.lua:1672-1731`. Pre-fix `addAction()` and `addConfirmAction()`
+had ZERO tooltip layer. New players pressing "Ashkal" or "BALOOT!"
+or "AKA" had no in-game way to learn what the call meant — they
+had to read source code or external Saudi Baloot tutorials.
+
+Extended both helpers with an optional `tooltip` parameter that
+wires `OnEnter` / `OnLeave` mirroring the existing checkbox tooltip
+pattern at `UI.lua:849-856`. Existing call sites passing nil keep
+pre-v1.7.0 behavior; opt-in.
+
+Wired tooltips at the highest-impact call sites:
+- Bid panel: Pass / wla / Hokm / Sun / Ashkal / Kawesh + R2 Hokm-suit
+- Escalation rungs: Skip / Bel / Bel & open / Bel & closed / Bel x3 /
+  Four / Gahwa
+- Overcall window: Upgrade to Sun / Take as Sun / WLA
+- Side calls: SWA / Accept SWA / Deny SWA / AKA / BALOOT!
+
+Each tooltip explains both the mechanic and the Saudi term in one
+sentence. New player first-game ramp-up is now possible without
+external docs.
+
+### First-launch welcome (HIGH — PJ-01)
+
+`WHEREDNGN.lua:130+`. Pre-fix the addon was completely silent on
+first install. Now prints a one-shot welcome on `PLAYER_LOGIN`,
+gated on `WHEREDNGNDB.welcomed` so it never repeats:
+
+```
+[WHEREDNGN] Welcome to Loot & Baloot — Saudi Baloot for WoW.
+Click the minimap icon to host or join a game. Type /baloot help
+for commands or /baloot rules for a Saudi-rules cheat-sheet.
+```
+
+### `/baloot help` and `/baloot rules` slash subcommands (HIGH — PJ-5X)
+
+`Slash.lua:38+`. Pre-fix `help()` was implemented as a static
+function at the top of `Slash.lua` but had NO entry in the dispatch
+table — typing `/baloot help` was a no-op. Now wired:
+
+- `/baloot help` (and aliases `?`, `h`) — dumps the full command list
+- `/baloot rules` (and aliases `rule`, `ref`) — Saudi Baloot quick-
+  reference cheat-sheet covering bidding, card values, escalation
+  chain, signals (AKA / SWA / BALOOT), win condition, and Saudi-
+  specific traps (9-of-trump rank, strict-majority bidder rule)
+
+`/baloot help` line list updated to mention both new commands.
+
+### Tests
+
+819/819 pass. All v1.7.0 changes are UI strings, tooltip wiring,
+or new slash-subcommand additions; no game logic touched.
+
 ## v1.6.1 — Wire desync fix (MSG_TURN dropped frame recovery)
 
 User-reported: "the game froze, it was two humans and two bots, the

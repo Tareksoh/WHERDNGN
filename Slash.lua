@@ -33,6 +33,37 @@ local function help()
     print("  /baloot history [N]  - dump last N round-result rows (default 20)")
     print("  /baloot history clear - wipe round-result history")
     print("  /baloot history off / on - toggle telemetry capture (default on)")
+    print("  /baloot rules        - Saudi Baloot quick-reference cheat-sheet")
+    print("  /baloot help         - show this command list")
+end
+
+-- v1.7.0 (audit v1.6.1 PJ-1X): Saudi rules cheat-sheet for new players.
+-- Pre-fix the addon had ZERO in-game rules education — players had to
+-- read external Saudi Baloot tutorials or guess from button names.
+-- This dumps a concise primer covering the bid types, card values, the
+-- escalation chain, and the special signals (AKA / SWA / Belote).
+local function rules()
+    say("Saudi Baloot quick reference:")
+    print("|cffffffffBidding (round 1):|r")
+    print("  - Hokm (trump = up-card suit), Sun (no-trump), Pass, Ashkal")
+    print("  - Sun overcalls Hokm. First non-pass wins.")
+    print("|cffffffffBidding (round 2):|r runs only if R1 was all-pass.")
+    print("  - Hokm with any non-up-card suit, Sun, or wla (skip).")
+    print("|cffffffffCard values:|r")
+    print("  Hokm trump: J=20, 9=14, A=11, T=10, K=4, Q=3, 8/7=0")
+    print("  Off-trump / Sun: A=11, T=10, K=4, Q=3, J=2, 9/8/7=0")
+    print("  Last trick: +10 raw bonus.")
+    print("|cffffffffEscalation chain (Saudi-specific):|r")
+    print("  Bel (×2) -> Bel x3 (×3) -> Four (×4) -> Gahwa (match-win)")
+    print("  Each rung must be voluntarily declared. Default closed.")
+    print("|cffffffffSignals:|r")
+    print("  AKA (إكَهْ): \"I hold the boss in this suit, partner — don't trump\"")
+    print("  SWA (سوا): \"I claim all remaining tricks\". <=3 cards instant; 4+ asks permission.")
+    print("  BALOOT (بلوت): K+Q-of-trump = +20 raw, multiplier-IMMUNE.")
+    print("|cffffffffWin condition:|r first team to /baloot target points (default 152).")
+    print("|cffffffffSaudi-specific traps:|r")
+    print("  9 of trump is rank #2 (after J). FOUR 9s do NOT form a Carre.")
+    print("  Bidder needs STRICT majority — tied 81/162 = bidder fails.")
 end
 
 local function dispatch(msg)
@@ -40,6 +71,16 @@ local function dispatch(msg)
 
     if msg == "" or msg == "show" or msg == "toggle" then
         B.UI.Toggle()
+        return
+    end
+
+    if msg == "help" or msg == "?" or msg == "h" then
+        help()
+        return
+    end
+
+    if msg == "rules" or msg == "rule" or msg == "ref" then
+        rules()
         return
     end
 

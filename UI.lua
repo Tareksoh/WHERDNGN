@@ -1664,12 +1664,28 @@ end
 local function clearActions()
     for i = 1, actionUsed do
         local b = actionPool[i]
-        if b then b:Hide(); b:SetScript("OnClick", nil) end
+        if b then
+            b:Hide()
+            b:SetScript("OnClick", nil)
+            -- v1.7.0 (audit v1.6.1 PJ + UX): clear tooltip handlers
+            -- on pool reuse so a stale tooltip from a previous phase
+            -- doesn't show on a button repurposed for a new action.
+            b:SetScript("OnEnter", nil)
+            b:SetScript("OnLeave", nil)
+        end
     end
     actionUsed = 0
 end
 
-local function addAction(label, onclick)
+-- v1.7.0 (audit v1.6.1 PJ-CRITICAL + UX-many): addAction now accepts
+-- an optional tooltip parameter. Pre-fix the action panel's buttons
+-- (Hokm/Sun/Pass/Ashkal/Bel*/Triple*/Four*/Gahwa/AKA/SWA/BALOOT/Take
+-- as Sun/wla/Skip/Confirm-prompt) had ZERO tooltip layer. New players
+-- pressing "Ashkal" or "BALOOT!" with no in-game explanation had to
+-- read the source code. Tooltip mirrors the existing checkbox tooltip
+-- pattern at UI.lua:849-856. Tooltip is OPTIONAL — call sites that
+-- pass nil keep the pre-v1.7.0 behavior (no tooltip shown).
+local function addAction(label, onclick, tooltip)
     actionUsed = actionUsed + 1
     local b = actionPool[actionUsed]
     if not b then
@@ -1688,12 +1704,28 @@ local function addAction(label, onclick)
     if b.armedTk then b.armedTk:Cancel(); b.armedTk = nil end
     b.armed = false
     b:SetScript("OnClick", onclick)
+    -- Tooltip wiring. Strips |cAARRGGBB...|r color codes from `label`
+    -- for the tooltip header so colored UI labels render plain in the
+    -- tooltip box.
+    if tooltip and tooltip ~= "" then
+        local plainLabel = label:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+        b:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:AddLine(plainLabel, 1, 1, 1)
+            GameTooltip:AddLine(tooltip, 0.85, 0.85, 0.85, true)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    else
+        b:SetScript("OnEnter", nil)
+        b:SetScript("OnLeave", nil)
+    end
     b:Show()
     return b
 end
 
-local function addConfirmAction(label, armedLabel, fire)
-    local b = addAction(label, nil)
+local function addConfirmAction(label, armedLabel, fire, tooltip)
+    local b = addAction(label, nil, tooltip)
     bindConfirm(b, label, armedLabel, fire)
     return b
 end
@@ -1717,7 +1749,10 @@ local function renderActions()
             -- pass is essentially "I have no preference / confirm
             -- the existing bid".
             local passLabel = (S.s.phase == K.PHASE_DEAL2BID) and "wla" or "Pass"
-            addAction(passLabel, function() net().LocalBid(K.BID_PASS) end)
+            local passTip = (S.s.phase == K.PHASE_DEAL2BID)
+                and "Decline to bid (round 2). Saudi: «ولا» — no preference."
+                or "Decline to bid (round 1). Saudi: «بَسْ» — pass."
+            addAction(passLabel, function() net().LocalBid(K.BID_PASS) end, passTip)
             local flippedSuit = S.s.bidCard and C.Suit(S.s.bidCard) or nil
             if S.s.phase == K.PHASE_DEAL1 then
                 -- Round 1: scan prior bids to know which buttons apply.
@@ -1734,7 +1769,7 @@ local function renderActions()
                 if flippedSuit and not anyBidYet then
                     addAction("Hokm "..K.SUIT_GLYPH[flippedSuit], function()
                         net().LocalBid(K.BID_HOKM..":"..flippedSuit)
-                    end)
+                    end, "Take the contract with this suit as Hokm (trump). Round-1 Hokm is locked to the up-card suit.")
                 end
 
                 -- Ashkal (Saudi rule): converts the contract to Sun
@@ -1760,7 +1795,11 @@ local function renderActions()
                     end
                 end
                 if not anySun and bidPos >= 3 then
-                    addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end)
+                    addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end,
+                        "Saudi rule (إشكل): convert the contract to Sun, "
+                        .. "with your PARTNER as declarer. Available only "
+                        .. "to bidders 3 and 4. Used to swing partner's Hokm "
+                        .. "into a stronger Sun when you hold the goods.")
                 end
 
                 -- v0.11.20 user-reported UI bug: Sun button was shown
@@ -1773,13 +1812,19 @@ local function renderActions()
                 -- design at HostAdvanceBidding line 2023). Now hidden
                 -- when anySun=true.
                 if not anySun then
-                    addAction("Sun", function() net().LocalBid(K.BID_SUN) end)
+                    addAction("Sun", function() net().LocalBid(K.BID_SUN) end,
+                        "Take the contract as Sun (no-trump). Saudi rule: "
+                        .. "Sun overcalls Hokm, hand total is 130 with a "
+                        .. "×2 multiplier baked in (260 effective).")
                 end
 
                 -- Kawesh: 5-card hand of only 7/8/9 → annul & redeal.
                 -- Available throughout round 1 to the qualifying player.
                 if C.IsKaweshHand(S.s.hand) then
-                    addAction("|cffff8800Kawesh|r", function() net().LocalKawesh() end)
+                    addAction("|cffff8800Kawesh|r", function() net().LocalKawesh() end,
+                        "Annul this deal and redeal. Available when your "
+                        .. "5-card initial hand contains only 7/8/9s — "
+                        .. "structurally unwinnable.")
                 end
             else
                 -- Round 2: 3 Hokm buttons (excluding the flipped suit) + Sun
@@ -1788,10 +1833,12 @@ local function renderActions()
                         local s2 = suit
                         addAction("H "..K.SUIT_GLYPH[suit], function()
                             net().LocalBid(K.BID_HOKM..":"..s2)
-                        end)
+                        end, "Take the contract with this suit as Hokm. "
+                            .. "Round-2 Hokm can be any non-up-card suit.")
                     end
                 end
-                addAction("Sun", function() net().LocalBid(K.BID_SUN) end)
+                addAction("Sun", function() net().LocalBid(K.BID_SUN) end,
+                    "Take the contract as Sun (no-trump, ×2 multiplier).")
             end
         end
     elseif S.s.phase == K.PHASE_DOUBLE then
@@ -1825,50 +1872,65 @@ local function renderActions()
                          S.s.contract, S.s.cumulative)
             if canBel == false then
                 addAction("Skip", function() net().LocalSkipDouble() end)
-                addAction("|cff999999Double forbidden (Sun >=100)|r",
+                addAction("|cff999999Bel forbidden (Sun >=100)|r",
                           function() end)
             else
                 -- v1.0.1 user-reported (Comment 3): Skip leftmost so a
                 -- click-momentum misfire from the just-finished overcall
                 -- phase (slot 1 = "Take as Sun") lands on Skip — the
-                -- safe-default outcome — rather than arming Double. Bel
+                -- safe-default outcome — rather than arming Bel. Bel
                 -- buttons ALREADY use addConfirmAction (two-click arm/
                 -- fire) for an additional safety layer; Skip-leftmost
                 -- closes the residual fast-double-click hole.
                 --
-                -- v1.0.2 user-requested label rename: "Bel" → "Double x2".
-                -- The internal phase / message names (PHASE_DOUBLE,
-                -- LocalDouble, MSG_DOUBLE) are unchanged; this is a
-                -- pure UI-string change matching the new sound asset.
-                addAction("Skip", function() net().LocalSkipDouble() end)
+                -- v1.7.0 (audit v1.6.1 SA-20): re-Saudi-fied escalation
+                -- labels. v1.0.2's rename to "Double x2" violated
+                -- CLAUDE.md's "Saudi names in player-visible text"
+                -- mandate. Restored to romanized Saudi (Bel x2 — NOT
+                -- Arabic glyphs since WoW's bundled fonts don't
+                -- render Arabic). Internal names (PHASE_DOUBLE,
+                -- LocalDouble, MSG_DOUBLE) unchanged.
+                addAction("Skip", function() net().LocalSkipDouble() end,
+                    "Decline to call Bel and let the contract play at base value.")
                 local isSun = S.s.contract and S.s.contract.type == K.BID_SUN
                 if isSun then
-                    addConfirmAction("Double x2", "|cffff7755Confirm Double x2?|r",
-                        function() net().LocalDouble(false) end)
+                    addConfirmAction("Bel x2", "|cffff7755Confirm Bel x2?|r",
+                        function() net().LocalDouble(false) end,
+                        "Bel a Sun contract — doubles the round score (×2). "
+                        .. "Saudi: «بل». Sun has no Bel x3 / Four / Gahwa rungs, "
+                        .. "so this is the terminal escalation.")
                 else
-                    addConfirmAction("Double & open", "|cffff7755Confirm Double & open?|r",
-                        function() net().LocalDouble(true) end)
-                    addConfirmAction("Double & closed", "|cffff7755Confirm Double & close?|r",
-                        function() net().LocalDouble(false) end)
+                    addConfirmAction("Bel & open", "|cffff7755Confirm Bel & open?|r",
+                        function() net().LocalDouble(true) end,
+                        "Bel & open — doubles the round (×2) AND lets the bidder "
+                        .. "counter with Bel x3 (×3). Higher upside, higher risk.")
+                    addConfirmAction("Bel & closed", "|cffff7755Confirm Bel & close?|r",
+                        function() net().LocalDouble(false) end,
+                        "Bel & closed — doubles the round (×2) and STOPS the "
+                        .. "escalation chain. Bidder cannot counter.")
                 end
             end
         end
     elseif S.s.phase == K.PHASE_TRIPLE then
-        -- v0.2.0: Triple is the BIDDER's response to Bel.
-        -- v1.0.2 user-requested label rename: "Triple ... (x3)" → "Triple x3
-        -- (open|closed)" — matches the simplified naming used on the
-        -- PHASE_DOUBLE rename ("Double x2"). Skip leftmost (slot 1) by the
-        -- same v1.0.1 click-momentum logic; Triple buttons retain
-        -- addConfirmAction (two-click arm/fire) as second-line defense.
+        -- v0.2.0: the bidder's response to Bel. Saudi calls this "Bel x3"
+        -- (or "Theri" / ثري in some regional usage); the addon uses
+        -- "Bel x3" to match the "Bel x2" sibling at PHASE_DOUBLE.
+        -- v1.7.0 (audit v1.6.1 SA-20): restored Saudi label. Internal
+        -- name PHASE_TRIPLE / LocalTriple unchanged.
         local b = S.s.contract and S.s.contract.bidder
         if b == S.s.localSeat then
-            addAction("Skip", function() net().LocalSkipDouble() end)
-            addConfirmAction("Triple x3 (open)",
-                "|cffff5555Confirm Triple x3 (open)?|r",
-                function() net().LocalTriple(true) end)
-            addConfirmAction("Triple x3 (closed)",
-                "|cffff5555Confirm Triple x3 (closed)?|r",
-                function() net().LocalTriple(false) end)
+            addAction("Skip", function() net().LocalSkipDouble() end,
+                "Decline to counter. Round plays at the defenders' Bel x2 (×2).")
+            addConfirmAction("Bel x3 (open)",
+                "|cffff5555Confirm Bel x3 (open)?|r",
+                function() net().LocalTriple(true) end,
+                "Bel x3 & open — counter the defenders' Bel x2, raising to ×3 "
+                .. "AND letting them counter with Four (×4). Confidence play.")
+            addConfirmAction("Bel x3 (closed)",
+                "|cffff5555Confirm Bel x3 (closed)?|r",
+                function() net().LocalTriple(false) end,
+                "Bel x3 & closed — raises to ×3 and STOPS the chain. Defenders "
+                .. "cannot counter Four. Locks in the ×3 multiplier.")
         end
     elseif S.s.phase == K.PHASE_FOUR then
         -- v0.2.0: Four is the DEFENDER's response to Triple.
@@ -1881,11 +1943,16 @@ local function renderActions()
         if def == S.s.localSeat then
             addConfirmAction("Four & open (x4)",
                 "|cffff3333Confirm Four & open?|r",
-                function() net().LocalFour(true) end)
+                function() net().LocalFour(true) end,
+                "Four & open — counter the bidder's Bel x3, raising to ×4 AND "
+                .. "letting them counter with Gahwa (match-win). High-stakes.")
             addConfirmAction("Four & closed (x4)",
                 "|cffff3333Confirm Four & close?|r",
-                function() net().LocalFour(false) end)
-            addAction("Skip", function() net().LocalSkipDouble() end)
+                function() net().LocalFour(false) end,
+                "Four & closed — raises to ×4 and STOPS the chain. Bidder "
+                .. "cannot counter Gahwa. Locks the ×4 multiplier.")
+            addAction("Skip", function() net().LocalSkipDouble() end,
+                "Decline to counter. Round plays at the bidder's Bel x3 (×3).")
         end
     elseif S.s.phase == K.PHASE_GAHWA then
         -- v0.2.0: Gahwa is the BIDDER's terminal — caller's team WINS
@@ -1895,8 +1962,13 @@ local function renderActions()
         if b == S.s.localSeat then
             addConfirmAction("|cffffd055Gahwa (match-win)|r",
                 "|cffff0000Confirm Gahwa? (match-win or match-loss)|r",
-                function() net().LocalGahwa() end)
-            addAction("Skip", function() net().LocalSkipDouble() end)
+                function() net().LocalGahwa() end,
+                "Gahwa (قهوة) — terminal escalation. If your contract makes, "
+                .. "your team WINS the entire match outright, regardless of "
+                .. "score. If it fails, your team LOSES the match outright. "
+                .. "All-or-nothing.")
+            addAction("Skip", function() net().LocalSkipDouble() end,
+                "Decline Gahwa. Round plays at the defenders' Four (×4).")
         end
     elseif S.s.phase == K.PHASE_OVERCALL then
         -- v0.7 Sun-overcall window: 5s post-Hokm chance for the bidder
@@ -1931,32 +2003,27 @@ local function renderActions()
                     -- net effect: bidder with Ace bid only sees WAIVE.
                     if canAct then
                         addAction("|cff66ff88Upgrade to Sun|r" .. rTag,
-                            function() net().LocalOvercall("UPGRADE") end)
+                            function() net().LocalOvercall("UPGRADE") end,
+                            "Upgrade your Hokm bid to Sun (×2 multiplier). "
+                            .. "Saudi-rule overcall window — 5 seconds. "
+                            .. "Use when the bid card revealed makes Sun "
+                            .. "stronger than Hokm.")
                     end
                     addAction("|cff999999WLA (waive)|r" .. rTag,
-                        function() net().LocalOvercall("WAIVE") end)
+                        function() net().LocalOvercall("WAIVE") end,
+                        "Decline. Saudi: «ولا» (wla) — keep your current Hokm.")
                 else
-                    -- Non-bidder: TAKE as Sun + TAKE as Hokm + WAIVE.
-                    -- v0.8 cross-trump-Hokm: same window, same priority,
-                    -- but the taker chooses their own trump suit (any
-                    -- suit other than bidder's current trump). UI shows
-                    -- a single "Take as Hokm (auto-pick suit)" button
-                    -- that picks the strongest non-current-trump from
-                    -- the local hand at click-time. This avoids 4 trump
-                    -- buttons cluttering the panel; the auto-pick uses
-                    -- the same suitStrengthAsTrump heuristic the bot
-                    -- uses, so the choice is consistent.
                     if canAct then
                         addAction("|cff66ddffTake as Sun|r" .. rTag,
-                            function() net().LocalOvercall("TAKE") end)
-                        -- v1.5.3: "Take as Hokm <suit>" button removed.
-                        -- Cross-trump Hokm-take is non-canonical
-                        -- (saudi-rules.md:26-28 — first non-pass wins;
-                        -- non-bidder can only PASS, ACCEPT, or ASHKAL).
-                        -- Use round 2 for different-suit Hokm.
+                            function() net().LocalOvercall("TAKE") end,
+                            "Take the contract for yourself, as Sun (no-trump, "
+                            .. "×2). 5-second Saudi overcall window. Use when "
+                            .. "your hand is stronger as Sun than the bidder's "
+                            .. "declared Hokm.")
                     end
                     addAction("|cff999999WLA (waive)|r" .. rTag,
-                        function() net().LocalOvercall("WAIVE") end)
+                        function() net().LocalOvercall("WAIVE") end,
+                        "Decline. Saudi: «ولا» (wla) — let the Hokm contract stand.")
                 end
             else
                 -- Decided already — show what we picked, no clickable.
@@ -2054,7 +2121,10 @@ local function renderActions()
             if swaEnabled and not swaPending then
                 addConfirmAction("|cffffd055SWA|r",
                     "|cffffd055SWA? again to confirm|r",
-                    function() net().LocalSWA() end)
+                    function() net().LocalSWA() end,
+                    "SWA (سوا) — claim you can take all remaining tricks. "
+                    .. "<=3 cards is auto-allowed; 4+ requires opps' permission. "
+                    .. "If your claim fails, you take a ~30 game-point penalty.")
             end
             -- If we're a non-caller opponent of a pending SWA request,
             -- show Accept/Deny vote buttons. Caller's team and the
@@ -2077,10 +2147,14 @@ local function renderActions()
                     -- BENIGN outcome for the responder (the loss falls
                     -- on the caller if they're wrong).
                     addAction("|cff66ff88Accept SWA|r",
-                        function() net().LocalSWAResp(true) end)
+                        function() net().LocalSWAResp(true) end,
+                        "Allow the SWA. Saudi: «نسمح» — let them claim. "
+                        .. "If wrong, the loss falls on the caller.")
                     addConfirmAction("|cffff5544Deny SWA|r",
                         "|cffff7755Confirm Deny — caller's invalid claim costs them ~30 pts; if Deny is wrong, your team takes the penalty.|r",
-                        function() net().LocalSWAResp(false) end)
+                        function() net().LocalSWAResp(false) end,
+                        "Demand proof. Saudi: «شرح». If caller's hand actually "
+                        .. "holds the claim, your team takes a ~30-pt penalty.")
                 end
             end
             -- AKA (إكَهْ) — partner-coordination call. Visible only when
@@ -2099,7 +2173,12 @@ local function renderActions()
                     -- render as empty boxes. The voice cue still says
                     -- إكَهْ, so the audio carries the Saudi feel.
                     addAction(("|cff66ff88AKA|r %s"):format(glyph),
-                        function() net().LocalAKA(cand.suit) end)
+                        function() net().LocalAKA(cand.suit) end,
+                        "AKA (إكَهْ) — partner-coordination call. Tells "
+                        .. "your partner you hold the highest live card "
+                        .. "in this suit, so they shouldn't over-trump. "
+                        .. "Soft signal — you still have to play the card "
+                        .. "yourself.")
                 end
             end
             -- v1.0.11 (D HIGH-2): BALOOT! button — Saudi spelling per
@@ -2142,7 +2221,11 @@ local function renderActions()
                     if hasK and hasQ then
                         -- Bright yellow label, all-caps Saudi spelling.
                         local btn = addAction("|cffffff00BALOOT!|r",
-                            function() net().LocalBelote() end)
+                            function() net().LocalBelote() end,
+                            "BALOOT! (بلوت) — declare K+Q-of-trump for "
+                            .. "+20 raw points. Saudi rule: multiplier-IMMUNE "
+                            .. "(a ×4 round doesn't ×4 the bonus). Click to "
+                            .. "announce; otherwise the bonus isn't awarded.")
                         -- Flash: pulse the text color via OnUpdate so
                         -- it grabs attention. WoW Button:GetFontString
                         -- returns the label FontString; SetTextColor
@@ -3145,7 +3228,21 @@ local function renderBanner()
         setOutcome(S.s.winner)
         banner:Show()
         banner:SetBackdropBorderColor(unpack(COL.legalEdge))
-        banner.title:SetText(("|cffffd0558amt!! go play something else|r"))
+        -- v1.7.0 (audit v1.6.1 SA-30): branch the title on local-team
+        -- vs winner. Pre-fix, "8amt!! go play something else" was shown
+        -- to BOTH winner and loser — Saudi banter has loser-targeted
+        -- "غامت" (8amt — blowout, lost badly) and winner-targeted
+        -- "علي بضو / يا بطل" (champion). Showing the loser line to
+        -- the winner reads as condescending or confusing. Branch:
+        -- winners get "WALLAH WIN!" banter; losers keep the 8amt
+        -- tease (which IS the right register for Saudi loser banter).
+        local localTeam = S.s.localSeat and R.TeamOf(S.s.localSeat) or nil
+        local won = (localTeam and S.s.winner and localTeam == S.s.winner)
+        if won then
+            banner.title:SetText("|cffffd055ya batal — match win!|r")
+        else
+            banner.title:SetText("|cffffd0558amt!! go play something else|r")
+        end
         -- Audit C30 fix: use teamLabel for custom team-name display.
         -- Previously showed "Team A wins" even when host had set custom
         -- names like "Champs" / "Rivals".
@@ -3250,8 +3347,11 @@ local function renderBanner()
             local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN)
                 and "Sun" or "Hokm"
             local mods = { typeStr }
-            if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Double x2" end
-            if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
+            -- v1.7.0 (audit v1.6.1 SA-20): Saudi rung names in player-
+            -- visible chips. Internal *.doubled / *.tripled flags
+            -- unchanged.
+            if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Bel x2" end
+            if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Bel x3" end
             if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
             if S.s.contract and S.s.contract.gahwa  then mods[#mods + 1] = "Gahwa (match-win)" end
             if bd.multiplier and bd.multiplier > 1 then
@@ -3259,8 +3359,15 @@ local function renderBanner()
             end
             banner.modifiers:SetText("|cffaaaaaa" .. table.concat(mods, "  ·  ") .. "|r")
             if bd.belote then
-                banner.belote:SetText(("Belote (K+Q ♥): %s +20 raw"):format(
-                    teamLabel(bd.belote)))
+                -- v1.7.0 (audit v1.6.1 SA-03): Belote glyph dynamic per
+                -- trump suit. Pre-fix hardcoded ♥ regardless of contract
+                -- trump — wrong on every non-hearts Hokm.
+                local trumpGlyph = K.SUIT_GLYPH
+                                   and S.s.contract
+                                   and K.SUIT_GLYPH[S.s.contract.trump]
+                                   or "♥"
+                banner.belote:SetText(("Belote (K+Q %s): %s +20 raw"):format(
+                    trumpGlyph, teamLabel(bd.belote)))
             end
         else
             -- Degraded (non-host receiver — no breakdown broadcast):
@@ -3369,10 +3476,11 @@ local function renderBanner()
         teamLabel(oppT), r.teamPoints[oppT] or 0, r.meldPoints[oppT] or 0))
 
     -- Modifiers line: contract type + multiplier
+    -- v1.7.0 (audit v1.6.1 SA-20): Saudi rung names. Mirrors block above.
     local typeStr = (S.s.contract and S.s.contract.type == K.BID_SUN) and "Sun" or "Hokm"
     local mods = { typeStr }
-    if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Double x2" end
-    if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Triple" end
+    if S.s.contract and S.s.contract.doubled then mods[#mods + 1] = "Bel x2" end
+    if S.s.contract and S.s.contract.tripled then mods[#mods + 1] = "Bel x3" end
     if S.s.contract and S.s.contract.foured then mods[#mods + 1] = "Four" end
     if S.s.contract and S.s.contract.gahwa then mods[#mods + 1] = "Gahwa (match-win)" end
     if r.multiplier and r.multiplier > 1 then
@@ -3380,9 +3488,15 @@ local function renderBanner()
     end
     banner.modifiers:SetText("|cffaaaaaa" .. table.concat(mods, "  ·  ") .. "|r")
 
-    -- Belote line (if applicable)
+    -- Belote line (if applicable). v1.7.0 (audit v1.6.1 SA-03): glyph
+    -- now reflects the actual trump suit, not a hardcoded heart.
     if r.belote then
-        banner.belote:SetText(("Belote (K+Q ♥): %s +20 raw"):format(teamLabel(r.belote)))
+        local trumpGlyph = K.SUIT_GLYPH
+                           and S.s.contract
+                           and K.SUIT_GLYPH[S.s.contract.trump]
+                           or "♥"
+        banner.belote:SetText(("Belote (K+Q %s): %s +20 raw"):format(
+            trumpGlyph, teamLabel(r.belote)))
     end
 
     -- Final delta — color each team's number by us-vs-them so the
@@ -3552,9 +3666,11 @@ local function renderStatus()
                 and "|cffff5555" or "|cffeeeeee"
             trumpStr = (" %s%s|r"):format(col, glyph)
         end
+        -- v1.7.0 (audit v1.6.1 SA-20): Saudi rung names in contract
+        -- banner. Internal *.doubled / *.tripled flags unchanged.
         local mods = {}
-        if c.doubled    then mods[#mods + 1] = "Double x2"       end
-        if c.tripled    then mods[#mods + 1] = "Triple x3"       end
+        if c.doubled    then mods[#mods + 1] = "Bel x2"          end
+        if c.tripled    then mods[#mods + 1] = "Bel x3"          end
         if c.foured     then mods[#mods + 1] = "Four (x4)"       end
         if c.gahwa      then mods[#mods + 1] = "Gahwa (match)"   end
         local modStr = #mods > 0
