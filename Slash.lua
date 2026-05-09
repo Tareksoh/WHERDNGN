@@ -58,9 +58,9 @@ local function rules()
     print("  Bel (×2) -> Bel x3 (×3) -> Four (×4) -> Gahwa (match-win)")
     print("  Each rung must be voluntarily declared. Default closed.")
     print("|cffffffffSignals:|r")
-    print("  AKA (إكَهْ): \"I hold the boss in this suit, partner — don't trump\"")
-    print("  SWA (سوا): \"I claim all remaining tricks\". <=3 cards instant; 4+ asks permission.")
-    print("  BALOOT (بلوت): K+Q-of-trump = +20 raw, multiplier-IMMUNE.")
+    print("  AKA (eka): \"I hold the boss in this suit, partner — don't trump\"")
+    print("  SWA: \"I claim all remaining tricks\". <=3 cards instant; 4+ asks permission.")
+    print("  BALOOT: K+Q-of-trump = +20 raw, multiplier-IMMUNE.")
     print("|cffffffffWin condition:|r first team to /baloot target points (default 152).")
     print("|cffffffffSaudi-specific traps:|r")
     print("  9 of trump is rank #2 (after J). FOUR 9s do NOT form a Carre.")
@@ -301,7 +301,7 @@ local function dispatch(msg)
         WHEREDNGNDB = WHEREDNGNDB or {}
         if WHEREDNGNDB.allowSWA == nil then WHEREDNGNDB.allowSWA = true end
         WHEREDNGNDB.allowSWA = not WHEREDNGNDB.allowSWA
-        say("SWA (سوا claim-the-rest) = " .. tostring(WHEREDNGNDB.allowSWA))
+        say("SWA (claim-the-rest) = " .. tostring(WHEREDNGNDB.allowSWA))
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end
@@ -332,7 +332,7 @@ local function dispatch(msg)
         WHEREDNGNDB = WHEREDNGNDB or {}
         if WHEREDNGNDB.preemptOnAce == nil then WHEREDNGNDB.preemptOnAce = true end
         WHEREDNGNDB.preemptOnAce = not WHEREDNGNDB.preemptOnAce
-        say("Triple-on-Ace pre-emption (الثالث) = " .. tostring(WHEREDNGNDB.preemptOnAce))
+        say("Triple-on-Ace pre-emption = " .. tostring(WHEREDNGNDB.preemptOnAce))
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end

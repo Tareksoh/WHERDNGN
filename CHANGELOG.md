@@ -1,5 +1,63 @@
 # Changelog
 
+## v2.0.2 — Hotfix: Arabic glyphs render as boxes in tooltips
+
+User-reported in playtest: tooltips and slash output showed `□□□`
+boxes instead of Arabic terms (e.g., "Decline to bid (round 1).
+Saudi: «□□□» — pass.").
+
+### Root cause
+
+The v2.0.0 SA-01 Arabic font infrastructure routes through
+`B.UI.SaudiName` which uses `pcall(SetFont, …)` to detect availability
+and falls back to romanized when the font is missing. **But that
+helper only applies where my code explicitly calls `SetFont`.**
+
+Tooltips use `GameTooltip:AddLine(…)` and chat output uses `print(…)`
+— both render through WoW's built-in `GameFontNormal` /
+`GameFontHighlight` font system, which doesn't have my custom
+Arabic font (and never can, since GameTooltip doesn't expose the
+font slot to addons). I included Arabic glyphs in tooltip strings
+and slash-output strings anyway, expecting the font fallback to
+kick in. It can't — the font system at the GameTooltip level isn't
+the same as the FontString-level `SetFont` I probe.
+
+User had already told me this back at the start of the marathon
+("SAUDI names should not mean arabic as WOW does not render arabic
+text") — I correctly applied it to button labels but missed it on
+tooltip + chat strings.
+
+### Fix
+
+Replaced all user-facing Arabic glyphs with romanized forms:
+
+| Site | Was | Now |
+|---|---|---|
+| Pass tooltip (R1) | `Saudi: «بَسْ» — pass` | `Saudi: 'bas' — pass` |
+| Pass tooltip (R2) | `Saudi: «ولا» — no preference` | `Saudi: 'wla' — no preference` |
+| Ashkal tooltip | `Saudi rule (إشكل): …` | `Saudi rule (Ashkal): …` |
+| Bel x2 (Sun) tooltip | `Saudi: «بل». …` | (term dropped — flow already implies it) |
+| Gahwa tooltip | `Gahwa (قهوة) — terminal escalation` | `Gahwa — terminal escalation` |
+| WLA × 2 tooltips | `Saudi: «ولا» (wla)` | `Saudi 'wla'` |
+| SWA / Accept SWA / Deny SWA | `«سوا» / «نسمح» / «شرح»` | romanized |
+| AKA action button tooltip | `AKA (إكَهْ) — partner-coord…` | `AKA — partner-coord… (Saudi 'eka')` |
+| BALOOT! tooltip | `BALOOT! (بلوت)` | `BALOOT!` |
+| AKA banner headline | `AKA (إكَهْ) — partner signal` | `AKA — partner signal` |
+| SWA banner headline | `SWA (سوا) — claim the rest` | `SWA — claim the rest` |
+| `/baloot rules` | 3 lines with Arabic | romanized + (eka) gloss |
+| `/baloot swa` toggle output | `SWA (سوا claim-the-rest)` | `SWA (claim-the-rest)` |
+| `/baloot preempt` toggle output | `pre-emption (الثالث)` | `pre-emption` |
+
+The `K.SAUDI_NAMES` map (Constants.lua:65-80) **keeps** its Arabic
+forms — they're only rendered via `B.UI.SaudiName` which probes for
+the bundled Arabic font first. Without the font: returns romanized.
+With the font: returns "حكم Hokm" via `SetFont`. Tooltips and chat
+never go through SaudiName and therefore never see the Arabic data.
+
+### Tests
+
+819/819 pass.
+
 ## v2.0.1 — Hotfix: BF-10 "thinking…" indicator crash on bot turn
 
 User-reported in-game error on `HostStartRound` (first refresh after

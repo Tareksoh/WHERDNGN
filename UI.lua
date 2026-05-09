@@ -1434,11 +1434,11 @@ local function buildTable()
     akaBanner.text:SetTextColor(0.40, 1.00, 0.55)
     -- v2.0.0 (audit v1.6.1 PJ-21 HIGH): tooltip explains the AKA cue.
     akaBanner:EnableMouse(true)
-    setLobbyTooltip(akaBanner, "AKA (إكَهْ) — partner signal",
+    setLobbyTooltip(akaBanner, "AKA — partner signal",
         "Caller holds the highest live card in this suit. Their "
         .. "partner shouldn't over-trump — let them win this suit. "
-        .. "Saudi-only signal; the only explicit partner-coordination "
-        .. "call in Saudi Baloot.")
+        .. "Saudi-only signal (eka); the only explicit partner-"
+        .. "coordination call in Saudi Baloot.")
     tablePanel.akaBanner = akaBanner
 
     -- v0.7 Sun-overcall countdown banner. Visible during the 5-sec
@@ -1536,7 +1536,7 @@ local function buildTable()
     swaBanner.body:SetTextColor(0.95, 0.95, 0.85)
     -- v2.0.0 (audit v1.6.1 PJ-24 HIGH): tooltip explains SWA mechanic.
     swaBanner:EnableMouse(true)
-    setLobbyTooltip(swaBanner, "SWA (سوا) — claim the rest",
+    setLobbyTooltip(swaBanner, "SWA — claim the rest",
         "Caller asserts they will win every remaining trick. With "
         .. "<=3 cards left it's auto-allowed; with 4+ cards opps "
         .. "must vote (Accept = let them claim, Deny = demand proof). "
@@ -1898,8 +1898,8 @@ local function renderActions()
             -- the existing bid".
             local passLabel = (S.s.phase == K.PHASE_DEAL2BID) and "wla" or "Pass"
             local passTip = (S.s.phase == K.PHASE_DEAL2BID)
-                and "Decline to bid (round 2). Saudi: «ولا» — no preference."
-                or "Decline to bid (round 1). Saudi: «بَسْ» — pass."
+                and "Decline to bid (round 2). Saudi: 'wla' — no preference."
+                or "Decline to bid (round 1). Saudi: 'bas' — pass."
             addAction(passLabel, function() net().LocalBid(K.BID_PASS) end, passTip)
             local flippedSuit = S.s.bidCard and C.Suit(S.s.bidCard) or nil
             if S.s.phase == K.PHASE_DEAL1 then
@@ -1948,7 +1948,7 @@ local function renderActions()
                 end
                 if not anySun and bidPos >= 3 then
                     addAction("Ashkal", function() net().LocalBid(K.BID_ASHKAL) end,
-                        "Saudi rule (إشكل): convert the contract to Sun, "
+                        "Saudi rule (Ashkal): convert the contract to Sun, "
                         .. "with your PARTNER as declarer. Available only "
                         .. "to bidders 3 and 4. Used to swing partner's Hokm "
                         .. "into a stronger Sun when you hold the goods.")
@@ -2052,8 +2052,8 @@ local function renderActions()
                     addConfirmAction("Bel x2", "|cffff7755Confirm Bel x2?|r",
                         function() net().LocalDouble(false) end,
                         "Bel a Sun contract — doubles the round score (×2). "
-                        .. "Saudi: «بل». Sun has no Bel x3 / Four / Gahwa rungs, "
-                        .. "so this is the terminal escalation.")
+                        .. "Sun has no Bel x3 / Four / Gahwa rungs, so this "
+                        .. "is the terminal escalation.")
                 else
                     addConfirmAction("Bel & open", "|cffff7755Confirm Bel & open?|r",
                         function() net().LocalDouble(true) end,
@@ -2118,7 +2118,7 @@ local function renderActions()
             addConfirmAction("|cffffd055Gahwa (match-win)|r",
                 "|cffff0000Confirm Gahwa? (match-win or match-loss)|r",
                 function() net().LocalGahwa() end,
-                "Gahwa (قهوة) — terminal escalation. If your contract makes, "
+                "Gahwa — terminal escalation. If your contract makes, "
                 .. "your team WINS the entire match outright, regardless of "
                 .. "score. If it fails, your team LOSES the match outright. "
                 .. "All-or-nothing.")
@@ -2166,7 +2166,7 @@ local function renderActions()
                     end
                     addAction("|cff999999WLA (waive)|r" .. rTag,
                         function() net().LocalOvercall("WAIVE") end,
-                        "Decline. Saudi: «ولا» (wla) — keep your current Hokm.")
+                        "Decline. Saudi 'wla' — keep your current Hokm.")
                 else
                     if canAct then
                         addAction("|cff66ddffTake as Sun|r" .. rTag,
@@ -2178,7 +2178,7 @@ local function renderActions()
                     end
                     addAction("|cff999999WLA (waive)|r" .. rTag,
                         function() net().LocalOvercall("WAIVE") end,
-                        "Decline. Saudi: «ولا» (wla) — let the Hokm contract stand.")
+                        "Decline. Saudi 'wla' — let the Hokm contract stand.")
                 end
             else
                 -- Decided already — show what we picked, no clickable.
@@ -2277,7 +2277,7 @@ local function renderActions()
                 addConfirmAction("|cffffd055SWA|r",
                     "|cffffd055SWA? again to confirm|r",
                     function() net().LocalSWA() end,
-                    "SWA (سوا) — claim you can take all remaining tricks. "
+                    "SWA — claim you can take all remaining tricks. "
                     .. "<=3 cards is auto-allowed; 4+ requires opps' permission. "
                     .. "If your claim fails, you take a ~30 game-point penalty.")
             end
@@ -2303,12 +2303,12 @@ local function renderActions()
                     -- on the caller if they're wrong).
                     addAction("|cff66ff88Accept SWA|r",
                         function() net().LocalSWAResp(true) end,
-                        "Allow the SWA. Saudi: «نسمح» — let them claim. "
+                        "Allow the SWA. Saudi 'nasmah' — let them claim. "
                         .. "If wrong, the loss falls on the caller.")
                     addConfirmAction("|cffff5544Deny SWA|r",
                         "|cffff7755Confirm Deny — caller's invalid claim costs them ~30 pts; if Deny is wrong, your team takes the penalty.|r",
                         function() net().LocalSWAResp(false) end,
-                        "Demand proof. Saudi: «شرح». If caller's hand actually "
+                        "Demand proof. Saudi 'sharh'. If caller's hand actually "
                         .. "holds the claim, your team takes a ~30-pt penalty.")
                 end
             end
@@ -2329,11 +2329,11 @@ local function renderActions()
                     -- إكَهْ, so the audio carries the Saudi feel.
                     addAction(("|cff66ff88AKA|r %s"):format(glyph),
                         function() net().LocalAKA(cand.suit) end,
-                        "AKA (إكَهْ) — partner-coordination call. Tells "
-                        .. "your partner you hold the highest live card "
-                        .. "in this suit, so they shouldn't over-trump. "
-                        .. "Soft signal — you still have to play the card "
-                        .. "yourself.")
+                        "AKA — partner-coordination call (Saudi 'eka'). "
+                        .. "Tells your partner you hold the highest live "
+                        .. "card in this suit, so they shouldn't over-"
+                        .. "trump. Soft signal — you still have to play "
+                        .. "the card yourself.")
                 end
             end
             -- v1.0.11 (D HIGH-2): BALOOT! button — Saudi spelling per
@@ -2377,9 +2377,9 @@ local function renderActions()
                         -- Bright yellow label, all-caps Saudi spelling.
                         local btn = addAction("|cffffff00BALOOT!|r",
                             function() net().LocalBelote() end,
-                            "BALOOT! (بلوت) — declare K+Q-of-trump for "
-                            .. "+20 raw points. Saudi rule: multiplier-IMMUNE "
-                            .. "(a ×4 round doesn't ×4 the bonus). Click to "
+                            "BALOOT! — declare K+Q-of-trump for +20 raw "
+                            .. "points. Saudi rule: multiplier-IMMUNE (a ×4 "
+                            .. "round doesn't ×4 the bonus). Click to "
                             .. "announce; otherwise the bonus isn't awarded.")
                         -- Flash: pulse the text color via OnUpdate so
                         -- it grabs attention. WoW Button:GetFontString
