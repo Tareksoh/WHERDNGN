@@ -6796,6 +6796,26 @@ do
     WHEREDNGNDB.advancedBots = nil
 end
 
+-- AT — v3.1.6 turn-rotation self-heal via heartbeat
+-- (user-saved-game freezelog correlation confirmed WoW addon channel
+-- silently drops MSG_TURN broadcasts; host's own loopback also fails.
+-- Heartbeat now carries turn pointer for client-side reconciliation.)
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find("v3%.1%.6 %(turn%-rotation self%-heal%)") ~= nil,
+        "AT.1 (v3.1.6): heartbeat self-heal marker present")
+    assertTrue(netSrc:find('broadcast%(%("%%s;%%d;%%s"%):format%(K%.MSG_HEARTBEAT') ~= nil,
+        "AT.2 (v3.1.6): heartbeat broadcast extended with turn+turnKind payload")
+    assertTrue(netSrc:find("function N%._OnHeartbeat%(sender, hostTurn, hostTurnKind%)") ~= nil,
+        "AT.3 (v3.1.6): _OnHeartbeat accepts hostTurn + hostTurnKind")
+    assertTrue(netSrc:find("S%.s%.phase == K%.PHASE_PLAY") ~= nil,
+        "AT.4 (v3.1.6): self-heal gated to PHASE_PLAY only")
+    assertTrue(netSrc:find('S%.s%.turn ~= hostTurn') ~= nil,
+        "AT.5 (v3.1.6): self-heal only fires on turn mismatch")
+    assertTrue(netSrc:find('"HEAL"') ~= nil,
+        "AT.6 (v3.1.6): heal events logged to freezeLog when active")
+end
+
 -- AR.1 — v3.1.3: /baloot lastround slash command
 do
     local slashSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Slash.lua"):read("*a")

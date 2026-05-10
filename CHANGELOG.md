@@ -1,5 +1,142 @@
 # Changelog
 
+## v3.1.6 — Turn-rotation self-heal via heartbeat
+
+User reproduced the freeze with `/baloot freezelog` enabled on both
+host and the affected client. The trace was conclusive:
+
+### Root cause confirmed by paired logs
+
+**Host (Acing) TX during freeze window:**
+
+```
+[6272.46]  TX P  ← Acing plays end of trick
+[6272.46]  TX T turn=2  ← "Dedah's turn now" — KEY MESSAGE
+[6272.72]  TX T turn=2  ← duplicate (host always sends T twice)
+[6272.78]  RX P loopback
+                         ← NO RX T loopback (host's own T never came back)
+[6286.93]  TX ~ heartbeat  (15s gap with only heartbeats)
+...
+[6332.46]  TX P  ← AFK auto-play (60.0s = K.TURN_TIMEOUT_SEC exactly)
+[6332.46]  TX T turn=3  ← skips Dedah, advances to seat 3
+```
+
+**Client (Dedah) RX during the same window:**
+
+```
+[438991.13]  RX P from=Acing turn=1  ← received P, then nothing
+                                      ← T(turn=2) NEVER arrived
+[439005.63]  RX ~  (heartbeats only)
+[439020.61]  RX ~
+[439035.62]  RX ~
+[439050.52]  RX ~
+[439051.13]  RX P  ← AFK auto-play P arrives
+[439051.13]  RX T turn=2  ← turn=2 finally appears (post-AFK)
+[439051.41]  RX T turn=3
+```
+
+### Two simultaneous addon-channel drops
+
+The smoking gun: **the host's OWN loopback for the T(turn=2)
+broadcasts also failed**. Acing broadcast T at 6272.46 AND 6272.72
+(redundant duplicate), but neither came back to Acing's own client.
+This means WoW silently dropped both messages at the local addon-
+channel layer before they ever hit the network.
+
+This is a known WoW behavior: `C_ChatInfo.SendAddonMessage` can be
+silently throttled when multiple messages are broadcast in close
+succession (P + T + T within 0.26s in this case). The `pcall` around
+the call doesn't catch it — the function returns success even when
+WoW drops the message internally.
+
+### The fix
+
+**Heartbeat-carries-turn for client-side self-heal.**
+
+The host already broadcasts `MSG_HEARTBEAT` every 15s for the
+host-alive watchdog. Extend the payload:
+
+```
+Old:  "~"
+New:  "~;{turn};{turnKind}"
+```
+
+On `_OnHeartbeat`, if the received `hostTurn` differs from local
+`S.s.turn` while in `PHASE_PLAY`, apply the host's value and refresh
+UI. Worst-case freeze duration: **~15s instead of 60s**.
+
+```lua
+if hostTurn and hostTurn > 0 and hostTurn <= 4
+   and S.s.phase == K.PHASE_PLAY
+   and S.s.turn ~= hostTurn then
+    local prev = S.s.turn or 0
+    S.s.turn = hostTurn
+    S.s.turnKind = (hostTurnKind ~= nil and hostTurnKind ~= "")
+                    and hostTurnKind or "play"
+    log("Info", "heartbeat self-heal: turn %d → %d", prev, hostTurn)
+    if N._FreezeLog then
+        N._FreezeLog("HEAL", ("turn %d → %d"):format(prev, hostTurn))
+    end
+    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+end
+```
+
+### Safety gates
+
+- **Phase-gated**: only fires in `PHASE_PLAY`. Other phases
+  (deal, double, overcall, score) have their own turn semantics
+  and shouldn't be overridden by heartbeat.
+- **Range-checked**: `hostTurn ∈ [1, 4]`. Defensive against
+  garbage payloads from a corrupt heartbeat.
+- **No-op on match**: only fires when local turn ≠ host turn.
+  Zero churn during normal play.
+- **Backward-compat**: pre-v3.1.6 hosts send `~` alone; the
+  receiver's `tonumber(fields[2])` returns nil; the gate
+  `hostTurn and hostTurn > 0` skips the heal silently.
+- **freezeLog logs HEAL events**: if `WHEREDNGNDB.freezeDebug` is on,
+  every heal is recorded. Lets us measure how often the bug fires
+  in production.
+
+### Why not also derive-turn-from-MSG_PLAY (the other proposal)
+
+Considered, but heartbeat-heal is sufficient on its own:
+- Heartbeat already exists; just extending payload (1 line of
+  format change)
+- Self-heal applies to the EXACT desync we observed
+- Derive-from-P would also need to know the trick-winner rotation
+  rule (after play 4, next-turn = winner, not next clockwise)
+- Two mechanisms = more surface area for edge-case bugs
+
+If 15s heal isn't enough in practice, derive-from-P can be added
+as v3.1.7 layered on top.
+
+### Tests
+
+**939/939 pass** (was 933 — +6 new pins). New section AT covers:
+
+- AT.1: marker comment present
+- AT.2: heartbeat broadcast format extended
+- AT.3: `_OnHeartbeat` accepts `hostTurn` + `hostTurnKind` params
+- AT.4: heal gated to `PHASE_PLAY`
+- AT.5: heal only on turn mismatch (no-op on match)
+- AT.6: heal events logged to freezeLog when debug active
+
+### What to expect after v3.1.6
+
+In a freezed scenario:
+- **Pre-v3.1.6**: Dedah waits 60s for AFK auto-play. Sees turn flash
+  by; her actual turn is force-played by host.
+- **Post-v3.1.6**: Dedah waits at most 15s for the next heartbeat,
+  which carries the corrected turn. Her UI shows "your turn." She
+  can play.
+
+For Acing/host behavior: zero change. Host already has accurate
+local state. The heal is purely receiver-side.
+
+The user can verify the fix is firing by enabling
+`/baloot freezelog on` next session and watching for `HEAL` events
+in the dump. Each `HEAL` entry confirms one prevented freeze.
+
 ## v3.1.5 — Freeze-diagnostic mode (`/baloot freezelog`)
 
 User reported 30-second freezes on a non-host client (Dedah, seat 4)

@@ -809,7 +809,9 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_HEARTBEAT then
         -- v1.8.0 (MP-21): host-alive heartbeat. Bumps the last-seen
         -- timestamp for the remote watchdog.
-        N._OnHeartbeat(sender)
+        -- v3.1.6: extended payload carries host's current turn +
+        -- turnKind for client-side rotation self-heal.
+        N._OnHeartbeat(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_TEAMS then
         N._OnTeams(sender, fields[2], fields[3])
     elseif tag == K.MSG_AKA then
@@ -3487,7 +3489,21 @@ function N.StartHostHeartbeat()
             N.StopHostHeartbeat()
             return
         end
-        broadcast(K.MSG_HEARTBEAT)
+        -- v3.1.6 (turn-rotation self-heal): carry the host's current
+        -- `turn` and `turnKind` in the heartbeat payload. Per the
+        -- v3.1.5 freezelog correlation, WoW's addon channel can
+        -- silently drop MSG_TURN broadcasts (host's own loopback
+        -- also fails to receive — confirmed in user's log). When a
+        -- T drops, the affected client's local turn pointer goes
+        -- stale until the host's 60s AFK timer auto-plays for them.
+        -- Heartbeat-carried turn lets clients reconcile within ≤15s
+        -- worst-case (the heartbeat cadence). Format extended:
+        --   "~;{turn};{turnKind}"
+        -- Old-format ("~" alone) parsed by older clients without
+        -- breakage; new fields are optional.
+        local turn = S.s.turn or 0
+        local turnKind = S.s.turnKind or ""
+        broadcast(("%s;%d;%s"):format(K.MSG_HEARTBEAT, turn, turnKind))
     end)
 end
 
@@ -3498,11 +3514,41 @@ function N.StopHostHeartbeat()
     N._heartbeatTk = nil
 end
 
-function N._OnHeartbeat(sender)
+function N._OnHeartbeat(sender, hostTurn, hostTurnKind)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
     N._lastHeartbeatAt = (GetTime and GetTime()) or 0
+    -- v3.1.6 (turn-rotation self-heal): if the host's heartbeat
+    -- carries a turn pointer that disagrees with our local
+    -- `S.s.turn` while we're in PLAY phase, a MSG_TURN broadcast
+    -- was lost. Apply the host's value and refresh UI. This caps
+    -- worst-case freeze at ~15s (heartbeat cadence) instead of
+    -- the prior 60s (AFK auto-play timeout).
+    --
+    -- Safety gates:
+    --   • Only fires in PHASE_PLAY (other phases have their own
+    --     turn semantics and shouldn't be overridden by heartbeat)
+    --   • Only fires when hostTurn is provided (backward-compat
+    --     with pre-v3.1.6 hosts that send "~" alone)
+    --   • Only fires when local turn DIFFERS — no churn on match
+    --   • turnKind reconciliation: defaults to "play" if the host
+    --     didn't include it (e.g., partial v3.1.6 deployment)
+    if hostTurn and hostTurn > 0 and hostTurn <= 4
+       and S.s.phase == K.PHASE_PLAY
+       and S.s.turn ~= hostTurn then
+        local prev = S.s.turn or 0
+        S.s.turn = hostTurn
+        S.s.turnKind = (hostTurnKind ~= nil and hostTurnKind ~= "")
+                        and hostTurnKind or "play"
+        log("Info", "heartbeat self-heal: turn %d → %d (kind=%s)",
+            prev, hostTurn, S.s.turnKind)
+        if N._FreezeLog then
+            N._FreezeLog("HEAL",
+                ("turn %d → %d via heartbeat"):format(prev, hostTurn))
+        end
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+    end
 end
 
 -- Returns seconds since last host heartbeat (or nil if no heartbeat
