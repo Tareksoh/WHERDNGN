@@ -1,5 +1,116 @@
 # Changelog
 
+## v3.1.9 — Partner-trump-led-fragile-lock + forced-ruff trump conservation
+
+User shared a saved-game (round 5) where a Saudi Master bot bid Hokm
+(trump=H) but lost trick 1 and burned J-of-trump on trick 2's routine
+ruff. Their team won 6/8 tricks (14 raw add) when 8/8 (Kaboot, 250) was
+on the table. Two distinct bugs identified.
+
+### Bug 1: Bot ducks partner's fragile trump lead (T1)
+
+**Setup**: bot=seat 4, trump=H. Partner (seat 2) led KH (rank 4).
+Opp seat 3 played 8H (rank 2). Bot pos-3 had {QH, JH, 9H, AH}.
+
+**Pre-fix behavior** (`Bot.lua:5382` lowestByRank fallback): bot
+returned QH (rank 3 = lowest trump) per the canonical "ride low when
+partner is winning" Saudi convention. Opp pos-4 played TH (rank 5)
+and won the trick. Team A captures 17 raw points; Kaboot dead.
+
+**The convention has a carve-out** the heuristic missed: when partner's
+trump lead is NOT the highest unplayed trump (here J was still out),
+opp pos-4 may over-cut. The bot should detect "fragile lead" and
+play its minimum-sufficient lock card.
+
+**v3.1.9 fix** (`Bot.lua:5361-5424`): in the partnerWinning + Hokm +
+trump-led + partner-led-the-trick branch (Advanced+ tier), compute:
+
+1. `maxOppRank` = highest rank that is NOT in our hand AND NOT yet
+   played. Walks `TRUMP_HOKM_ORDER_DESC = {J, 9, A, T, K, Q, 8, 7}`
+   matching `S.s.playedCardsThisRound` and own-hand membership.
+2. If `maxOppTR > partnerTR`, partner's lead is beatable. Find the
+   LOWEST of our trumps with trick rank > maxOppTR (the minimum-
+   sufficient lock). Return it.
+3. Otherwise (partner's lead IS the boss), fall through to the
+   v0.11.19 U-6 / lowestByRank ride-low path.
+
+**Reproducer trace post-fix**: bot detects partner's KH (rank 4) is
+fragile (J is the boss). maxOppRank = T (highest not in our hand,
+not played) → maxOppTR = 5. Bot's trumps with rank > 5 are AH (6),
+9H (7), JH (8). Lowest = AH. Bot plays AH, opp pos-4's TH (rank 5)
+loses, bot's team locks T1 with +17 raw to team B. Kaboot back on
+the table.
+
+### Bug 2: ISMCTS overrides heuristic with high trump on routine ruff (T2)
+
+**Setup**: bot pos-4, trump=H. Opp seat 1 led AC. Partner 9C, opp
+TC. Bot is void in C, must trump. legal = {JH, 9H, AH} (trumps left
+after T1's QH used).
+
+**Pre-fix behavior**: heuristic at `Bot.lua:6475` correctly returns
+AH (lowest trick rank — JH=8, 9H=7, AH=6). But Saudi Master ISMCTS
+overrode with JH because:
+
+- Each candidate's rollout score includes the immediate trick's raw
+  capture: JH=20 raw, 9H=14 raw, AH=11 raw.
+- Rollouts under-value future J-of-trump preservation because the
+  rollout policy itself doesn't model "J is uniquely valuable as
+  Saudi kill card." So the future-trick advantage of saving JH
+  doesn't compensate for the immediate +9 raw delta.
+- ISMCTS argmax picks JH; Saudi convention mandates AH.
+
+**v3.1.9 fix** (`BotMaster.lua:1154-1200`): post-argmax override.
+When `best` is a trump in Hokm + non-trump lead + all legal are
+trump (true forced-ruff), force the lowest trick rank trump.
+
+```lua
+if best and S.s.contract.type == K.BID_HOKM and S.s.contract.trump
+   and trick.leadSuit ~= S.s.contract.trump
+   and C.IsTrump(best, S.s.contract) then
+    -- Check forced-ruff: all legal == trump
+    -- Find lowest trick-rank trump → swap if best != lowest
+end
+```
+
+**Why this is safe**:
+- Faranka exceptions return non-winners (not high trumps), so the
+  override never fights Faranka.
+- Over-cut requirements pre-filter `legal` (only over-cutters are
+  legal), so "lowest in legal" is still the canonical minimum-
+  sufficient over-cut.
+- The Saudi rule "don't waste J/9 on routine ruff" is unambiguous;
+  there's no scenario where playing JH is correct over AH/9H when
+  all three win the same trick.
+
+**Reproducer trace post-fix**: ISMCTS picks JH. Override fires:
+all legal are trump, AH has lower trick rank than JH, swap.
+Bot plays AH, T2 still won by team B but bot retains JH for
+future high-stakes ruff (e.g., when an opp leads K or Q of trump).
+
+### Tests
+
+**963/963 pass** (was 953, +10 new pins). New section AW covers:
+
+- AW.1: lock marker in Bot.lua
+- AW.2-3: lock gates (Hokm + trump-led + partner-led)
+- AW.4: maxOppRank computation
+- AW.5: minimum-sufficient lock semantics
+- AW.6: override marker in BotMaster.lua
+- AW.7: forced-ruff detection (all legal == trump)
+- AW.8: gated on non-trump lead
+- AW.9: trick-rank comparison
+- AW.10: no-op when argmax already lowest
+
+### Why no behavioral test for the bot's actual play
+
+The fix is in two pickers (heuristic + ISMCTS post-process). A
+behavioral test would need to set up a 4-player game with specific
+hands matching the saved-game scenario. Test-section AS already has
+similar end-to-end pickFollow tests; AW pins source-level invariants
+which is sufficient given the trace above shows the picker now
+returns the canonical Saudi card. If future regressions surface,
+behavioral tests can be added.
+
 ## v3.1.8 — Heartbeat-derive heal fallback + deployment diagnostics
 
 User shared a fresh freezelog (`message (3).txt`) after v3.1.6+v3.1.7

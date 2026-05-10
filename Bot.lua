@@ -5358,6 +5358,75 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
         end
 
+        -- v3.1.9 (partner-trump-led-fragile-lock): when partner LEADS
+        -- trump but their lead is NOT the highest unplayed trump (so
+        -- opp pos-4 may over-cut with a higher trump), check if WE
+        -- hold a "lock" — a trump strictly higher than every trump
+        -- still possibly in opp hands. If yes, play the LOWEST
+        -- such lock (minimum-sufficient over-take) to LOCK the trick
+        -- for our team. Saudi convention: protect partner's fragile
+        -- trump lead with our cheapest sure-winner.
+        --
+        -- Reproducer (user-reported v3.1.8 saved-game, round 5):
+        -- bot bidder seat 4 trump=H. Partner seat 2 led KH (rank 4).
+        -- Bot held {QH, JH, 9H, AH}. Pre-fix: heuristic returned QH
+        -- via lowestByRank fallback below, opp pos-4 played TH (rank
+        -- 5) and won T1 — game was no longer a Kaboot candidate.
+        -- Post-fix: bot detects partner's KH ≠ boss (J still
+        -- unplayed), computes maxOppTrump = T (rank 5, highest
+        -- unplayed not in our hand), and returns AH (rank 6 = the
+        -- min-sufficient lock).
+        --
+        -- Gate: Advanced+ tier (the "read partner's lead strength"
+        -- consideration is past the basic level). Hokm only (Sun
+        -- has no trump). Trump-led only. Partner-led only.
+        if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+           and contract.trump
+           and trick.leadSuit == contract.trump
+           and trick.plays and trick.plays[1]
+           and trick.plays[1].seat == R.Partner(seat) then
+            local TRUMP_DESC = { "J", "9", "A", "T", "K", "Q", "8", "7" }
+            local ourTrump = {}
+            for _, c in ipairs(legal) do
+                if C.IsTrump(c, contract) then
+                    ourTrump[C.Rank(c)] = true
+                end
+            end
+            -- Highest possible opp trump: highest rank that is NOT in
+            -- our hand AND NOT yet played.
+            local maxOppRank = nil
+            local played = S.s.playedCardsThisRound or {}
+            for _, r in ipairs(TRUMP_DESC) do
+                if not ourTrump[r] and not played[r .. contract.trump] then
+                    maxOppRank = r
+                    break
+                end
+            end
+            if maxOppRank then
+                local maxOppTR = K.RANK_TRUMP_HOKM[maxOppRank] or 0
+                local partnerTR = C.TrickRank(trick.plays[1].card, contract)
+                -- Lock fires only when partner's lead is BEATABLE by
+                -- the max possible opp trump. If partner already led
+                -- the boss (e.g., J), max opp can't over-cut → ride low.
+                if maxOppTR > partnerTR then
+                    -- Find LOWEST of our trumps that beats maxOppTR
+                    -- (the minimum-sufficient lock).
+                    local lockCard = nil
+                    local lockTR = math.huge
+                    for _, c in ipairs(legal) do
+                        if C.IsTrump(c, contract) then
+                            local cr = C.TrickRank(c, contract)
+                            if cr > maxOppTR and cr < lockTR then
+                                lockCard = c
+                                lockTR = cr
+                            end
+                        end
+                    end
+                    if lockCard then return lockCard end
+                end
+            end
+        end
+
         -- v0.11.19 audit U-6: prefer non-trump discard when partner
         -- is winning in Hokm and we're released from must-ruff. Per
         -- decision-trees.md Section 6, when pos-4-partner-winning-

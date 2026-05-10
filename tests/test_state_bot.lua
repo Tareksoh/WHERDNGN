@@ -6813,6 +6813,37 @@ do
         "AU.5 (v3.1.7): heal events logged to freezeLog")
 end
 
+-- AW — v3.1.9 partner-trump-led-fragile-lock + forced-ruff lowest-trump
+-- override. User-reported saved-game showed bot bidder following partner's
+-- KH (rank 4) trump lead with QH (rank 3) when JH/9H/AH were available
+-- → opp pos-4 won with TH; bot also burned JH on a routine pos-4 ruff
+-- when AH would have won the same trick. v3.1.9 lock fixes both.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.1%.9 %(partner%-trump%-led%-fragile%-lock%)") ~= nil,
+        "AW.1 (v3.1.9): partner-trump-led-fragile-lock marker present in Bot.lua")
+    assertTrue(botSrc:find('trick%.leadSuit == contract%.trump') ~= nil,
+        "AW.2 (v3.1.9): lock fires on trump-led only (not non-trump lead)")
+    assertTrue(botSrc:find('trick%.plays%[1%]%.seat == R%.Partner%(seat%)') ~= nil,
+        "AW.3 (v3.1.9): lock fires on partner-led only (not opp lead)")
+    assertTrue(botSrc:find("maxOppRank") ~= nil,
+        "AW.4 (v3.1.9): lock computes max possible opp trump from played + own hand")
+    assertTrue(botSrc:find("minimum%-sufficient lock") ~= nil,
+        "AW.5 (v3.1.9): lock returns minimum-sufficient lock card")
+
+    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
+    assertTrue(bmSrc:find("v3%.1%.9 %(trump%-conservation override%)") ~= nil,
+        "AW.6 (v3.1.9): forced-ruff override marker present in BotMaster.lua")
+    assertTrue(bmSrc:find("allTrump") ~= nil,
+        "AW.7 (v3.1.9): override checks all-legal-are-trump (forced ruff)")
+    assertTrue(bmSrc:find("trick%.leadSuit ~= S%.s%.contract%.trump") ~= nil,
+        "AW.8 (v3.1.9): override gated on non-trump lead (ruff context)")
+    assertTrue(bmSrc:find("C%.TrickRank%(c, S%.s%.contract%)") ~= nil,
+        "AW.9 (v3.1.9): override picks lowest trick rank")
+    assertTrue(bmSrc:find("if lowest ~= best then") ~= nil,
+        "AW.10 (v3.1.9): override only swaps when lowest != argmax (no-op on match)")
+end
+
 -- AV — v3.1.8 heartbeat-derive heal fallback (handles old-host case where
 -- the v3.1.6 heartbeat doesn't carry a usable turn payload). Mirrors the
 -- v3.1.7 mid-trick derive logic but is triggered at heartbeat tick instead

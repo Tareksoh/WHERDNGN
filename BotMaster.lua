@@ -1155,5 +1155,53 @@ function BM.PickPlay(seat)
     for _, c in ipairs(legal) do
         if scores[c] > bestScore then best, bestScore = c, scores[c] end
     end
+
+    -- v3.1.9 (trump-conservation override): when ISMCTS picks a high
+    -- trump in a forced-ruff scenario (Hokm, non-trump lead, bot void
+    -- in lead so legal is all trump), swap to the LOWEST trump. Saudi
+    -- canonical rule: never burn J/9 of trump on a routine ruff when
+    -- a 7/8/Q/K of trump suffices.
+    --
+    -- Reproducer (user-reported v3.1.8 saved-game, round 5 trick 2):
+    -- bot bidder seat 4 trump=H, void in C, opp seat 1 led AC, partner
+    -- seat 2 played 9C, opp seat 3 played TC. Bot at pos-4 with legal
+    -- = {JH, 9H, AH} (all trumps win). Heuristic at pickFollow:6475
+    -- correctly returns AH (lowest by trick rank = AH rank 6, JH=8,
+    -- 9H=7). ISMCTS overrode with JH because rollouts score immediate
+    -- raw capture (JH=20 > AH=11) higher than they value the future
+    -- preservation of J-of-trump (Saudi "kill card"). Rollout policy
+    -- under-weights "save J for forcing leads" — calibration gap.
+    --
+    -- Override: in forced-ruff (all legal == trump in Hokm + non-trump
+    -- lead), force the lowest-trick-rank trump. This is unambiguous
+    -- Saudi convention with no real exceptions (Faranka withhold is a
+    -- non-winner play, NOT a high-trump play; over-cut requirement
+    -- pre-filters legal, so the lowest is still the correct minimum-
+    -- sufficient over-cut).
+    if best and S.s.contract and S.s.contract.type == K.BID_HOKM
+       and S.s.contract.trump
+       and trick.leadSuit and trick.leadSuit ~= S.s.contract.trump
+       and C.IsTrump(best, S.s.contract) then
+        local allTrump = true
+        for _, c in ipairs(legal) do
+            if not C.IsTrump(c, S.s.contract) then
+                allTrump = false; break
+            end
+        end
+        if allTrump and #legal >= 2 then
+            local lowest = best
+            for _, c in ipairs(legal) do
+                if C.IsTrump(c, S.s.contract)
+                   and C.TrickRank(c, S.s.contract)
+                      < C.TrickRank(lowest, S.s.contract) then
+                    lowest = c
+                end
+            end
+            if lowest ~= best then
+                best = lowest
+            end
+        end
+    end
+
     return _restore(best)
 end
