@@ -2080,8 +2080,32 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
                 end
             end
         end
+        -- v3.1.3 (user request — bot-behavior monitoring):
+        -- per-trick play history. Compact pipe-delimited format
+        -- "{leadSuit}|{winnerSeat}|{points}|{seat1-card1},{seat2-card2},..."
+        -- e.g. "S|3|16|2-8S,3-TS,4-KS,1-JS". One string per played
+        -- trick, in trick order. Lets `/baloot lastround` print
+        -- play-by-play; analyzers can parse for behavioral audits.
+        -- Schema bumped to v=4. Older v=1/2/3 rows have no `trickPlays`
+        -- field; analyzer skips via field-presence check.
+        local trickPlaysCompact = {}
+        if s.tricks then
+            for ti, t in ipairs(s.tricks) do
+                local plays = {}
+                if t.plays then
+                    for _, p in ipairs(t.plays) do
+                        plays[#plays + 1] = ("%d-%s"):format(p.seat or 0, p.card or "?")
+                    end
+                end
+                trickPlaysCompact[ti] = ("%s|%d|%d|%s"):format(
+                    t.leadSuit or "?",
+                    t.winner or 0,
+                    t.points or 0,
+                    table.concat(plays, ","))
+            end
+        end
         local row = {
-            v            = 3,                            -- schema version
+            v            = 4,                            -- v3.1.3 schema bump
             roundNumber  = s.roundNumber or 0,
             ts           = (GetTime and GetTime()) or 0,
             type         = s.contract.type,
@@ -2108,6 +2132,7 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
             tricksA      = tricksA,                      -- v=3 (Cluster 6)
             tricksB      = tricksB,                      -- v=3 (Cluster 6)
             trickWinners = table.concat(perTrick),       -- v=3 (Cluster 6)
+            trickPlays   = trickPlaysCompact,            -- v=4 (v3.1.3)
             bidderMade   = (bidderMade == true) and 1
                            or (bidderMade == false) and 0 or -1,
             target       = s.target or 152,

@@ -34,6 +34,7 @@ local function help()
     print("  /baloot history [N]  - dump last N round-result rows (default 20)")
     print("  /baloot history clear - wipe round-result history")
     print("  /baloot history off / on - toggle telemetry capture (default on)")
+    print("  /baloot lastround [N] - print last round's per-trick plays (N=2 → 2 rounds back)")
     print("  /baloot config       - open the Settings panel (Esc → Options → AddOns)")
     print("  /baloot leave        - graceful exit (non-host); host sees you as dropped")
     print("  /baloot stats        - lifetime W/L + bidder stats (cross-session)")
@@ -535,6 +536,70 @@ local function dispatch(msg)
         end
         say(("see SavedVariables/WHEREDNGN.lua for the full table " ..
              "(WHEREDNGNDB.history)"))
+        return
+    end
+
+    -- v3.1.3 (user request — bot-behavior monitoring): print last
+    -- round's play-by-play with per-trick cards. Sources from
+    -- WHEREDNGNDB.history's v=4 trickPlays field.
+    -- Usage:
+    --   /baloot lastround       → most-recent round
+    --   /baloot lastround N     → N rounds back (1 = most recent,
+    --                              2 = previous, etc.)
+    local lrArg = msg:match("^lastround%s*(.*)$")
+    if lrArg then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        local h = WHEREDNGNDB.history
+        if type(h) ~= "table" or #h == 0 then
+            say("no rounds recorded yet (toggle with /baloot history on)")
+            return
+        end
+        local back = tonumber(lrArg) or 1
+        if back < 1 then back = 1 end
+        local idx = #h - back + 1
+        if idx < 1 then
+            say(("only %d round%s recorded; cannot go %d back"):format(
+                #h, #h == 1 and "" or "s", back))
+            return
+        end
+        local r = h[idx]
+        if type(r) ~= "table" then
+            say("round entry is corrupt; check WHEREDNGNDB.history")
+            return
+        end
+        local typeStr = r.type or "?"
+        local trumpStr = (r.trump and r.trump ~= "") and (" trump=" .. r.trump) or ""
+        local mods = {}
+        if r.doubled == 1 then mods[#mods + 1] = "Bel" end
+        if r.tripled == 1 then mods[#mods + 1] = "Bel x2" end
+        if r.foured == 1  then mods[#mods + 1] = "Four"  end
+        if r.gahwa == 1   then mods[#mods + 1] = "Gahwa" end
+        local modStr = (#mods > 0) and (" [" .. table.concat(mods, " ") .. "]") or ""
+        say(("round %d  %s%s%s  bidder=seat%d (%s)  bidcard=%s"):format(
+            r.roundNumber or 0, typeStr, trumpStr, modStr,
+            r.bidder or 0, r.bidderTier or "?",
+            r.bidCard or "-"))
+        say(("  outcome: A %+d  B %+d  → cum %d/%d  made=%s%s"):format(
+            r.addA or 0, r.addB or 0, r.totA or 0, r.totB or 0,
+            (r.bidderMade == 1) and "yes"
+            or (r.bidderMade == 0) and "no" or "?",
+            (r.sweep ~= nil and r.sweep ~= "")
+                and (" sweep=" .. r.sweep) or ""))
+        if type(r.trickPlays) ~= "table" or #r.trickPlays == 0 then
+            say("  (no per-trick plays — pre-v3.1.3 row, schema v=" ..
+                tostring(r.v or 1) .. ")")
+            return
+        end
+        for ti, line in ipairs(r.trickPlays) do
+            -- format: "{leadSuit}|{winner}|{points}|{seat-card,...}"
+            local ls, w, pts, plays = line:match("^([^|]+)|([^|]+)|([^|]+)|(.*)$")
+            if ls then
+                say(("  T%d  lead=%s  winner=seat%s  pts=%s  plays: %s"):format(
+                    ti, ls, w, pts, plays or ""))
+            else
+                say(("  T%d  (parse error) %s"):format(ti, line))
+            end
+        end
         return
     end
 

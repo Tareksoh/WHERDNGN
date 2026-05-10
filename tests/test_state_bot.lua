@@ -4882,7 +4882,8 @@ do
                    "AG.10a (schema v=3): ApplyRoundEnd appends 1 row to history")
         if h and h[1] then
             local row = h[1]
-            assertEq(row.v, 3, "AG.10b (schema v=3): row v=3 schema bump")
+            -- v3.1.3: schema bumped to v=4 with addition of trickPlays.
+            assertEq(row.v, 4, "AG.10b (schema v=4 / v3.1.3): row v=4 schema bump")
             assertEq(row.bidderTier, "M3lm",
                      "AG.10c (schema v=3): bidderTier from active flags")
             assertEq(row.trickWinners, "ABABABAB",
@@ -4898,6 +4899,15 @@ do
                      "AG.10h (schema v=3): v=2 fields preserved (bidderIsBot)")
             assertEq(row.bidderMade, 1,
                      "AG.10i (schema v=3): v=2 fields preserved (bidderMade)")
+            -- v3.1.3 (v=4): trickPlays array. Each trick a string
+            -- "{leadSuit}|{winner}|{points}|{plays}". The fixture's
+            -- AG.10 setup uses 8 tricks with mock winners but no
+            -- play data (just .winner). Check that the field is a
+            -- table; per-trick content depends on .plays existence.
+            assertTrue(type(row.trickPlays) == "table",
+                       "AG.10j (v3.1.3 v=4): trickPlays is a table")
+            assertEq(#row.trickPlays, 8,
+                     "AG.10k (v3.1.3 v=4): trickPlays has 8 entries (1 per trick)")
         end
     end
     -- Restore WHEREDNGNDB.
@@ -6682,6 +6692,29 @@ do
         "AQ.9a (Change 10): HK-5 marker on Hokm-bidder discard branch")
     assertTrue(botSrc:find('longerCandidates') ~= nil,
         "AQ.9b (Change 10): prefers longerCandidates (suitCount >= 2)")
+end
+
+-- AR.1 — v3.1.3: /baloot lastround slash command
+do
+    local slashSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Slash.lua"):read("*a")
+    assertTrue(slashSrc:find('lastround') ~= nil,
+        "AR.1a (v3.1.3): /baloot lastround command exists in Slash.lua")
+    assertTrue(slashSrc:find('trickPlays') ~= nil,
+        "AR.1b (v3.1.3): lastround handler reads trickPlays field")
+    -- help text mentions lastround (use literal substring search)
+    assertTrue(slashSrc:find("per%-trick plays") ~= nil,
+        "AR.1c (v3.1.3): help text describes lastround command")
+end
+
+-- AR.2 — v3.1.3: trickPlays writer in State.lua
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    assertTrue(stateSrc:find('trickPlaysCompact') ~= nil,
+        "AR.2a (v3.1.3): State.lua builds trickPlaysCompact array")
+    assertTrue(stateSrc:find('trickPlays%s+= trickPlaysCompact') ~= nil,
+        "AR.2b (v3.1.3): row.trickPlays field assigned")
+    assertTrue(stateSrc:find('v%s+= 4,') ~= nil,
+        "AR.2c (v3.1.3): schema bumped to v=4")
 end
 
 -- AQ.10 (behavioral) — void-Hokm fix: when both opps void in S,

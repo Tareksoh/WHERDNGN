@@ -1,5 +1,103 @@
 # Changelog
 
+## v3.1.3 — Per-round trick logging for bot-behavior monitoring
+
+User requested per-trick play logging so they can audit bot decisions
+post-game (e.g. "Bot 3 bid Sun and narrowly won — was that good play
+or did they give away points?").
+
+### What's new
+
+#### `WHEREDNGNDB.history[i].trickPlays` — per-trick play array
+
+Schema bumped from **v=3 → v=4**. Each round-history row now
+includes a `trickPlays` array, one string per played trick:
+
+```
+"{leadSuit}|{winnerSeat}|{points}|{seat-card,seat-card,...}"
+```
+
+Example:
+```
+trickPlays = {
+  "S|3|16|2-8S,3-TS,4-KS,1-JS",
+  "S|4|36|3-7S,4-JH,1-9H,2-JD",
+  "C|1|14|4-7C,1-AC,2-9C,3-QC",
+  ...
+}
+```
+
+Pipe-delimited fields, comma-separated plays. Compact (~30 chars per
+trick) so the existing 200-row cap on `WHEREDNGNDB.history` keeps
+total saved-vars overhead under ~50KB.
+
+Backward-compatible: pre-v3.1.3 (v=1/2/3) rows have no `trickPlays`
+field; the slash command's parse skips gracefully and prints
+"pre-v3.1.3 row, schema v=N".
+
+#### `/baloot lastround [N]` slash command
+
+Prints the last round's full play-by-play in chat:
+
+```
+> /baloot lastround
+round 5  HOKM trump=H [Bel]  bidder=seat4 (SaudiMaster)  bidcard=8H
+  outcome: A +9  B +34  → cum 9/34  made=yes
+  T1  lead=S  winner=seat3  pts=16  plays: 2-8S,3-TS,4-KS,1-JS
+  T2  lead=S  winner=seat4  pts=36  plays: 3-7S,4-JH,1-9H,2-JD
+  T3  lead=C  winner=seat1  pts=14  plays: 4-7C,1-AC,2-9C,3-QC
+  ...
+```
+
+Argument `N` walks back N rounds (default 1 = most recent):
+- `/baloot lastround 1` → most-recent round
+- `/baloot lastround 2` → 2 rounds back
+- ...
+
+Works for any round in the history (up to the 200-row cap).
+
+### Why the format choice
+
+Pipe-delimited string was chosen over Lua nested tables because:
+- ~30 chars/trick × 8 = 240 chars vs ~150 bytes structured = 4× smaller
+- Trivially parseable with `:match("^([^|]+)|([^|]+)|([^|]+)|(.*)$")`
+- Human-readable in raw saved-vars dump
+- One-line-per-trick = grep-friendly for offline analysis
+
+### Implementation
+
+- **`State.lua:2058+`**: builds `trickPlaysCompact` from `s.tricks`
+  walking each trick's `plays` array (already populated by
+  `S.ApplyPlay`). Format: `{leadSuit}|{winner}|{points}|{seat-card,...}`.
+- **`Slash.lua:541+`**: `lastround [N]` command parses each compact
+  string and prints in human-readable form.
+- **Help text** (`Slash.lua:37`): `lastround` listed in `/baloot help`.
+
+### Tests
+
+**931/931 pass** (was 923 — +8 new pins; 1 existing pin updated for
+schema v=3 → v=4 bump). Added:
+
+- AG.10b: schema bump v=3 → v=4
+- AG.10j-k: trickPlays is a table with 8 entries
+- AR.1a-c: `/baloot lastround` command exists, reads trickPlays,
+  help text describes the feature
+- AR.2a-c: State.lua builds trickPlaysCompact + assigns to row +
+  bumps schema version to 4
+
+### Notes for use
+
+To audit Bot 3's behavior in your last narrowly-won Sun round (the
+one that prompted this feature), wait for the next round to play out
+on **v3.1.3 code** — then run `/baloot lastround` immediately after
+round-end. The full per-trick play sequence will print in chat,
+ready to copy-paste here for analysis.
+
+For offline / forensic review of multiple rounds, the
+`WHEREDNGNDB.history` array in `SavedVariables/WHEREDNGN.lua` carries
+the same `trickPlays` data persistently (cap 200 rows; oldest dropped
+on overflow).
+
 ## v3.1.2 — Tahreeb hint-give/take gaps + void-Hokm pickLead fix
 
 User asked to ship all gaps identified by video #46 (Tahreeb advanced)
