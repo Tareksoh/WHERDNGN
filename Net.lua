@@ -422,6 +422,38 @@ end
 
 function N.SendPlay(seat, card)
     broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
+    -- v3.1.10 (user-reported wire desync): defensive 250ms re-broadcast,
+    -- same pattern as v1.6.1's SendTurn fix. WoW's CHAT_MSG_ADDON channel
+    -- silently drops frames under throttle pressure; user observed plays
+    -- where the host's MSG_TURN arrived at remotes but the preceding
+    -- MSG_PLAY did NOT — remotes see "your turn" notification but the
+    -- table is missing the host's card visually. The MSG_TRICK at trick-
+    -- end carries the full play list and recovers the visual at trick
+    -- close, but mid-trick the UX is broken until then.
+    --
+    -- Re-broadcast safety:
+    --   • Idempotent on receive: _OnPlay's idempotence guard at
+    --     Net.lua:1978-1982 rejects any seat already present in
+    --     s.trick.plays, so a duplicate add is a no-op.
+    --   • Self-suppressing: gate on (still in PLAY phase + same trick
+    --     state). If the trick has resolved (4 plays + MSG_TRICK
+    --     arrived → s.trick reset) the seat won't be in current
+    --     plays and the re-broadcast is harmless (receivers see it
+    --     for a phase that already passed → ignored by phase guard).
+    --   • 250ms < typical inter-play delay (1.5s+ bots, longer humans),
+    --     so the retry cannot collide with a fresh play.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            -- Only the original sender (host for bot/AFK plays, human
+            -- for self-play) re-broadcasts. The re-broadcast goes out
+            -- regardless of whether the seat is already in s.trick.plays
+            -- locally, because receivers may have missed the first
+            -- frame even if the sender's loopback was fine.
+            if S.s.phase == K.PHASE_PLAY then
+                broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
+            end
+        end)
+    end
 end
 
 function N.SendTrick(winner, points)
@@ -1474,6 +1506,33 @@ end
 
 function N.SendOvercallDecision(seat, decision)
     broadcast(("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION, seat, decision))
+    -- v3.1.10 (user-reported "Sun button did nothing"): defensive 250ms
+    -- re-broadcast, same pattern as v1.6.1 SendTurn. User observed
+    -- pressing "Take as Sun" and nothing happening — the wire frame
+    -- was dropped on its single broadcast, host never received the
+    -- decision, the 5-second overcall timer timed out with all-WAIVE,
+    -- and Hokm stood. Without retry the only recovery is "wait 5s and
+    -- hope the player notices nothing changed and re-presses" (which
+    -- they can't because the button locks once decided locally).
+    --
+    -- Re-broadcast safety:
+    --   • Idempotent on receive: S.RecordOvercallDecision rejects any
+    --     seat that already has a recorded decision (State.lua:1096),
+    --     so a duplicate frame is a no-op.
+    --   • Self-suppressing: gate on (still in PHASE_OVERCALL). If the
+    --     window has resolved (PHASE_OVERCALL → PHASE_DOUBLE), the
+    --     duplicate is suppressed at the receiver's _OnOvercallDecision
+    --     phase guard (Net.lua:1524).
+    --   • 250ms is well within the 5-second overcall window, so any
+    --     legitimate first-arrival hits before the second.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_OVERCALL then
+                broadcast(("%s;%d;%s"):format(
+                    K.MSG_OVERCALL_DECISION, seat, decision))
+            end
+        end)
+    end
 end
 
 function N.SendOvercallResolve(taken, by, otype)

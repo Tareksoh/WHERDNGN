@@ -1,5 +1,112 @@
 # Changelog
 
+## v3.1.10 — MSG_PLAY + MSG_OVERCALL_DECISION 250ms retry
+
+User reported two new symptoms after v3.1.8 shipped:
+
+1. **"Sun button did nothing"** — Dedah pressed "Take as Sun" during the
+   5-second overcall window after Pain bid Hokm. The button click had
+   no effect, the timer expired, Hokm stood.
+2. **"Host's card invisible mid-trick"** — host plays a card; remotes
+   see the turn advance to themselves but the table doesn't show the
+   host's card. Trick-end MSG_TRICK eventually backfills the visual,
+   but during the trick the UX is broken.
+
+User suspected v3.1.6-3.1.8 caused these. They didn't — but our fixes
+EXPOSED them. Pre-v3.1.6, dropped wire frames produced 60-second
+freezes that masked everything. With heal mechanisms now recovering
+the freeze automatically, the shorter visual artifacts of OTHER
+dropped messages became noticeable.
+
+### Root cause: missing retry on critical wire messages
+
+WoW's CHAT_MSG_ADDON channel is at-most-once and silently drops frames
+under throttle pressure. v1.6.1 added a 250ms re-broadcast to
+`SendTurn` to recover dropped MSG_TURN. The same pattern was never
+applied to:
+
+- **`SendPlay`** (`Net.lua:423`) — single-shot. When MSG_PLAY drops,
+  remotes don't see the card. MSG_TRICK at trick-end carries the full
+  play list and recovers the visual at trick close, but mid-trick
+  rendering is broken.
+- **`SendOvercallDecision`** (`Net.lua:1475`) — single-shot. When the
+  decision frame drops, the host never registers the decision, the
+  5-second timer fires with all-WAIVE, and the contract stands
+  unchanged. The button-press gives no feedback because local state
+  only updates on host echo, which never arrived.
+
+### Fix: mirror v1.6.1 SendTurn retry pattern
+
+Both `SendPlay` and `SendOvercallDecision` now re-broadcast 250ms
+after the initial frame:
+
+```lua
+function N.SendPlay(seat, card)
+    broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_PLAY then
+                broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
+            end
+        end)
+    end
+end
+```
+
+Idempotence is already wired in receivers:
+
+- **`_OnPlay`** (Net.lua:1978-1982) — the per-trick "seat already
+  played" check rejects any seat already in `s.trick.plays`. A
+  duplicate MSG_PLAY for an already-applied play is a no-op.
+- **`S.RecordOvercallDecision`** (State.lua:1096) — returns false if
+  the seat already has a recorded decision. A duplicate decision frame
+  is a no-op.
+
+Phase guards on the retry side suppress stale re-broadcasts: a play
+broadcast for a trick that has since resolved (phase advanced past
+PLAY) doesn't re-emit; an overcall decision after the window closed
+doesn't re-emit.
+
+### Why these weren't caught earlier
+
+The original v1.6.1 SendTurn fix was prompted by a specific user-
+reported MSG_TURN drop scenario. Other wire messages didn't have
+prominent symptoms in the v0.x to v3.1.5 era because:
+
+- Mid-trick MSG_PLAY drops were masked by the eventual MSG_TRICK
+  frame that contains the full play list. UX degradation was brief
+  (typically 1-3 seconds) and infrequent enough to not be reported.
+- MSG_OVERCALL_DECISION drops manifested as "I waved when I meant
+  to take" — easy to misattribute to the player's own click.
+
+The v3.1.6-3.1.8 freeze fixes cleaned up the worst symptom (60-second
+state freezes), making these residual artifacts visible enough to
+diagnose. Mirror-fix the v1.6.1 retry pattern now closes the gap.
+
+### Tests
+
+**969/969 pass** (was 963, +6 new pins). New section AX covers:
+
+- AX.1: SendPlay retry marker present
+- AX.2: SendPlay broadcasts MSG_PLAY twice
+- AX.3: SendPlay retry uses 0.25s + PHASE_PLAY guard
+- AX.4: SendOvercallDecision retry marker present
+- AX.5: SendOvercallDecision broadcasts MSG_OVERCALL_DECISION twice
+- AX.6: SendOvercallDecision retry uses 0.25s + PHASE_OVERCALL guard
+
+### Audit follow-up: other single-broadcast call sites
+
+Other senders that may benefit from retry but haven't shown user-
+visible symptoms (deferred to future audit):
+
+- `SendBid`, `SendDouble`, `SendTriple`, `SendFour`, `SendGahwa`
+  (escalation chain)
+- `SendBidCard`, `SendBelote`
+- `SendAKA`, `SendSWA`, `SendSWAReq`, `SendSWAResp`
+- `SendMeld`, `SendKawesh`
+
+These are queued for v3.2.x audit if user reports surface them.
+
 ## v3.1.9 — Partner-trump-led-fragile-lock + forced-ruff trump conservation
 
 User shared a saved-game (round 5) where a Saudi Master bot bid Hokm

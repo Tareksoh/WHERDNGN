@@ -6813,6 +6813,41 @@ do
         "AU.5 (v3.1.7): heal events logged to freezeLog")
 end
 
+-- AX — v3.1.10 SendPlay + SendOvercallDecision 250ms retry. Same wire-drop
+-- pattern that v1.6.1 fixed for SendTurn applies to MSG_PLAY (host's card
+-- invisible to remotes when first broadcast drops) and MSG_OVERCALL_DECISION
+-- (Sun overcall button "did nothing" when dropped). Mirror the v1.6.1
+-- SendTurn retry pattern for both.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- SendPlay retry block
+    assertTrue(netSrc:find("v3%.1%.10 %(user%-reported wire desync%)") ~= nil,
+        "AX.1 (v3.1.10): SendPlay retry marker present")
+    -- The retry should be in SendPlay specifically (next to MSG_PLAY format).
+    assertTrue(netSrc:find("function N%.SendPlay%(seat, card%)\n    broadcast.-MSG_PLAY.-MSG_PLAY") ~= nil,
+        "AX.2 (v3.1.10): SendPlay broadcasts MSG_PLAY twice (initial + retry)")
+    -- 0.25 second delay (mirror SendTurn). Use balanced search across
+    -- a window of the SendPlay function rather than strict adjacency.
+    do
+        local sp = netSrc:match("function N%.SendPlay.-\nend")
+        assertTrue(sp and sp:find("C_Timer%.After%(0%.25") ~= nil
+                  and sp:find("S%.s%.phase == K%.PHASE_PLAY") ~= nil,
+            "AX.3 (v3.1.10): SendPlay retry uses 0.25s delay + PHASE_PLAY guard")
+    end
+
+    -- SendOvercallDecision retry block
+    assertTrue(netSrc:find('v3%.1%.10 %(user%-reported "Sun button did nothing"%)') ~= nil,
+        "AX.4 (v3.1.10): SendOvercallDecision retry marker present")
+    assertTrue(netSrc:find("function N%.SendOvercallDecision%(seat, decision%)\n    broadcast.-MSG_OVERCALL_DECISION.-MSG_OVERCALL_DECISION") ~= nil,
+        "AX.5 (v3.1.10): SendOvercallDecision broadcasts MSG_OVERCALL_DECISION twice")
+    do
+        local sod = netSrc:match("function N%.SendOvercallDecision.-\nend")
+        assertTrue(sod and sod:find("C_Timer%.After%(0%.25") ~= nil
+                  and sod:find("S%.s%.phase == K%.PHASE_OVERCALL") ~= nil,
+            "AX.6 (v3.1.10): SendOvercallDecision retry uses 0.25s delay + PHASE_OVERCALL guard")
+    end
+end
+
 -- AW — v3.1.9 partner-trump-led-fragile-lock + forced-ruff lowest-trump
 -- override. User-reported saved-game showed bot bidder following partner's
 -- KH (rank 4) trump lead with QH (rank 3) when JH/9H/AH were available
