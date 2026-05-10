@@ -1,5 +1,81 @@
 # Changelog
 
+## v3.1.1 — NASHRAH polish (remove redundant line + scroll for >5 rounds)
+
+User feedback on v3.1.0:
+
+> last line of the scoreboard is repeating same info, it is not really
+> needed we already know 152 is the target, also make it scrollable
+> if the game went over 5 rounds.
+
+### Changes
+
+**Removed redundant score line.** v3.1.0's TOTAL row already showed
+team scores; the line below it just repeated the same numbers with
+`/ 152 pts` suffix. Target is fixed and well-known to players.
+Cleaner panel:
+
+```
+— NASHRAH —
+R1: w7osh: 12  j7l6: 8
+R2: w7osh: 24  j7l6: 18
+TOTAL: w7osh: 47  j7l6: 43
+```
+
+(Pre-v3.1.1 had an extra `w7osh: 47  j7l6: 43  / 152 pts` line.)
+
+**Scrollable for >5 rounds.** A ScrollFrame now wraps the per-round
+rows with a 5-row viewport. When a game runs longer than 5 rounds,
+mouse-wheel scrolls the older rows into view. The TOTAL row stays
+fixed at the bottom of the panel (always visible regardless of
+scroll position).
+
+Auto-scrolls to bottom on each refresh so the **latest round is
+always visible** by default — players still see the most recent
+deltas without manual scrolling. Older rounds are reachable by
+scrolling up.
+
+### Implementation
+
+```lua
+-- Fixed-height panel with viewport for exactly 5 rows.
+local viewportH = NASHRAH_VISIBLE_ROWS * NASHRAH_ROW_H  -- 5 * 12 = 60px
+local scrollFrame = CreateFrame("ScrollFrame", nil, nashrahPanel)
+scrollFrame:SetSize(204, viewportH)
+scrollFrame:EnableMouseWheel(true)
+scrollFrame:SetScript("OnMouseWheel", function(self, delta)
+    local cur = self:GetVerticalScroll() or 0
+    local maxScroll = self:GetVerticalScrollRange() or 0
+    local nxt = cur - (delta * NASHRAH_ROW_H)
+    self:SetVerticalScroll(math.max(0, math.min(maxScroll, nxt)))
+end)
+local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+scrollFrame:SetScrollChild(scrollChild)
+```
+
+In the renderer:
+```lua
+local childHeight = math.max(viewportH, #hist * NASHRAH_ROW_H)
+p.scrollChild:SetHeight(childHeight)
+-- Auto-scroll to bottom (no-op when ≤5 rounds).
+p.scrollFrame:SetVerticalScroll(childHeight - viewportH)
+```
+
+For ≤5 rounds, `childHeight == viewportH` → scroll range is 0 →
+mouse wheel becomes a no-op (clamped to 0). No visual scroll bar
+clutter for short games.
+
+### Tests
+
+**902/902 pass** (was 897 — +5 new pins). AP.2 expanded to cover
+the v3.1.1 changes:
+
+- AP.2g: rows wrapped in `CreateFrame("ScrollFrame", ...)`
+- AP.2h: `EnableMouseWheel(true)` on scrollFrame
+- AP.2i: `NASHRAH_VISIBLE_ROWS = 5` (per user spec)
+- AP.2j: `SetScrollChild` wires viewport ↔ child
+- AP.2k: renderer calls `SetVerticalScroll` (auto-scroll-to-bottom)
+
 ## v3.1.0 — NASHRAH (نشرة) per-round scoreboard panel
 
 ### What's new

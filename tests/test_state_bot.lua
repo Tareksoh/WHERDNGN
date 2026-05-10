@@ -6404,7 +6404,7 @@ do
         "AP.1c (v3.1.0): roundHistory entry includes totA/totB cumulatives")
 end
 
--- AP.2 — UI.lua: nashrahPanel + renderer + Refresh wiring
+-- AP.2 — UI.lua: nashrahPanel + renderer + Refresh wiring (v3.1.1 update)
 do
     local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
     assertTrue(uiSrc:find("renderNashrahPanel") ~= nil,
@@ -6420,6 +6420,18 @@ do
     -- bottom-left scoreText now blanks (data moved to panel)
     assertTrue(uiSrc:find('scoreText:SetText%(""%)') ~= nil,
         "AP.2f (v3.1.0): bottom-left scoreText blanked (moved to NASHRAH)")
+    -- v3.1.1: redundant scoreLine removed; ScrollFrame for >5 rounds.
+    assertTrue(uiSrc:find('CreateFrame%("ScrollFrame"') ~= nil,
+        "AP.2g (v3.1.1): NASHRAH wraps rows in ScrollFrame")
+    assertTrue(uiSrc:find("EnableMouseWheel%(true%)") ~= nil,
+        "AP.2h (v3.1.1): scrollFrame enables mouse wheel")
+    assertTrue(uiSrc:find("NASHRAH_VISIBLE_ROWS = 5") ~= nil,
+        "AP.2i (v3.1.1): visible-rows cap = 5 (per user spec)")
+    assertTrue(uiSrc:find("SetScrollChild") ~= nil,
+        "AP.2j (v3.1.1): scrollFrame:SetScrollChild wired")
+    -- Auto-scroll-to-bottom so the latest round is always visible.
+    assertTrue(uiSrc:find("SetVerticalScroll") ~= nil,
+        "AP.2k (v3.1.1): renderer sets vertical scroll (auto-scroll-to-bottom)")
 end
 
 -- AP.3 (behavioral) — ApplyRoundEnd grows roundHistory

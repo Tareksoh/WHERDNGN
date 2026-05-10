@@ -652,33 +652,73 @@ local function buildMain()
 
     -- v3.1.0 NASHRAH (نشرة) — per-round scoreboard panel, top-left,
     -- below the Sound row. Shows R1: TeamA-delta TeamB-delta per
-    -- round, then TOTAL: cumulative-A cumulative-B, then the "/ N pts"
-    -- target line that used to live at BOTTOMLEFT. Pre-v3.1.0 the
+    -- round, then TOTAL: cumulative-A cumulative-B. Pre-v3.1.0 the
     -- only score display was the bottom-left scoreText line which
     -- showed cumulative totals — players had no easy way to see
     -- per-round deltas without scrolling chat / opening the score
     -- breakdown panel. The Nashrah aggregates everything in one
     -- compact panel.
+    --
+    -- v3.1.1 layout:
+    --   * Removed redundant score-with-target line (TOTAL already
+    --     shows the same team scores; target is fixed at 152).
+    --   * Rows live inside a ScrollFrame with a 5-row viewport. When
+    --     the game runs longer than 5 rounds, mouse-wheel scrolls the
+    --     hidden rows into view. Auto-scrolls to the bottom on each
+    --     refresh so the latest round is always visible.
+    local NASHRAH_VISIBLE_ROWS = 5
+    local NASHRAH_ROW_H = 12
+    local NASHRAH_HEADER_H = 18
+    local NASHRAH_TOTAL_GAP = 4
+    local NASHRAH_TOTAL_H = 14
+    local NASHRAH_PADDING = 6
     local nashrahPanel = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    nashrahPanel:SetSize(220, 120)  -- width fits R-N: NameA: NN  NameB: NN
-                                    -- height grows in renderNashrahPanel
+    -- Fixed total height: header + 5-row viewport + TOTAL gap + TOTAL.
+    local panelHeight = NASHRAH_HEADER_H
+                      + (NASHRAH_VISIBLE_ROWS * NASHRAH_ROW_H)
+                      + NASHRAH_TOTAL_GAP + NASHRAH_TOTAL_H
+                      + NASHRAH_PADDING
+    nashrahPanel:SetSize(220, panelHeight)
     nashrahPanel:SetPoint("TOPLEFT", 8, -38)
     setBackdrop(nashrahPanel, true,
         { 0.05, 0.05, 0.06, 0.85 }, { 0.55, 0.45, 0.30, 1 }, 6, "solid")
     nashrahPanel:Hide()  -- only shown once a round has ended
-    -- Header (small caps "NASHRAH" with leading dashes for the
-    -- canonical Saudi scoreboard look; matches the user-spec format).
     nashrahPanel.header = makeText(nashrahPanel, 11, "CENTER")
     nashrahPanel.header:SetPoint("TOP", 0, -4)
     nashrahPanel.header:SetText("|cffd9b56b— NASHRAH —|r")
-    -- Per-round rows (lazy-built; we lay out as many as are needed
-    -- on each refresh). Stored in nashrahPanel.rows[i].
+
+    -- v3.1.1 ScrollFrame for per-round rows. Viewport height = 5 rows;
+    -- scrollChild height grows with #hist. Mouse-wheel scrolls when
+    -- count exceeds 5; otherwise no scroll bar / no wheel response
+    -- (handler clamps to range).
+    local viewportH = NASHRAH_VISIBLE_ROWS * NASHRAH_ROW_H
+    local scrollFrame = CreateFrame("ScrollFrame", nil, nashrahPanel)
+    scrollFrame:SetPoint("TOPLEFT", 8, -NASHRAH_HEADER_H)
+    scrollFrame:SetSize(204, viewportH)  -- 220 panel - 16 horizontal padding
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseWheel", function(self, delta)
+        local cur = self:GetVerticalScroll() or 0
+        local maxScroll = self:GetVerticalScrollRange() or 0
+        -- delta = +1 (wheel up) → scroll up (decrease offset);
+        -- delta = -1 (wheel down) → scroll down (increase offset).
+        local nxt = cur - (delta * NASHRAH_ROW_H)
+        nxt = math.max(0, math.min(maxScroll, nxt))
+        self:SetVerticalScroll(nxt)
+    end)
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetSize(204, viewportH)  -- resized in renderer
+    scrollFrame:SetScrollChild(scrollChild)
+    nashrahPanel.scrollFrame = scrollFrame
+    nashrahPanel.scrollChild = scrollChild
+    -- Rows live in scrollChild now (so mouse wheel scrolls them).
     nashrahPanel.rows = {}
-    -- TOTAL row + score line; created once, populated each refresh.
+
+    -- TOTAL row anchored at the bottom of the panel (below the scroll
+    -- viewport). Fixed position regardless of row count.
     nashrahPanel.totalLine = makeText(nashrahPanel, 11, "LEFT")
-    nashrahPanel.totalLine:SetPoint("TOPLEFT", 8, -22)  -- repositioned below rows
-    nashrahPanel.scoreLine = makeText(nashrahPanel, 11, "LEFT")
-    nashrahPanel.scoreLine:SetPoint("TOPLEFT", 8, -34)  -- repositioned below total
+    nashrahPanel.totalLine:SetPoint(
+        "TOPLEFT", 8,
+        -(NASHRAH_HEADER_H + viewportH + NASHRAH_TOTAL_GAP))
     f.nashrahPanel = nashrahPanel
 
     gameIDText = makeText(f, 11, "RIGHT")
@@ -4473,21 +4513,24 @@ local function renderPauseControls()
 end
 
 -- v3.1.0 NASHRAH (نشرة) panel renderer. Top-left scoreboard showing
--- per-round deltas + cumulative totals. Replaces the bottom-left
--- scoreText (which is now blanked to free that space).
+-- per-round deltas + cumulative totals.
 --
--- Layout:
+-- v3.1.1 layout:
 --   --- NASHRAH ---
---   R1: TeamA: 12  TeamB: 8
---   R2: TeamA: 24  TeamB: 18
---   ...
---   TOTAL: TeamA: 56  TeamB: 84
---   TeamA: 56  TeamB: 84  /  152 pts        ← moved scoreText
+--   R1: TeamA: 12  TeamB: 8     ┐
+--   R2: TeamA: 24  TeamB: 18    │ ScrollFrame viewport
+--   R3: ...                     │ (5 rows visible)
+--   R4: ...                     │ Mouse-wheel to scroll
+--   R5: ...                     ┘
+--   TOTAL: TeamA: 56  TeamB: 84  ← anchored bottom of panel
 --
--- The panel is hidden until at least one round has ended (i.e.,
--- S.s.roundHistory is non-empty) so an idle lobby doesn't show an
--- empty "NASHRAH" header. Each refresh resizes the panel to fit
--- the current row count.
+-- The panel is hidden until at least one round has ended. Removed
+-- the redundant "TeamA: X TeamB: Y / 152 pts" line that v3.1.0 had
+-- (TOTAL row already shows the same team scores; target is fixed).
+-- Auto-scrolls to bottom on each refresh so the latest round is
+-- always visible.
+local NASHRAH_VISIBLE_ROWS = 5
+local NASHRAH_ROW_H = 12
 local function renderNashrahPanel()
     local p = f and f.nashrahPanel
     if not p then return end
@@ -4501,43 +4544,43 @@ local function renderNashrahPanel()
     end
     local nA = (S.s.teamNames and S.s.teamNames.A) or "Team A"
     local nB = (S.s.teamNames and S.s.teamNames.B) or "Team B"
-    -- Per-round rows. Reuse existing FontStrings; create new ones as
-    -- needed. Each row anchored at TOPLEFT (8, -16 - i*12).
+    -- Per-round rows live in scrollChild (so mouse-wheel scroll works).
+    -- Reuse existing FontStrings; create new ones as needed.
     p.rows = p.rows or {}
     for i, entry in ipairs(hist) do
         local row = p.rows[i]
         if not row then
-            row = makeText(p, 10, "LEFT")
+            row = makeText(p.scrollChild, 10, "LEFT")
             p.rows[i] = row
         end
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 12)
+        -- Inside scrollChild, rows stack from top.
+        row:SetPoint("TOPLEFT", 0, -(i - 1) * NASHRAH_ROW_H)
         row:SetText(("|cffd9b56bR%d:|r %s: |cff66ff66%d|r  %s: |cffff6666%d|r"):format(
             i, nA, entry.A or 0, nB, entry.B or 0))
         row:Show()
     end
-    -- Hide any leftover rows from a longer prior history (e.g., new
-    -- game after old game's history was cleared).
+    -- Hide any leftover rows from a longer prior history.
     for i = #hist + 1, #p.rows do
         p.rows[i]:Hide()
     end
-    -- TOTAL row anchored after the last per-round row.
-    local totalY = -16 - #hist * 12 - 4   -- 4px gap above TOTAL
-    p.totalLine:ClearAllPoints()
-    p.totalLine:SetPoint("TOPLEFT", 8, totalY)
+    -- Resize scrollChild to fit all rows; the ScrollFrame's
+    -- VerticalScrollRange becomes (scrollChild.height - viewport.height)
+    -- automatically, enabling scroll when #hist > NASHRAH_VISIBLE_ROWS.
+    local childHeight = math.max(NASHRAH_VISIBLE_ROWS * NASHRAH_ROW_H,
+                                 #hist * NASHRAH_ROW_H)
+    p.scrollChild:SetHeight(childHeight)
+    -- Auto-scroll to bottom so the latest round is always visible.
+    -- For ≤5 rounds, scroll range is 0 and SetVerticalScroll(0) is no-op.
+    if p.scrollFrame then
+        local maxScroll = math.max(0,
+            childHeight - (NASHRAH_VISIBLE_ROWS * NASHRAH_ROW_H))
+        p.scrollFrame:SetVerticalScroll(maxScroll)
+    end
+    -- TOTAL row text. Position is fixed (anchored at panel build time
+    -- below the scroll viewport).
     p.totalLine:SetText(("|cffffe066TOTAL:|r %s: |cff66ff66%d|r  %s: |cffff6666%d|r"):format(
         nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0))
-    -- Score-with-target line (the moved bottom-left scoreText)
-    -- anchored under TOTAL.
-    local scoreY = totalY - 14
-    p.scoreLine:ClearAllPoints()
-    p.scoreLine:SetPoint("TOPLEFT", 8, scoreY)
-    p.scoreLine:SetText(("%s: |cff66ff66%d|r  %s: |cffff6666%d|r  / %d pts"):format(
-        nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0,
-        S.s.target or 152))
-    -- Resize panel to fit content (header + rows + total + score line + padding).
-    local height = math.abs(scoreY) + 14
-    p:SetHeight(math.max(40, height))
     p:Show()
 end
 
