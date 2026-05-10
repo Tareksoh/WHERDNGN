@@ -1,6 +1,7 @@
 package-as: WHEREDNGN
 
 ignore:
+  # Repo metadata
   - .git
   - .github
   - .gitignore
@@ -9,12 +10,32 @@ ignore:
   - LICENSE
   - CHANGELOG.md
   - "*.zip"
+  # v3.1.11 codex review #3 — exclude development artifacts from
+  # CurseForge release archive. The TOC only loads runtime addon
+  # files, so these are dead weight in installed copies and expose
+  # internal working material.
+  - CLAUDE.md
+  - .swarm_plan.md
+  - .swarm
+  - .swarm_findings
+  - .claude-flow
+  - docs
+  - tests
+  - tools
+  - human_target_ev_audit_report.md
+  # Card-art / sound generators (Python build scripts, not loaded by Lua)
   - cards/_src
   - cards/*/_src
   - cards/_convert.py
   - cards/_make_back.py
   - cards/_make_textures.py
   - cards/_make_classic_v2.py
+  - cards/_make_wow.py
+  - cards/_make_tattoo.py
+  - cards/_make_royal_noir.py
+  - cards/_make_felt_vintage.py
+  - cards/_make_felt_midnight.py
+  - cards/_make_burgundy.py
   - sounds/_make_sounds.py
   - sounds/_make_voice.py
   - sounds/_make_voice_gtts.py

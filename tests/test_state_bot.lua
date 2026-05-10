@@ -6813,6 +6813,61 @@ do
         "AU.5 (v3.1.7): heal events logged to freezeLog")
 end
 
+-- AY — v3.1.11 codex review fixes:
+--   #1: N.LocalOvercall non-host path routes through N.SendOvercallDecision
+--       so the v3.1.10 250ms retry helper covers remote-client decisions
+--       (the exact path Dedah hit when "Take as Sun" did nothing).
+--   #2: WAIVE bypasses R.CanOvercall so bidder Ace-bid wla button works
+--       (pre-fix the visible button silently returned false on the
+--       CanOvercall guard, leaving the window to time out).
+--   #3: .pkgmeta excludes docs/, tests/, tools/, dev notes, and the
+--       cards/sounds generator scripts from the CurseForge archive.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- AY.1: non-host LocalOvercall path uses N.SendOvercallDecision (not
+    -- a raw broadcast). Search inside the LocalOvercall function body.
+    local lo = netSrc:match("function N%.LocalOvercall.-\nend")
+    assertTrue(lo ~= nil,
+        "AY.1a (v3.1.11): LocalOvercall function present")
+    assertTrue(lo and lo:find("N%.SendOvercallDecision%(S%.s%.localSeat") ~= nil,
+        "AY.1b (v3.1.11): non-host path routes via N.SendOvercallDecision")
+    -- The raw-broadcast pattern that was the bug should be gone from
+    -- the LocalOvercall body.
+    assertTrue(lo and lo:find('broadcast%(%(".-MSG_OVERCALL_DECISION') == nil,
+        "AY.1c (v3.1.11): no raw broadcast(MSG_OVERCALL_DECISION) inside LocalOvercall")
+
+    -- AY.2: WAIVE bypasses R.CanOvercall. The fix gates the CanOvercall
+    -- check on `decision ~= "WAIVE"`. Verify the marker + the structure.
+    assertTrue(lo and lo:find('codex review #2') ~= nil,
+        "AY.2a (v3.1.11): codex review #2 marker present in LocalOvercall")
+    assertTrue(lo and lo:find('decision ~= "WAIVE"') ~= nil,
+        "AY.2b (v3.1.11): CanOvercall is gated on decision ~= WAIVE")
+    -- Sanity: positive actions still gated.
+    assertTrue(lo and lo:find('R%.CanOvercall') ~= nil,
+        "AY.2c (v3.1.11): R.CanOvercall still consulted for non-WAIVE")
+
+    -- AY.3: .pkgmeta ignores dev artifacts. Open + scan for the
+    -- canonical entries the codex review called out.
+    local pkgF = io.open(WHEREDNGN_TESTS_ROOT .. "/.pkgmeta")
+    assertTrue(pkgF ~= nil, "AY.3a (v3.1.11): .pkgmeta exists")
+    if pkgF then
+        local pkg = pkgF:read("*a")
+        pkgF:close()
+        assertTrue(pkg:find("\n  %- docs\n") ~= nil,
+            "AY.3b (v3.1.11): .pkgmeta ignores docs/")
+        assertTrue(pkg:find("\n  %- tests\n") ~= nil,
+            "AY.3c (v3.1.11): .pkgmeta ignores tests/")
+        assertTrue(pkg:find("\n  %- tools\n") ~= nil,
+            "AY.3d (v3.1.11): .pkgmeta ignores tools/")
+        assertTrue(pkg:find("CLAUDE%.md") ~= nil,
+            "AY.3e (v3.1.11): .pkgmeta ignores CLAUDE.md")
+        assertTrue(pkg:find("human_target_ev_audit_report%.md") ~= nil,
+            "AY.3f (v3.1.11): .pkgmeta ignores human_target_ev_audit_report.md")
+        assertTrue(pkg:find("cards/_make_wow%.py") ~= nil,
+            "AY.3g (v3.1.11): .pkgmeta ignores cards/_make_wow.py")
+    end
+end
+
 -- AX — v3.1.10 SendPlay + SendOvercallDecision 250ms retry. Same wire-drop
 -- pattern that v1.6.1 fixed for SendTurn applies to MSG_PLAY (host's card
 -- invisible to remotes when first broadcast drops) and MSG_OVERCALL_DECISION

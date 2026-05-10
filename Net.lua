@@ -1838,10 +1838,6 @@ function N.LocalOvercall(decision)
     if not S.s.overcall then return false end
     if not S.s.localSeat then return false end
     if S.s.phase ~= K.PHASE_OVERCALL then return false end
-    if not R.CanOvercall(S.s.localSeat, S.s.contract,
-                         S.s.overcall.bidCard) then
-        return false
-    end
     -- Validate decision string (mirrors S.RecordOvercallDecision).
     -- v1.5.3: TAKE_HOKM_<suit> removed (non-canonical Saudi rule —
     -- saudi-rules.md:26-28). Stale clients may still emit it; we
@@ -1850,8 +1846,28 @@ function N.LocalOvercall(decision)
                      or decision == "TAKE"
                      or decision == "WAIVE"
     if not validDec then return false end
-    -- Bidder + Ace-bid forces UPGRADE → WAIVE silently (R.CanOvercall
-    -- returns false for that combo, so we already returned above).
+    -- v3.1.11 (codex review #2): WAIVE bypasses R.CanOvercall.
+    -- Pre-fix: bidder with Ace bid card sees a wla button (UI renders
+    -- it because WAIVE is always a valid decision — see UI.lua:2565,
+    -- 2582 unconditional addAction calls), but clicking it hits
+    -- R.CanOvercall returning false (Rules.lua:692 Ace-bid block) and
+    -- silently returned false. Result: the visible wla button did
+    -- nothing, the 5-second timer fired with no decision, and the
+    -- contract resolved on timeout. Bidder's intent ("I waive my
+    -- own upgrade option") never reached the host.
+    --
+    -- Fix: only require R.CanOvercall for positive actions
+    -- (UPGRADE/TAKE that change the contract). WAIVE is a "decline"
+    -- and is always a valid decision regardless of CanOvercall —
+    -- it just locks in "no change" for this seat. This also makes
+    -- the bidder Ace-bid window resolve immediately on click rather
+    -- than waiting out the full 5s timeout.
+    if decision ~= "WAIVE" then
+        if not R.CanOvercall(S.s.localSeat, S.s.contract,
+                             S.s.overcall.bidCard) then
+            return false
+        end
+    end
     if S.s.localSeat == S.s.contract.bidder and decision == "TAKE" then
         return false                                 -- bidder can't TAKE own bid
     end
@@ -1860,14 +1876,21 @@ function N.LocalOvercall(decision)
     end
     -- Send to host. On host, dispatch directly; on remote, broadcast
     -- the MSG_OVERCALL_DECISION and let _OnOvercallDecision route it.
+    -- v3.1.11 (codex review #1): non-host path now routes through
+    -- N.SendOvercallDecision so the v3.1.10 250ms retry helper runs.
+    -- Pre-fix the raw broadcast() bypassed the retry, leaving the
+    -- exact symptom v3.1.10 was meant to address (Dedah-as-remote
+    -- pressed Take-as-Sun and the wire frame dropped silently with
+    -- no recovery). Idempotency on the host receive side is preserved
+    -- by S.RecordOvercallDecision's already-decided guard
+    -- (State.lua:1096), so the duplicate retry is a no-op.
     if S.s.isHost then
         if S.RecordOvercallDecision(S.s.localSeat, decision) then
             N.SendOvercallDecision(S.s.localSeat, decision)
             if N._OvercallAllDecided() then N._HostResolveOvercall() end
         end
     else
-        broadcast(("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION,
-                                       S.s.localSeat, decision))
+        N.SendOvercallDecision(S.s.localSeat, decision)
     end
     return true
 end

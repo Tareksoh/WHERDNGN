@@ -1,5 +1,103 @@
 # Changelog
 
+## v3.1.11 — Codex review fixes for v3.1.10 overcall + release packaging
+
+External code review (Codex) caught three issues post-v3.1.10:
+
+### #1: Remote LocalOvercall path bypassed the retry helper
+
+`N.SendOvercallDecision` (Net.lua:1507) was given a 250ms re-broadcast
+in v3.1.10 to recover dropped MSG_OVERCALL_DECISION frames. But the
+non-host code path inside `N.LocalOvercall` (Net.lua:1869 pre-fix)
+did a raw `broadcast(("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION,
+S.s.localSeat, decision))` — bypassing the retry entirely.
+
+This meant the **exact symptom v3.1.10 was meant to fix** (Dedah-as-
+remote pressed "Take as Sun" and the wire frame dropped silently) was
+still latent: only the host's own self-decisions got the retry; remote
+clients didn't.
+
+**Fix**: replace the raw `broadcast` call with
+`N.SendOvercallDecision(S.s.localSeat, decision)`. Idempotency on
+the receiving host is preserved by `S.RecordOvercallDecision`'s
+already-decided guard at State.lua:1096, so duplicate retry frames
+are no-ops.
+
+### #2: Bidder Ace-bid wla button silently returned false
+
+When the bidder's bid card is an Ace, `R.CanOvercall` blocks UPGRADE
+(Rules.lua:692-695: "bidder UPGRADE blocked when bid card was an
+Ace"). The UI correctly suppresses the "Upgrade to Sun" button in
+that case — but it still renders the "wla" (waive) button (UI.lua:
+2565, 2582 unconditional `addAction` calls).
+
+Pre-fix, `N.LocalOvercall` had a top-level `R.CanOvercall` gate
+(Net.lua:1841 pre-fix) that returned false for ANY decision, including
+WAIVE. Result: the bidder saw a wla button, clicked it, nothing
+happened, and the contract resolved on 5-second timeout instead of
+locking immediately.
+
+**Fix**: gate `R.CanOvercall` only on positive actions
+(UPGRADE/TAKE). WAIVE is a "decline" with no contract impact and
+should always be a valid decision regardless of CanOvercall —
+it just locks in "no change" for this seat:
+
+```lua
+if decision ~= "WAIVE" then
+    if not R.CanOvercall(S.s.localSeat, S.s.contract,
+                         S.s.overcall.bidCard) then
+        return false
+    end
+end
+```
+
+The bidder/non-bidder direction guards (line ~1855) stay as before.
+
+### #3: Release archive included dev artifacts
+
+The `.pkgmeta` ignore list omitted several development-only files
+that shipped to CurseForge installations:
+
+- `CLAUDE.md` (Claude Code repo guidance)
+- `.swarm_plan.md`, `.swarm/`, `.swarm_findings/`, `.claude-flow/`
+  (multi-agent audit notes)
+- `docs/` (strategy docs — internal reference, not user-facing)
+- `tests/` (Lua test harness — Python-driven, not loaded by WoW)
+- `tools/` (build scripts)
+- `human_target_ev_audit_report.md`
+- Card-art generators in `cards/_make_*.py` (Python, not loaded by Lua)
+
+**Fix**: `.pkgmeta` now excludes all of the above. Runtime assets
+preserved: top-level `.lua` files (per `WHEREDNGN.toc`), `cards/*.tga`,
+runtime card-style folders, `sounds/*.ogg`, `media/easter.*`.
+Estimated archive size drop: ~30-40% (most of it `docs/strategy/`
+and `tests/`).
+
+### Tests
+
+**982/982 pass** (was 969, +13 new pins). New section AY covers:
+
+- AY.1a-c: non-host LocalOvercall routes via SendOvercallDecision
+  (no raw broadcast inside LocalOvercall body)
+- AY.2a-c: WAIVE bypasses CanOvercall, positive actions still gated
+- AY.3a-g: .pkgmeta ignores docs, tests, tools, CLAUDE.md, audit
+  report, and the cards/_make_*.py generator scripts
+
+### Why review caught what audit didn't
+
+The v3.1.10 changelog claimed "fix Sun overcall" but the fix was
+inside `SendOvercallDecision`, not at all the call sites that
+construct MSG_OVERCALL_DECISION wire frames. Without checking the
+calling code, the assumption "all overcall decisions go through
+SendOvercallDecision" went unverified. Codex's static review
+explicitly traced the call-graph and found the raw `broadcast`
+bypass.
+
+Mitigation for future similar fixes: when adding a defensive helper
+(retry, throttle, validation), audit ALL existing call sites of the
+underlying primitive (`broadcast` of the relevant MSG tag) for
+direct-construction patterns that bypass the helper.
+
 ## v3.1.10 — MSG_PLAY + MSG_OVERCALL_DECISION 250ms retry
 
 User reported two new symptoms after v3.1.8 shipped:
