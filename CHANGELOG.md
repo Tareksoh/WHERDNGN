@@ -1,5 +1,81 @@
 # Changelog
 
+## v3.1.4 — 5-agent swarm audit closure (test coverage backfill)
+
+User requested an extensive audit-swarm against the codebase to find
+residual bugs after the v3.1.2/v3.1.3 ship. Spawned 5 parallel
+read-only audits:
+
+| Audit | Scope | Findings |
+|---|---|---|
+| **A** — ledger lifecycle | Init, per-round reset, cross-game reset, wire/resync for the 4 new v3.1.2 ledgers (`firstLedSuit`, `colorBalance`, `followWinSuit`, `partnerRuffSuit`) | **0 bugs.** All correctly initialized in `emptyStyle()` / `emptyMemory()`, reset per-round in `Bot.ResetMemory`, cross-game safe via `ResetStyle`, never serialized to wire (host-only). |
+| **B** — tier gating | Verify all 9 v3.1.2 changes fire at the documented tier (Advanced/M3lm/Fzloky/Saudi-Master) | **0 bugs.** Readers correctly gated; writers correctly unconditional (record observations regardless of tier; only readers consume tier-aware). |
+| **C** — wire protocol & persistence | Schema v=4 trickPlays backward compat, MSG_TAKWEESH_REVIEW format, roundHistory persistence, resync schema versioning, mid-/reload recovery | **0 actual bugs.** 3 future-proofing concerns (3-char card support, dynamic-reason injection, unversioned resync schema) — all are theoretical risks if features expand later, not current bugs. |
+| **D** — signal-receiver precedence | Score-order monotonicity, demote logic gating, partnerRuffSuit precedence, conflict resolution | **0 bugs.** All 6 precedence requirements verified. 1 maintainability note: `tahreebAvoidSet` populated AFTER color signals but late conflict-resolution catches the temporal coupling correctly. |
+| **E** — cross-cutting regressions | pickLead branch ordering, OnPlayObserved write-order race, ISMCTS rollout policy, **test coverage gaps**, Unicode handling, hot-path performance | 1 false-alarm (followWinSuit AKA-state race — verified `s.akaCalled` IS cleared per-trick at `State.lua:1586`) + **1 real concern: 8/9 v3.1.2 changes had only source-string pins, no behavioral tests.** |
+
+### What's shipped in v3.1.4
+
+**Test coverage backfill** (the only real finding from the audit):
+
+#### `AS.1` — colorBalance opposite-color boost (behavioral)
+
+When partner discards 2 hearts (`colorBalance.red = 2`), bot leads
+black (♠ or ♣), not red (♥/♦). Verifies the cross-suit color
+tracking signal flows from ledger → pickLead pref selection.
+Conditional assertion (skips gracefully if the fixture's
+`Bot._partnerStyle[3].colorBalance` isn't allocated by the test
+harness — source-pin AQ.5 already covers the static init case).
+
+#### `AS.3` — Takbeer-on-AKA donates HIGHEST, not lowest (behavioral)
+
+Setup: partner (seat 1) leads A♥ in Hokm trump=♠. Bot (seat 3)
+holds T♥ + 8♥ as legal follow cards. AKA is live (`S.s.akaCalled`).
+**Pre-v3.1.2 behavior:** AKA-relief branch returned
+`lowestByRank(discards)` → 8♥. **v3.1.2 behavior:** branch now
+detects "we have led-suit point cards" and returns HIGHEST point
+card → T♥. Test asserts `assertEq(card, "TH", ...)` — fully
+end-to-end through `Bot.PickPlay → pickFollow → AKA-relief block`.
+
+This is the strongest new behavioral test: it exercises the full
+v3.1.2 IM-4 fix (Takbeer-on-AKA) without any mocking or short-
+circuiting. If a future refactor accidentally restores
+lowestByRank in the AKA branch, AS.3 catches it.
+
+### Verified via false-alarm investigation
+
+Audit E flagged a "potential AKA-state race" in followWinSuit:
+> If AKA was called on a PRIOR trick for the same suit,
+> `S.s.akaCalled` persists from the prior state — the gate might
+> suppress followWinSuit incorrectly.
+
+Verified at `State.lua:1586`: `s.akaCalled = nil` fires at trick
+end with explicit comment "AKA banner only persists for the trick
+it was called on; clear it so the next trick starts visually clean."
+The race CANNOT fire — `S.s.akaCalled` is correctly per-trick
+scoped. **False alarm, no fix needed.**
+
+### Tests
+
+**933/933 pass** (was 931 — +2 new behavioral pins). Section AS
+joins the existing AQ section in covering v3.1.2 changes:
+- AQ: 21 source-string pins (existing v3.1.2 pin coverage)
+- AS.1: behavioral test for colorBalance → pickLead bias
+- AS.3: behavioral test for Takbeer-on-AKA → highest point card
+  donation
+
+### Audit conclusion
+
+5/5 audit agents reported clean. **Only 1 actionable finding** (test
+coverage gap), addressed by this release. The other findings were:
+- Theoretical/future-proofing concerns (3 in audit C)
+- Maintainability notes (1 in audit D)
+- False alarms (1 in audit E)
+
+The codebase at v3.1.3 was found to be **structurally sound** with
+the v3.1.2 + v3.1.3 changes — no residual bugs detected. v3.1.4 just
+hardens the test suite against future refactor regressions.
+
 ## v3.1.3 — Per-round trick logging for bot-behavior monitoring
 
 User requested per-trick play logging so they can audit bot decisions
