@@ -1,5 +1,185 @@
 # Changelog
 
+## v3.1.2 — Tahreeb hint-give/take gaps + void-Hokm pickLead fix
+
+User asked to ship all gaps identified by video #46 (Tahreeb advanced)
+plus the Q4 void-Hokm fix from the saved-game audit. **9 surgical
+changes** across give-hint and take-hint logic. Pre-implementation
+audit (read-only Explore agent) sequenced changes into 3 waves;
+tests pass after each wave.
+
+### Wave 1 — surgical, low risk
+
+#### Change 1 — Q4 Fix #1: void-Hokm pickLead
+
+**Where:** `Bot.lua:3725-3740` ("free trick" branch) AND a parallel
+fix at `Bot.lua:2733-2742` ("highest-unplayed" branch).
+
+**Bug:** When both opponents are observed void in a non-trump suit,
+the existing heuristic returned the HIGHEST card (correct in Sun
+where opps can't trump; **wrong in Hokm** where void opps will
+trump-ruff our boss). User's saved-game T5 was the canary —
+Bot 3 had A♠ + Q♠ + 9♠ + 7♥, both opps void in ♠ from T2; bot led
+high spade and got it ruffed by trump-A.
+
+**Fix:** branch on contract type:
+- Sun: keep HIGHEST (free trick)
+- Hokm: lead LOWEST (sacrifice cheapest into inevitable ruff)
+
+Applied to both pickLead branches that touch this scenario. Verified
+fix via simulation: Basic/Adv/M3lm/Fzloky now all pick 9♠ (10/10
+trials) instead of A♠. Saudi Master ISMCTS rollouts inherit the
+correct heuristic default.
+
+#### Change 3 — IM-7: Adjacent-to-T anti-rule (broader)
+
+**Where:** `Bot.lua:3990-4031` (`tPlusLowDoubletonSuit`, was
+`tPlusNineDoubletonSuit`)
+
+**Per video #46:** "Don't sacrifice 7♦ when you have 7♦ + T♦. If
+opp plays A♦, you're forced to give T♦ anyway." Generalizes to
+T+7, T+8, T+9, T+J, T+Q doubletons (T+K excluded — Belote pair;
+T+A excluded — A is its own boss).
+
+**Fix:** extend the existing `tPlusNineDoubletonSuit` exclusion
+(only handled T+9) to T+anything-from-{7,8,9,J,Q}. Renamed variable
+to `tPlusLowDoubletonSuit`; backward-compat alias retained.
+
+### Wave 2 — additive ledgers + signal-readers
+
+#### Change 2 — TR-1: Color-inversion suggestion
+
+**Where:** `Bot.lua` partner-side score selection loop (after
+existing tahreeb-suit scoring).
+
+**Per video #46:** "Single-suit discard means partner wants the
+OPPOSITE COLOR." ♠/♣ are black, ♥/♦ are red. After tahreebClassify
+returns "dontwant" for suit X, ALSO boost opposite-color suits
+in `tahreebPrefSuit` selection at weight **0.5** (sub-`hint`,
+fires only when no stronger signal exists).
+
+#### Change 4 — TR-2/TR-3: Cross-suit color tracking
+
+**Where:** new `Bot._partnerStyle[seat].colorBalance = { red = 0,
+black = 0 }` ledger.
+
+**Per video #46:** "Two same-color discards = wants OTHER color."
+Increment `colorBalance[red|black]` on voluntary same-color
+discards (forced-flag check using post-play hand-shape). After
+2+ discards in one color, receiver boosts OTHER color suits at
+weight **0.6** (above color_inv 0.5, below want_hint 1.0).
+
+#### Change 5 — IM-1/IM-3: First-led-suit memory
+
+**Where:** new `Bot._partnerStyle[seat].firstLedSuit` ledger.
+Writer in `Bot.OnPlayObserved`; reader in `pickLead`.
+
+**Per video #46:** "If you're FIRST to play, lead a card in your
+STRONG suit; partner reads this as 'I want this suit, return it.'"
+Track per-round; receiver prefers leading partner's first-led
+suit at weight **0.7** (above color_balance 0.6, below
+want_hint 1.0).
+
+#### Change 6 — IM-4: Takbeer-on-AKA fix
+
+**Where:** `Bot.lua` AKA-relief branch (the `akaLive` block).
+
+**Per video #46:** "If your friend FIRST played an Ace, you MUST
+give them the T to continue eating." Pre-v3.1.2 the AKA-relief
+branch returned `lowestByRank(discards)` — sacrificing the wrong
+card. **Fix:** when we have led-suit point cards (T/K/Q/J), donate
+the HIGHEST (Takbeer); only fall back to lowest when no point
+cards exist in led suit.
+
+#### Change 7 — IM-6: Win-by-follow → no strong hand
+
+**Where:** new `Bot._partnerStyle[seat].followWinSuit` per-suit
+flag. Writer in `Bot.OnPlayObserved`; reader in pref selection.
+
+**Per video #46:** "Won by follow, not AKA → no strong hand
+here." When seat plays T/K/Q in follow position (not lead) on
+non-trump AND no AKA was called for that suit, mark
+`followWinSuit[suit] = true`. Receiver demotes any pref-suit
+choice that hits a `followWinSuit` flag (only for weak signals
+< score 2; doesn't override confirmed bargiya/want).
+
+### Wave 3 — Hokm-specific
+
+#### Change 9 — HK-2: Post-ruff suit-repeat
+
+**Where:** new `Bot._memory[seat].partnerRuffSuit` per-suit flag.
+Writer in `Bot.OnPlayObserved`; reader in pickLead.
+
+**Per video #46:** "If opp is bidder Hokm AND your partner ruffed
+suit X, repeat X — partner ruffs again, draining bidder's trump."
+Tracks per-suit; reader fires only when opp is Hokm bidder, prefers
+leading partner's previously-ruffed suits as `tahreebPrefSuit`
+override (M3lm-gated, advanced read).
+
+#### Change 10 — HK-5: Hokm-bidder don't reveal void
+
+**Where:** `Bot.lua` pickFollow's final-fallthrough discard branch.
+
+**Per video #46:** "If you're bidder Hokm, don't tahreeb your short
+suit — opp will lead it and force partner to ruff, draining trump."
+When bot is bidder Hokm in a free-discard position, prefer
+discarding from suits with count >= 2 over singletons (preserves
+void mystery). Falls through to general lowestByRank when only
+singletons remain.
+
+#### Change 8 — HK-1: DEFERRED
+
+The audit flagged HK-1 (partner-of-Hokm-bidder support sacrifice)
+as "refactor risk — partner-quarte detection undefined." The video's
+"partner plays T-of-trump as quarte" phrasing is ambiguous (could
+be lead position or follow). Deferred pending video clarification
+or user direction. The conventional cases (consecutive trumps,
+J+9 sacrifice) are already handled by existing pickFollow logic.
+
+### Cross-cutting concerns
+
+**Per-round resets:** All new ledgers (`firstLedSuit`,
+`colorBalance`, `followWinSuit`, `partnerRuffSuit`) are cleared in
+`Bot.ResetMemory` (per-round) following the same pattern as
+existing per-round-scoped ledgers (`tahreebSent`, `topTouchSignal`,
+`baitedSuit`).
+
+**Forced-flag handling:** colorBalance increment uses post-play
+hand-shape inspection (parallels v1.1.1 M2 forced-flag pattern in
+`tahreebSent`) so forced same-color discards don't pollute the
+color read.
+
+### Tests
+
+**923/923 pass** (was 902 — +21 new pins). New section AQ:
+
+- AQ.1 (2 pins): Change 1 source markers + Sun/Hokm split
+- AQ.2 (2 pins): Change 3 broader anti-rule
+- AQ.3 (2 pins): Change 2 color-inversion
+- AQ.4 (3 pins): Change 5 firstLedSuit ledger + reset
+- AQ.5 (3 pins): Change 4 colorBalance + forced-flag
+- AQ.6 (2 pins): Change 7 followWinSuit
+- AQ.7 (2 pins): Change 6 Takbeer-on-AKA
+- AQ.8 (2 pins): Change 9 post-ruff repeat
+- AQ.9 (2 pins): Change 10 Hokm-bidder don't-reveal-void
+- AQ.10 (1 behavioral): void-Hokm fix end-to-end (Bot 3 leads 9♠,
+  not A♠, when both opps void in ♠)
+
+### Strategic impact
+
+These changes fill in **bot↔bot signal fidelity** that was missing
+since v0.x — the bot now both *gives* hints (first-led suit,
+colorBalance, partner-ruff repeat) and *takes* hints (color-inversion,
+cross-suit color, follow-win-no-strong) following Saudi convention
+per video #46. Combined with the void-Hokm fix, all 5 bot tiers
+(Basic through Saudi Master) should play noticeably more
+coordinated in Hokm, especially in early-trick scenarios where
+opps reveal voids quickly.
+
+Tournament re-run deferred — with 9 simultaneous changes, expected
+behavioral drift is significant; will validate via multi-seed
+tournament after user confirms in real play.
+
 ## v3.1.1 — NASHRAH polish (remove redundant line + scroll for >5 rounds)
 
 User feedback on v3.1.0:

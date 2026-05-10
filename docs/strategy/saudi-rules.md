@@ -334,6 +334,34 @@ Other Bel constraints (per video #11):
 - **Half-and-half tiebreak:** if bidder team gets exactly 81 of 162,
   bidder **fails** (need strictly more than half). `R.ScoreRound`
   encodes this.
+
+  **⚠ Known house-rule variation (الجلسة):** there are TWO real
+  Saudi conventions for the exact-tie case:
+
+  1. **Strict-majority** *(this project, default)*: bidder must
+     strictly exceed half. Tied 81-81 (Hokm) or 65-65 with meld
+     parity (Sun) = bidder failed his commitment → defenders take
+     full 16/26 nuqat. Sourced from the Saudi PDF (K-04 reading),
+     videos #25/#26/#36 («غالبا تخسر»), and v0.10.1 user
+     arbitration.
+  2. **Half-and-half-split** *(documented in video #45,
+     `45_bnaat_when_count_extracted.md`)*: tied means each team
+     keeps what they earned — record 8-8 (Hokm) or 13-13 (Sun).
+     Bidder didn't *fail*; they just didn't *win* outright.
+     More lenient.
+
+  Both interpretations exist at real Saudi tables; choice is
+  per-session per الجلسة (house rules) per video #36 + #40. We
+  ship the strict-majority interpretation by default because it's
+  the better-sourced of the two (PDF + multiple videos), but the
+  split-on-tie variant is a legitimate alternative. Code change
+  to switch interpretations is surgical: `Rules.lua:1087-1090` —
+  the tie branch's `outcome_kind = "fail"` would become `"make"`
+  for the no-escalation case (the rule-4-10 doubled-tie
+  inversion path stays as-is).
+
+  No code change shipped — this note documents the house-rule
+  variation for future reference / user arbitration.
 - **Failed bid (defenders win the round):** defenders capture the
   full `handTotal` (×multiplier) as a qaid penalty against the
   bidder team. Per the Saudi rule «مشروعي لي ومشروعك لك» ("my

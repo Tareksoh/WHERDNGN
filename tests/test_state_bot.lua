@@ -6590,6 +6590,137 @@ do
 end
 
 -- =====================================================================
+-- AQ. v3.1.2 video-#46-tahreeb gaps + void-Hokm fix (9 changes)
+--
+-- Video #46 (Tahreeb advanced) revealed multiple gaps in our give-hint
+-- and take-hint logic. Plus the v3.1.1 user-saved-game audit found
+-- the pickLead "free trick" branch was buggy in Hokm. v3.1.2 ships
+-- 9 surgical fixes covering both areas.
+-- =====================================================================
+section("AQ. v3.1.2 video-#46-tahreeb gaps + void-Hokm fix")
+
+-- AQ.1 — Change 1: void-Hokm fix in pickLead "free trick" branch
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.1%.2 %(Q4 Fix #1%)") ~= nil,
+        "AQ.1a (Change 1): pickLead free-trick branch documents Q4 Fix #1")
+    assertTrue(botSrc:find("cmpHigher = %(contract%.type == K%.BID_SUN%)") ~= nil,
+        "AQ.1b (Change 1): branches Sun (HIGHEST) vs Hokm (LOWEST)")
+end
+
+-- AQ.2 — Change 3: T+X adjacent-to-T anti-rule (broader)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("tPlusLowDoubletonSuit") ~= nil,
+        "AQ.2a (Change 3): tPlusLowDoubletonSuit variable exists")
+    assertTrue(botSrc:find('r == "7" or r == "8" or r == "9"\n%s+or r == "J" or r == "Q"') ~= nil,
+        "AQ.2b (Change 3): extended to T+7/8/9/J/Q (excluding K and A)")
+end
+
+-- AQ.3 — Change 2: Color-inversion suggestion (TR-1)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.1%.2 %(TR%-1") ~= nil,
+        "AQ.3a (Change 2): TR-1 color-inversion marker")
+    assertTrue(botSrc:find('color_inv') ~= nil,
+        "AQ.3b (Change 2): color_inv flavor used in pref selection")
+end
+
+-- AQ.4 — Change 5: First-led-suit memory (IM-1/IM-3)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("firstLedSuit = nil") ~= nil,
+        "AQ.4a (Change 5): firstLedSuit ledger initialized")
+    assertTrue(botSrc:find('first_led') ~= nil,
+        "AQ.4b (Change 5): first_led flavor consumed in pickLead")
+    assertTrue(botSrc:find('style%.firstLedSuit = nil') ~= nil,
+        "AQ.4c (Change 5): firstLedSuit cleared in ResetMemory (per round)")
+end
+
+-- AQ.5 — Change 4: Cross-suit color tracking (TR-2/TR-3)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("colorBalance") ~= nil,
+        "AQ.5a (Change 4): colorBalance ledger exists")
+    assertTrue(botSrc:find('color_balance') ~= nil,
+        "AQ.5b (Change 4): color_balance flavor consumed")
+    assertTrue(botSrc:find('discardForced = %(n == 0%)') ~= nil,
+        "AQ.5c (Change 4): forced-flag check on color increment")
+end
+
+-- AQ.6 — Change 7: followWinSuit (IM-6)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("followWinSuit") ~= nil,
+        "AQ.6a (Change 7): followWinSuit ledger exists")
+    assertTrue(botSrc:find("v3%.1%.2 %(IM%-6") ~= nil,
+        "AQ.6b (Change 7): IM-6 marker")
+end
+
+-- AQ.7 — Change 6: Takbeer-on-AKA (IM-4)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.1%.2 %(IM%-4") ~= nil,
+        "AQ.7a (Change 6): IM-4 marker on AKA-relief block")
+    assertTrue(botSrc:find("pointInLead") ~= nil,
+        "AQ.7b (Change 6): pointInLead candidates collected for Takbeer")
+end
+
+-- AQ.8 — Change 9: post-ruff suit-repeat (HK-2)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("partnerRuffSuit") ~= nil,
+        "AQ.8a (Change 9): partnerRuffSuit ledger exists")
+    assertTrue(botSrc:find('post_ruff_repeat') ~= nil,
+        "AQ.8b (Change 9): post_ruff_repeat flavor used in pickLead")
+end
+
+-- AQ.9 — Change 10: Hokm bidder don't reveal void (HK-5)
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.1%.2 %(HK%-5") ~= nil,
+        "AQ.9a (Change 10): HK-5 marker on Hokm-bidder discard branch")
+    assertTrue(botSrc:find('longerCandidates') ~= nil,
+        "AQ.9b (Change 10): prefers longerCandidates (suitCount >= 2)")
+end
+
+-- AQ.10 (behavioral) — void-Hokm fix: when both opps void in S,
+-- bot leads LOWEST (not HIGHEST) of S. Reproduces user's saved-game
+-- T5 scenario.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 4 }
+    -- Inject opp void in S into memory (simulate observed plays)
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[2].void.S = true
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Hand: A♠, Q♠, 9♠, 7♥ (must lead from S or 7♥)
+    S.s.hostHands = {
+        [1] = { "AC", "JC" },
+        [2] = { "TC" },
+        [3] = { "AS", "QS", "9S", "7H" },
+        [4] = { "AH" },
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    -- Now PickPlay seat 3 should pick 9S (lowest of S, not A♠)
+    local card = Bot.PickPlay(3)
+    assertEq(card, "9S",
+        "AQ.10 (Change 1 behavioral): both opps void in S → lead 9♠ (lowest), not A♠")
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

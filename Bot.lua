@@ -184,6 +184,13 @@ local function emptyMemory()
             -- down rank) so receiver should keep the next-down to
             -- support a clean partner-runner.
             partnerAkaSuit = { S = false, H = false, D = false, C = false },
+            -- v3.1.2 (HK-2, video #46): track suits where partner
+            -- has RUFFED (played trump on a non-trump lead) so far
+            -- this round. When opp is bidder Hokm, repeating the
+            -- ruffed suit lets partner ruff again, draining bidder's
+            -- trump. Set as a per-suit boolean (multiple ruffs across
+            -- suits all stay flagged; cleared at round-end).
+            partnerRuffSuit = { S = false, H = false, D = false, C = false },
             -- Audit Tier 4 (B-99): hand-annul (Kawesh) inference.
             -- After trick 3, if all opponent plays are rank 7/8/9, the
             -- opponent likely has a Kawesh hand they declined to call.
@@ -229,6 +236,17 @@ function Bot.ResetMemory()
                 end
                 if style.topTouchSignal then
                     style.topTouchSignal = { S = {}, H = {}, D = {}, C = {} }
+                end
+                -- v3.1.2: per-round-scoped new ledgers
+                if style.firstLedSuit ~= nil then
+                    style.firstLedSuit = nil
+                end
+                if style.colorBalance then
+                    style.colorBalance = { red = 0, black = 0 }
+                end
+                if style.followWinSuit then
+                    style.followWinSuit =
+                        { S = false, H = false, D = false, C = false }
                 end
             end
         end
@@ -311,6 +329,25 @@ local function emptyStyle()
             -- Sources: decision-trees.md Section 8 (Definite, videos
             -- 01, 02, 03, 09, 10).
             tahreebSent = { S = {}, H = {}, D = {}, C = {} },
+            -- v3.1.2 (IM-1/IM-3, video #46): track this seat's FIRST
+            -- led suit per round. Per video #46: "If you're first to
+            -- play, lead a card in your STRONG suit; partner reads
+            -- this as 'I want this suit, return it.'" Receiver in
+            -- pickLead can prefer leading partner's first-led suit
+            -- as a soft signal of partner's strength. Set once per
+            -- round (first lead only), cleared at round-end.
+            firstLedSuit = nil,
+            -- v3.1.2 (TR-2/TR-3, video #46): cross-suit color
+            -- balance tracker. Per video #46: "two same-color
+            -- discards = wants OTHER color." Increment on each
+            -- voluntary same-color discard (not forced). After 2+
+            -- same-color, receiver should boost OTHER color.
+            colorBalance = { red = 0, black = 0 },
+            -- v3.1.2 (IM-6, video #46): track suits where this seat
+            -- WON a trick by following high (T/K/Q) WITHOUT calling
+            -- AKA. Per video: "Won by follow, not AKA → no strong
+            -- hand here." Receiver subtracts from suit weight.
+            followWinSuit = { S = false, H = false, D = false, C = false },
             -- v1.2.0 (Tier 5 control-the-game per video #20 «تمسك
             -- لون»): hand-strength signal counter. Each follow event
             -- where this seat played a low card (rank ≤ 9 in plain
@@ -408,6 +445,16 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     local mem = Bot._memory[seat]
     if not mem then return end
     mem.played[card] = true
+    -- v3.1.2 (IM-1/IM-3, video #46): record this seat's FIRST lead
+    -- of the round. leadSuit == nil means seat is opening a new
+    -- trick (lead position); the suit they choose is a strong
+    -- signal of their preferred suit. Set once per round (first
+    -- lead only). Cleared by Bot.OnRoundEnd.
+    if leadSuit == nil and Bot._partnerStyle
+       and Bot._partnerStyle[seat]
+       and Bot._partnerStyle[seat].firstLedSuit == nil then
+        Bot._partnerStyle[seat].firstLedSuit = C.Suit(card)
+    end
     -- Gemini #5 audit catch: if the play was ILLEGAL (host marked it
     -- p.illegal=true in S.ApplyPlay), the seat actually DID hold a
     -- card of leadSuit but chose not to play it. Inferring void from
@@ -441,6 +488,43 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
                                and cardSuit == s_contract.trump
         if not mem.firstDiscard and not isTrumpDiscard then
             mem.firstDiscard = { suit = cardSuit, rank = C.Rank(card) }
+        end
+        -- v3.1.2 (TR-2/TR-3, video #46): increment color-balance on
+        -- voluntary same-color discards. Forced discards (only-suit
+        -- left) are skipped — they're not signaling intent. The
+        -- forced-flag mirrors the v1.1.1 forced detection at the
+        -- tahreebSent recorder below; check post-play hand-shape
+        -- for at-least-one-other-non-led-non-trump suit. Host-only
+        -- (uses S.s.hostHands).
+        if not isTrumpDiscard and Bot._partnerStyle
+           and Bot._partnerStyle[seat] then
+            local style = Bot._partnerStyle[seat]
+            if style.colorBalance then
+                local trumpSuit = (s_contract and s_contract.type == K.BID_HOKM)
+                                   and s_contract.trump or nil
+                local postHand = (S.s.isHost and S.s.hostHands
+                                   and S.s.hostHands[seat]) or {}
+                local distinct = {}
+                for _, c2 in ipairs(postHand) do
+                    local su2 = C.Suit(c2)
+                    if su2 ~= leadSuit and su2 ~= trumpSuit then
+                        distinct[su2] = true
+                    end
+                end
+                local n = 0
+                for _ in pairs(distinct) do n = n + 1 end
+                local discardForced = (n == 0)
+                if not discardForced then
+                    -- ♠/♣ are black, ♥/♦ are red.
+                    local CARD_COLOR = { S = "black", C = "black",
+                                          H = "red",   D = "red" }
+                    local color = CARD_COLOR[cardSuit]
+                    if color then
+                        style.colorBalance[color] =
+                            (style.colorBalance[color] or 0) + 1
+                    end
+                end
+            end
         end
     end
 
@@ -526,6 +610,22 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
         mem.firstDiscard = nil
     end
 
+    -- v3.1.2 (HK-2, video #46): record partner-ruff per suit for the
+    -- post-ruff suit-repeat heuristic in pickLead. When `seat`'s
+    -- partner observes that seat just played trump on a non-trump
+    -- lead in Hokm, mark `Bot._memory[partner].partnerRuffSuit[leadSuit]`.
+    -- Per video #46 HK-2: opp is bidder Hokm → repeat the ruffed
+    -- suit so partner ruffs again, draining bidder's trump.
+    if not wasIllegal and leadSuit and cardSuit ~= leadSuit
+       and contract and contract.type == K.BID_HOKM
+       and contract.trump and cardSuit == contract.trump then
+        local partnerSeat = R.Partner(seat)
+        local partnerMem = Bot._memory and Bot._memory[partnerSeat]
+        if partnerMem and partnerMem.partnerRuffSuit then
+            partnerMem.partnerRuffSuit[leadSuit] = true
+        end
+    end
+
     -- Audit Tier 4 (B-56): per-suit lead counter. Accumulated on every
     -- LEAD play (trickPlays count was 1 after ApplyPlay since this is
     -- the first card of the trick). Used for repeat-lead pattern
@@ -533,6 +633,30 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
     -- by opponents who hoard high cards in X waiting to over-trump.
     if (#trickPlays == 1) and style.leadCount then
         style.leadCount[cardSuit] = (style.leadCount[cardSuit] or 0) + 1
+    end
+
+    -- v3.1.2 (IM-6, video #46): record "won by follow" suits. When
+    -- seat plays a HIGH card (T/K/Q) in follow position (not lead),
+    -- on a non-trump suit AND no AKA was called for that suit, mark
+    -- followWinSuit. Per video #46: "Won by follow, not AKA → no
+    -- strong hand here." The receiver subtracts weight from this
+    -- suit in pref selection — partner's not signaling strength.
+    -- Provisional (we don't strictly verify the trick was won —
+    -- T/K/Q follow that gets overcut still confirms "no strong
+    -- stand" because partner had one high, no more).
+    if style.followWinSuit and (#trickPlays > 1)
+       and not wasIllegal then
+        local r = C.Rank(card)
+        local isTrumpHere = contract and contract.type == K.BID_HOKM
+                            and contract.trump
+                            and cardSuit == contract.trump
+        local akaForSuit = S.s and S.s.akaCalled
+                           and S.s.akaCalled.seat == seat
+                           and S.s.akaCalled.suit == cardSuit
+        if (r == "T" or r == "K" or r == "Q")
+           and not isTrumpHere and not akaForSuit then
+            style.followWinSuit[cardSuit] = true
+        end
     end
 
     -- Touching-honors-down inferences (Definite, video #05).
@@ -2736,7 +2860,17 @@ local function pickLead(legal, contract, seat)
             local r = C.Rank(c)
             local su = C.Suit(c)
             if su ~= contract.trump and S.HighestUnplayedRank(su) == r then
-                return c
+                -- v3.1.2 (Q4 Fix #1, void-aware): in Hokm, "highest
+                -- unplayed in non-trump" is a guaranteed trick ONLY
+                -- when at least one opp can still follow the suit
+                -- (no trump-ruff). If BOTH opps are void in this
+                -- suit, leading the boss guarantees losing it to a
+                -- trump-ruff. Skip in that case — falls through to
+                -- the "free trick" branch below which now also
+                -- handles Hokm-void correctly (leads LOWEST instead).
+                if not opponentsVoidInAll(seat, su) then
+                    return c
+                end
             end
         end
     end
@@ -2797,6 +2931,100 @@ local function pickLead(legal, contract, seat)
                             tahreebAvoidSet[su] = true
                         end
                     end
+                end
+                -- v3.1.2 (TR-1, video #46): color-inversion suggestion.
+                -- Per video #46 rule 1: "Single-suit discard means
+                -- partner wants the OPPOSITE COLOR." Our existing
+                -- score table only marks the discarded suit as avoid
+                -- ("dontwant" → tahreebAvoidSet); it doesn't actively
+                -- BOOST opposite-color suits. After the suit-loop
+                -- above, scan for any "dontwant" suits and add their
+                -- OPPOSITE-COLOR siblings to a soft-pref boost (weight
+                -- 0.5 — sub-`hint`, sub-`want_hint`, sub-bargiya_hint;
+                -- only fires when no stronger signal exists).
+                -- Color mapping: ♠/♣ are black, ♥/♦ are red.
+                if not best or bestScore < 1 then
+                    local CARD_COLOR = { S = "B", C = "B", H = "R", D = "R" }
+                    for _, su in ipairs(shuffledSuits()) do
+                        if su ~= contract.trump then
+                            local cls = tahreebClassify(signals[su])
+                            if cls == "dontwant" then
+                                local discardColor = CARD_COLOR[su]
+                                local oppColor = (discardColor == "B") and "R" or "B"
+                                -- Boost the first-found opposite-color
+                                -- non-trump suit. 0.5 weight — strong
+                                -- enough to bias when nothing else is
+                                -- present, weak enough not to override
+                                -- a real bargiya/want.
+                                for _, su2 in ipairs(shuffledSuits()) do
+                                    if su2 ~= contract.trump
+                                       and CARD_COLOR[su2] == oppColor
+                                       and not tahreebAvoidSet[su2] then
+                                        if 0.5 > bestScore then
+                                            best = su2
+                                            bestScore = 0.5
+                                            bestFlavor = "color_inv"
+                                        end
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                -- v3.1.2 (IM-1/IM-3, video #46): partner's
+                -- first-led suit is a soft signal of their strong
+                -- suit. If we have no stronger signal, prefer
+                -- leading partner's first-led suit at weight 0.7
+                -- (between bargiya_hint=1 and color_inv=0.5).
+                local pStyle = Bot._partnerStyle[p]
+                if pStyle and pStyle.firstLedSuit
+                   and pStyle.firstLedSuit ~= contract.trump then
+                    if 0.7 > bestScore then
+                        best = pStyle.firstLedSuit
+                        bestScore = 0.7
+                        bestFlavor = "first_led"
+                    end
+                end
+                -- v3.1.2 (TR-2/TR-3, video #46): cross-suit color
+                -- balance. If partner has discarded 2+ of one
+                -- color, they want the OTHER color. Boost weight
+                -- 0.6 (just above color_inv=0.5).
+                if pStyle and pStyle.colorBalance then
+                    local cb = pStyle.colorBalance
+                    local desiredColor
+                    if cb.red >= 2 and cb.red > cb.black then
+                        desiredColor = "black"
+                    elseif cb.black >= 2 and cb.black > cb.red then
+                        desiredColor = "red"
+                    end
+                    if desiredColor then
+                        local CARD_COLOR = { S = "black", C = "black",
+                                              H = "red",   D = "red" }
+                        for _, su2 in ipairs(shuffledSuits()) do
+                            if su2 ~= contract.trump
+                               and CARD_COLOR[su2] == desiredColor
+                               and not tahreebAvoidSet[su2] then
+                                if 0.6 > bestScore then
+                                    best = su2
+                                    bestScore = 0.6
+                                    bestFlavor = "color_balance"
+                                end
+                                break
+                            end
+                        end
+                    end
+                end
+                -- v3.1.2 (IM-6, video #46): if partner won by
+                -- following high (no AKA) in suit X, X is NOT a
+                -- strong-hand suit for them. Subtract from any
+                -- existing pref weight (only fires if best ==
+                -- followWinSuit AND best is a weak signal).
+                if pStyle and pStyle.followWinSuit and best
+                   and pStyle.followWinSuit[best]
+                   and bestScore < 2 then
+                    -- Demote to nil; let other heuristics pick.
+                    best, bestScore, bestFlavor = nil, 0, nil
                 end
                 if best then
                     tahreebPrefSuit = best
@@ -3029,6 +3257,38 @@ local function pickLead(legal, contract, seat)
                 tahreebPrefSuit = nil
             end
         end
+        -- v3.1.2 (HK-2, video #46): post-ruff suit-repeat. When
+        -- opp is bidder Hokm AND partner has ruffed suit X earlier
+        -- in this round, repeat X — partner ruffs again, draining
+        -- bidder's trump. Per video #46:
+        -- «إذا الخصم حاكم وأنت لعبت شكل وخويك قطع بالشكل فأنت كرزات
+        --  مرة ثانية علشان يدقه خويك ويستفيد من قطعة الحكم»
+        -- Strong signal — fires before partnerAkaSuit. M3lm-gated
+        -- (advanced read). Only Hokm + opp-bidder context.
+        if not tahreebPrefSuit and Bot.IsM3lm and Bot.IsM3lm()
+           and contract and contract.type == K.BID_HOKM
+           and contract.bidder
+           and R.TeamOf(contract.bidder) ~= R.TeamOf(seat)
+           and Bot._memory then
+            local mem = Bot._memory[seat]
+            if mem and mem.partnerRuffSuit then
+                for _, su in ipairs(shuffledSuits()) do
+                    if su ~= contract.trump and mem.partnerRuffSuit[su] then
+                        -- Verify we have at least one card of this
+                        -- suit to lead.
+                        for _, c in ipairs(legal) do
+                            if C.Suit(c) == su then
+                                tahreebPrefSuit = su
+                                tahreebPrefFlavor = "post_ruff_repeat"
+                                break
+                            end
+                        end
+                        if tahreebPrefSuit then break end
+                    end
+                end
+            end
+        end
+
         -- v1.1.0 (audit partner-coord H3): if no Tahreeb pref but
         -- partner AKA'd a non-trump suit earlier, treat that suit
         -- as a "want" lead-back signal. Partner held the boss in
@@ -3723,16 +3983,33 @@ local function pickLead(legal, contract, seat)
     end
 
     -- 1: any free-trick suit?
+    -- v3.1.2 (Q4 Fix #1): branch on contract type. The pre-v3.1.2
+    -- comment "opponents can't trump (can't follow either)" was true
+    -- only for Sun (no trump exists). In Hokm, void opps WILL
+    -- trump-ruff with their highest trump → leading our HIGHEST
+    -- non-trump guarantees losing the boss to a ruff. The fix:
+    --   • Sun  → keep current behavior (HIGHEST card, free trick)
+    --   • Hokm → lead LOWEST card in the void suit (sacrifice the
+    --            cheapest into the inevitable ruff; preserves
+    --            higher cards for actual winning later)
+    -- Verified via simulation against the v3.1.1 user-saved-game
+    -- T5 scenario: Basic/Adv/M3lm/Fzloky all picked A♠ pre-fix
+    -- (10/10 trials), wasting boss to opp's trump-A ruff.
+    -- Saudi Master ISMCTS partially compensated via rollouts but
+    -- still picked Q♠ ~50% (rollout noise). Fixing the heuristic
+    -- improves ALL tiers.
     for _, c in ipairs(nonTrumps) do
         if opponentsVoidInAll(seat, C.Suit(c)) then
-            -- Take the HIGHEST card we have in that suit — opponents
-            -- can't trump (can't follow either), and partner won't
-            -- be able to take from us.
+            local cmpHigher = (contract.type == K.BID_SUN)
             local best, bestR = c, C.TrickRank(c, contract)
             for _, c2 in ipairs(nonTrumps) do
                 if C.Suit(c2) == C.Suit(c) then
                     local r = C.TrickRank(c2, contract)
-                    if r > bestR then best, bestR = c2, r end
+                    if cmpHigher then
+                        if r > bestR then best, bestR = c2, r end
+                    else
+                        if r < bestR then best, bestR = c2, r end
+                    end
                 end
             end
             return best
@@ -3979,29 +4256,52 @@ local function pickLead(legal, contract, seat)
     -- suit-mate is higher). Detect this shape and avoid it in
     -- subsequent suit-selection (shortest-suit, longest-low). M3lm+
     -- gated (sophisticated read).
-    local tPlusNineDoubletonSuit = nil
+    --
+    -- v3.1.2 (video #46 IM-7 broader anti-rule): the rule applies to
+    -- T + ANY-non-A doubleton, not just T+9. Per video #46:
+    -- «لا تعلق عشرتك معك سبعة الديمن وعشرة الديمن أنت بتهرب سبعة
+    -- الديمن لأنه لو الخصم لعب إكة الديمن فأنت بتعطيه عشرة الديمن»
+    -- "Don't sacrifice 7♦ when you have 7♦ + T♦. If opp plays A♦,
+    -- you're forced to give T♦ anyway." Generalize: T+7, T+8, T+9,
+    -- T+J, T+Q doubletons all share the same anti-pattern. T+K is
+    -- excluded because K is the natural pair with T (Belote partner).
+    -- The variable is renamed `tPlusLowDoubletonSuit` (was just for
+    -- 9). Backward-compat alias retained for caller readability —
+    -- both names point to the same suit when set.
+    local tPlusLowDoubletonSuit = nil
     if Bot.IsM3lm and Bot.IsM3lm() then
         local suitCountForT9 = { S = 0, H = 0, D = 0, C = 0 }
-        local hasT9 = { S = { t = false, n = false },
-                        H = { t = false, n = false },
-                        D = { t = false, n = false },
-                        C = { t = false, n = false } }
+        local hasTAnd = { S = { t = false, low = false },
+                          H = { t = false, low = false },
+                          D = { t = false, low = false },
+                          C = { t = false, low = false } }
         for _, c in ipairs(legal) do
             if not C.IsTrump(c, contract) then
                 local r, s = C.Rank(c), C.Suit(c)
                 suitCountForT9[s] = suitCountForT9[s] + 1
-                if r == "T" then hasT9[s].t = true end
-                if r == "9" then hasT9[s].n = true end
+                if r == "T" then hasTAnd[s].t = true end
+                -- v3.1.2: extended to 7/8/9/J/Q (was just 9). K
+                -- excluded because K+T = Belote pair (Hokm) and is
+                -- handled by Bel-preservation logic. A excluded
+                -- because A is itself a guaranteed winner — the
+                -- "telegraph T" anti-pattern doesn't apply.
+                if r == "7" or r == "8" or r == "9"
+                   or r == "J" or r == "Q" then
+                    hasTAnd[s].low = true
+                end
             end
         end
         for _, suit in ipairs({ "S", "H", "D", "C" }) do
             if suitCountForT9[suit] == 2
-               and hasT9[suit].t and hasT9[suit].n then
-                tPlusNineDoubletonSuit = suit
+               and hasTAnd[suit].t and hasTAnd[suit].low then
+                tPlusLowDoubletonSuit = suit
                 break
             end
         end
     end
+    -- Backward-compat alias for downstream readers (they use the
+    -- old name in two places below).
+    local tPlusNineDoubletonSuit = tPlusLowDoubletonSuit
 
     -- v0.5 H-7: Sun shortest-suit lead. Saudi pro convention is to
     -- lead from the shortest non-trump suit in Sun (forcing opponents
@@ -4378,6 +4678,37 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
         end
         if #discards > 0 then
+            -- v3.1.2 (IM-4, video #46): when partner just AKA'd (or
+            -- led bare-A = implicit AKA) and we HAVE led-suit cards
+            -- (must-follow), DONATE the HIGHEST point card in led
+            -- suit (Takbeer) — partner's A is the boss; our T/K/Q
+            -- gets captured into partner's pile = +raw to team.
+            -- Per video #46: "If partner first-played an A, you
+            -- MUST give them the T to continue eating."
+            -- Pre-v3.1.2 this branch returned lowestByRank,
+            -- missing the Takbeer donation. Only fires when we have
+            -- led-suit cards AND any of T/K/Q in led suit (the
+            -- "point cards" the speaker calls «أبناط»).
+            local lead = trick.leadSuit
+            local pointInLead = {}
+            for _, c in ipairs(discards) do
+                local r = C.Rank(c)
+                if C.Suit(c) == lead
+                   and (r == "T" or r == "K" or r == "Q" or r == "J") then
+                    pointInLead[#pointInLead + 1] = c
+                end
+            end
+            if #pointInLead > 0 then
+                -- Donate HIGHEST point card. Sort by trick rank desc.
+                table.sort(pointInLead, function(a, b)
+                    return C.TrickRank(a, contract) > C.TrickRank(b, contract)
+                end)
+                return pointInLead[1]
+            end
+            -- No point cards in led suit (we have only low 7/8/9
+            -- in led, or are void in led and only have non-trump
+            -- discards). Fall back to lowestByRank — preserve our
+            -- own value, no Takbeer possible here.
             return lowestByRank(discards, contract)
         end
     end
@@ -6514,6 +6845,44 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
             end
         end
+    end
+
+    -- v3.1.2 (HK-5, video #46): Hokm-bidder don't-reveal-void on
+    -- discard. Per video #46:
+    -- «إذا أنت حاكم حاول إنك ما تهرب مقطوعك علشان الخصم ما يحل
+    --  مقطوعك وتدق ويخلص حكمك»
+    -- "If you're the bidder Hokm, don't tahreeb your short suit —
+    -- opp will lead it and force partner to ruff, draining trump."
+    -- When we're bidder Hokm AND in a free-discard position (no
+    -- must-follow constraint, multiple suits available), prefer
+    -- discarding from a LONGER suit over a singleton/short suit.
+    -- M3lm-gated (advanced read).
+    if Bot.IsM3lm and Bot.IsM3lm() and contract
+       and contract.type == K.BID_HOKM and contract.bidder == seat
+       and #legal >= 2 then
+        local trumpSuit = contract.trump
+        local suitCount = { S = 0, H = 0, D = 0, C = 0 }
+        for _, c in ipairs(legal) do
+            local su = C.Suit(c)
+            if su ~= trumpSuit then
+                suitCount[su] = suitCount[su] + 1
+            end
+        end
+        -- Find candidates from suits with count >= 2 (i.e., not
+        -- singletons or void). Among those, pick lowest-rank.
+        local longerCandidates = {}
+        for _, c in ipairs(legal) do
+            local su = C.Suit(c)
+            if su ~= trumpSuit and suitCount[su] >= 2 then
+                longerCandidates[#longerCandidates + 1] = c
+            end
+        end
+        if #longerCandidates > 0 then
+            return lowestByRank(longerCandidates, contract)
+        end
+        -- All non-trump cards are singletons OR we have only trump
+        -- left → fall through to general lowestByRank. The "don't
+        -- reveal void" constraint can't be satisfied; minimize loss.
     end
 
     return lowestByRank(legal, contract)
