@@ -6813,6 +6813,307 @@ do
         "AU.5 (v3.1.7): heal events logged to freezeLog")
 end
 
+-- AZ — v3.1.12 behavioral coverage for the codex audit fixes.
+-- Per audit: "Do not treat source-string tests as sufficient. The main
+-- recurring bug class in this addon is 'helper exists but a Local*
+-- call site bypasses it.'" These tests exercise the actual code paths
+-- with captured broadcast() and capturable C_Timer.After deferrals.
+do
+    -- This is the only section in the harness that loads Net.lua.
+    -- Net.lua references IsInGroup / IsInRaid / GetTime at runtime
+    -- (not load-time), so we stub them just-in-time before running the
+    -- code paths below. Load order: K/C/R/S/Bot are already loaded
+    -- above (lines 100-104).
+    local _origIsInGroup = IsInGroup
+    local _origIsInRaid = IsInRaid
+    local _origGetTime = GetTime
+    IsInGroup = function() return true end
+    IsInRaid  = function() return false end
+    GetTime   = function() return fakeNow end
+
+    -- Capture broadcasts. WHEREDNGN's `broadcast` local in Net.lua calls
+    -- `C_ChatInfo.SendAddonMessage(K.PREFIX, msg, "PARTY")` via pcall.
+    local broadcastLog = {}
+    local realSendAddonMessage = C_ChatInfo.SendAddonMessage
+    C_ChatInfo.SendAddonMessage = function(prefix, msg, channel, target)
+        broadcastLog[#broadcastLog + 1] = {
+            prefix = prefix, msg = msg, channel = channel, target = target,
+        }
+    end
+
+    -- Capture C_Timer.After callbacks. The helper functions use 0.25s
+    -- retries — we want to fire them manually to verify behavior.
+    local timerCallbacks = {}
+    local realCTimerAfter = C_Timer.After
+    C_Timer.After = function(delay, fn)
+        timerCallbacks[#timerCallbacks + 1] = { delay = delay, fn = fn }
+    end
+
+    -- Helpers used by the tests below
+    local function clearCaptures()
+        for i = #broadcastLog, 1, -1 do broadcastLog[i] = nil end
+        for i = #timerCallbacks, 1, -1 do timerCallbacks[i] = nil end
+    end
+    local function broadcastsMatching(tag)
+        local n = 0
+        for _, b in ipairs(broadcastLog) do
+            if b.msg and b.msg:sub(1, #tag) == tag
+               and (b.msg == tag or b.msg:sub(#tag + 1, #tag + 1) == ";") then
+                n = n + 1
+            end
+        end
+        return n
+    end
+    -- Fire all queued C_Timer.After callbacks (one round).
+    local function fireTimers()
+        local snapshot = {}
+        for i, e in ipairs(timerCallbacks) do snapshot[i] = e end
+        for i = #timerCallbacks, 1, -1 do timerCallbacks[i] = nil end
+        for _, e in ipairs(snapshot) do
+            local ok, err = pcall(e.fn)
+            if not ok then
+                print("  timer callback error:", err)
+            end
+        end
+    end
+
+    -- Now load Net.lua. After this point WHEREDNGN.Net is populated.
+    load("Net.lua")
+    local N = WHEREDNGN.Net
+    assertTrue(N ~= nil, "AZ.0a: WHEREDNGN.Net loaded successfully")
+    assertTrue(type(N.SendSWAReq) == "function",
+        "AZ.0b: N.SendSWAReq present after load")
+
+    -- ---------------------------------------------------------------------
+    -- AZ.1 SWA: dropped first MSG_SWA_REQ recovered via 250ms retry
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        N.SendSWAReq(2, "AHKHQH")
+        -- Initial broadcast should be captured immediately.
+        assertEq(broadcastsMatching("I"), 1,
+            "AZ.1a (v3.1.12): SendSWAReq emits initial MSG_SWA_REQ")
+        assertEq(#timerCallbacks, 1,
+            "AZ.1b (v3.1.12): SendSWAReq schedules a retry callback")
+        assertEq(timerCallbacks[1].delay, 0.25,
+            "AZ.1c (v3.1.12): retry delay is 0.25s (mirror SendTurn pattern)")
+        -- Set up state so the retry's self-suppress guard passes.
+        -- The retry only fires if (phase == PHASE_PLAY) AND
+        -- (S.s.swaRequest.caller == seat).
+        S.s.phase = K.PHASE_PLAY
+        S.s.swaRequest = { caller = 2 }
+        fireTimers()
+        assertEq(broadcastsMatching("I"), 2,
+            "AZ.1d (v3.1.12): retry callback fires a second MSG_SWA_REQ broadcast")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.2 SWA: retry self-suppresses when state moved on (idempotence)
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        N.SendSWAReq(3, "ASKSQS")
+        assertEq(broadcastsMatching("I"), 1,
+            "AZ.2a: initial broadcast emitted")
+        -- Move past PLAY phase — retry should self-suppress
+        S.s.phase = K.PHASE_SCORE
+        S.s.swaRequest = nil
+        fireTimers()
+        assertEq(broadcastsMatching("I"), 1,
+            "AZ.2b (v3.1.12): retry suppressed when phase no longer PLAY")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.3 SWA: dropped deny MSG_SWA_RESP recovered via 250ms retry.
+    --   This is the worst-case drop: caller pre-clears local swaRequest,
+    --   host never sees deny, host's 5s timer auto-accepts. Retry closes
+    --   the window.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        S.s.swaRequest = { caller = 1 }
+        N.SendSWAResp(2, false, 1)
+        assertEq(broadcastsMatching("O"), 1,
+            "AZ.3a (v3.1.12): SendSWAResp emits initial MSG_SWA_RESP")
+        assertEq(#timerCallbacks, 1,
+            "AZ.3b (v3.1.12): SendSWAResp schedules a retry")
+        fireTimers()
+        assertEq(broadcastsMatching("O"), 2,
+            "AZ.3c (v3.1.12): retry fires a second MSG_SWA_RESP broadcast")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.4 Takweesh: SendTakweesh emits initial + retry, idempotent on host
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        N.SendTakweesh(2)
+        assertEq(broadcastsMatching("k"), 1,
+            "AZ.4a (v3.1.12): SendTakweesh emits initial MSG_TAKWEESH")
+        assertEq(#timerCallbacks, 1,
+            "AZ.4b (v3.1.12): SendTakweesh schedules retry")
+        fireTimers()
+        assertEq(broadcastsMatching("k"), 2,
+            "AZ.4c (v3.1.12): retry fires when still in PHASE_PLAY")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.5 Takweesh: duplicate _OnTakweesh frames are idempotent on host
+    --   (HostBeginTakweeshReview's takweeshReview-non-nil guard).
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.isHost = true
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 2 }
+        S.s.takweeshReview = nil
+        S.s.tricks = {}
+        S.s.trick = { plays = {} }
+        S.s.hostHands = { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        -- First arrival
+        N._OnTakweesh("Foo-X", 1)
+        local review1 = S.s.takweeshReview
+        -- Second (duplicate) arrival from retry
+        N._OnTakweesh("Foo-X", 1)
+        local review2 = S.s.takweeshReview
+        assertTrue(review1 ~= nil,
+            "AZ.5a (v3.1.12): first MSG_TAKWEESH opens review window")
+        assertTrue(review1 == review2,
+            "AZ.5b (v3.1.12): duplicate MSG_TAKWEESH is idempotent — review object unchanged")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.6 Kawesh: SendKawesh emits initial + retry, idempotent on host
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL1
+        N.SendKawesh(3)
+        assertEq(broadcastsMatching("a"), 1,
+            "AZ.6a (v3.1.12): SendKawesh emits initial MSG_KAWESH")
+        fireTimers()
+        assertEq(broadcastsMatching("a"), 2,
+            "AZ.6b (v3.1.12): SendKawesh retry fires when still in DEAL1")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.7 Kawesh: retry self-suppresses when phase advanced past DEAL1
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL1
+        N.SendKawesh(3)
+        assertEq(broadcastsMatching("a"), 1, "AZ.7a: initial")
+        S.s.phase = K.PHASE_PLAY   -- moved on (redeal completed, new round)
+        fireTimers()
+        assertEq(broadcastsMatching("a"), 1,
+            "AZ.7b (v3.1.12): Kawesh retry suppressed when phase no longer DEAL1")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.8 BALOOT non-host: S.s.hand={KH,QH} + no hostHands → LocalBelote
+    --      should successfully announce (pre-fix it silently no-op'd
+    --      because the hostHands-only check fell through).
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        -- Setup: non-host, trump=H, local hand has K and Q of H.
+        S.s.isHost = false
+        S.s.hostHands = nil
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.localSeat = 2
+        S.s.hand = { "KH", "QH" }
+        S.s.tricks = {}
+        S.s.trick = { plays = {} }
+        S.s.beloteAnnounced = {}
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalBelote()
+        -- Behavioral assertions:
+        --   • Local Belote announce was applied (state updated).
+        --   • A MSG_BELOTE wire frame was broadcast.
+        assertTrue(
+            S.s.beloteAnnounced and S.s.beloteAnnounced[2] ~= nil,
+            "AZ.8a (v3.1.12): non-host LocalBelote applies state (beloteAnnounced[2] set)")
+        assertEq(broadcastsMatching("$"), 1,
+            "AZ.8b (v3.1.12): non-host LocalBelote broadcasts MSG_BELOTE")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.9 BALOOT non-host: K already played, Q in hand → should succeed.
+    --      (announce-after-first-of-pair scenario).
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.hostHands = nil
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.localSeat = 2
+        S.s.hand = { "QH", "7H" }
+        S.s.tricks = {
+            { plays = {
+                { seat = 1, card = "AH" }, { seat = 2, card = "KH" },
+                { seat = 3, card = "9H" }, { seat = 4, card = "8H" },
+            } },
+        }
+        S.s.trick = { plays = {} }
+        S.s.beloteAnnounced = {}
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalBelote()
+        assertTrue(
+            S.s.beloteAnnounced and S.s.beloteAnnounced[2] ~= nil,
+            "AZ.9 (v3.1.12): non-host LocalBelote succeeds when K played + Q in hand")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.10 BALOOT non-host: only one of K/Q ever held → must NOT announce.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.hostHands = nil
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.localSeat = 2
+        S.s.hand = { "KH", "7H" }     -- only K, no Q
+        S.s.tricks = {}
+        S.s.trick = { plays = {} }
+        S.s.beloteAnnounced = {}
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalBelote()
+        assertTrue(
+            not (S.s.beloteAnnounced and S.s.beloteAnnounced[2]),
+            "AZ.10 (v3.1.12): non-host LocalBelote correctly rejects K-only (no Q held)")
+        assertEq(broadcastsMatching("$"), 0,
+            "AZ.10b (v3.1.12): no MSG_BELOTE broadcast when validation fails")
+    end
+
+    -- Restore real harness stubs for any subsequent test sections.
+    -- (Currently this is the last `do` block before the test summary, but
+    -- restore anyway so future inserts don't pick up our captures.)
+    C_ChatInfo.SendAddonMessage = realSendAddonMessage
+    C_Timer.After = realCTimerAfter
+    IsInGroup = _origIsInGroup
+    IsInRaid = _origIsInRaid
+    GetTime = _origGetTime
+end
+
 -- AY — v3.1.11 codex review fixes:
 --   #1: N.LocalOvercall non-host path routes through N.SendOvercallDecision
 --       so the v3.1.10 250ms retry helper covers remote-client decisions

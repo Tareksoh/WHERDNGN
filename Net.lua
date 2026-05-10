@@ -413,11 +413,93 @@ end
 
 function N.SendSWAReq(seat, encodedHand)
     broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, encodedHand or ""))
+    -- v3.1.12 (codex audit P1 — SWA reliability): defensive 250ms
+    -- re-broadcast, same pattern as v1.6.1 SendTurn + v3.1.10 SendPlay.
+    -- A dropped MSG_SWA_REQ otherwise hard-stalls the caller: they have
+    -- a local swaRequest set (UI hides the SWA button) but the host
+    -- never sees it (so no host-side timer fires).
+    --
+    -- Idempotence: _OnSWAReq has an existing overwrite guard (Net.lua
+    -- ~3952: `if S.s.swaRequest and S.s.swaRequest.caller then return end`)
+    -- that rejects a duplicate request when one is already pending —
+    -- so a duplicate retry frame is a no-op on the host.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            -- Self-suppress if the SWA has already resolved (no longer
+            -- in PLAY phase) or local request was cleared.
+            if S.s.phase == K.PHASE_PLAY and S.s.swaRequest
+               and S.s.swaRequest.caller == seat then
+                broadcast(("%s;%d;%s"):format(
+                    K.MSG_SWA_REQ, seat, encodedHand or ""))
+            end
+        end)
+    end
 end
 
 function N.SendSWAResp(responder, accept, caller)
     broadcast(("%s;%d;%s;%d"):format(
         K.MSG_SWA_RESP, responder, accept and "1" or "0", caller))
+    -- v3.1.12 (codex audit P1): defensive 250ms re-broadcast. A dropped
+    -- deny MSG_SWA_RESP is the worst single-frame loss in the SWA flow:
+    -- the responder clears their own swaRequest immediately (LocalSWAResp
+    -- non-host branch at ~3909), but the host never sees the deny and
+    -- the host's 5-second auto-approve timer fires accepting the SWA.
+    -- Net result: an opp who explicitly denied the SWA had it pass anyway.
+    --
+    -- Idempotence: _OnSWAResp records responses[responder] = accept
+    -- per-responder; a duplicate frame writes the same value. Safe.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            -- Self-suppress if the request resolved (s.swaRequest nil)
+            -- or moved on to a different caller.
+            if S.s.phase == K.PHASE_PLAY and S.s.swaRequest
+               and S.s.swaRequest.caller == caller then
+                broadcast(("%s;%d;%s;%d"):format(
+                    K.MSG_SWA_RESP, responder, accept and "1" or "0",
+                    caller))
+            end
+        end)
+    end
+end
+
+-- v3.1.12 (codex audit P1 — Takweesh/Kawesh reliability): retry helpers
+-- mirroring the v3.1.10 SendPlay/SendOvercallDecision pattern. Pre-fix
+-- LocalTakweesh, LocalKawesh, and the host's bot dispatch sites all
+-- did raw broadcast() with no retry. A single-frame drop meant:
+--   • Takweesh: caller's review window never opens, host continues play.
+--   • Kawesh: caller's "hand annulled, redeal" announcement fires
+--     locally but the host never redeals.
+-- Host handlers are already idempotent (HostBeginTakweeshReview has a
+-- takweeshReview-non-nil guard at ~2963; HostHandleKawesh phase-gates
+-- on DEAL1), so a duplicate retry frame is a no-op.
+function N.SendTakweesh(seat)
+    broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            -- Takweesh is valid in PHASE_PLAY (rule-engine scan) and
+            -- briefly in PHASE_TAKWEESH_REVIEW (just-began review).
+            -- Outside those phases the host already moved on; retry
+            -- would be a stale ghost call.
+            if S.s.phase == K.PHASE_PLAY
+               or S.s.phase == K.PHASE_TAKWEESH_REVIEW then
+                broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
+            end
+        end)
+    end
+end
+
+function N.SendKawesh(seat)
+    broadcast(("%s;%d"):format(K.MSG_KAWESH, seat))
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            -- Kawesh is round-1 bidding only (DEAL1). After a successful
+            -- redeal the phase transitions immediately; the retry's
+            -- phase guard prevents stale re-Kawesh on the new hand.
+            if S.s.phase == K.PHASE_DEAL1 then
+                broadcast(("%s;%d"):format(K.MSG_KAWESH, seat))
+            end
+        end)
+    end
 end
 
 function N.SendPlay(seat, card)
@@ -2681,23 +2763,41 @@ function N.LocalBelote()
     if S.s.beloteAnnounced and S.s.beloteAnnounced[S.s.localSeat] then
         return -- already announced, idempotent
     end
-    -- Hand check: must hold both K and Q of trump.
-    local hand = S.s.hostHands and S.s.hostHands[S.s.localSeat]
-    if hand then
-        local hasK, hasQ = false, false
-        for _, c in ipairs(hand) do
-            if C.Suit(c) == S.s.contract.trump then
-                if C.Rank(c) == "K" then hasK = true
-                elseif C.Rank(c) == "Q" then hasQ = true end
+    -- v3.1.12 (codex audit P2 — remote BALOOT button): validate using
+    -- LOCAL hand (S.s.hand) + cards already played by this seat.
+    -- Pre-fix the check read S.s.hostHands[localSeat] which is host-
+    -- only — non-host clients always had `hand=nil` and the `if hand
+    -- then ... end` block fully short-circuited, so the only effective
+    -- gate was the beloteAnnounced idempotence + phase checks. That
+    -- "passes silently for non-hosts" turned into a positive UX bug
+    -- only because UI.lua:2780 (same bug) hid the button from non-
+    -- hosts, so the broken validation was never reached.
+    --
+    -- Now: detect if the local seat EVER HELD both K+Q of trump this
+    -- round, by scanning still-in-hand cards (S.s.hand) + already-
+    -- played cards by this seat (S.s.tricks + S.s.trick).
+    local trump = S.s.contract.trump
+    local hasK, hasQ = false, false
+    for _, c in ipairs(S.s.hand or {}) do
+        if C.Suit(c) == trump then
+            if     C.Rank(c) == "K" then hasK = true
+            elseif C.Rank(c) == "Q" then hasQ = true end
+        end
+    end
+    local function scanPlays(plays)
+        for _, p in ipairs(plays or {}) do
+            if p.seat == S.s.localSeat
+               and p.card and C.Suit(p.card) == trump then
+                if     C.Rank(p.card) == "K" then hasK = true
+                elseif C.Rank(p.card) == "Q" then hasQ = true end
             end
         end
-        -- Saudi rule: Baloot is announceable only if BOTH K+Q still
-        -- in hand OR you've just played the second of the pair. Since
-        -- the play-and-announce moment is just after playing the
-        -- second card, allow if either both still present (just before
-        -- play) or one present (just after first-of-pair played).
-        if not (hasK or hasQ) then return end
     end
+    for _, t in ipairs(S.s.tricks or {}) do scanPlays(t.plays) end
+    if S.s.trick then scanPlays(S.s.trick.plays) end
+    -- Saudi rule: Belote announceable iff local seat HAD both K+Q of
+    -- trump at any point this round (still-in-hand or already-played).
+    if not (hasK and hasQ) then return end
     S.ApplyBeloteAnnounce(S.s.localSeat)
     N.SendBelote(S.s.localSeat)
 end
@@ -2914,7 +3014,10 @@ function N.LocalTakweesh()
     if S.s.paused then return end
     if S.s.phase ~= K.PHASE_PLAY then return end
     if not S.s.localSeat or not S.s.contract then return end
-    broadcast(("%s;%d"):format(K.MSG_TAKWEESH, S.s.localSeat))
+    -- v3.1.12 (codex audit P1): route through N.SendTakweesh so the
+    -- 250ms retry covers dropped MSG_TAKWEESH frames. Pre-fix the raw
+    -- broadcast meant a remote Takweesh click could vanish silently.
+    N.SendTakweesh(S.s.localSeat)
     -- v3.0.8: route through review phase (cards-reveal proof window
     -- per video #36 + optional host approval in multi-human games).
     if S.s.isHost then N.HostBeginTakweeshReview(S.s.localSeat) end
@@ -3794,6 +3897,47 @@ function N.LocalSWA()
             windowSec = K.SWA_TIMEOUT_SEC or 5,
         }
         N.SendSWAReq(S.s.localSeat, enc)
+        -- v3.1.12 (codex audit P1 — SWA stale local-pending rollback):
+        -- when the caller is NON-HOST, schedule a safety-clear timer.
+        -- Pre-fix the non-host caller set S.s.swaRequest but only the
+        -- HOST scheduled a 5-second resolve timer. If both initial
+        -- MSG_SWA_REQ AND the v3.1.12 250ms retry dropped, the caller's
+        -- local swaRequest stayed pinned forever:
+        --   • The SWA UI button is hidden (UI guards on local-pending).
+        --   • The host never sees the request, so HostResolveSWA never
+        --     fires and no MSG_SWA_OUT arrives to clear it.
+        -- Hard stall, recoverable only by /reload or a new round.
+        --
+        -- Rollback: if (windowSec + safety_margin) seconds after the
+        -- click NO host echo has arrived (we detect "host echo" via
+        -- any received MSG_SWA_RESP, MSG_SWA_OUT, MSG_TAKWEESH, or
+        -- the host's MSG_SWA_REQ reverb), clear the local request as
+        -- a "lost in flight" rollback. The user can then re-click SWA.
+        --
+        -- The detection proxy is simpler than tracking each message:
+        -- we just check whether req.responses got populated by anyone
+        -- OR req.encodedHand-bearing host-side resolution happened. If
+        -- nothing on the wire confirmed the host received our request,
+        -- assume drop.
+        if not S.s.isHost and C_Timer and C_Timer.After then
+            local mySeat = S.s.localSeat
+            local stashedReq = S.s.swaRequest
+            local safetyDelay = (K.SWA_TIMEOUT_SEC or 5) + 3   -- 8s
+            C_Timer.After(safetyDelay, function()
+                local cur = S.s.swaRequest
+                -- Same request still pinned, same caller, no responses
+                -- recorded → host never saw the request.
+                if cur and cur == stashedReq
+                   and cur.caller == mySeat
+                   and (not cur.responses or next(cur.responses) == nil) then
+                    S.s.swaRequest = nil
+                    log("Warn",
+                        "SWA safety-clear: no host echo within %ds — assumed dropped",
+                        safetyDelay)
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end
+            end)
+        end
         -- 9th-audit fix: same bot auto-accept as the _OnSWAReq path.
         -- The host's own LocalSWA self-loopback is dropped by
         -- fromSelf, so without this branch a host calling SWA in a
@@ -4720,7 +4864,11 @@ function N.LocalKawesh()
     local info = S.s.seats[S.s.localSeat]
     local nm = (info and info.name and (info.name:match("^([^%-]+)") or info.name)) or "?"
     print(("|cffff8800WHEREDNGN|r %s called Kawesh — hand annulled, redeal."):format(nm))
-    broadcast(("%s;%d"):format(K.MSG_KAWESH, S.s.localSeat))
+    -- v3.1.12 (codex audit P1): route through N.SendKawesh so the
+    -- 250ms retry covers dropped MSG_KAWESH. Pre-fix the raw broadcast
+    -- meant a non-host Kawesh would print locally but the host might
+    -- never redeal if the wire frame dropped.
+    N.SendKawesh(S.s.localSeat)
     if S.s.isHost then N.HostHandleKawesh(S.s.localSeat) end
 end
 
@@ -5640,7 +5788,9 @@ function N.MaybeRunBot()
                                 and (info.name:match("^([^%-]+)") or info.name))
                                 or "?"
                     print(("|cffff8800WHEREDNGN|r %s called Kawesh — hand annulled, redeal."):format(nm))
-                    broadcast(("%s;%d"):format(K.MSG_KAWESH, seat))
+                    -- v3.1.12 (codex audit P1): route via N.SendKawesh
+                    -- for 250ms retry coverage.
+                    N.SendKawesh(seat)
                     N.HostHandleKawesh(seat)
                     return
                 end
@@ -5704,7 +5854,12 @@ function N.MaybeRunBot()
                 -- If it decides to call, the round resolves immediately
                 -- and we never schedule the play.
                 if B.Bot.PickTakweesh and B.Bot.PickTakweesh(seat) then
-                    broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
+                    -- v3.1.12 (codex audit P1): route via N.SendTakweesh
+                    -- for 250ms retry coverage. Bot Takweesh is currently
+                    -- only used by the host (bots only run on host), but
+                    -- a host-loopback drop or host-to-remote drop would
+                    -- otherwise leave remotes without the review banner.
+                    N.SendTakweesh(seat)
                     -- v3.0.8: route bot-initiated Takweesh through the
                     -- review phase too. Reveal-cards step is harmless
                     -- for bots (no privacy) but maintains uniform UX —

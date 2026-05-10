@@ -1,5 +1,122 @@
 # Changelog
 
+## v3.1.12 — Full-addon audit fixes (SWA + Takweesh/Kawesh + BALOOT) + behavioral tests
+
+External full-addon audit (Codex on head `929dd13`) flagged three P1/P2
+reliability gaps and one process gap. All fixed in this release.
+
+### P1: SWA permission flow can hard-stall or auto-approve wrongly
+
+**Evidence**: `Net.lua:414-420` — `N.SendSWAReq` and `N.SendSWAResp`
+were single-shot broadcasts (the v3.1.10 retry pattern was never
+applied to MSG_SWA_REQ/RESP). The non-host `N.LocalSWA` also created a
+durable local `S.s.swaRequest` before any host echo, and `N.LocalSWAResp`
+deny pre-cleared local state.
+
+**Failure modes**:
+1. Non-host caller's MSG_SWA_REQ drops: caller has local swaRequest
+   pinned forever, UI hides the SWA button (it treats local-pending as
+   "request in flight"), host never sees the request and no host-side
+   timer fires. **Hard stall** — recoverable only by /reload.
+2. Defender's deny MSG_SWA_RESP drops: defender clears their own
+   swaRequest locally, but host never sees the deny, host's 5-second
+   auto-approve timer fires accepting the SWA. **Wrong outcome** — an
+   explicit deny gets converted into an accept.
+
+**Fix** (`Net.lua:414-465`):
+- `SendSWAReq` and `SendSWAResp` now 250ms re-broadcast (mirror v3.1.10
+  SendPlay pattern). Idempotent on receive: `_OnSWAReq`'s existing
+  overwrite guard at Net.lua:3952 rejects duplicate requests;
+  `_OnSWAResp` writes per-responder so duplicates overwrite same value.
+- `N.LocalSWA` non-host caller now schedules a safety-clear timer:
+  if no host echo (any response or trick activity) arrives within
+  `SWA_TIMEOUT_SEC + 3` seconds, the local swaRequest is rolled back
+  with a Warn log line so the player can retry. Self-suppresses on
+  state advance.
+
+### P1: Takweesh and Kawesh used one-shot action frames
+
+**Evidence**: `Net.lua:2917` (`LocalTakweesh`) and `Net.lua:4723`
+(`LocalKawesh`) called raw `broadcast()` directly. Bot Takweesh/Kawesh
+dispatch sites at `Net.lua:5707`/`Net.lua:5643` did the same.
+
+**Failure modes**:
+- Remote Takweesh click: single frame drops → caller gets no review
+  window, host continues play. No recovery.
+- Remote Kawesh click: single frame drops → caller sees local print
+  but host never redeals.
+
+**Fix** (`Net.lua:454-498`):
+- New `N.SendTakweesh(seat)` and `N.SendKawesh(seat)` helpers with
+  the standard 250ms retry pattern.
+- `LocalTakweesh`, `LocalKawesh`, bot Takweesh, and bot Kawesh sites
+  all routed through the new helpers.
+- Host receivers (`HostBeginTakweeshReview`, `HostHandleKawesh`) are
+  already idempotent (phase-gated + state-non-nil guards), so duplicate
+  retry frames are no-ops.
+
+### P2: Remote BALOOT button read host-only state
+
+**Evidence**: `UI.lua:10` says "the UI never reads s.hostHands."
+`UI.lua:2780` did exactly that, and `Net.lua:2685` (`LocalBelote`)
+repeated the same host-only validation.
+
+**Failure mode**: Remote human holding K+Q of trump never saw the
+BALOOT button until BOTH cards had been played (only then did the
+played-card scan catch them, by which point the click window had
+passed). Host and remote behaviors diverged silently.
+
+**Fix** (`UI.lua:2780-2787`, `Net.lua:2675-2716`):
+- BALOOT detection now uses `S.s.hand` (local-only authoritative hand)
+  combined with `S.s.tricks` + `S.s.trick` played-card scan. The check
+  reflects "did this seat EVER HOLD K+Q of trump this round?"
+- `N.LocalBelote` switched to the same local-state check. Strengthened
+  the predicate from `hasK or hasQ` to `hasK and hasQ` (the pre-fix
+  loose check was effectively dead for non-hosts and overly permissive
+  for hosts).
+- Scoring stays authoritative in `R.ScoreRound`; this fix is only
+  about correct UI button visibility and local click gating.
+
+### Process fix: behavioral tests (not source pins)
+
+Per audit: "Do not treat source-string tests as sufficient. The main
+recurring bug class in this addon is 'helper exists but a Local* call
+site bypasses it.'" v3.1.10's bug was missed because tests only
+verified the helper existed, not that callers used it.
+
+This release adds 25 new tests in **section AZ**, all behavioral:
+- AZ.0: Net.lua loaded into harness for the first time (test
+  infrastructure milestone — prior tests never loaded Net.lua)
+- AZ.1-3: SWA retry behavior — initial+retry broadcasts captured,
+  retry self-suppresses when state moved on, deny retry covers the
+  worst-case drop
+- AZ.4-5: Takweesh retry + duplicate idempotence on host
+- AZ.6-7: Kawesh retry + phase-guarded self-suppress
+- AZ.8-10: Non-host BALOOT — state-update + wire-broadcast captured
+  with `s.hand={KH,QH}` and no `hostHands`; also verifies the
+  K-played-Q-in-hand and K-only-no-Q edge cases
+
+Test approach: stub `C_ChatInfo.SendAddonMessage` and `C_Timer.After`
+to capture calls, then load Net.lua dynamically and exercise actual
+code paths. Restore stubs at the end so future test inserts aren't
+affected.
+
+### Deferred to future audit (not addressed this release)
+
+Per Codex P2/P3 follow-ups:
+- Other single-shot MSG_BID/MSG_DOUBLE/MSG_TRIPLE/MSG_FOUR/MSG_GAHWA/
+  MSG_SKIP_*/MSG_PREEMPT_PASS/MSG_MELD/MSG_AKA — no user reports yet
+- A unified reliability helper instead of per-tag retry blocks
+- Dead-code candidates: `Bot.lua:2397` `highestNonTrump`,
+  `Bot.lua:7742` `escalateDecision`, `State.lua:632` `S.LocalSeat`,
+  `State.lua:638` `S.MyHand`, `State.lua:1815` `S.SWARemainingPoints`,
+  `State.lua:2243` `S.HostValidatePlay`
+
+### Tests
+
+**1007/1007 pass** (was 982, +25 new behavioral pins in section AZ).
+Lua syntax: 26 files clean.
+
 ## v3.1.11 — Codex review fixes for v3.1.10 overcall + release packaging
 
 External code review (Codex) caught three issues post-v3.1.10:

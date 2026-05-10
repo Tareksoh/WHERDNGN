@@ -2773,13 +2773,25 @@ local function renderActions()
                 local already = S.s.beloteAnnounced
                                   and S.s.beloteAnnounced[S.s.localSeat]
                 if not already then
+                    -- v3.1.12 (codex audit P2): use LOCAL hand (S.s.hand)
+                    -- not host-only S.s.hostHands. Pre-fix the in-hand
+                    -- scan only worked on the HOST — non-host humans
+                    -- holding K+Q of trump never saw the BALOOT button
+                    -- until BOTH cards had been played (only then did
+                    -- the played-card scan below catch them, by which
+                    -- time the K/Q pair was already on the table and
+                    -- the player had missed their click window).
+                    --
+                    -- Per UI.lua:10 (file-level invariant): UI never
+                    -- reads s.hostHands. The pre-fix line was the lone
+                    -- violation of that invariant.
+                    --
                     -- Detect: did local seat ever HOLD K+Q-of-trump?
                     -- Combine current hand + cards already played by
                     -- this seat. If both K and Q seen, show button.
                     local trump = S.s.contract.trump
-                    local hand = S.s.hostHands and S.s.hostHands[S.s.localSeat]
                     local hasK, hasQ = false, false
-                    for _, c in ipairs(hand or {}) do
+                    for _, c in ipairs(S.s.hand or {}) do
                         if C.Suit(c) == trump then
                             if     C.Rank(c) == "K" then hasK = true
                             elseif C.Rank(c) == "Q" then hasQ = true end
