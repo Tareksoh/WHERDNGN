@@ -1,5 +1,85 @@
 # Changelog
 
+## v3.1.0 — NASHRAH (نشرة) per-round scoreboard panel
+
+### What's new
+
+A persistent **per-round scoreboard** in the top-left corner of the
+addon window. Replaces the bottom-left score line (which showed only
+cumulative totals). Format follows the canonical Saudi tournament
+display style:
+
+```
+— NASHRAH —
+R1: TeamA: 12  TeamB: 8
+R2: TeamA: 24  TeamB: 18
+R3: TeamA: 47  TeamB: 43
+TOTAL: TeamA: 47  TeamB: 43
+TeamA: 47  TeamB: 43  / 152 pts
+```
+
+Hidden until the first round completes (no empty header during lobby).
+Grows per round; resizes the panel automatically. Per-team color
+coding (green for team A, red for team B) preserved from the prior
+score line for visual continuity.
+
+### Implementation
+
+#### State (`State.lua`)
+
+New field `S.s.roundHistory`: array of `{ A, B, totA, totB }` entries,
+appended in `S.ApplyRoundEnd` after each round resolves. Initialized
+empty in `reset()`. **NOT transient** — persists via `SaveSession`
+across `/reload`. Cleared along with `cumulative` when a new game
+begins (next `reset()` cycle).
+
+#### UI (`UI.lua`)
+
+- New `nashrahPanel` frame (220×variable) at TOPLEFT (8, -38), below
+  the Sound row + scale buttons
+- New `renderNashrahPanel()` function called from `Refresh()`:
+  - Lazy-builds row FontStrings as needed (`p.rows[i]`)
+  - Renders header + per-round rows + TOTAL + score-with-target line
+  - Resizes panel height to fit content
+  - Hides entirely when `roundHistory` is empty (no idle clutter)
+- Bottom-left `scoreText` is now **blanked** (`SetText("")`) — data
+  moved to the panel under the TOTAL row. The FontString is preserved
+  for backward compatibility (referenced elsewhere).
+
+### Multiplayer behavior
+
+- Per-round entries grow on **every client** as `MSG_ROUND` arrives
+  and triggers `ApplyRoundEnd` locally
+- `/reload` mid-game preserves history (`SaveSession` snapshot)
+- **Known limitation**: a fresh client joining mid-game via resync
+  does NOT receive prior rounds' history (resync wire schema is
+  positional and adding a variable-length list requires schema bump).
+  Their panel starts empty and grows from the next round forward.
+  Acceptable for v3.1.0; future enhancement if requested.
+
+### Tests
+
+**897/897 pass** (was 881 — +16 new pins). New section AP covers:
+
+- AP.1 (3 pins): State.lua `roundHistory` init + append + entry shape
+- AP.2 (6 pins): UI.lua panel + renderer + Refresh wiring + bottom-
+  left scoreText blank
+- AP.3 (5 behavioral): `ApplyRoundEnd` grows history correctly across
+  three simulated rounds
+- AP.4 (1 pin): `roundHistory` NOT in `TRANSIENT_FIELDS` (so it
+  persists via `SaveSession`)
+
+Plus 1 housekeeping fix: `N.2 (RT07-04)` test's 1500-char scan window
+bumped to 3000 to accommodate `ApplyRoundEnd`'s grown body.
+
+### Why "NASHRAH"
+
+Saudi Baloot tournament tables traditionally use a printed
+**نشرة** (nashrah, "bulletin") to track per-round scores — a small
+notepad showing R1/R2/.../TOTAL columns per team. The panel mirrors
+that physical artifact. Players familiar with tournament play
+recognize the format instantly.
+
 ## v3.0.8 — Takweesh anti-abuse: cards-reveal + الجلسة host approval
 
 ### Problem

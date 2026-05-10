@@ -650,6 +650,37 @@ local function buildMain()
     end)
     muteBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+    -- v3.1.0 NASHRAH (نشرة) — per-round scoreboard panel, top-left,
+    -- below the Sound row. Shows R1: TeamA-delta TeamB-delta per
+    -- round, then TOTAL: cumulative-A cumulative-B, then the "/ N pts"
+    -- target line that used to live at BOTTOMLEFT. Pre-v3.1.0 the
+    -- only score display was the bottom-left scoreText line which
+    -- showed cumulative totals — players had no easy way to see
+    -- per-round deltas without scrolling chat / opening the score
+    -- breakdown panel. The Nashrah aggregates everything in one
+    -- compact panel.
+    local nashrahPanel = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    nashrahPanel:SetSize(220, 120)  -- width fits R-N: NameA: NN  NameB: NN
+                                    -- height grows in renderNashrahPanel
+    nashrahPanel:SetPoint("TOPLEFT", 8, -38)
+    setBackdrop(nashrahPanel, true,
+        { 0.05, 0.05, 0.06, 0.85 }, { 0.55, 0.45, 0.30, 1 }, 6, "solid")
+    nashrahPanel:Hide()  -- only shown once a round has ended
+    -- Header (small caps "NASHRAH" with leading dashes for the
+    -- canonical Saudi scoreboard look; matches the user-spec format).
+    nashrahPanel.header = makeText(nashrahPanel, 11, "CENTER")
+    nashrahPanel.header:SetPoint("TOP", 0, -4)
+    nashrahPanel.header:SetText("|cffd9b56b— NASHRAH —|r")
+    -- Per-round rows (lazy-built; we lay out as many as are needed
+    -- on each refresh). Stored in nashrahPanel.rows[i].
+    nashrahPanel.rows = {}
+    -- TOTAL row + score line; created once, populated each refresh.
+    nashrahPanel.totalLine = makeText(nashrahPanel, 11, "LEFT")
+    nashrahPanel.totalLine:SetPoint("TOPLEFT", 8, -22)  -- repositioned below rows
+    nashrahPanel.scoreLine = makeText(nashrahPanel, 11, "LEFT")
+    nashrahPanel.scoreLine:SetPoint("TOPLEFT", 8, -34)  -- repositioned below total
+    f.nashrahPanel = nashrahPanel
+
     gameIDText = makeText(f, 11, "RIGHT")
     gameIDText:SetPoint("TOPRIGHT", -36, -12)
 
@@ -4441,20 +4472,84 @@ local function renderPauseControls()
     end
 end
 
+-- v3.1.0 NASHRAH (نشرة) panel renderer. Top-left scoreboard showing
+-- per-round deltas + cumulative totals. Replaces the bottom-left
+-- scoreText (which is now blanked to free that space).
+--
+-- Layout:
+--   --- NASHRAH ---
+--   R1: TeamA: 12  TeamB: 8
+--   R2: TeamA: 24  TeamB: 18
+--   ...
+--   TOTAL: TeamA: 56  TeamB: 84
+--   TeamA: 56  TeamB: 84  /  152 pts        ← moved scoreText
+--
+-- The panel is hidden until at least one round has ended (i.e.,
+-- S.s.roundHistory is non-empty) so an idle lobby doesn't show an
+-- empty "NASHRAH" header. Each refresh resizes the panel to fit
+-- the current row count.
+local function renderNashrahPanel()
+    local p = f and f.nashrahPanel
+    if not p then return end
+    local hist = S.s.roundHistory or {}
+    if #hist == 0 then
+        p:Hide()
+        if p.rows then
+            for _, row in ipairs(p.rows) do row:Hide() end
+        end
+        return
+    end
+    local nA = (S.s.teamNames and S.s.teamNames.A) or "Team A"
+    local nB = (S.s.teamNames and S.s.teamNames.B) or "Team B"
+    -- Per-round rows. Reuse existing FontStrings; create new ones as
+    -- needed. Each row anchored at TOPLEFT (8, -16 - i*12).
+    p.rows = p.rows or {}
+    for i, entry in ipairs(hist) do
+        local row = p.rows[i]
+        if not row then
+            row = makeText(p, 10, "LEFT")
+            p.rows[i] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 12)
+        row:SetText(("|cffd9b56bR%d:|r %s: |cff66ff66%d|r  %s: |cffff6666%d|r"):format(
+            i, nA, entry.A or 0, nB, entry.B or 0))
+        row:Show()
+    end
+    -- Hide any leftover rows from a longer prior history (e.g., new
+    -- game after old game's history was cleared).
+    for i = #hist + 1, #p.rows do
+        p.rows[i]:Hide()
+    end
+    -- TOTAL row anchored after the last per-round row.
+    local totalY = -16 - #hist * 12 - 4   -- 4px gap above TOTAL
+    p.totalLine:ClearAllPoints()
+    p.totalLine:SetPoint("TOPLEFT", 8, totalY)
+    p.totalLine:SetText(("|cffffe066TOTAL:|r %s: |cff66ff66%d|r  %s: |cffff6666%d|r"):format(
+        nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0))
+    -- Score-with-target line (the moved bottom-left scoreText)
+    -- anchored under TOTAL.
+    local scoreY = totalY - 14
+    p.scoreLine:ClearAllPoints()
+    p.scoreLine:SetPoint("TOPLEFT", 8, scoreY)
+    p.scoreLine:SetText(("%s: |cff66ff66%d|r  %s: |cffff6666%d|r  / %d pts"):format(
+        nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0,
+        S.s.target or 152))
+    -- Resize panel to fit content (header + rows + total + score line + padding).
+    local height = math.abs(scoreY) + 14
+    p:SetHeight(math.max(40, height))
+    p:Show()
+end
+
 local function renderStatus()
     statusText:SetText(statusFor(S.s.phase))
 
-    -- score (uses host-customizable team names; falls back to "Team A"/"B")
-    -- v2.2.0 (audit v1.6.1 SA-31 LOW): suffix "pts" so the raw target
-    -- number reads as a score rather than an arbitrary number.
-    -- Pre-fix "152" alone meant nothing to a new player; "152 pts"
-    -- is unambiguous. Saudi tournament displays use "بنط" (banta);
-    -- "pts" is the universal Latin gloss.
-    local nA = (S.s.teamNames and S.s.teamNames.A) or "Team A"
-    local nB = (S.s.teamNames and S.s.teamNames.B) or "Team B"
-    scoreText:SetText(("%s: |cff66ff66%d|r   %s: |cffff6666%d|r   /  %d pts"):format(
-        nA, S.s.cumulative.A or 0, nB, S.s.cumulative.B or 0,
-        S.s.target or 152))
+    -- v3.1.0: bottom-left scoreText is now blank — score lives in
+    -- the top-left NASHRAH panel under the TOTAL row. Pre-v3.1.0 this
+    -- read "TeamA: X  TeamB: Y  /  N pts"; the data moved to the
+    -- panel for unified scoreboard view. Empty string keeps the
+    -- FontString allocated (referenced elsewhere) without rendering.
+    scoreText:SetText("")
 
     -- contract
     if S.s.contract then
@@ -4544,6 +4639,7 @@ function U.Refresh()
     end
     renderActions()
     renderStatus()
+    renderNashrahPanel()  -- v3.1.0
 end
 
 -- AFK pre-warn pulse: flash the local-player bar's border between

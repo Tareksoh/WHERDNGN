@@ -72,6 +72,11 @@ local function reset()
     s.preemptEligible = nil
     -- scores
     s.cumulative  = { A = 0, B = 0 }
+    -- v3.1.0 NASHRAH: per-round score history for the top-left
+    -- scoreboard. Each entry: { A=delta, B=delta, totA=cumulative,
+    -- totB=cumulative }. Appended in ApplyRoundEnd; consulted by
+    -- UI.lua renderNashrahPanel.
+    s.roundHistory = {}
     -- 6th-audit fix: pull target / teamNames from WHEREDNGNDB so a
     -- /baloot reset (or any other reset() entry, e.g. host-finishes-
     -- game cleanup) doesn't silently revert the user's saved
@@ -1861,6 +1866,17 @@ function S.ApplyRoundEnd(addA, addB, totA, totB, sweep, bidderMade)
     s.cumulative.B = totB
     s.phase = K.PHASE_SCORE
     s.lastRoundDelta = { A = addA, B = addB }
+    -- v3.1.0: NASHRAH (نشرة) per-round scoring history. Append the
+    -- finalized round delta + cumulative totals so the top-left
+    -- scoreboard panel can render the full round-by-round breakdown.
+    -- Persisted across /reload via SaveSession (added to the saved
+    -- snapshot table). Bounded by the 152-point game length — at most
+    -- ~8-12 rounds before someone hits target — so unbounded growth
+    -- is not a concern within a single game.
+    s.roundHistory = s.roundHistory or {}
+    s.roundHistory[#s.roundHistory + 1] = {
+        A = addA, B = addB, totA = totA, totB = totB
+    }
     -- Reset peek allowance for the next hand
     s.peekedThisRound = false
     -- v0.11.3 RT07-04 fix (defense-in-depth): clear sweepTrackAnnounced

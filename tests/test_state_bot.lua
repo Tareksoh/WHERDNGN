@@ -2291,8 +2291,11 @@ do
     assertTrue(fnStart ~= nil,
                "N.2 setup: S.ApplyRoundEnd function found")
     if fnStart then
-        -- Scan ~1500 chars (function body should be much shorter, but be safe).
-        local fnSlice = stateSrc:sub(fnStart, fnStart + 1500)
+        -- v3.1.0: bumped scan window from 1500 → 3000 chars after the
+        -- NASHRAH roundHistory append was added to S.ApplyRoundEnd.
+        -- The function body grew ~900 chars; 3000 leaves comfortable
+        -- headroom for future additions.
+        local fnSlice = stateSrc:sub(fnStart, fnStart + 3000)
         assertTrue(fnSlice:find("s%.sweepTrackAnnounced%s*=%s*nil") ~= nil,
                    "N.2 (RT07-04): S.ApplyRoundEnd clears s.sweepTrackAnnounced")
     end
@@ -6379,6 +6382,83 @@ end
 -- timeout defaults to auto-validate via the rule engine's p.illegal
 -- scan (the pre-v3.0.8 behavior).
 -- =====================================================================
+
+-- =====================================================================
+-- AP. v3.1.0 NASHRAH (نشرة) per-round scoreboard
+--
+-- Top-left scoreboard panel showing per-round score deltas + cumulative
+-- totals. Replaces the bottom-left scoreText line. State-side: each
+-- ApplyRoundEnd appends an entry to S.s.roundHistory; UI-side: the
+-- nashrahPanel renders header + R1/R2/...Rn rows + TOTAL + score line.
+-- =====================================================================
+section("AP. v3.1.0 NASHRAH per-round scoreboard")
+
+-- AP.1 — State.lua: roundHistory initialization + append in ApplyRoundEnd
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    assertTrue(stateSrc:find("s%.roundHistory = {}") ~= nil,
+        "AP.1a (v3.1.0): roundHistory initialized in reset()")
+    assertTrue(stateSrc:find("s%.roundHistory%[#s%.roundHistory %+ 1%] = {") ~= nil,
+        "AP.1b (v3.1.0): ApplyRoundEnd appends to roundHistory")
+    assertTrue(stateSrc:find("totA = totA, totB = totB") ~= nil,
+        "AP.1c (v3.1.0): roundHistory entry includes totA/totB cumulatives")
+end
+
+-- AP.2 — UI.lua: nashrahPanel + renderer + Refresh wiring
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    assertTrue(uiSrc:find("renderNashrahPanel") ~= nil,
+        "AP.2a (v3.1.0): renderNashrahPanel function exists")
+    assertTrue(uiSrc:find("f%.nashrahPanel = nashrahPanel") ~= nil,
+        "AP.2b (v3.1.0): nashrahPanel attached to main frame")
+    assertTrue(uiSrc:find("— NASHRAH —") ~= nil,
+        "AP.2c (v3.1.0): NASHRAH header text present")
+    assertTrue(uiSrc:find('|cffffe066TOTAL:|r') ~= nil,
+        "AP.2d (v3.1.0): TOTAL row formatting present")
+    assertTrue(uiSrc:find('renderNashrahPanel%(%)') ~= nil,
+        "AP.2e (v3.1.0): renderNashrahPanel called from Refresh")
+    -- bottom-left scoreText now blanks (data moved to panel)
+    assertTrue(uiSrc:find('scoreText:SetText%(""%)') ~= nil,
+        "AP.2f (v3.1.0): bottom-left scoreText blanked (moved to NASHRAH)")
+end
+
+-- AP.3 (behavioral) — ApplyRoundEnd grows roundHistory
+do
+    freshState()
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.roundHistory = {}
+    -- Simulate three round-ends.
+    S.ApplyRoundEnd(12, 8, 12, 8)
+    S.ApplyRoundEnd(20, 5, 32, 13)
+    S.ApplyRoundEnd(15, 30, 47, 43)
+    assertEq(#S.s.roundHistory, 3,
+        "AP.3a: roundHistory has 3 entries after 3 ApplyRoundEnd calls")
+    assertEq(S.s.roundHistory[1].A, 12,
+        "AP.3b: round 1 team A delta = 12")
+    assertEq(S.s.roundHistory[1].B, 8,
+        "AP.3c: round 1 team B delta = 8")
+    assertEq(S.s.roundHistory[2].totA, 32,
+        "AP.3d: round 2 cumulative A = 32")
+    assertEq(S.s.roundHistory[3].totB, 43,
+        "AP.3e: round 3 cumulative B = 43")
+end
+
+-- AP.4 — roundHistory NOT in TRANSIENT_FIELDS (so it persists across /reload)
+do
+    local stateSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+    -- Find TRANSIENT_FIELDS table; verify roundHistory isn't a key.
+    local fnStart = stateSrc:find("local TRANSIENT_FIELDS = {")
+    assertTrue(fnStart ~= nil, "AP.4 setup: TRANSIENT_FIELDS table found")
+    if fnStart then
+        local fnSlice = stateSrc:sub(fnStart, fnStart + 3000)
+        local closeIdx = fnSlice:find("\n}")
+        if closeIdx then
+            fnSlice = fnSlice:sub(1, closeIdx)
+        end
+        assertTrue(fnSlice:find("roundHistory%s*=%s*true") == nil,
+            "AP.4 (v3.1.0): roundHistory is NOT transient (persists via SaveSession)")
+    end
+end
 
 -- AO.1 — Constants pinned
 do
