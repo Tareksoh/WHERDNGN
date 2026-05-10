@@ -36,6 +36,7 @@ local function help()
     print("  /baloot history off / on - toggle telemetry capture (default on)")
     print("  /baloot lastround [N] - print last round's per-trick plays (N=2 → 2 rounds back)")
     print("  /baloot freezelog on/off/clear/all - toggle freeze-diagnostic capture")
+    print("  /baloot version      - show addon version (yours + all peers)")
     print("  /baloot config       - open the Settings panel (Esc → Options → AddOns)")
     print("  /baloot leave        - graceful exit (non-host); host sees you as dropped")
     print("  /baloot stats        - lifetime W/L + bidder stats (cross-session)")
@@ -537,6 +538,38 @@ local function dispatch(msg)
         end
         say(("see SavedVariables/WHEREDNGN.lua for the full table " ..
              "(WHEREDNGNDB.history)"))
+        return
+    end
+
+    -- v3.1.8 (deployment-diagnostic): print local addon version + every
+    -- peer's reported version. Surfaces stale clients that haven't
+    -- /reloaded after a CurseForge update — the most common cause of
+    -- "the fix is shipped but the freeze still happens" reports. Peer
+    -- versions are populated by `_OnHost` and `_OnJoin` handshakes
+    -- (S.s.peerVersions). Mismatched peers display a warning glyph.
+    if msg == "version" or msg == "ver" then
+        local S = B.State
+        local myVersion = (K and K.GetAddonVersion and K.GetAddonVersion()) or "?"
+        say(("your version: |cffffd055%s|r"):format(tostring(myVersion)))
+        if not S or not S.s or type(S.s.peerVersions) ~= "table" then
+            say("no peer versions known yet (join or host a game first)")
+            return
+        end
+        local any = false
+        for name, ver in pairs(S.s.peerVersions) do
+            any = true
+            local short = (name and name:match("^([^%-]+)")) or name
+            local mark = (ver ~= myVersion)
+                and "|cffff5544 ✗ MISMATCH|r"
+                or "|cff66ff88 ✓|r"
+            print(("  %-24s %s%s"):format(tostring(short or "?"),
+                                          tostring(ver), mark))
+        end
+        if not any then
+            say("no peers tracked yet")
+        else
+            say("a MISMATCH means that player should /reload after updating the addon")
+        end
         return
     end
 

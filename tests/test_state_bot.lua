@@ -6813,6 +6813,35 @@ do
         "AU.5 (v3.1.7): heal events logged to freezeLog")
 end
 
+-- AV — v3.1.8 heartbeat-derive heal fallback (handles old-host case where
+-- the v3.1.6 heartbeat doesn't carry a usable turn payload). Mirrors the
+-- v3.1.7 mid-trick derive logic but is triggered at heartbeat tick instead
+-- of MSG_PLAY arrival. Plus the deployment-diagnostic /baloot version
+-- slash command for surfacing peer-version mismatches.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find("v3%.1%.8 %(heartbeat%-derive fallback%)") ~= nil,
+        "AV.1 (v3.1.8): heartbeat-derive fallback marker present")
+    assertTrue(netSrc:find("not hostTurn or hostTurn == 0") ~= nil,
+        "AV.2 (v3.1.8): fallback gated on missing/zero hostTurn (no oscillation with v3.1.6)")
+    assertTrue(netSrc:find("heartbeat derive%-heal: turn") ~= nil,
+        "AV.3 (v3.1.8): derive-heal log line distinct from v3.1.6 heal")
+    assertTrue(netSrc:find('"derive turn .-via heartbeat %(last seat ' ) ~= nil,
+        "AV.4 (v3.1.8): freezeLog HEAL captures heartbeat-derive provenance")
+    assertTrue(netSrc:find("lastPlay%.seat >= 1 and lastPlay%.seat <= 4") ~= nil,
+        "AV.5 (v3.1.8): seat-range validation on derived nextSeat input")
+
+    local slashSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Slash.lua"):read("*a")
+    assertTrue(slashSrc:find('msg == "version" or msg == "ver"') ~= nil,
+        "AV.6 (v3.1.8): /baloot version command exists in Slash.lua")
+    assertTrue(slashSrc:find("peerVersions") ~= nil,
+        "AV.7 (v3.1.8): version handler reads S.s.peerVersions")
+    assertTrue(slashSrc:find("MISMATCH") ~= nil,
+        "AV.8 (v3.1.8): version handler flags mismatched peers")
+    assertTrue(slashSrc:find("/baloot version") ~= nil,
+        "AV.9 (v3.1.8): help text mentions /baloot version")
+end
+
 -- AT — v3.1.6 turn-rotation self-heal via heartbeat
 -- (user-saved-game freezelog correlation confirmed WoW addon channel
 -- silently drops MSG_TURN broadcasts; host's own loopback also fails.

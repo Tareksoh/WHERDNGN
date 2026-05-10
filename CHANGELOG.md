@@ -1,5 +1,115 @@
 # Changelog
 
+## v3.1.8 — Heartbeat-derive heal fallback + deployment diagnostics
+
+User shared a fresh freezelog (`message (3).txt`) after v3.1.6+v3.1.7
+shipped. Two distinct freeze segments (Acing host @ GetTime ~438991,
+Ballripper host @ GetTime ~444826), both 60 seconds, both with
+`turn=1` stuck across every heartbeat in the gap.
+
+### The smoking gun: zero HEAL events in the log
+
+Across both freezes, Dedah's freezelog captured ~30 `RX` events
+including heartbeats, MSG_PLAY, MSG_TURN, MSG_TRICK — but **no
+`HEAL` entries**. Both v3.1.6 (heartbeat-heal) and v3.1.7
+(MSG_PLAY-derive heal) write a freezeLog `HEAL` entry on every fire.
+Their absence is conclusive: the heal code never executed on
+Dedah's client.
+
+The most likely cause is deployment lag — CurseForge propagation
+delay, or a missed `/reload` after the addon updater pulled the
+new build. The v3.1.6 + v3.1.7 logic IS correct (verified against
+both freeze segments line-by-line); it just wasn't running yet on
+the affected client.
+
+### Two new mitigations for partial deployment
+
+#### 1. Heartbeat-derive heal fallback (`Net.lua`, `_OnHeartbeat`)
+
+The v3.1.6 heal only fires when `hostTurn` from the heartbeat
+payload is non-zero. If the host is still on v3.1.5-, heartbeats
+ship as `~` alone with no turn field — and v3.1.6 receivers
+silently skip. This pure-defense fallback handles that case:
+
+```lua
+if (not hostTurn or hostTurn == 0)
+   and S.s.phase == K.PHASE_PLAY
+   and S.s.turnKind == "play"
+   and S.s.trick and S.s.trick.plays then
+    local playCount = #S.s.trick.plays
+    if playCount > 0 and playCount < 4 then
+        local lastPlay = S.s.trick.plays[playCount]
+        if lastPlay and lastPlay.seat
+           and lastPlay.seat >= 1 and lastPlay.seat <= 4 then
+            local derivedTurn = (lastPlay.seat % 4) + 1
+            if S.s.turn ~= derivedTurn then
+                ...heal + log HEAL event
+```
+
+**Gate logic** — `not hostTurn or hostTurn == 0` means this fallback
+only activates when the v3.1.6 path didn't. The two blocks are
+mutually exclusive, so there's no risk of oscillation if both host
+and client are temporarily stuck at the same value.
+
+**Effective recovery time** — capped at one heartbeat cadence
+(15s) when host is on v3.1.5- and client is on v3.1.8+. Worse
+than v3.1.7's ~1-3s but materially better than the 60s AFK fallback.
+
+#### 2. `/baloot version` slash command (`Slash.lua`)
+
+Surfaces the most common diagnostic question — "is the fix
+actually deployed everywhere?" — directly in chat:
+
+```
+> /baloot version
+WHEREDNGN your version: 3.1.8
+  Acing                    3.1.5 ✗ MISMATCH
+  Ballripper               3.1.8 ✓
+  Bassiouni                3.1.7 ✗ MISMATCH
+WHEREDNGN a MISMATCH means that player should /reload after updating the addon
+```
+
+Reads from `S.s.peerVersions` (populated by `_OnHost` + `_OnJoin`
+handshakes since v2.0.0 MP-60). Players see at a glance who's
+behind without scrolling chat history for the auto-mismatch warning.
+
+### Coverage matrix (host × client × what fires)
+
+| Host ver | Client ver | What heals the dropped MSG_TURN |
+|---|---|---|
+| v3.1.7+ | v3.1.7+ | v3.1.7 mid-trick (1-3s) |
+| v3.1.7+ | v3.1.6 | v3.1.6 heartbeat (≤15s) |
+| v3.1.6  | v3.1.8+ | v3.1.6 heartbeat (≤15s) |
+| v3.1.5- | v3.1.8+ | **v3.1.8 derive-heartbeat (≤15s)** ← new |
+| v3.1.5- | v3.1.7  | (no heal, 60s AFK) |
+| v3.1.5- | v3.1.5- | (no heal, 60s AFK) |
+
+The v3.1.8 fallback closes the row that previously had no recovery:
+client updated, host not yet updated. Users no longer need to wait
+for every peer to update simultaneously.
+
+### Tests
+
+**953/953 pass** (was 944 — +9 new pins). New section AV covers:
+
+- AV.1: heartbeat-derive fallback marker present
+- AV.2: gated on missing/zero `hostTurn` (no v3.1.6 oscillation)
+- AV.3: distinct log line for derive-heal vs heartbeat-heal
+- AV.4: freezeLog HEAL captures heartbeat-derive provenance
+- AV.5: seat-range validation `[1,4]` on lastPlay.seat input
+- AV.6-9: `/baloot version` command + peerVersions read + MISMATCH
+  flag + help text mention
+
+### Why this isn't over-engineering
+
+The root cause of the user's reported freeze is deployment lag, not
+a code bug. But "tell the user to /reload" doesn't scale when the
+freeze is intermittent and the user has 3 other players to coordinate
+with. Surfacing version-mismatch directly + ensuring the updated
+client self-heals regardless of peer state lets the fix benefit
+the user as soon as ONE party (typically the host) updates —
+rather than waiting for all four.
+
 ## v3.1.7 — Millisecond-speed mid-trick turn self-heal
 
 User feedback on v3.1.6's 15s heartbeat-heal: "15 seconds can make

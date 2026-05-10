@@ -3589,6 +3589,45 @@ function N._OnHeartbeat(sender, hostTurn, hostTurnKind)
                 ("turn %d → %d via heartbeat"):format(prev, hostTurn))
         end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        return
+    end
+    -- v3.1.8 (heartbeat-derive fallback): if the host's heartbeat doesn't
+    -- carry a usable turn pointer (pre-v3.1.6 host sends "~" alone, or a
+    -- v3.1.6+ host with S.s.turn=0 emits "~;0;..."), we cannot trust the
+    -- payload — but we CAN derive next-turn from local trick state. When
+    -- a mid-trick MSG_TURN drop leaves us stale AND v3.1.7's _OnPlay-time
+    -- heal didn't fire for any reason (e.g., the P arrived BEFORE we
+    -- upgraded), this 15s heartbeat tick catches it.
+    --
+    -- Gated on hostTurn nil/0 only: when the host DOES carry a valid
+    -- payload, the block above is authoritative. Avoids oscillation if
+    -- both sides are temporarily stale at the same value.
+    if (not hostTurn or hostTurn == 0)
+       and S.s.phase == K.PHASE_PLAY
+       and S.s.turnKind == "play"
+       and S.s.trick and S.s.trick.plays then
+        local playCount = #S.s.trick.plays
+        if playCount > 0 and playCount < 4 then
+            local lastPlay = S.s.trick.plays[playCount]
+            if lastPlay and lastPlay.seat
+               and lastPlay.seat >= 1 and lastPlay.seat <= 4 then
+                local derivedTurn = (lastPlay.seat % 4) + 1
+                if S.s.turn ~= derivedTurn then
+                    local prev = S.s.turn or 0
+                    S.s.turn = derivedTurn
+                    S.s.turnKind = "play"
+                    log("Info",
+                        "heartbeat derive-heal: turn %d → %d (last seat %d)",
+                        prev, derivedTurn, lastPlay.seat)
+                    if N._FreezeLog then
+                        N._FreezeLog("HEAL",
+                            ("derive turn %d → %d via heartbeat (last seat %d)")
+                            :format(prev, derivedTurn, lastPlay.seat))
+                    end
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end
+            end
+        end
     end
 end
 
