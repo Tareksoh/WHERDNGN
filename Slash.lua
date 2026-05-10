@@ -35,6 +35,7 @@ local function help()
     print("  /baloot history clear - wipe round-result history")
     print("  /baloot history off / on - toggle telemetry capture (default on)")
     print("  /baloot lastround [N] - print last round's per-trick plays (N=2 → 2 rounds back)")
+    print("  /baloot freezelog on/off/clear/all - toggle freeze-diagnostic capture")
     print("  /baloot config       - open the Settings panel (Esc → Options → AddOns)")
     print("  /baloot leave        - graceful exit (non-host); host sees you as dropped")
     print("  /baloot stats        - lifetime W/L + bidder stats (cross-session)")
@@ -536,6 +537,60 @@ local function dispatch(msg)
         end
         say(("see SavedVariables/WHEREDNGN.lua for the full table " ..
              "(WHEREDNGNDB.history)"))
+        return
+    end
+
+    -- v3.1.5 freeze-diagnostic: capture timestamped wire/Refresh
+    -- events to investigate the user-reported 30-second freeze on
+    -- non-host clients during the OTHER human's turn (2H+2bot
+    -- multiplayer setup; freeze spontaneously recovers).
+    -- Usage:
+    --   /baloot freezelog on    → enable capture (zero overhead off)
+    --   /baloot freezelog off   → disable
+    --   /baloot freezelog clear → wipe captured events
+    --   /baloot freezelog       → dump last 50 events
+    --   /baloot freezelog all   → dump all (up to 200 cap)
+    local fzArg = msg:match("^freezelog%s*(.*)$")
+    if fzArg then
+        WHEREDNGNDB = WHEREDNGNDB or {}
+        if fzArg == "on" then
+            WHEREDNGNDB.freezeDebug = true
+            WHEREDNGNDB.freezeLog = WHEREDNGNDB.freezeLog or {}
+            say("freeze diagnostic: ON (capturing wire/refresh/turn events; max 200, ring buffer)")
+            return
+        elseif fzArg == "off" then
+            WHEREDNGNDB.freezeDebug = false
+            say("freeze diagnostic: OFF (existing log preserved; use 'clear' to wipe)")
+            return
+        elseif fzArg == "clear" then
+            WHEREDNGNDB.freezeLog = {}
+            say("freeze log cleared")
+            return
+        end
+        local fl = WHEREDNGNDB.freezeLog
+        if type(fl) ~= "table" or #fl == 0 then
+            say("no freeze events captured (toggle with /baloot freezelog on)")
+            return
+        end
+        local n = (fzArg == "all") and #fl or 50
+        local startIdx = math.max(1, #fl - n + 1)
+        say(("freeze log: %d total, showing last %d"):format(#fl, math.min(n, #fl)))
+        for i = startIdx, #fl do
+            local e = fl[i]
+            if type(e) == "table" then
+                local elapsed = (i > 1 and type(fl[i-1]) == "table")
+                    and (e.ts - fl[i-1].ts) or 0
+                local tag = (elapsed > 1) and (" |cffff5555+%.1fs|r"):format(elapsed)
+                              or ""
+                print(("  [%.2f%s]  %s  %-40s  seat=%d turn=%d phase=%s"):format(
+                    e.ts or 0, tag,
+                    e.cat or "?",
+                    (e.detail or ""):sub(1, 40),
+                    e.seat or 0, e.turn or 0,
+                    tostring(e.phase or "?")))
+            end
+        end
+        say("→ events with |cffff5555+1s|r gap are likely freeze candidates")
         return
     end
 

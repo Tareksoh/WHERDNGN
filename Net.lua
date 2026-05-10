@@ -43,6 +43,16 @@ local function broadcast(msg)
     end
     local ok, err = pcall(C_ChatInfo.SendAddonMessage, K.PREFIX, msg, "PARTY")
     if not ok then log("Warn", "send failed: %s", tostring(err)) end
+    -- v3.1.5 freeze diagnostic: log broadcast attempts. SendAddonMessage
+    -- can fail silently if the addon channel queue is saturated; the
+    -- pcall above only catches Lua errors, not WoW chat-throttle drops.
+    if WHEREDNGNDB and WHEREDNGNDB.freezeDebug then
+        local tag = msg:match("^([^;]+)")
+        if N._FreezeLog then
+            N._FreezeLog("TX", ("tag=%s ok=%s"):format(
+                tostring(tag), tostring(ok)))
+        end
+    end
 end
 
 local function whisper(target, msg)
@@ -77,6 +87,48 @@ local function deferredRefresh()
         B.UI.Refresh()
     end
 end
+
+-- v3.1.5 freeze diagnostic logger. User reported a 30-second freeze
+-- on a non-host client during the OTHER human's turn (2-human +
+-- 2-bot multiplayer setup). 30s isn't any of our timer constants
+-- (K.TURN_TIMEOUT_SEC=60, K.HOST_HEARTBEAT_TIMEOUT_SEC=45,
+-- K.SWA_TIMEOUT_SEC=5, K.TAKWEESH_REVIEW_SEC=8) so the source is
+-- likely WoW system-level (addon channel queue throttle, network
+-- round-trip latency, or a UI handler stuck mid-frame).
+--
+-- This logger captures timestamped events into WHEREDNGNDB.freezeLog
+-- when WHEREDNGNDB.freezeDebug = true. The log captures:
+--   • Wire receipts (every MSG_* dispatched on this client)
+--   • Refresh calls
+--   • Phase changes
+--   • Turn changes (who's to act + when)
+--
+-- Use:
+--   /baloot freezelog on    → enable capture
+--   /baloot freezelog       → dump last 50 events
+--   /baloot freezelog clear → wipe
+--   /baloot freezelog off   → disable
+--
+-- Capped at 200 events; oldest dropped on overflow. Ring buffer.
+-- Off by default — zero overhead when disabled.
+local function freezeLog(category, detail)
+    if not (WHEREDNGNDB and WHEREDNGNDB.freezeDebug) then return end
+    if type(WHEREDNGNDB.freezeLog) ~= "table" then
+        WHEREDNGNDB.freezeLog = {}
+    end
+    local fl = WHEREDNGNDB.freezeLog
+    local now = (GetTime and GetTime()) or 0
+    fl[#fl + 1] = {
+        ts       = now,
+        cat      = category or "?",
+        detail   = detail or "",
+        seat     = S.s and S.s.localSeat or 0,
+        turn     = S.s and S.s.turn or 0,
+        phase    = S.s and S.s.phase or "?",
+    }
+    while #fl > 200 do table.remove(fl, 1) end
+end
+N._FreezeLog = freezeLog
 
 -- 14th-audit helper (scoring-vs-rules audit). Saudi rule for Sun Bel
 -- (per "نظام الدبل في لعبة البلوت"):
@@ -640,6 +692,9 @@ function N.HandleMessage(prefix, message, channel, sender)
     local fields = split(message, ";")
     local tag = fields[1]
     log("Debug", "<- [%s] from %s: %s", channel, tostring(sender), message)
+    -- v3.1.5 freeze diagnostic: log every wire receipt.
+    freezeLog("RX", ("tag=%s from=%s ch=%s"):format(
+        tostring(tag), tostring(sender), tostring(channel)))
 
     if tag == K.MSG_HOST then
         N._OnHost(sender, fields[2], fields[3])

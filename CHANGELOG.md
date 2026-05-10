@@ -1,5 +1,93 @@
 # Changelog
 
+## v3.1.5 — Freeze-diagnostic mode (`/baloot freezelog`)
+
+User reported 30-second freezes on a non-host client (Dedah, seat 4)
+during their own turn in 2-human + 2-bot multiplayer. Freeze
+spontaneously recovers. None of our timer constants are 30s
+(`K.TURN_TIMEOUT_SEC=60`, `K.HOST_HEARTBEAT_TIMEOUT_SEC=45`,
+`K.SWA_TIMEOUT_SEC=5`, `K.TAKWEESH_REVIEW_SEC=8`) — so the source is
+likely **WoW system-level**: addon channel queue throttle, network
+round-trip latency, or a UI handler stuck mid-frame.
+
+Without trace data we can't know which. v3.1.5 ships an opt-in
+diagnostic logger to capture next occurrence.
+
+### Usage
+
+```
+/baloot freezelog on       → enable capture (zero overhead when off)
+/baloot freezelog off      → disable
+/baloot freezelog clear    → wipe captured events
+/baloot freezelog          → dump last 50 events
+/baloot freezelog all      → dump all (up to 200 cap)
+```
+
+Captures every:
+- **Wire receipt** (RX with tag, sender, channel)
+- **Wire send** (TX with tag, send-success flag)
+
+into `WHEREDNGNDB.freezeLog` ring-buffer (200 entries, oldest dropped).
+Each entry: `{ ts, category, detail, seat, turn, phase }`.
+
+Output highlights gaps > 1 second between events with `|cffff5555+Xs|r`
+markers — those are the freeze candidates. Example dump:
+
+```
+freeze log: 47 total, showing last 47
+  [218.34]  RX  tag=R from=Acing ch=PARTY        seat=4 turn=4 phase=play
+  [218.34]  TX  tag=p ok=true                    seat=4 turn=4 phase=play
+  [248.71 +30.4s]  RX  tag=R from=Acing ch=PARTY    seat=4 turn=4 phase=play
+  →                                ^^^^^^^^^^^^ freeze candidate
+```
+
+The 30s gap above would indicate the wire-receive cycle stalled —
+strong evidence of WoW addon-channel queue saturation. Conversely if
+the log shows continuous events through the freeze window, the issue
+is UI rendering not network.
+
+### Implementation
+
+- **`Net.lua:81-128`** — `freezeLog(category, detail)` ring-buffer
+  writer. Zero overhead when `WHEREDNGNDB.freezeDebug ~= true`
+  (single boolean check).
+- **`Net.lua:684`** — `HandleMessage` logs every RX with tag/sender/
+  channel.
+- **`Net.lua:46-54`** — `broadcast` logs every TX with tag and
+  send-success flag (so we see `pcall` failures of
+  `C_ChatInfo.SendAddonMessage`).
+- **`Slash.lua:541-590`** — `/baloot freezelog [on|off|clear|all|N]`
+  command. `freezeDebug` flag controls capture; log persists in
+  saved-vars so post-game review works.
+
+### What to do next time the freeze fires
+
+1. Before the game, type `/baloot freezelog on` on Dedah's client
+2. Play normally
+3. When freeze occurs, wait for it to recover (don't /reload)
+4. Type `/baloot freezelog all` and copy-paste the output
+5. Look for the `+Xs` gap markers — that timestamp range = the freeze
+6. Share the output and I can pinpoint root cause
+
+### Tests
+
+**933/933 pass** (no behavioral changes). Diagnostic logger is
+gated behind `WHEREDNGNDB.freezeDebug` — never fires unless user
+opts in.
+
+### Why no fix yet
+
+Without trace data there's no way to differentiate:
+- Addon channel throttle (would show wire-RX gap)
+- UI render stall (would show no events at all during freeze)
+- Heartbeat watchdog firing (would show MSG_HEARTBEAT events
+  pre+post freeze with the gap in between)
+- Some other client-side issue
+
+Once the trace shows up, the fix is usually targeted (1-line
+change). Premature speculation could ship a "fix" that addresses
+the wrong root cause.
+
 ## v3.1.4 — 5-agent swarm audit closure (test coverage backfill)
 
 User requested an extensive audit-swarm against the codebase to find
