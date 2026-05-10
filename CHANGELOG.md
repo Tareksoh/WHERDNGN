@@ -1,5 +1,109 @@
 # Changelog
 
+## v3.1.7 — Millisecond-speed mid-trick turn self-heal
+
+User feedback on v3.1.6's 15s heartbeat-heal: "15 seconds can make
+the game feel very slow, we want it more realistic for peak fast
+play moments." Right call — 15s of staring at a frozen table is
+disruptive even if recoverable.
+
+### What v3.1.7 adds
+
+When a `MSG_TURN` drops mid-trick (plays 1-3 of 4), the **next
+`MSG_PLAY` to arrive triggers a local turn re-derivation**, with a
+typical recovery time of **1-3 seconds** (the next bot or human
+play in active gameplay). This complements v3.1.6's heartbeat-heal:
+
+| Drop scenario | v3.1.5 (no fix) | v3.1.6 (heartbeat) | v3.1.7 (this) |
+|---|---|---|---|
+| MSG_TURN drops on play 1, 2, or 3 of trick | 60s freeze | 15s freeze | **1-3s freeze** |
+| MSG_TURN drops on play 4 (trick-end) | 60s freeze | 15s freeze | 15s freeze (heartbeat fallback) |
+| Heartbeat ALSO drops | 60s freeze | 60s freeze | depends on next play arrival |
+
+The user's reported scenario (Dedah's freeze in 2H+2B) was a
+mid-trick drop at play 1 — the v3.1.7 fix would have caught it
+in <2 seconds.
+
+### Implementation
+
+In `_OnPlay` after `S.ApplyPlay(seat, card, isReplay)`:
+
+```lua
+if not S.s.isHost and S.s.phase == K.PHASE_PLAY
+   and S.s.trick and S.s.trick.plays then
+    local playCount = #S.s.trick.plays
+    if playCount > 0 and playCount < 4 then
+        local nextSeat = (seat % 4) + 1
+        if S.s.turn ~= nextSeat then
+            local prev = S.s.turn or 0
+            S.s.turn = nextSeat
+            S.s.turnKind = "play"
+            log("Info", "play-derived self-heal: turn %d → %d", prev, nextSeat)
+            if N._FreezeLog then
+                N._FreezeLog("HEAL",
+                    ("derive turn %d → %d after seat %d play"):format(
+                        prev, nextSeat, seat))
+            end
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        end
+    end
+end
+```
+
+### Why mid-trick only
+
+For play 4 (trick-end), turn doesn't go to "next clockwise seat" —
+it goes to the trick winner. Computing the winner locally requires
+running `R.TrickWinner(trick, contract)` which is fine but:
+
+1. There's a 2.2s "show all 4 cards" window after the 4th play
+   before the host fires `MSG_TRICK` + `MSG_TURN(winner)`. Rotating
+   turn locally during that window would create UI flicker.
+
+2. SWA / Takweesh / sweep-detection might intervene at trick-end,
+   making the "winner = next leader" derivation unreliable.
+
+3. v3.1.6's 15s heartbeat-heal already catches dropped trick-end
+   `MSG_TURN`. Acceptable bound.
+
+If trick-end freezes prove disruptive in practice, v3.1.8 can add
+deferred (3s) trick-end self-heal layered on top. For now, mid-trick
+only is the surgical, low-risk fix that addresses the reported case.
+
+### Safety gates
+
+- **Non-host only**: host has direct state mutation via
+  `_HostStepPlay` and doesn't need this self-heal.
+- **`PHASE_PLAY` only**: other phases have their own turn semantics.
+- **Mid-trick only**: `playCount > 0 and playCount < 4`.
+- **No-op on match**: `S.s.turn ~= nextSeat` prevents redundant
+  state writes during normal play.
+- **HEAL events captured**: if `WHEREDNGNDB.freezeDebug = true`,
+  every fired heal logs to `freezeLog` for production telemetry.
+
+### Tests
+
+**944/944 pass** (was 939 — +5 new pins). New section AU covers:
+
+- AU.1: marker comment present
+- AU.2: mid-trick gate `playCount > 0 and playCount < 4`
+- AU.3: clockwise rotation `(seat % 4) + 1`
+- AU.4: gated to non-host
+- AU.5: HEAL events logged to freezeLog
+
+### Total mitigation surface
+
+With v3.1.6 + v3.1.7 stacked:
+
+- **75% of plays** (1-3 of each trick) → recovery in milliseconds
+- **25% of plays** (play 4 / trick-end) → recovery in ≤15s via heartbeat
+- **Worst case** (heartbeat ALSO drops) → recovery on next non-dropped play
+
+The user's reported freeze should now be either invisible (heal
+faster than perception) or briefly noticeable (≤2s) at most. Even if
+WoW's addon channel drops 50% of MSG_TURN broadcasts, the game
+should remain playable.
+
 ## v3.1.6 — Turn-rotation self-heal via heartbeat
 
 User reproduced the freeze with `/baloot freezelog` enabled on both

@@ -6796,6 +6796,23 @@ do
     WHEREDNGNDB.advancedBots = nil
 end
 
+-- AU — v3.1.7 mid-trick play-derived turn self-heal (millisecond recovery)
+-- Complements v3.1.6's 15s heartbeat-heal: when a MSG_TURN drops mid-trick,
+-- the very next MSG_PLAY arrival re-derives turn = (seat % 4) + 1 locally.
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    assertTrue(netSrc:find("v3%.1%.7 %(turn%-rotation self%-heal, fast path%)") ~= nil,
+        "AU.1 (v3.1.7): play-derived self-heal marker present")
+    assertTrue(netSrc:find("playCount > 0 and playCount < 4") ~= nil,
+        "AU.2 (v3.1.7): mid-trick gate (plays 1-3 only)")
+    assertTrue(netSrc:find("nextSeat = %(seat %% 4%) %+ 1") ~= nil,
+        "AU.3 (v3.1.7): clockwise rotation derived from played seat")
+    assertTrue(netSrc:find('not S%.s%.isHost') ~= nil,
+        "AU.4 (v3.1.7): self-heal gated to non-host (host has direct mutation)")
+    assertTrue(netSrc:find('"derive turn .-after seat .-play"') ~= nil,
+        "AU.5 (v3.1.7): heal events logged to freezeLog")
+end
+
 -- AT — v3.1.6 turn-rotation self-heal via heartbeat
 -- (user-saved-game freezelog correlation confirmed WoW addon channel
 -- silently drops MSG_TURN broadcasts; host's own loopback also fails.

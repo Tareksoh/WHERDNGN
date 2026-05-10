@@ -2016,6 +2016,47 @@ function N._OnPlay(sender, seat, card, replayFlag)
     if not isReplay then
         N.CancelTurnTimer()
         if S.s.isHost then N._HostStepPlay() end
+        -- v3.1.7 (turn-rotation self-heal, fast path): derive next-turn
+        -- locally on non-host clients after each MSG_PLAY. Per the
+        -- v3.1.5/v3.1.6 freezelog correlation, WoW's addon channel can
+        -- silently drop MSG_TURN broadcasts (host's own loopback also
+        -- fails) leaving the receiver's turn pointer stale until the
+        -- 60s AFK auto-play timer fires. v3.1.6's heartbeat-heal caps
+        -- worst-case at 15s (heartbeat cadence). v3.1.7 adds millisecond-
+        -- speed mid-trick recovery: when a P arrives for plays 1-3 of
+        -- the current trick, derive next-turn = (seat % 4) + 1 locally.
+        -- Heals to the very next P arrival, which is typically 1-3s
+        -- in active play.
+        --
+        -- For play 4 (trick-end), turn goes to the winner, not next
+        -- clockwise — so we DON'T self-derive after play 4. The
+        -- subsequent MSG_TRICK + MSG_TURN sequence handles it; if those
+        -- drop, v3.1.6 heartbeat-heal still recovers within 15s.
+        --
+        -- Safety: only fires on non-host (host has direct state
+        -- mutation via _HostStepPlay; doesn't need this). Only fires
+        -- in PHASE_PLAY. No-op on match (turn already correct).
+        if not S.s.isHost and S.s.phase == K.PHASE_PLAY
+           and S.s.trick and S.s.trick.plays then
+            local playCount = #S.s.trick.plays
+            if playCount > 0 and playCount < 4 then
+                local nextSeat = (seat % 4) + 1
+                if S.s.turn ~= nextSeat then
+                    local prev = S.s.turn or 0
+                    S.s.turn = nextSeat
+                    S.s.turnKind = "play"
+                    log("Info",
+                        "play-derived self-heal: turn %d → %d (seat %d played)",
+                        prev, nextSeat, seat)
+                    if N._FreezeLog then
+                        N._FreezeLog("HEAL",
+                            ("derive turn %d → %d after seat %d play"):format(
+                                prev, nextSeat, seat))
+                    end
+                    if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                end
+            end
+        end
     end
 end
 
