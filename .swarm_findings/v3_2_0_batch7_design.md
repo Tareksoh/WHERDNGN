@@ -25,13 +25,13 @@ Pins relevant to the future `Bot/Bidding.lua` and/or `Bot/Escalation.lua` extrac
 
 | Pin | Line | Scans | Protects | Blocks | Convertibility |
 |---|---|---|---|---|---|
-| **W.1** | 3055-3070 | `aceCount == 2` / `sunAces == 2` / `K.BOT_SUN_2ACE_BONUS` inside PickBid (window 6 000 chars) | 2-Ace Sun bonus applied | Bidding | **LOW (RETIRE — W.2 covers)** |
+| **W.1** | 3055-3070 | `aceCount == 2` / `sunAces == 2` / `K.BOT_SUN_2ACE_BONUS` inside PickBid (window 6 000 chars) | 2-Ace Sun bonus applied | Bidding | **LOW (CONVERT — new AJ.14 zero-jitter boundary test)** |
 | **T.2b** | 2722 | `math.min(penalty, K.BOT_SUN_VOID_PENALTY_CAP)` in `sunStrength` | sunStrength uses K-cap constant | Bidding | MEDIUM (helper is local; behavioral needs massive-void fixture through PickBid) |
 | T.2c | 2724 | `math.min(penalty, 18)` ABSENT | old 18-cap removed | Bidding | KEEP (absence assertion) |
 | **T.3a** | 2743 | `hasTrumpA, hasTrumpNine` declaration in `hokmMinShape` | Lever C variable presence | Bidding | HIGH (purely structural variable name) — but T.4 behavioral already covers the J+8 mardoofa rejection |
 | **T.3b** | 2745 | `hasTrumpNine or hasTrumpA` gate in `hokmMinShape` | Lever C count==2 gate | Bidding | MEDIUM — T.4 covers behaviorally for rejection side; acceptance side (J+9 self-sufficient) is X.2 territory |
-| **X.1c** | 3169 | `K.BOT_OVERCALL_VOID_TRUMP_BONUS` reference in PickOvercall | overcall void bonus applied | Bidding | **LOW (CONVERT — new AJ.14 behavioral)** |
-| **X.1d** | 3171 | `trumpCount == 0` check in PickOvercall | void detection | Bidding | **LOW (CONVERT — same AJ.14 block)** |
+| **X.1c** | 3169 | `K.BOT_OVERCALL_VOID_TRUMP_BONUS` reference in PickOvercall | overcall void bonus applied | Bidding | **LOW (CONVERT — new AJ.15 behavioral, Hokm overcall window)** |
+| **X.1d** | 3171 | `trumpCount == 0` check in PickOvercall | void detection | Bidding | **LOW (CONVERT — same AJ.15 block)** |
 | X.1c-setup | 3166 | `assertTrue(fnStart ~= nil)` for PickOvercall | function exists | Bidding | dies with X.1c block |
 | **X.2** | 3189 | `count >= 3 and hasTrumpNine` in `hokmMinShape` | J+9+count≥3 self-sufficient mardoofa path | Bidding | MEDIUM (needs Hokm fixture without side Ace; X.4 already covers via Hokm-on-flipped behavioral) |
 | Y.2b | 3276 | Belote-escape ordering before J-floor | structural order | Bidding | KEEP (ordering) |
@@ -59,7 +59,7 @@ Pins relevant to the future `Bot/Bidding.lua` and/or `Bot/Escalation.lua` extrac
 | AD.3 | 3718 | `"DEAD-2"` comment in PickGahwa (duplicate of AB.2) | rationale | Escalation | KEEP (comment-only duplicate) |
 | AD.7a | 3783 | `local function eltrace` in PickDouble | diagnostic helper | Escalation | KEEP (debug-mode) |
 | AD.7b | 3785 | `"PickDouble eval: strength="` log format | diagnostic format | Escalation | KEEP (debug-mode) |
-| **AH.3** | 5054-5065 | `th < K.BOT_TRIPLE_TH - 16 then th = K.BOT_TRIPLE_TH - 16` in PickTriple | floor cap | Escalation | **LOW (RETIRE — AK.7 covers)** |
+| **AH.3** | 5054-5065 | `th < K.BOT_TRIPLE_TH - 16 then th = K.BOT_TRIPLE_TH - 16` in PickTriple | floor cap | Escalation | **MEDIUM (KEEP source-only — see §5; AK.7 is general weak-hand coverage, does not tightly prove the cap is load-bearing)** |
 | **AI.2a** | 5122 | `if contract.foured or contract.tripled then` in pickFollow smother gate | tiered smother gate strict tier | Escalation | HIGH (deep pickFollow fixture; defer to extraction commit) |
 | **AI.2b** | 5124 | `elseif contract.doubled then` smother gate medium tier | tiered smother gate medium tier | Escalation | HIGH (same) |
 
