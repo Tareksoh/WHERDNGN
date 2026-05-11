@@ -82,6 +82,7 @@ load("Constants.lua")
 load("Cards.lua")
 load("Rules.lua")
 load("State.lua")
+load("Bot/Tiers.lua")
 load("Bot.lua")
 load("BotMaster.lua")
 

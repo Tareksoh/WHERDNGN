@@ -81,6 +81,7 @@ loadFile("Constants.lua")
 loadFile("Cards.lua")
 loadFile("Rules.lua")
 loadFile("State.lua")
+loadFile("Bot/Tiers.lua")
 loadFile("Bot.lua")
 
 local K   = WHEREDNGN.K

@@ -81,6 +81,7 @@ loadAddon("Constants.lua")
 loadAddon("Cards.lua")
 loadAddon("Rules.lua")
 loadAddon("State.lua")
+loadAddon("Bot/Tiers.lua")
 loadAddon("Bot.lua")
 loadAddon("BotMaster.lua")
 

@@ -83,6 +83,13 @@ loadFile("Constants.lua")
 loadFile("Cards.lua")
 loadFile("Rules.lua")
 loadFile("State.lua")
+-- v3.2.0 cleanup batch 5B: tier predicates live in Bot/Tiers.lua now
+-- and must populate B.Bot before the patched Bot.lua chunk compiles
+-- (Bot.lua call sites resolve `Bot.IsAdvanced()` through the shared
+-- table at runtime). The H7 anchor on `\nlocal function highestByRank`
+-- is preserved by this batch — the PlayPrimitives extraction that
+-- would invalidate it is deferred to Batch 5C.
+loadFile("Bot/Tiers.lua")
 
 local K = WHEREDNGN.K
 local C = WHEREDNGN.Cards

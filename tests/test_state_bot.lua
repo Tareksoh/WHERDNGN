@@ -101,6 +101,7 @@ load("Constants.lua")
 load("Cards.lua")
 load("Rules.lua")
 load("State.lua")
+load("Bot/Tiers.lua")
 load("Bot.lua")
 
 local K   = WHEREDNGN.K
@@ -5341,6 +5342,34 @@ do
     assertTrue(uiPos    ~= nil, "AJ.9c-ui:     WHEREDNGN.toc lists UI.lua")
     assertTrue(themePos and uiPos and themePos < uiPos,
                "AJ.9c-order:  UI/Themes.lua loads BEFORE UI.lua")
+end
+
+-- AJ.9d (v3.2.0 cleanup batch 5B): Bot/Tiers.lua presence + .toc load
+-- order. The tier predicates (Bot.IsAdvanced / IsM3lm / IsFzloky /
+-- IsSaudiMaster / IsBotSeat) moved out of Bot.lua and now ship in
+-- Bot/Tiers.lua. The .toc must load Bot/Tiers.lua after State.lua and
+-- before Bot.lua so the predicates exist on B.Bot when Bot.lua's
+-- chunk runs and its picker call sites close over them.
+do
+    local tierSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Tiers.lua"):read("*a")
+    assertTrue(tierSrc:find("function Bot%.IsAdvanced") ~= nil,
+               "AJ.9d-adv:  Bot/Tiers.lua defines Bot.IsAdvanced")
+    assertTrue(tierSrc:find("function Bot%.IsM3lm") ~= nil,
+               "AJ.9d-m3lm: Bot/Tiers.lua defines Bot.IsM3lm")
+    assertTrue(tierSrc:find("function Bot%.IsFzloky") ~= nil,
+               "AJ.9d-fzl:  Bot/Tiers.lua defines Bot.IsFzloky")
+    assertTrue(tierSrc:find("function Bot%.IsSaudiMaster") ~= nil,
+               "AJ.9d-sm:   Bot/Tiers.lua defines Bot.IsSaudiMaster")
+    assertTrue(tierSrc:find("function Bot%.IsBotSeat") ~= nil,
+               "AJ.9d-bot:  Bot/Tiers.lua defines Bot.IsBotSeat")
+
+    local tocSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/WHEREDNGN.toc"):read("*a")
+    local tierPos = tocSrc:find("Bot/Tiers%.lua")
+    local botPos  = tocSrc:find("\nBot%.lua")
+    assertTrue(tierPos ~= nil, "AJ.9d-toc-tiers: WHEREDNGN.toc lists Bot/Tiers.lua")
+    assertTrue(botPos  ~= nil, "AJ.9d-toc-bot:   WHEREDNGN.toc lists Bot.lua")
+    assertTrue(tierPos and botPos and tierPos < botPos,
+               "AJ.9d-toc-order: Bot/Tiers.lua loads BEFORE Bot.lua")
 end
 
 print("=== Section AK: v1.0.7 test-debt closure (behavioral conversions) ===")
