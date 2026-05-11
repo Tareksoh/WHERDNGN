@@ -1031,10 +1031,12 @@ end
 -- withBidcard, sunStrength, partnerBidBonus, scoreUrgency,
 -- opponentUrgency, Bot.OpponentUrgency (public), matchPointUrgency,
 -- combinedUrgency, partnerEscalatedBonus, and Bot.PickBid moved to
--- Bot/Bidding.lua in v3.2.0 cleanup batch 8. The 5-locals re-binding
--- header near the top of this file imports the helpers consumed by
--- escalation deciders (sunStrength / partnerBidBonus /
--- partnerEscalatedBonus / combinedUrgency / opponentUrgency).
+-- Bot/Bidding.lua in v3.2.0 cleanup batch 8 (along with
+-- suitStrengthAsTrump from earlier in this file). The 6-locals
+-- re-binding header near the top of this file imports the helpers
+-- consumed by escalation deciders (suitStrengthAsTrump / sunStrength /
+-- partnerBidBonus / partnerEscalatedBonus / combinedUrgency /
+-- opponentUrgency).
 
 
 -- ---------------------------------------------------------------------

@@ -9,15 +9,15 @@
 --   * Bot.OpponentUrgency (public — read by BotMaster.lua)
 --   * Bot._beloteBypassQualifies (test-internal export at test_state_bot.lua:6230)
 --
--- All 14 bidding helpers (sideSuitAceBonus, hokmMinShape, sunMinShape,
--- beloteSuit, beloteBypassQualifies, aceCountAndMardoofa, withBidcard,
--- sunStrength, partnerBidBonus, scoreUrgency, opponentUrgency,
--- matchPointUrgency, combinedUrgency, partnerEscalatedBonus) are
--- declared `local function` inside this file. Five of them
--- (sunStrength, partnerBidBonus, partnerEscalatedBonus,
--- combinedUrgency, opponentUrgency) are also re-exported via the
--- `Bot.Bidding.*` sub-table so Bot.lua's escalation deciders can
--- re-bind them as file-locals.
+-- All 15 bidding helpers (suitStrengthAsTrump, sideSuitAceBonus,
+-- hokmMinShape, sunMinShape, beloteSuit, beloteBypassQualifies,
+-- aceCountAndMardoofa, withBidcard, sunStrength, partnerBidBonus,
+-- scoreUrgency, opponentUrgency, matchPointUrgency, combinedUrgency,
+-- partnerEscalatedBonus) are declared `local function` inside this
+-- file. Six of them (suitStrengthAsTrump, sunStrength, partnerBidBonus,
+-- partnerEscalatedBonus, combinedUrgency, opponentUrgency) are also
+-- re-exported via the `Bot.Bidding.*` sub-table so Bot.lua's escalation
+-- deciders can re-bind them as file-locals.
 --
 -- `bidderHoldsBidcard` STAYS in Bot.lua (its only caller is pickLead/
 -- pickFollow's trump-J inference). The bidding cluster is therefore

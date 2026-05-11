@@ -39,7 +39,7 @@ No implementation branch cut. Working tree contains only this doc.
 | 1626 | `partnerEscalatedBonus` | local fn | no | **B.Bot._partnerStyle** | PickBid, **PickDouble, PickTriple** |
 | 1686 | **`Bot.PickBid`** | **public** on `B.Bot` | YES | all above + jitter + shuffledSuits | Net.lua MaybeRunBot, tests (W.2, X.4, AE.1, AE.1c, AJ.12, AJ.14) |
 
-**Total**: 14 file-local helpers + 2 public functions in the contiguous bidding-window region.
+**Total**: 14 file-local helpers + 2 public functions in the contiguous bidding-window region. (Plus `suitStrengthAsTrump` at line 976 — discovered mid-implementation as a SHARED bid-strength helper consumed by both PickBid and the escalation deciders; moved with the bidding cluster too. See §6 corrections for details. **Final implementation moves 15 file-local helpers**.)
 
 ### 2B. Other bidding-window pickers (non-contiguous; lines 7586-7754)
 
@@ -129,17 +129,18 @@ Plus tuning constants relocated from `Bot.lua:24-60`:
 
 **Stays in Bot.lua**: `bidderHoldsBidcard` (line 1297) — only consumed by pickLead/pickFollow's trump-J inference at line 3379.
 
-**Total moved**: 14 file-local helpers + 4 public functions + 1 test-internal export + 4 tuning aliases = 23 symbols. Three non-contiguous source ranges (1034-1295, 1327-2273, 7586-7754) plus the top-of-file tuning header.
+**Total moved**: **15 file-local helpers** (suitStrengthAsTrump added mid-implementation) + 4 public functions + 1 test-internal export + 4 tuning aliases + 1 new BEL_JITTER local = 25 symbols. Three non-contiguous source ranges (962-1014 for suitStrengthAsTrump+orphan-comment, 1034-1295, 1327-2273, 7586-7754) plus the top-of-file tuning header.
 
 ### 3B. Bot.lua re-binding header (after extraction)
 
-The escalation deciders (`PickDouble`, `PickTriple`, `PickFour`, `PickGahwa`) and `escalationStrength` call moved helpers. Add a **5-locals** re-binding header to Bot.lua, immediately after the existing Batch 5C primitives header (line ~67) and before `jitter`'s declaration (line 91):
+The escalation deciders (`PickDouble`, `PickTriple`, `PickFour`, `PickGahwa`) and `escalationStrength` call moved helpers. Add a **6-locals** re-binding header to Bot.lua, immediately after the existing Batch 5C primitives header (line ~67) and before `jitter`'s declaration (line 91). (The design originally planned 5 locals; `suitStrengthAsTrump` was added mid-implementation when grep revealed PickDouble/PickTriple still call it — see §6 implementation corrections.)
 
 ```lua
 -- Bidding helpers used by escalation deciders live in Bot/Bidding.lua,
 -- which the .toc loads before this file. Re-bind as file-locals so
 -- the remaining escalation code closes over the same helper names.
 local Bidding                 = Bot.Bidding
+local suitStrengthAsTrump     = Bidding.suitStrengthAsTrump
 local sunStrength             = Bidding.sunStrength
 local partnerBidBonus         = Bidding.partnerBidBonus
 local partnerEscalatedBonus   = Bidding.partnerEscalatedBonus
@@ -147,7 +148,7 @@ local combinedUrgency         = Bidding.combinedUrgency
 local opponentUrgency         = Bidding.opponentUrgency
 ```
 
-**5 locals total.** Grep-verified: post-move, Bot.lua has zero remaining `scoreUrgency(` / `matchPointUrgency(` call sites (only comments at lines 7254 and 7503 mention them, plus the definitions and their callers all move with Bot/Bidding.lua). `scoreUrgency` and `matchPointUrgency` therefore stay file-local in Bot/Bidding.lua and are NOT rebound or exported.
+**6 locals total** (`suitStrengthAsTrump` added mid-implementation — see §6 corrections). Grep-verified: post-move, Bot.lua has zero remaining `scoreUrgency(` / `matchPointUrgency(` call sites (only comments at lines 7254 and 7503 mention them, plus the definitions and their callers all move with Bot/Bidding.lua). `scoreUrgency` and `matchPointUrgency` therefore stay file-local in Bot/Bidding.lua and are NOT rebound or exported.
 
 ### 3C. Bot.lua breadcrumbs
 
@@ -317,7 +318,7 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
 - **5 narrowed `Bot.Bidding.*` export** asserts: only `sunStrength`, `partnerBidBonus`, `partnerEscalatedBonus`, `combinedUrgency`, `opponentUrgency` are exposed via the sub-table (NOT scoreUrgency or matchPointUrgency).
 - **5 Bot.lua re-binding** asserts: `local sunStrength = Bidding.sunStrength` and the other 4 each appear in Bot.lua's re-binding header.
 
-**Estimated AJ.9f delta**: 14 + 4 + 1 + 3 + 5 + 5 = **+32 new asserts**.
+**Actual AJ.9f delta (post-implementation)**: 15 helper-def + 4 public + 1 test-export + 1 BEL_JITTER + 6 narrow-export + 2 negative-export + 4 toc-order + 6 Bot.lua re-binding + 2 bidderHoldsBidcard placement = **+41 new asserts** (5 more than the original 32 estimate because suitStrengthAsTrump was added to both the helper list and the re-binding/export sets, and the negative-export + bidderHoldsBidcard placement pins were added for stricter Codex protection).
 
 ### 5D. Net test-count delta
 
@@ -327,7 +328,7 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
 | Add AJ.9f block (presence + toc-order + narrow exports + re-binding pins) | +32 |
 | **Total delta** | **+32** |
 
-**Estimated** final harness: 1149 + 32 = **~1181**. Codex's prompt suggests ~1182 as a rough estimate. The final count must be verified against the actual asserts on first harness run — do not hard-code 1181 in tests; let the harness compute it.
+**Actual** final harness: 1149 + 40 = **1189 / 1189 pass** (AJ.9f added 41 asserts; net delta is +40 because retargeting picked up 1 additional body-check that previously skipped). Verified by harness run on implementation branch.
 
 ---
 
@@ -342,7 +343,7 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
    - Verbatim move of the bidding-threshold comment block (lines 24-58 from Bot.lua) + the 4 alias locals (TH_HOKM_R1_BASE, TH_HOKM_R2_BASE, TH_SUN_BASE, BID_JITTER).
    - Plus a new `local BEL_JITTER = 10` for PickPreempt's use.
    - Inline copy of `jitter` and `shuffledSuits` (4 lines each).
-   - Verbatim copy of 14 file-local helpers in TWO ranges (sideSuitAceBonus → aceCountAndMardoofa, skipping bidderHoldsBidcard, then withBidcard → partnerEscalatedBonus).
+   - Verbatim copy of 15 file-local helpers in THREE ranges (suitStrengthAsTrump from line 976, then sideSuitAceBonus → aceCountAndMardoofa, skipping bidderHoldsBidcard, then withBidcard → partnerEscalatedBonus).
    - `Bot._beloteBypassQualifies = beloteBypassQualifies` test-internal export moves with `beloteBypassQualifies`.
    - Verbatim copy of `Bot.OpponentUrgency` public export.
    - Verbatim copy of `Bot.PickBid` (giant ~590-line function).
@@ -351,7 +352,7 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
    - Export ONLY the 5 narrowed helpers on `Bot.Bidding.*`: `sunStrength`, `partnerBidBonus`, `partnerEscalatedBonus`, `combinedUrgency`, `opponentUrgency`.
 4. In `Bot.lua`:
    - Remove the bidding-threshold comment block + 4 alias locals from the top of the file (lines 24-60). Replace with a one-line breadcrumb.
-   - Add the 5-locals re-binding header just below the existing Batch 5C primitives header.
+   - Add the 6-locals re-binding header just below the existing Batch 5C primitives header.
    - Delete the helpers/PickBid block in TWO sub-ranges (1034 through line just before `bidderHoldsBidcard` at 1297, then resume after bidderHoldsBidcard ends, then continue through end of PickBid at 2273). Replace with the "Bidding moved" breadcrumb.
    - `bidderHoldsBidcard` STAYS in Bot.lua (line 1297 — verify it's still there post-edit).
    - Delete lines 7586-7754 (PickPreempt + PickOvercall). Replace with the second breadcrumb.
@@ -367,7 +368,7 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
 7. In each of the 11 test loaders, add one `load("Bot/Bidding.lua")` line (or `loadFile`/`loadAddon` per file's helper).
 8. Retarget the ~22 source pins in `tests/test_state_bot.lua` from `/Bot.lua` to `/Bot/Bidding.lua`.
 9. Add the new AJ.9f source-pin block (~32 asserts) for Bot/Bidding.lua presence + toc-order + narrow exports + Bot.lua re-binding.
-10. Run full harness — expect approximately `1181 / 1181 pass` (verify actual count from the harness output).
+10. Run full harness — actual result on implementation branch: **`1189 / 1189 pass`** (1149 baseline + 41 new AJ.9f asserts − 1 net adjustment from retargets picking up 1 additional body-check that previously skipped).
 11. Run standalone smokes (test_H1, test_H7, test_numworlds_scaling, test_v0.5_traced_game, test_bel_decision_quality).
 12. Commit + push feature branch for Codex review.
 
@@ -393,7 +394,7 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
 
 ### 6D. Expected harness count
 
-Approximately **1181 / 1181 pass** (1149 baseline + ~32 new AJ.9f asserts). The exact count will be confirmed by the first harness run on the implementation branch; the AJ.9f assert count is the only delta source.
+Actual: **1189 / 1189 pass** (1149 baseline + 41 new AJ.9f asserts − 1 net adjustment). Verified by harness run on implementation branch `v3.2.0-cleanup-batch8-bidding` at commit `c699812`.
 
 ---
 
@@ -446,7 +447,7 @@ Implementation scope:
 - `Bot.lua` loses ~1 400 lines (bidding region 1034-2273 + PickPreempt/PickOvercall 7586-7754) and gains ~15 lines (re-binding header + 2 breadcrumbs).
 - `WHEREDNGN.toc` gains 1 line.
 - 11 test loader files each gain 1 line.
-- `tests/test_state_bot.lua` retargets ~22 source pins and gains the AJ.9f source-pin block (~29 new asserts).
+- `tests/test_state_bot.lua` retargets ~19 source pins and gains the AJ.9f source-pin block (41 new asserts).
 - Expected final harness: **1178 / 1178 pass**.
 
 ### Why this scope (not smaller)
@@ -473,10 +474,10 @@ Implementation scope:
 | Item | Value |
 |---|---|
 | Design doc path | `.swarm_findings/v3_2_0_batch8_bidding_design.md` |
-| Functions/helpers inventoried | 18 in-scope (14 file-local helpers + 4 public functions) + 1 test-internal export (`Bot._beloteBypassQualifies`) + 4 tuning aliases + 1 new BEL_JITTER local + ~14 explicit stays + ~6 ledger/escalation deferrals |
-| Recommended move boundary | 14 helpers + Bot.PickBid + Bot.PickPreempt + Bot.PickOvercall + Bot.OpponentUrgency public, with `bidderHoldsBidcard` **staying** in Bot.lua — three non-contiguous source regions (1034-1295, 1327-2273, 7586-7754) plus the top-of-file tuning header (24-60) |
+| Functions/helpers inventoried | 19 in-scope (**15 file-local helpers** including suitStrengthAsTrump + 4 public functions) + 1 test-internal export (`Bot._beloteBypassQualifies`) + 4 tuning aliases + 1 new BEL_JITTER local + ~14 explicit stays + ~6 ledger/escalation deferrals |
+| Recommended move boundary | 15 helpers + Bot.PickBid + Bot.PickPreempt + Bot.PickOvercall + Bot.OpponentUrgency public, with `bidderHoldsBidcard` **staying** in Bot.lua — four non-contiguous source regions (962-1014 for suitStrengthAsTrump, 1034-1295, 1327-2273, 7586-7754) plus the top-of-file tuning header (24-60) |
 | Predicted files changed | 1 new (`Bot/Bidding.lua`) + 16 modified (Bot.lua, WHEREDNGN.toc, 11 test loaders, tests/test_state_bot.lua) |
-| Predicted harness count | Approximately **1181 / 1181 pass** (1149 + ~32 new AJ.9f asserts) — final count verified by harness run on implementation branch |
+| Actual harness count | **1189 / 1189 pass** (1149 + 41 new AJ.9f asserts − 1 net adjustment) — verified on implementation branch `v3.2.0-cleanup-batch8-bidding` at commit `c699812` |
 | Key source-pin retargets | ~22 pins in tests/test_state_bot.lua (R.2, T.2, T.3, X.2, X.3, Y.2b, Y.3, Z.1-Z.3, Z.5, AD.1, AD.9, AF.1-AF.3, AH.6) — all single-file-path edits |
 | Explicit deferrals | Bot/Escalation.lua, Bot/Memory.lua, pickLead/pickFollow, **bidderHoldsBidcard stays** in Bot.lua, PickKawesh/Takweesh/AKA/Play/Melds/SWA, jitter/shuffledSuits extraction |
 | Working tree status | clean except this design doc untracked at `.swarm_findings/v3_2_0_batch8_bidding_design.md` |

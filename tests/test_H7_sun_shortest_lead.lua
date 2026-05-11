@@ -98,11 +98,11 @@ loadFile("Bot/Tiers.lua")
 -- those Bot.lua-scoped locals.
 loadFile("Bot/PlayPrimitives.lua")
 -- v3.2.0 cleanup batch 8: the bidding-window deciders (Bot.PickBid /
--- Bot.PickPreempt / Bot.PickOvercall) and 14 file-local helpers (incl.
--- sunStrength / partnerBidBonus / partnerEscalatedBonus / combinedUrgency
--- / opponentUrgency) live in Bot/Bidding.lua. Bot.lua's 5-locals
--- re-binding header at the top of its chunk imports the helpers
--- consumed by escalation deciders.
+-- Bot.PickPreempt / Bot.PickOvercall) and 15 file-local helpers (incl.
+-- suitStrengthAsTrump / sunStrength / partnerBidBonus /
+-- partnerEscalatedBonus / combinedUrgency / opponentUrgency) live in
+-- Bot/Bidding.lua. Bot.lua's 6-locals re-binding header at the top of
+-- its chunk imports the helpers consumed by escalation deciders.
 loadFile("Bot/Bidding.lua")
 
 local K = WHEREDNGN.K
