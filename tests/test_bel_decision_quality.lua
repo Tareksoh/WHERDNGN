@@ -291,8 +291,18 @@ local function pickDoubleAtTH(hands, contract, defSeat, th)
     K.BOT_BEL_TH = th
 
     -- Freeze jitter: math.random(-10,10) must return 0.
+    --
+    -- The shim must handle all three math.random signatures because
+    -- Bot.lua's pickers call:
+    --   math.random()       (no args)   — Fisher-Yates / probability
+    --   math.random(n)      (1 arg)     — shuffledSuits, pickRandomTied
+    --   math.random(a, b)   (2 args)    — jitter(base, amp) in PickDouble
+    -- Passing nil through to origRandom errors under Lupa, so dispatch
+    -- on arg presence before forwarding.
     math.random = function(a, b)
         if a == -10 and b == 10 then return 0 end
+        if a == nil then return origRandom() end
+        if b == nil then return origRandom(a) end
         return origRandom(a, b)
     end
 

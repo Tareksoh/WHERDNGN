@@ -8,59 +8,59 @@
   "results": {
     "60": {
       "raw": {
-        "false_bel": 95,
-        "correct_pass": 646,
-        "fired": 171,
-        "missed_bel": 183,
-        "correct_bel": 76
+        "correct_bel": 60,
+        "false_bel": 116,
+        "fired": 176,
+        "correct_pass": 679,
+        "missed_bel": 145
       },
-      "fire_rate": 0.171,
+      "recall": 0.2926829268292683,
+      "false_bel_rate": 0.6590909090909091,
+      "correct_bel_rate": 0.3409090909090909,
+      "fire_rate": 0.176,
       "threshold": 60,
-      "n_hands": 1000,
-      "false_bel_rate": 0.5555555555555556,
-      "missed_bel_rate": 0.22074788902291917,
-      "precision": 0.4444444444444444,
-      "recall": 0.29343629343629346,
-      "correct_bel_rate": 0.4444444444444444
+      "missed_bel_rate": 0.17597087378640777,
+      "precision": 0.3409090909090909,
+      "n_hands": 1000
     },
     "70": {
       "raw": {
-        "false_bel": 33,
-        "correct_pass": 708,
-        "fired": 69,
-        "missed_bel": 223,
-        "correct_bel": 36
+        "correct_bel": 31,
+        "false_bel": 41,
+        "fired": 72,
+        "correct_pass": 754,
+        "missed_bel": 174
       },
-      "fire_rate": 0.069,
+      "recall": 0.15121951219512195,
+      "false_bel_rate": 0.5694444444444444,
+      "correct_bel_rate": 0.4305555555555556,
+      "fire_rate": 0.072,
       "threshold": 70,
-      "n_hands": 1000,
-      "false_bel_rate": 0.4782608695652174,
-      "missed_bel_rate": 0.23952738990332975,
-      "precision": 0.5217391304347826,
-      "recall": 0.138996138996139,
-      "correct_bel_rate": 0.5217391304347826
+      "missed_bel_rate": 0.1875,
+      "precision": 0.4305555555555556,
+      "n_hands": 1000
     },
     "80": {
       "raw": {
-        "false_bel": 6,
-        "correct_pass": 735,
-        "fired": 17,
-        "missed_bel": 248,
-        "correct_bel": 11
+        "correct_bel": 11,
+        "false_bel": 8,
+        "fired": 19,
+        "correct_pass": 787,
+        "missed_bel": 194
       },
-      "fire_rate": 0.017,
+      "recall": 0.05365853658536585,
+      "false_bel_rate": 0.42105263157894735,
+      "correct_bel_rate": 0.5789473684210527,
+      "fire_rate": 0.019,
       "threshold": 80,
-      "n_hands": 1000,
-      "false_bel_rate": 0.35294117647058826,
-      "missed_bel_rate": 0.25228891149542215,
-      "precision": 0.6470588235294118,
-      "recall": 0.04247104247104247,
-      "correct_bel_rate": 0.6470588235294118
+      "missed_bel_rate": 0.19775739041794088,
+      "precision": 0.5789473684210527,
+      "n_hands": 1000
     }
   },
   "recommendation": {
     "optimal_threshold": "60",
-    "best_f1": 0.3535,
-    "rationale": "Threshold 60 maximises F1=0.353 (harmonic mean of precision and recall)."
+    "best_f1": 0.315,
+    "rationale": "Threshold 60 maximises F1=0.315 (harmonic mean of precision and recall)."
   }
 }
