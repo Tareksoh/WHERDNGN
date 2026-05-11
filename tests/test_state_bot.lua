@@ -102,6 +102,7 @@ load("Cards.lua")
 load("Rules.lua")
 load("State.lua")
 load("Bot/Tiers.lua")
+load("Bot/PlayPrimitives.lua")
 load("Bot.lua")
 
 local K   = WHEREDNGN.K
@@ -5372,6 +5373,54 @@ do
                "AJ.9d-toc-order: Bot/Tiers.lua loads BEFORE Bot.lua")
 end
 
+-- AJ.9e (v3.2.0 cleanup batch 5C): Bot/PlayPrimitives.lua presence,
+-- exports, and .toc load order. The ten play-primitive helpers
+-- (pickRandomTied / lowestByRank / highestByRank / highestByFaceValue /
+-- holdsBeloteThusFar / highestTrump / legalPlaysFor / wouldWin /
+-- tahreebClassify / applyClosedTrumpLeadGate) moved out of Bot.lua
+-- and now ship in Bot/PlayPrimitives.lua, exported via the
+-- B.Bot.Primitives sub-table. Bot.lua re-binds each as a file-local
+-- at the top of its chunk so existing call sites resolve unchanged.
+do
+    local primSrc = io.open(WHEREDNGN_TESTS_ROOT
+                            .. "/Bot/PlayPrimitives.lua"):read("*a")
+    -- Local-function definitions must exist in the moved file.
+    local primNames = {
+        "pickRandomTied", "lowestByRank", "highestByRank",
+        "highestByFaceValue", "holdsBeloteThusFar", "highestTrump",
+        "legalPlaysFor", "wouldWin", "tahreebClassify",
+        "applyClosedTrumpLeadGate",
+    }
+    for _, name in ipairs(primNames) do
+        assertTrue(
+            primSrc:find("local function " .. name .. "%(") ~= nil,
+            ("AJ.9e-def-%s: Bot/PlayPrimitives.lua defines local function %s"):format(name, name))
+        assertTrue(
+            primSrc:find("Primitives%." .. name .. "%s*=") ~= nil,
+            ("AJ.9e-exp-%s: Bot/PlayPrimitives.lua exports Primitives.%s"):format(name, name))
+    end
+
+    -- .toc must list Bot/PlayPrimitives.lua after Bot/Tiers.lua and
+    -- before Bot.lua.
+    local tocSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/WHEREDNGN.toc"):read("*a")
+    local tierPos = tocSrc:find("Bot/Tiers%.lua")
+    local primPos = tocSrc:find("Bot/PlayPrimitives%.lua")
+    local botPos  = tocSrc:find("\nBot%.lua")
+    assertTrue(primPos ~= nil, "AJ.9e-toc-prim:  WHEREDNGN.toc lists Bot/PlayPrimitives.lua")
+    assertTrue(tierPos and primPos and tierPos < primPos,
+               "AJ.9e-toc-order-a: Bot/Tiers.lua loads BEFORE Bot/PlayPrimitives.lua")
+    assertTrue(primPos and botPos and primPos < botPos,
+               "AJ.9e-toc-order-b: Bot/PlayPrimitives.lua loads BEFORE Bot.lua")
+
+    -- Bot.lua re-binding header must bind each name as a file-local.
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    for _, name in ipairs(primNames) do
+        assertTrue(
+            botSrc:find("local " .. name .. "%s*=%s*Primitives%." .. name) ~= nil,
+            ("AJ.9e-bind-%s: Bot.lua binds %s = Primitives.%s"):format(name, name, name))
+    end
+end
+
 print("=== Section AK: v1.0.7 test-debt closure (behavioral conversions) ===")
 
 -- AK.1 (agent #2 multiplier tiered gate, BEHAVIORAL).
@@ -6398,11 +6447,18 @@ end
 section("AN. v3.0.3 audit doc-vs-code differential fixes")
 
 -- AN.1 GAP-01: Tahreeb single-low → "want_hint"
+-- v3.2.0 cleanup batch 5C: tahreebClassify moved to
+-- Bot/PlayPrimitives.lua. The classifier-side strings (GAP-01 marker,
+-- `return "want_hint"`) now live there; scan that file for AN.1a/b.
+-- The receiver-side `cls == "want_hint"` consumer stays in Bot.lua
+-- (inside pickLead/pickFollow); keep AN.1c on Bot.lua.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("v3%.0%.3 GAP%-01") ~= nil,
-        "AN.1a (GAP-01): Bot.lua contains v3.0.3 GAP-01 marker")
-    assertTrue(botSrc:find('return "want_hint"') ~= nil,
+    local primSrc = io.open(WHEREDNGN_TESTS_ROOT
+                            .. "/Bot/PlayPrimitives.lua"):read("*a")
+    local botSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(primSrc:find("v3%.0%.3 GAP%-01") ~= nil,
+        "AN.1a (GAP-01): Bot/PlayPrimitives.lua contains v3.0.3 GAP-01 marker")
+    assertTrue(primSrc:find('return "want_hint"') ~= nil,
         "AN.1b (GAP-01): tahreebClassify returns 'want_hint' for single-low")
     assertTrue(botSrc:find('cls == "want_hint"') ~= nil,
         "AN.1c (GAP-01): receiver score table includes want_hint weight")
@@ -6500,13 +6556,22 @@ end
 -- not "want"). The classifier requires lenAtFirstDiscard >= 3 to
 -- promote a single-low to "want_hint"; absent or <3 falls back to
 -- "hint" (ambiguous, weight 0).
+--
+-- v3.2.0 cleanup batch 5C: tahreebClassify moved to
+-- Bot/PlayPrimitives.lua. Scan that file for the classifier-side
+-- strings (sender-intent header, classifier `lenAtFirstDiscard` read,
+-- `if lenAtFirst >= 3 then` gate). The recorder-side write of
+-- `lenAtFirstDiscard` stays in Bot.lua's memory-update code, so
+-- relying on Bot.lua would create false-positive pins for the
+-- classifier code.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("v3%.0%.6 SENDER%-INTENT alignment") ~= nil,
+    local primSrc = io.open(WHEREDNGN_TESTS_ROOT
+                            .. "/Bot/PlayPrimitives.lua"):read("*a")
+    assertTrue(primSrc:find("v3%.0%.6 SENDER%-INTENT alignment") ~= nil,
         "AN.8a (v3.0.6): tahreebClassify documents sender-intent gate")
-    assertTrue(botSrc:find("lenAtFirstDiscard") ~= nil,
-        "AN.8b (v3.0.6): lenAtFirstDiscard tracker exists")
-    assertTrue(botSrc:find("if lenAtFirst >= 3 then") ~= nil,
+    assertTrue(primSrc:find("lenAtFirstDiscard") ~= nil,
+        "AN.8b (v3.0.6): lenAtFirstDiscard tracker exists in classifier")
+    assertTrue(primSrc:find("if lenAtFirst >= 3 then") ~= nil,
         "AN.8c (v3.0.6): want_hint gated on suit-size >= 3")
 end
 

@@ -83,13 +83,20 @@ loadFile("Constants.lua")
 loadFile("Cards.lua")
 loadFile("Rules.lua")
 loadFile("State.lua")
--- v3.2.0 cleanup batch 5B: tier predicates live in Bot/Tiers.lua now
--- and must populate B.Bot before the patched Bot.lua chunk compiles
+-- v3.2.0 cleanup batch 5B: tier predicates live in Bot/Tiers.lua and
+-- must populate B.Bot before the patched Bot.lua chunk compiles
 -- (Bot.lua call sites resolve `Bot.IsAdvanced()` through the shared
--- table at runtime). The H7 anchor on `\nlocal function highestByRank`
--- is preserved by this batch — the PlayPrimitives extraction that
--- would invalidate it is deferred to Batch 5C.
+-- table at runtime).
 loadFile("Bot/Tiers.lua")
+-- v3.2.0 cleanup batch 5C: the play-primitive helpers (pickRandomTied
+-- / lowestByRank / highestByRank / highestByFaceValue /
+-- holdsBeloteThusFar / highestTrump / legalPlaysFor / wouldWin /
+-- tahreebClassify / applyClosedTrumpLeadGate) live in
+-- Bot/PlayPrimitives.lua. Bot.lua re-binds them as file-locals at
+-- the top of its chunk, so the patched code injected below (which
+-- calls `lowestByRank` inside pickLead's body) resolves through
+-- those Bot.lua-scoped locals.
+loadFile("Bot/PlayPrimitives.lua")
 
 local K = WHEREDNGN.K
 local C = WHEREDNGN.Cards
@@ -114,8 +121,16 @@ local src = fh:read("*a")
 fh:close()
 
 -- ---- Hunk 1: cardsOfSuit helper ----------------------------------------
--- Anchor: the blank line immediately before `local function highestByRank`
-local ANCHOR_HELPER = "\nlocal function highestByRank"
+-- Anchor: the blank line immediately before `local function pickLead`.
+-- (v3.2.0 cleanup batch 5C: `highestByRank` moved to
+-- Bot/PlayPrimitives.lua, so the previous anchor on
+-- "\nlocal function highestByRank" no longer matches Bot.lua source.
+-- `pickLead` is the next stable file-scope symbol and is deferred
+-- indefinitely from extraction, so it's a stable anchor across
+-- foreseeable batches. Injecting cardsOfSuit immediately before
+-- pickLead places it at the same file-scope position as before, in
+-- the same chunk closure as Bot.lua's re-bound `lowestByRank` local.)
+local ANCHOR_HELPER = "\nlocal function pickLead"
 
 local HELPER_BLOCK = [[
 
