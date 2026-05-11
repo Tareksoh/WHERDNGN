@@ -2394,17 +2394,6 @@ local function holdsBeloteThusFar(hand, contract)
     return hasK and hasQ
 end
 
-local function highestNonTrump(cards, contract)
-    local best, bestR = nil, -1
-    for _, c in ipairs(cards) do
-        if not C.IsTrump(c, contract) then
-            local r = C.TrickRank(c, contract)
-            if r > bestR then best, bestR = c, r end
-        end
-    end
-    return best
-end
-
 local function highestTrump(cards, contract)
     local best, bestR = nil, -1
     for _, c in ipairs(cards) do
@@ -7734,18 +7723,6 @@ local function escalationStrength(seat, hand, contract)
     strength = strength + partnerBidBonus(seat, contract)
                        + partnerEscalatedBonus(seat, contract)
     return strength
-end
-
--- Returns (yes, wantOpen). wantOpen heuristic: open if our strength
--- has a comfortable buffer over the threshold (we'd be willing to
--- escalate again next rung if challenged).
-local function escalateDecision(strength, th)
-    local jth = jitter(th, BEL_JITTER)
-    if strength < jth then return false, false end
-    -- Strong-enough → open if we're well past threshold (we'd
-    -- still escalate the next rung); else close.
-    local wantOpen = strength >= jth + 20
-    return true, wantOpen
 end
 
 function Bot.PickTriple(seat)

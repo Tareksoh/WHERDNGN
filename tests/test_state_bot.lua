@@ -7660,6 +7660,46 @@ do
             "AZ.28b (v3.1.14): swaDenied toast survives the 0.35s request clear")
     end
 
+    -- ---------------------------------------------------------------------
+    -- AZ.29 (v3.2.0 cleanup batch 1): N.SendSkip* helpers emit exactly one
+    -- frame each. Helper-extraction coverage only — these helpers are
+    -- intentionally one-shot (no retry, no phase guard) per the v3.2.0
+    -- cleanup plan. Retry coverage is deferred to a later batch.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        N.SendSkipDouble(2)
+        assertEq(broadcastsMatching("n"), 1,
+            "AZ.29a (v3.2.0): SendSkipDouble emits one MSG_SKIP_DBL frame")
+    end
+    do
+        clearCaptures()
+        N.SendSkipTriple(1)
+        assertEq(broadcastsMatching("u"), 1,
+            "AZ.29b (v3.2.0): SendSkipTriple emits one MSG_SKIP_TRP frame")
+    end
+    do
+        clearCaptures()
+        N.SendSkipFour(2)
+        assertEq(broadcastsMatching("v"), 1,
+            "AZ.29c (v3.2.0): SendSkipFour emits one MSG_SKIP_FOR frame")
+    end
+    do
+        clearCaptures()
+        N.SendSkipGahwa(1)
+        assertEq(broadcastsMatching("w"), 1,
+            "AZ.29d (v3.2.0): SendSkipGahwa emits one MSG_SKIP_GHW frame")
+    end
+
+    -- AZ.29e: helpers are one-shot — no retry callback queued (intentional
+    -- per cleanup batch 1 scope; retry coverage is a separate later batch).
+    do
+        clearCaptures()
+        N.SendSkipDouble(3)
+        assertEq(#timerCallbacks, 0,
+            "AZ.29e (v3.2.0): SendSkipDouble queues no C_Timer retry (one-shot by design)")
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)

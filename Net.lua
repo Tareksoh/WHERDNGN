@@ -422,6 +422,35 @@ function N.SendGahwa(seat)
     end
 end
 
+-- v3.2.0 cleanup batch 1: extract repeated `MSG_SKIP_*` broadcasts
+-- into named helpers. Pre-cleanup these were direct broadcast calls
+-- scattered across LocalSkipDouble/Triple/Four/Gahwa, _OnDouble
+-- Race-A recovery, _HostBelTimeout, MaybeRunBot bot Bel/Triple/Four/
+-- Gahwa decision paths, and error-recovery branches inside the bot
+-- dispatch (16 call sites total). Helper extraction now means future
+-- changes (retry, phase guards, observability) need exactly one
+-- edit per skip rung instead of N edits.
+--
+-- Intentionally one-shot broadcasts only. No retry, no phase guards
+-- — those are deferred to a separate audit batch per the v3.2.0
+-- cleanup plan. Preserving current single-emit semantics keeps the
+-- behavior change scope at zero.
+function N.SendSkipDouble(seat)
+    broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+end
+
+function N.SendSkipTriple(seat)
+    broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, seat))
+end
+
+function N.SendSkipFour(seat)
+    broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, seat))
+end
+
+function N.SendSkipGahwa(seat)
+    broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, seat))
+end
+
 -- v1.0.11 (D HIGH-2): Baloot/Belote announcement broadcast.
 function N.SendBelote(seat)
     broadcast(("%s;%d"):format(K.MSG_BELOTE, seat))
@@ -1571,7 +1600,7 @@ function N._OnDouble(sender, seat, openField)
        and not R.CanBel(R.TeamOf(seat), S.s.contract, S.s.cumulative) then
         log("Warn", "rejected illegal Bel from seat %d (Sun >=100 gate)", seat)
         if S.s.isHost then
-            broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+            N.SendSkipDouble(seat)
             N.HostFinishDeal()
         end
         return
@@ -3063,7 +3092,7 @@ function N.LocalSkipDouble()
                       or ((S.s.contract.bidder % 4) + 1)
     if S.s.phase == K.PHASE_DOUBLE then
         if not pendingContains(S.s.belPending, S.s.localSeat) then return end
-        broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, S.s.localSeat))
+        N.SendSkipDouble(S.s.localSeat)
         -- v1.0.11: mutate belPending locally (the wire echo skips
         -- via fromSelf, so this side has to update its own state).
         local newPending = {}
@@ -3082,17 +3111,17 @@ function N.LocalSkipDouble()
     elseif S.s.phase == K.PHASE_TRIPLE then
         -- Bidder skips Triple.
         if S.s.localSeat ~= S.s.contract.bidder then return end
-        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, S.s.localSeat))
+        N.SendSkipTriple(S.s.localSeat)
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_FOUR then
         -- Specific doubler skips Four.
         if S.s.localSeat ~= fourSeat then return end
-        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, S.s.localSeat))
+        N.SendSkipFour(S.s.localSeat)
         if S.s.isHost then N.HostFinishDeal() end
     elseif S.s.phase == K.PHASE_GAHWA then
         -- Bidder skips Gahwa.
         if S.s.localSeat ~= S.s.contract.bidder then return end
-        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, S.s.localSeat))
+        N.SendSkipGahwa(S.s.localSeat)
         if S.s.isHost then N.HostFinishDeal() end
     end
 end
@@ -5395,7 +5424,7 @@ function N._HostBelTimeout(seat, kind)
     if S.s.paused then return end
     if kind == "double" and S.s.phase == K.PHASE_DOUBLE then
         log("Info", "AFK timeout: bel skip seat=%d", seat)
-        broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+        N.SendSkipDouble(seat)
         -- v1.0.11 (D MED M1): mutate belPending locally; finish only
         -- when all defenders have decided.
         local newPending = {}
@@ -5410,15 +5439,15 @@ function N._HostBelTimeout(seat, kind)
         end
     elseif kind == "triple" and S.s.phase == K.PHASE_TRIPLE then
         log("Info", "AFK timeout: triple skip seat=%d", seat)
-        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, seat))
+        N.SendSkipTriple(seat)
         N.HostFinishDeal()
     elseif kind == "four" and S.s.phase == K.PHASE_FOUR then
         log("Info", "AFK timeout: four skip seat=%d", seat)
-        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, seat))
+        N.SendSkipFour(seat)
         N.HostFinishDeal()
     elseif kind == "gahwa" and S.s.phase == K.PHASE_GAHWA then
         log("Info", "AFK timeout: gahwa skip seat=%d", seat)
-        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, seat))
+        N.SendSkipGahwa(seat)
         N.HostFinishDeal()
     elseif kind == "preempt_pass" and S.s.phase == K.PHASE_PREEMPT then
         -- Pre-emption window timed out for an eligible seat — auto-pass
@@ -5675,7 +5704,7 @@ function N.MaybeRunBot()
         -- No bot Bel'd. Broadcast skips for the bots and update
         -- belPending to drop them.
         for _, seat in ipairs(botSkips) do
-            broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+            N.SendSkipDouble(seat)
         end
         if #botSkips > 0 then
             local newPending = {}
@@ -5725,7 +5754,7 @@ function N.MaybeRunBot()
                         N.SendTriple(bidder, wantOpen)
                         if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                     else
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
+                        N.SendSkipTriple(bidder)
                         skipSent = true
                         N.HostFinishDeal()
                     end
@@ -5744,7 +5773,7 @@ function N.MaybeRunBot()
                     elseif skipSent then
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_TRIPLE then
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_TRP, bidder))
+                        N.SendSkipTriple(bidder)
                         N.HostFinishDeal()
                     end
                 end
@@ -5779,7 +5808,7 @@ function N.MaybeRunBot()
                         N.SendFour(defSeat, wantOpen)
                         if wantOpen then N.MaybeRunBot() else N.HostFinishDeal() end
                     else
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
+                        N.SendSkipFour(defSeat)
                         skipSent = true
                         N.HostFinishDeal()
                     end
@@ -5798,7 +5827,7 @@ function N.MaybeRunBot()
                     elseif skipSent then
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_FOUR then
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_FOR, defSeat))
+                        N.SendSkipFour(defSeat)
                         N.HostFinishDeal()
                     end
                 end
@@ -5831,7 +5860,7 @@ function N.MaybeRunBot()
                         applied = true
                         N.SendGahwa(bidder)
                     else
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
+                        N.SendSkipGahwa(bidder)
                         skipSent = true
                     end
                     N.HostFinishDeal()
@@ -5844,7 +5873,7 @@ function N.MaybeRunBot()
                     if applied or skipSent then
                         N.HostFinishDeal()
                     elseif S.s.phase == K.PHASE_GAHWA then
-                        broadcast(("%s;%d"):format(K.MSG_SKIP_GHW, bidder))
+                        N.SendSkipGahwa(bidder)
                         N.HostFinishDeal()
                     end
                 end
