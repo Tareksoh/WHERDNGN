@@ -84,6 +84,7 @@ loadAddon("State.lua")
 loadAddon("Bot/Tiers.lua")
 loadAddon("Bot/PlayPrimitives.lua")
 loadAddon("Bot/Bidding.lua")
+loadAddon("Bot/Escalation.lua")
 loadAddon("Bot.lua")
 loadAddon("BotMaster.lua")
 

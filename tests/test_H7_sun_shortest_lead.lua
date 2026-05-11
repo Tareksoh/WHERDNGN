@@ -101,9 +101,15 @@ loadFile("Bot/PlayPrimitives.lua")
 -- Bot.PickPreempt / Bot.PickOvercall) and 15 file-local helpers (incl.
 -- suitStrengthAsTrump / sunStrength / partnerBidBonus /
 -- partnerEscalatedBonus / combinedUrgency / opponentUrgency) live in
--- Bot/Bidding.lua. Bot.lua's 6-locals re-binding header at the top of
--- its chunk imports the helpers consumed by escalation deciders.
+-- Bot/Bidding.lua.
 loadFile("Bot/Bidding.lua")
+-- v3.2.0 cleanup batch 9: the four-rung escalation chain
+-- (Bot.PickDouble / PickTriple / PickFour / PickGahwa) plus 3 file-
+-- local helpers (escalationStrength / selfStyleJitterBonus /
+-- styleBelTendency) and 4 per-rung jitter constants live in
+-- Bot/Escalation.lua. Imports the 6 Bidding helpers it needs and
+-- inlines its own jitter + shuffledSuits.
+loadFile("Bot/Escalation.lua")
 
 local K = WHEREDNGN.K
 local C = WHEREDNGN.Cards

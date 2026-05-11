@@ -85,6 +85,7 @@ load("State.lua")
 load("Bot/Tiers.lua")
 load("Bot/PlayPrimitives.lua")
 load("Bot/Bidding.lua")
+load("Bot/Escalation.lua")
 load("Bot.lua")
 load("BotMaster.lua")
 

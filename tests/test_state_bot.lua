@@ -104,6 +104,7 @@ load("State.lua")
 load("Bot/Tiers.lua")
 load("Bot/PlayPrimitives.lua")
 load("Bot/Bidding.lua")
+load("Bot/Escalation.lua")
 load("Bot.lua")
 
 local K   = WHEREDNGN.K
@@ -3397,7 +3398,7 @@ print("=== Section AA: v0.11.17 Tier-2 audit fixes ===")
 
 -- AA.1 (B1 / EV-1) — escalationStrength includes void/side-Ace bonuses
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     local fnStart = botSrc:find("local function escalationStrength")
     if fnStart then
         -- v1.0.3: bumped 2500 -> 4000 chars; ESC-1 fix added a Sun-
@@ -3469,7 +3470,7 @@ print("=== Section AB: v0.11.17 hotfix ===")
 
 -- AB.2 (F3) — PickGahwa floor cap added
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickGahwa")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2500)
@@ -3690,7 +3691,7 @@ end
 
 -- AD.3 (DEAD-2): PickGahwa floor cap removed
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickGahwa")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2500)
@@ -3735,7 +3736,7 @@ end
 -- (score-desperation early-return + 100-meld modifier) which
 -- pushed the strength-eval log past the original 8000-char window.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickDouble")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 14000)
@@ -5035,7 +5036,7 @@ end
 -- v1.0.8: bumped 2500 -> 4000 to accommodate the new eltrace block
 -- in PickTriple. Behavior unchanged.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickTriple")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 4000)
@@ -5074,7 +5075,7 @@ end
 
 -- AH.7 (ESC-1 sunStrength void penalty inversion): pin Hokm branch.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     local fnStart = botSrc:find("local function escalationStrength")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2500)
@@ -5116,7 +5117,7 @@ end
 -- AI.4 (agent #4 PickDouble bid-history inflection): preempt and
 -- overcall paths bias `th` upward.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Escalation.lua"):read("*a")
     assertTrue(botSrc:find("v1%.0%.4 %(agent #4%): bid%-history inflection") ~= nil,
                "AI.4 (agent #4): PickDouble reads bid-history inflection")
 end
@@ -5465,17 +5466,15 @@ do
     assertTrue(bidPos and botPos and bidPos < botPos,
                "AJ.9f-toc-order-c: Bidding BEFORE Bot.lua")
 
-    -- Bot.lua re-binding header: 6 file-locals from Bidding.
+    -- AJ.9f-bind assertions for Bot.lua's Bidding re-binding header
+    -- are RETIRED in v3.2.0 cleanup batch 9. The 6-locals header was
+    -- introduced in Batch 8 to feed escalation deciders that lived in
+    -- Bot.lua at the time. Batch 9 moved those deciders to
+    -- Bot/Escalation.lua, where the re-binding header now lives. The
+    -- new AJ.9g block (below) asserts the header in Bot/Escalation.lua
+    -- AND asserts ABSENCE of the obsolete Bidding re-binding header
+    -- in Bot.lua.
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local bidRebindNames = {
-        "suitStrengthAsTrump", "sunStrength", "partnerBidBonus",
-        "partnerEscalatedBonus", "combinedUrgency", "opponentUrgency",
-    }
-    for _, name in ipairs(bidRebindNames) do
-        assertTrue(
-            botSrc:find("local " .. name .. "%s*=%s*Bidding%." .. name) ~= nil,
-            ("AJ.9f-bind-%s: Bot.lua binds %s = Bidding.%s"):format(name, name, name))
-    end
 
     -- bidderHoldsBidcard STAYS in Bot.lua (not in Bot/Bidding.lua).
     assertTrue(
@@ -5484,6 +5483,118 @@ do
     assertTrue(
         bidSrc:find("local function bidderHoldsBidcard") == nil,
         "AJ.9f-bhb-not-in-bid: bidderHoldsBidcard is NOT in Bot/Bidding.lua")
+end
+
+-- AJ.9g (v3.2.0 cleanup batch 9): Bot/Escalation.lua presence, jitter
+-- constants, Bidding helper imports, .toc load order, and the absence
+-- of a Bot.Escalation sub-table / Bot.lua Bidding re-binding header.
+-- The four-rung escalation chain (Bot.PickDouble / PickTriple /
+-- PickFour / PickGahwa) plus 3 file-local helpers (escalationStrength,
+-- selfStyleJitterBonus, styleBelTendency) and 4 per-rung jitter
+-- constants moved out of Bot.lua to Bot/Escalation.lua. Pickers
+-- remain public on B.Bot.* (no Bot.Escalation sub-table).
+do
+    local escSrc = io.open(WHEREDNGN_TESTS_ROOT
+                           .. "/Bot/Escalation.lua"):read("*a")
+
+    -- File-local helper presence (3 helpers).
+    local escLocalNames = {
+        "styleBelTendency", "selfStyleJitterBonus", "escalationStrength",
+    }
+    for _, name in ipairs(escLocalNames) do
+        assertTrue(
+            escSrc:find("local function " .. name .. "[%(%s]") ~= nil,
+            ("AJ.9g-def-%s: Bot/Escalation.lua defines local function %s"):format(name, name))
+    end
+
+    -- Public picker presence (4 functions).
+    local escPublicNames = { "PickDouble", "PickTriple", "PickFour", "PickGahwa" }
+    for _, name in ipairs(escPublicNames) do
+        assertTrue(
+            escSrc:find("function Bot%." .. name .. "%(") ~= nil,
+            ("AJ.9g-pub-%s: Bot/Escalation.lua defines function Bot.%s"):format(name, name))
+    end
+
+    -- 4 per-rung jitter constants.
+    assertTrue(escSrc:find("local BEL_JITTER%s*=%s*10") ~= nil,
+               "AJ.9g-jitter-bel:    Bot/Escalation.lua defines BEL_JITTER = 10")
+    assertTrue(escSrc:find("local TRIPLE_JITTER%s*=%s*12") ~= nil,
+               "AJ.9g-jitter-triple: Bot/Escalation.lua defines TRIPLE_JITTER = 12")
+    assertTrue(escSrc:find("local FOUR_JITTER%s*=%s*15") ~= nil,
+               "AJ.9g-jitter-four:   Bot/Escalation.lua defines FOUR_JITTER = 15")
+    assertTrue(escSrc:find("local GAHWA_JITTER%s*=%s*18") ~= nil,
+               "AJ.9g-jitter-gahwa:  Bot/Escalation.lua defines GAHWA_JITTER = 18")
+
+    -- Bidding helper imports (6 locals via Bot.Bidding).
+    local bidImports = {
+        "suitStrengthAsTrump", "sunStrength", "partnerBidBonus",
+        "partnerEscalatedBonus", "combinedUrgency", "opponentUrgency",
+    }
+    for _, name in ipairs(bidImports) do
+        assertTrue(
+            escSrc:find("local " .. name .. "%s*=%s*Bidding%." .. name) ~= nil,
+            ("AJ.9g-imp-%s: Bot/Escalation.lua re-binds %s = Bidding.%s"):format(name, name, name))
+    end
+
+    -- .toc load order: Tiers < PlayPrimitives < Bidding < Escalation < Bot.lua.
+    local tocSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/WHEREDNGN.toc"):read("*a")
+    local tierPos = tocSrc:find("Bot/Tiers%.lua")
+    local primPos = tocSrc:find("Bot/PlayPrimitives%.lua")
+    local bidPos  = tocSrc:find("Bot/Bidding%.lua")
+    local escPos  = tocSrc:find("Bot/Escalation%.lua")
+    local botPos  = tocSrc:find("\nBot%.lua")
+    assertTrue(escPos ~= nil, "AJ.9g-toc-esc: WHEREDNGN.toc lists Bot/Escalation.lua")
+    assertTrue(tierPos and primPos and tierPos < primPos,
+               "AJ.9g-toc-order-a: Tiers BEFORE PlayPrimitives")
+    assertTrue(primPos and bidPos and primPos < bidPos,
+               "AJ.9g-toc-order-b: PlayPrimitives BEFORE Bidding")
+    assertTrue(bidPos and escPos and bidPos < escPos,
+               "AJ.9g-toc-order-c: Bidding BEFORE Escalation")
+    assertTrue(escPos and botPos and escPos < botPos,
+               "AJ.9g-toc-order-d: Escalation BEFORE Bot.lua")
+
+    -- Negative-export asserts: no Bot.Escalation / B.Bot.Escalation sub-table.
+    assertTrue(escSrc:find("Bot%.Escalation%s*=") == nil,
+               "AJ.9g-no-subtable-a: Bot/Escalation.lua does NOT introduce Bot.Escalation = {} sub-table")
+    assertTrue(escSrc:find("B%.Bot%.Escalation") == nil,
+               "AJ.9g-no-subtable-b: Bot/Escalation.lua does NOT reference B.Bot.Escalation")
+
+    -- Bot.lua should NOT have the old Batch 8 Bidding re-binding header.
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(
+        botSrc:find("local Bidding%s*=%s*Bot%.Bidding") == nil,
+        "AJ.9g-bot-no-bidding-rebind: Bot.lua has NO Bidding re-binding header (removed in batch 9; consumers moved to Bot/Escalation.lua)")
+
+    -- Bot.lua should still have the style-ledger maintenance code.
+    assertTrue(
+        botSrc:find("local function styleTrumpTempo") ~= nil,
+        "AJ.9g-style-trump-stays: styleTrumpTempo stays in Bot.lua (consumed by pickLead/pickFollow)")
+    assertTrue(
+        escSrc:find("local function styleTrumpTempo") == nil,
+        "AJ.9g-style-trump-not-in-esc: styleTrumpTempo is NOT in Bot/Escalation.lua")
+    assertTrue(
+        botSrc:find("function Bot%.OnEscalation") ~= nil,
+        "AJ.9g-on-escalation-stays: Bot.OnEscalation stays in Bot.lua (called by State.lua)")
+    assertTrue(
+        botSrc:find("function Bot%.OnRoundEnd") ~= nil,
+        "AJ.9g-on-round-end-stays: Bot.OnRoundEnd stays in Bot.lua (called by State.lua)")
+
+    -- Bot.lua should NOT have any escalation picker / helper definitions.
+    assertTrue(
+        botSrc:find("local function styleBelTendency") == nil,
+        "AJ.9g-style-bel-moved: styleBelTendency is NOT in Bot.lua (moved to Escalation)")
+    assertTrue(
+        botSrc:find("local function selfStyleJitterBonus") == nil,
+        "AJ.9g-jitter-bonus-moved: selfStyleJitterBonus is NOT in Bot.lua (moved)")
+    assertTrue(
+        botSrc:find("local function escalationStrength") == nil,
+        "AJ.9g-esc-strength-moved: escalationStrength is NOT in Bot.lua (moved)")
+    local botPickers = { "PickDouble", "PickTriple", "PickFour", "PickGahwa" }
+    for _, name in ipairs(botPickers) do
+        assertTrue(
+            botSrc:find("function Bot%." .. name .. "%(") == nil,
+            ("AJ.9g-picker-moved-%s: Bot.%s is NOT defined in Bot.lua (moved to Escalation)"):format(name, name))
+    end
 end
 
 -- =====================================================================
