@@ -2605,17 +2605,9 @@ end
 -- =====================================================================
 section("Q. v0.11.7 SWA UX fixes")
 
--- Q.1 (Bot.PickSWA #hand<=1 short-circuit).
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("function Bot%.PickSWA")
-    assertTrue(fnStart ~= nil, "Q.1 setup: Bot.PickSWA function found")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 1500)
-        assertTrue(body:find("if #hand <= 1 then return false end") ~= nil,
-                   "Q.1 (v0.11.7): Bot.PickSWA short-circuits with #hand<=1 (just play)")
-    end
-end
+-- Q.1 (v3.2.0 cleanup batch 6): source pin RETIRED. Behavioral
+-- counterpart at AJ.10 (PickSWA hand-size boundaries) covers the
+-- #hand<=1 short-circuit as one of three boundary asserts.
 
 -- Q.2 (HostResolveSWA stashes encodedHand on swaResult).
 -- HostResolveSWA is ~250 lines; need a wide slice to catch the
@@ -3264,12 +3256,11 @@ end
 print("")
 print("=== Section Y: v0.11.16 Tier-1 audit fixes ===")
 
--- Y.1 (A1) — withBidcard helper exists at file scope
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("local function withBidcard%(hand, bidcard%)") ~= nil,
-               "Y.1 (A1): withBidcard helper defined at file scope")
-end
+-- Y.1 (v3.2.0 cleanup batch 6): source pin RETIRED. AE.1 + AE.1c
+-- both exercise withBidcard end-to-end — they build K+Q+side-Ace
+-- hands that are sub-threshold WITHOUT the bidcard's spades joining
+-- hypHand, then call Bot.PickBid and assert HOKM:S (AE.1) / PASS
+-- (AE.1c). If withBidcard regresses, AE.1 stops firing HOKM:S.
 
 -- Y.2 (A2) — Belote K+Q escape clause in hokmMinShape
 do
@@ -3279,9 +3270,11 @@ do
         local body = botSrc:sub(fnStart)
         local nextFn = body:find("\nlocal function ", 2, true)
         if nextFn then body = body:sub(1, nextFn) end
-        assertTrue(body:find("hasKsuit and hasQsuit and count >= 2") ~= nil,
-                   "Y.2 (A2 / BS-1): Belote K+Q-of-trump escape clause in hokmMinShape")
-        -- Verify it appears BEFORE the J-floor.
+        -- Y.2 (v3.2.0 cleanup batch 6): existence pin RETIRED.
+        -- Behavioral counterpart at AJ.12 (Belote K+Q escape via
+        -- PickBid R2, jitter-frozen) covers the substantive branch.
+        -- Y.2b ordering assertion (Belote-escape before J-floor)
+        -- intentionally retained — ordering is structural, not behavioral.
         local belotePath = body:find("hasKsuit and hasQsuit and count >= 2")
         local jFloor = body:find("if not hasJ then return false end")
         if belotePath and jFloor then
@@ -3332,11 +3325,9 @@ do
 end
 
 -- Y.5 (A5) — PickSWA cap raised 4 -> 6
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("if not hand or #hand == 0 or #hand > 6 then return false end") ~= nil,
-               "Y.5 (A5): PickSWA cap raised to 6 cards")
-end
+-- Y.5 (v3.2.0 cleanup batch 6): source pin RETIRED. Behavioral
+-- counterpart at AJ.10 (PickSWA hand-size boundaries) covers the
+-- cap-of-6 + nil + 0-card guard cluster.
 
 -- Y.6 (A3) — Bot.PickSWAResponse exists
 do
@@ -3349,18 +3340,11 @@ do
                "Y.6b (A3): Net.lua wires Bot.PickSWAResponse into _OnSWAReq bot-vote path")
 end
 
--- Y.7 (A6) — AKA trick-1 suppression dropped (no `if trickNum <= 1 then return nil end`)
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("function Bot%.PickAKA")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 5000)
-        -- The trickNum local is still computed, but the "<= 1 -> nil"
-        -- early-return must be gone.
-        assertTrue(body:find("if trickNum <= 1 then return nil end") == nil,
-                   "Y.7 (A6 / H-1): trick-1 AKA suppression dropped")
-    end
-end
+-- Y.7 (v3.2.0 cleanup batch 6): source pin RETIRED. Behavioral
+-- counterpart at AJ.11 (PickAKA fires on trick 1) confirms the
+-- suppression is gone via a lead-only trick-1 fixture that returns
+-- the AKA suit, where the old `if trickNum <= 1 then return nil end`
+-- guard would have returned nil.
 
 -- Y.8 (A7) — Tahreeb-return decision tree fires bare-T branch
 do
@@ -3444,12 +3428,11 @@ do
                    "AA.1a (B1 / EV-1): escalationStrength includes void bonus (Hokm bidder)")
         assertTrue(body:find("sideAces %- 1") ~= nil,
                    "AA.1b (B1 / EV-1): escalationStrength includes side-Ace bonus")
-        -- v0.11.17-hotfix F1: Sun branch removed (was dead code; all
-        -- escalation callers early-return on Sun). The PickBid path
-        -- already has these bonuses for the bid-acceptance side. Pin
-        -- the comment that explains the intentional removal.
-        assertTrue(body:find("Sun has no Triple/Four/Gahwa rungs") ~= nil,
-                   "AA.1c (F1 hotfix): escalationStrength documents Sun-no-rungs intentionally")
+        -- AA.1c (v3.2.0 cleanup batch 6): source pin RETIRED.
+        -- Behavioral counterpart at AJ.13 (Sun-no-rungs invariant)
+        -- covers the Sun early-return across all four escalation
+        -- deciders, which is the substantive guarantee the comment
+        -- documented.
     end
 end
 
@@ -3497,16 +3480,12 @@ end
 print("")
 print("=== Section AB: v0.11.17 hotfix ===")
 
--- AB.1 (F1) — Sun dead branch removed from escalationStrength
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("local function escalationStrength")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 2500)
-        assertTrue(body:find('elseif contract%.type == K%.BID_SUN then') == nil,
-                   "AB.1 (F1): escalationStrength Sun dead branch removed")
-    end
-end
+-- AB.1 (v3.2.0 cleanup batch 6): source pin RETIRED. Behavioral
+-- counterpart at AJ.13 (Sun-no-rungs invariant) covers the dead-
+-- branch removal: under a Sun contract every escalation decider
+-- early-returns false BEFORE escalationStrength would re-introduce
+-- a Sun branch, so AJ.13's four assertEq calls catch any Sun
+-- escalation behavior regression.
 
 -- AB.2 (F3) — PickGahwa floor cap added
 do
@@ -5419,6 +5398,173 @@ do
             botSrc:find("local " .. name .. "%s*=%s*Primitives%." .. name) ~= nil,
             ("AJ.9e-bind-%s: Bot.lua binds %s = Primitives.%s"):format(name, name, name))
     end
+end
+
+-- =====================================================================
+-- AJ.10 - AJ.13 (v3.2.0 cleanup batch 6): bidding/escalation source-pin
+-- to behavioral conversions. Each block replaces one or more source
+-- pins listed above with a fixture-driven assertion that exercises
+-- the actual runtime behavior rather than the source string.
+-- =====================================================================
+
+-- AJ.10 (v3.2.0 cleanup batch 6, replaces Q.1 + Y.5 source pins):
+-- behavioral counterpart for Bot.PickSWA's hand-size guards. The
+-- guards short-circuit on:
+--   * #hand == 0 (no cards to claim)
+--   * #hand == 1 (just play the card; no SWA needed)
+--   * #hand > 6 (cap raised from 4 -> 6 in v0.11.16 A5; above the
+--     cap the bot will not initiate SWA)
+-- All three return paths yield `false`.
+do
+    local restore = snapshotS({
+        "phase", "contract", "hostHands", "localSeat", "isHost",
+    })
+    local prevAdvanced = WHEREDNGNDB.advancedBots
+    WHEREDNGNDB.advancedBots = true
+
+    S.s.phase     = K.PHASE_PLAY
+    S.s.contract  = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+    S.s.isHost    = true
+    S.s.hostHands = {}
+
+    -- Empty hand -> false.
+    S.s.hostHands[1] = {}
+    assertEq(Bot.PickSWA(1), false,
+             "AJ.10a (PickSWA guard): empty hand returns false")
+    -- 1-card hand -> false.
+    S.s.hostHands[1] = { "AS" }
+    assertEq(Bot.PickSWA(1), false,
+             "AJ.10b (PickSWA guard): 1-card hand returns false")
+    -- 7-card hand -> false (>6).
+    S.s.hostHands[1] = { "AS", "KS", "QS", "JS", "TS", "9S", "8S" }
+    assertEq(Bot.PickSWA(1), false,
+             "AJ.10c (PickSWA guard): 7-card hand exceeds cap, returns false")
+
+    WHEREDNGNDB.advancedBots = prevAdvanced
+    restore()
+end
+
+-- AJ.11 (v3.2.0 cleanup batch 6, replaces Y.7 source pin):
+-- behavioral counterpart for the v0.11.16 A6 fix that dropped the
+-- trick-1 AKA suppression. Pre-fix, Bot.PickAKA short-circuited to
+-- nil on trick 1; post-fix the bot can declare AKA on the opening
+-- trick. Bot.PickAKA is lead-only and refuses Ace announcements,
+-- so the fixture uses a lead-only trick-1 state where the seat
+-- holds KH (boss of H) and stubs S.HighestUnplayedRank to make
+-- the boss check deterministic (J.1 pattern).
+do
+    local restore = snapshotS({
+        "phase", "contract", "hostHands", "trick", "tricks",
+        "playedCardsThisRound", "seats", "cumulative",
+        "localSeat", "akaCalled",
+    })
+    local prevAdvanced = WHEREDNGNDB.advancedBots
+    WHEREDNGNDB.advancedBots = true
+
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    S.s.hostHands = { [2] = { "KH", "9C", "8D", "7H", "QS" } }
+    S.s.tricks = {}                            -- trickNum = 1
+    S.s.trick = { leadSuit = nil, plays = {} } -- lead-only, no one has played
+    S.s.playedCardsThisRound = {}
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    if Bot.ResetMemory then Bot.ResetMemory() end
+
+    local origHUR = S.HighestUnplayedRank
+    S.HighestUnplayedRank = function(suit)
+        if suit == "H" then return "K" end
+        if suit == "S" then return "J" end
+        return origHUR and origHUR(suit) or nil
+    end
+
+    local aka = Bot.PickAKA(2, "KH")
+
+    S.HighestUnplayedRank = origHUR
+    WHEREDNGNDB.advancedBots = prevAdvanced
+    restore()
+
+    assertEq(aka, "H",
+             "AJ.11 (A6 / H-1): PickAKA fires on trick 1 (suppression dropped)")
+end
+
+-- AJ.12 (v3.2.0 cleanup batch 6, replaces Y.2 source pin):
+-- behavioral counterpart for the v0.11.16 A2 Belote K+Q-of-trump
+-- escape clause in hokmMinShape. Pre-fix the J-floor short-
+-- circuited the function on hands without J-of-trump regardless
+-- of other shape. Post-fix, hands with K+Q-of-trump and count>=2
+-- in the trump suit pass shape even without J -- Belote (+20)
+-- compensates for the missing J.
+--
+-- Determinism: jitter is frozen at 0 via the arity-aware shim shape
+-- (same pattern as commit 08473ce) so the bid threshold comparison
+-- is exact. Without the freeze the hand sits inside the jitter band
+-- and the assert would only hold ~5/13 of the time.
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == -K.BOT_BID_JITTER and b == K.BOT_BID_JITTER then return 0 end
+        if a == nil then return origRandom() end
+        if b == nil then return origRandom(a) end
+        return origRandom(a, b)
+    end
+
+    S.s.bidRound = 2
+    S.s.bidCard = "JC"
+    S.s.dealer = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = { K.BID_PASS, K.BID_PASS, K.BID_PASS, K.BID_PASS }
+    S.s.hostHands = { [1] = { "KH", "QH", "7H", "AS", "KD" } }
+
+    local result = Bot.PickBid(1)
+
+    math.random = origRandom
+    restore()
+
+    assertEq(result, K.BID_HOKM .. ":H",
+             "AJ.12 (A2 / BS-1): K+Q+other trump no J fires Hokm-H via Belote escape")
+end
+
+-- AJ.13 (v3.2.0 cleanup batch 6, replaces AA.1c + AB.1 source pins):
+-- behavioral counterpart for the invariant that Sun contracts have
+-- NO Triple/Four/Gahwa escalation rungs. The escalationStrength
+-- helper used to have an `elseif contract.type == K.BID_SUN then`
+-- branch (v0.11.17-hotfix F1 removed it as dead code -- every
+-- escalation caller early-returns on Sun before reaching the
+-- strength calc). Behavioral assertion: under a Sun contract,
+-- Bot.PickDouble / Bot.PickTriple / Bot.PickFour / Bot.PickGahwa
+-- ALL return false regardless of hand strength.
+do
+    local restore = snapshotS({
+        "phase", "contract", "hostHands", "cumulative", "tricks", "trick",
+    })
+    S.s.phase     = K.PHASE_PLAY
+    S.s.contract  = { type = K.BID_SUN, bidder = 1 }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.tricks   = {}
+    S.s.trick    = nil
+    -- Strong Sun hand -- would absolutely qualify for any rung under
+    -- Hokm. If escalationStrength's Sun branch were re-introduced
+    -- (or if any decider forgot the Sun early-return) a non-false
+    -- return would slip through.
+    S.s.hostHands = { [1] = { "AS", "AH", "AD", "AC", "KS" } }
+
+    assertEq(Bot.PickDouble(1), false,
+             "AJ.13a (F1): PickDouble returns false on Sun contract")
+    assertEq(Bot.PickTriple(1), false,
+             "AJ.13b (F1): PickTriple returns false on Sun contract")
+    assertEq(Bot.PickFour(1), false,
+             "AJ.13c (F1): PickFour returns false on Sun contract")
+    assertEq(Bot.PickGahwa(1), false,
+             "AJ.13d (F1): PickGahwa returns false on Sun contract")
+
+    restore()
 end
 
 print("=== Section AK: v1.0.7 test-debt closure (behavioral conversions) ===")
