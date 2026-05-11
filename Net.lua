@@ -441,7 +441,34 @@ end
 -- cleanup plan. Preserving current single-emit semantics keeps the
 -- behavior change scope at zero.
 function N.SendSkipDouble(seat)
-    broadcast(("%s;%d"):format(K.MSG_SKIP_DBL, seat))
+    -- v3.2.0 batch 4A (codex audit P2 continuation): 250ms re-broadcast
+    -- with POST-APPLY guard. The Bel-skip flow mutates `S.s.belPending`
+    -- to remove the skipping defender (or to nil when the last defender
+    -- has decided). The retry only fires if our skip is recorded
+    -- locally AND the round hasn't advanced past PHASE_DOUBLE.
+    --
+    -- Empty/nil belPending is VALID for a non-host final skip — when
+    -- the last defender skips, _HostBelTimeout / LocalSkip wipes the
+    -- list via HostFinishDeal. The guard accepts that case to give
+    -- the retry a chance to fire on a dropped final skip frame.
+    --
+    -- For the non-final cases (other defender still pending), the
+    -- guard `not pendingContains(belPending, seat)` confirms our skip
+    -- was applied locally; receiver-side `_OnSkipDouble` is idempotent
+    -- on duplicate frames (rejects already-removed seats).
+    local function pendingContains(t, sa)
+        if not t then return false end
+        for _, v in ipairs(t) do if v == sa then return true end end
+        return false
+    end
+    broadcastWithRetry(
+        ("%s;%d"):format(K.MSG_SKIP_DBL, seat),
+        function()
+            return S.s.phase == K.PHASE_DOUBLE
+               and S.s.belPending ~= nil
+               and not pendingContains(S.s.belPending, seat)
+        end
+    )
 end
 
 function N.SendSkipTriple(seat)
@@ -539,11 +566,75 @@ function N._HostMaybeAutoBelote(seat, card)
 end
 
 function N.SendPreempt(seat)
-    broadcast(("%s;%d"):format(K.MSG_PREEMPT, seat))
+    -- v3.2.0 batch 4A (codex audit P2 continuation): 250ms re-broadcast
+    -- with TWO-BRANCH post-send guard. Two state orderings exist:
+    --
+    --   (a) N.LocalPreempt() — non-host claimant calls
+    --       S.ApplyPreempt(localSeat) FIRST (which moves local state
+    --       to PHASE_DEAL2BID with contract == nil), THEN calls
+    --       N.SendPreempt(localSeat). If the first frame drops, the
+    --       host never echoes back, so the contract NEVER becomes
+    --       Sun-by-this-seat on the local client. A contract-only
+    --       retry guard would dead-code this case (Codex caught
+    --       this design flaw in review).
+    --
+    --   (b) Host / bot post-claim — N.LocalPreempt on host, or
+    --       MaybeRunBot bot path, runs S.ApplyContract(seat, SUN, nil)
+    --       BEFORE the retry timer fires. Local state has
+    --       contract.bidder == seat, contract.type == SUN.
+    --
+    -- The two-branch guard covers BOTH cases:
+    --   Branch 1: phase == PHASE_DEAL2BID and contract == nil
+    --             → non-host claimant waiting for host echo
+    --   Branch 2: contract.bidder == seat and type == SUN
+    --             → host/bot post-ApplyContract
+    --
+    -- Receiver-side `_OnPreempt` (Net.lua:1687-1717) phase-gates on
+    -- PHASE_PREEMPT + seat ∈ preemptEligible; idempotent on already-
+    -- removed seats.
+    broadcastWithRetry(
+        ("%s;%d"):format(K.MSG_PREEMPT, seat),
+        function()
+            if S.s.phase == K.PHASE_DEAL2BID and S.s.contract == nil then
+                return true
+            end
+            if S.s.contract
+               and S.s.contract.bidder == seat
+               and S.s.contract.type == K.BID_SUN then
+                return true
+            end
+            return false
+        end
+    )
 end
 
 function N.SendPreemptPass(seat)
-    broadcast(("%s;%d"):format(K.MSG_PREEMPT_PASS, seat))
+    -- v3.2.0 batch 4A: 250ms re-broadcast with post-apply guard.
+    -- After S.ApplyPreemptPass(seat) the seat is removed from
+    -- S.s.preemptEligible (or preemptEligible becomes nil if this
+    -- was the last eligible seat — in which case _FinalizePreempt
+    -- runs and the original buyer's contract is finalized).
+    --
+    -- Guard accepts BOTH (a) seat removed from non-empty list AND
+    -- (b) preemptEligible == nil (final pass from a non-host
+    -- claimant; phase may still be PHASE_PREEMPT locally until
+    -- host echo).
+    --
+    -- Receiver-side `_OnPreemptPass` (Net.lua:1719-1759) phase-gates
+    -- on PHASE_PREEMPT + seat ∈ preemptEligible; idempotent on
+    -- already-removed seats.
+    local function preemptContains(t, sa)
+        if not t then return false end
+        for _, v in ipairs(t) do if v == sa then return true end end
+        return false
+    end
+    broadcastWithRetry(
+        ("%s;%d"):format(K.MSG_PREEMPT_PASS, seat),
+        function()
+            return S.s.phase == K.PHASE_PREEMPT
+               and not preemptContains(S.s.preemptEligible, seat)
+        end
+    )
 end
 
 function N.SendMeld(seat, meld)
@@ -5434,8 +5525,11 @@ function N._HostBelTimeout(seat, kind)
         -- Pre-emption window timed out for an eligible seat — auto-pass
         -- on their behalf. May either close the window (if last seat)
         -- or hand off to the next eligible seat.
+        -- v3.2.0 batch 4A: route through N.SendPreemptPass helper so
+        -- the v3.2.0 retry covers this AFK path too. Pre-fix the raw
+        -- broadcast bypassed the helper entirely.
         log("Info", "AFK timeout: preempt waive seat=%d", seat)
-        broadcast(("%s;%d"):format(K.MSG_PREEMPT_PASS, seat))
+        N.SendPreemptPass(seat)
         S.ApplyPreemptPass(seat)
         if not S.s.preemptEligible then
             N._FinalizePreempt()
@@ -6144,7 +6238,12 @@ function N.MaybeRunBot()
                             ts        = (GetTime and GetTime()) or 0,
                             windowSec = K.SWA_TIMEOUT_SEC or 5,
                         }
-                        broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, enc))
+                        -- v3.2.0 batch 4A: route through N.SendSWAReq
+                        -- helper to inherit the v3.1.12 retry (phase ==
+                        -- PHASE_PLAY + swaRequest.caller == seat). Pre-
+                        -- fix the bot path bypassed the helper entirely
+                        -- so a dropped first frame had no recovery.
+                        N.SendSWAReq(seat, enc)
                         -- Auto-vote opponent bots (mirrors _OnSWAReq).
                         -- v0.11.16 audit H1: PickSWAResponse can deny
                         -- clearly-invalid SWAs (bot-fired SWAs are

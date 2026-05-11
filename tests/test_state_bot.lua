@@ -7772,13 +7772,30 @@ do
             "AZ.29d (v3.2.0): SendSkipGahwa emits one MSG_SKIP_GHW frame")
     end
 
-    -- AZ.29e: helpers are one-shot — no retry callback queued (intentional
-    -- per cleanup batch 1 scope; retry coverage is a separate later batch).
+    -- AZ.29e (v3.2.0 batch 4A update): SendSkipTriple/Four/Gahwa remain
+    -- one-shot — no clean post-apply guard exists for those rungs
+    -- (phase advances immediately, no per-rung "we skipped" flag).
+    -- SendSkipDouble GAINED retry in batch 4A because its multi-defender
+    -- belPending state IS a checkable post-apply identity. Pinning the
+    -- three still-one-shot rungs here; SendSkipDouble retry is covered
+    -- by AZ.37 below.
     do
         clearCaptures()
-        N.SendSkipDouble(3)
+        N.SendSkipTriple(3)
         assertEq(#timerCallbacks, 0,
-            "AZ.29e (v3.2.0): SendSkipDouble queues no C_Timer retry (one-shot by design)")
+            "AZ.29e-trp (v3.2.0): SendSkipTriple queues no C_Timer retry (one-shot, phase advances immediately)")
+    end
+    do
+        clearCaptures()
+        N.SendSkipFour(3)
+        assertEq(#timerCallbacks, 0,
+            "AZ.29e-for (v3.2.0): SendSkipFour queues no C_Timer retry (one-shot, phase advances immediately)")
+    end
+    do
+        clearCaptures()
+        N.SendSkipGahwa(3)
+        assertEq(#timerCallbacks, 0,
+            "AZ.29e-ghw (v3.2.0): SendSkipGahwa queues no C_Timer retry (one-shot, phase advances immediately)")
     end
 
     -- ---------------------------------------------------------------------
@@ -7921,6 +7938,234 @@ do
         pcall(retry.fn)
         assertEq(broadcastsMatching("<"), 1,
             "AZ.32d (v3.2.0): SendOvercallDecision retry suppressed when phase moves past OVERCALL")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.33-37 (v3.2.0 batch 4A): skip/preempt retry coverage.
+    --
+    -- Per CLAUDE_V3_2_0_CLEANUP_BATCH4A_PROMPT.md scope: 5 items —
+    -- 2 raw→helper migrations + 3 helper retry additions. All tests
+    -- start from helper call points and assert behavior end-to-end
+    -- (initial broadcast + retry-fires + retry-suppresses across the
+    -- guard's various states).
+    -- ---------------------------------------------------------------------
+
+    -- AZ.33 SendSkipDouble retry — initial, fire, suppress, suppress-if-still-pending
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.belPending = { 2, 4 }   -- both defenders pending
+        N.SendSkipDouble(2)
+        assertEq(broadcastsMatching("n"), 1,
+            "AZ.33a (v3.2.0): SendSkipDouble emits initial MSG_SKIP_DBL")
+        -- Local apply has removed seat 2 from belPending
+        S.s.belPending = { 4 }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("n"), 2,
+            "AZ.33b (v3.2.0): retry fires when seat 2 removed from belPending and phase still DOUBLE")
+    end
+
+    -- AZ.33-suppress (phase moved on)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.belPending = { 2, 4 }
+        N.SendSkipDouble(2)
+        S.s.belPending = { 4 }
+        S.s.phase = K.PHASE_TRIPLE   -- phase advanced
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("n"), 1,
+            "AZ.33c (v3.2.0): SendSkipDouble retry suppressed when phase advances to TRIPLE")
+    end
+
+    -- AZ.33-still-pending (seat still in belPending — guard rejects)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.belPending = { 2, 4 }
+        N.SendSkipDouble(2)
+        -- Local apply did NOT remove seat 2 (corruption / race case)
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("n"), 1,
+            "AZ.33d (v3.2.0): SendSkipDouble retry suppressed when seat 2 still in belPending")
+    end
+
+    -- AZ.33-empty-belPending (final-skip path: belPending = {} but
+    -- phase still PHASE_DOUBLE on non-host claimant)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.belPending = { 2 }
+        N.SendSkipDouble(2)
+        S.s.belPending = {}   -- emptied, but non-host hasn't advanced phase
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("n"), 2,
+            "AZ.33e (v3.2.0): SendSkipDouble retry fires when belPending is empty but phase still DOUBLE (final-skip non-host)")
+    end
+
+    -- AZ.34 SendPreempt retry — initial + branch (a) non-host claimant
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL2BID
+        S.s.contract = nil
+        N.SendPreempt(2)
+        assertEq(broadcastsMatching("@"), 1,
+            "AZ.34a (v3.2.0): SendPreempt emits initial MSG_PREEMPT")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("@"), 2,
+            "AZ.34b (v3.2.0): retry fires in non-host claimant state (PHASE_DEAL2BID, contract=nil)")
+    end
+
+    -- AZ.34 branch (b) — host/bot post-ApplyContract state
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PREEMPT   -- doesn't matter for branch b
+        S.s.contract = { type = K.BID_SUN, bidder = 3, trump = nil }
+        N.SendPreempt(3)
+        assertEq(broadcastsMatching("@"), 1, "AZ.34c setup: initial")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("@"), 2,
+            "AZ.34d (v3.2.0): retry fires in post-ApplyContract state (contract.bidder=3, type=SUN)")
+    end
+
+    -- AZ.34-suppress: neither branch holds
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL2BID
+        S.s.contract = nil
+        N.SendPreempt(2)
+        -- Round moved on: phase is PLAY, contract is Hokm (not by seat 2)
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, bidder = 1, trump = "S" }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("@"), 1,
+            "AZ.34e (v3.2.0): SendPreempt retry suppressed when neither branch holds")
+    end
+
+    -- AZ.35 SendPreemptPass retry — initial + seat removed from preemptEligible
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2, 3 }
+        N.SendPreemptPass(2)
+        assertEq(broadcastsMatching("%"), 1,
+            "AZ.35a (v3.2.0): SendPreemptPass emits initial MSG_PREEMPT_PASS")
+        S.s.preemptEligible = { 3 }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("%"), 2,
+            "AZ.35b (v3.2.0): retry fires when seat 2 removed from preemptEligible and phase still PREEMPT")
+    end
+
+    -- AZ.35 final-pass (preemptEligible == nil after _FinalizePreempt)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2 }
+        N.SendPreemptPass(2)
+        S.s.preemptEligible = nil   -- _FinalizePreempt cleared it
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("%"), 2,
+            "AZ.35c (v3.2.0): retry fires when preemptEligible=nil but phase still PREEMPT")
+    end
+
+    -- AZ.35-suppress (phase moved past PREEMPT)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2, 3 }
+        N.SendPreemptPass(2)
+        S.s.phase = K.PHASE_DOUBLE   -- preempt resolved, normal post-bid flow
+        S.s.preemptEligible = nil
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("%"), 1,
+            "AZ.35d (v3.2.0): SendPreemptPass retry suppressed when phase moves past PREEMPT")
+    end
+
+    -- AZ.36 bot SWA migration — bot path now routes through SendSWAReq
+    -- and inherits its retry. We verify the helper does its 2 broadcasts;
+    -- the helper-routing migration itself is a Net.lua source-pin
+    -- assertion (the bot path body in MaybeRunBot now contains
+    -- "N.SendSWAReq").
+    do
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        -- The bot SWA dispatch block lives inside MaybeRunBot, between
+        -- the swaRequest setup and the bot auto-vote loop. Find the
+        -- "v3.2.0 batch 4A" marker we added to that site.
+        assertTrue(netSrc:find("v3%.2%.0 batch 4A.- N%.SendSWAReq") ~= nil
+                or netSrc:find("v3%.2%.0 batch 4A:.-N%.SendSWAReq") ~= nil,
+            "AZ.36a (v3.2.0): MaybeRunBot bot SWA path routes through N.SendSWAReq")
+        -- Direct helper test: SendSWAReq still produces initial + retry
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        S.s.swaRequest = { caller = 2, responses = {} }
+        N.SendSWAReq(2, "AS")
+        assertEq(broadcastsMatching("I"), 1,
+            "AZ.36b (v3.2.0): SendSWAReq initial broadcast")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("I"), 2,
+            "AZ.36c (v3.2.0): SendSWAReq retry fires (helper unchanged from v3.1.12)")
+    end
+
+    -- AZ.37 AFK preempt-pass migration — _HostBelTimeout now routes
+    -- through SendPreemptPass. Source-pin assertion since the AFK
+    -- path is multi-step and the helper-routing IS the change.
+    do
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        local fnStart = netSrc:find("function N%._HostBelTimeout")
+        assertTrue(fnStart ~= nil, "AZ.37a setup: _HostBelTimeout found")
+        if fnStart then
+            local body = netSrc:sub(fnStart, fnStart + 3500)
+            assertTrue(body:find('kind == "preempt_pass"') ~= nil,
+                "AZ.37b (v3.2.0): _HostBelTimeout preempt_pass branch present")
+            -- Pre-fix: this branch had `broadcast(... MSG_PREEMPT_PASS ...)`.
+            -- Post-fix: routes through N.SendPreemptPass helper.
+            assertTrue(body:find("N%.SendPreemptPass%(seat%)") ~= nil,
+                "AZ.37c (v3.2.0): _HostBelTimeout preempt_pass routes through N.SendPreemptPass")
+        end
     end
 
     -- Restore real harness stubs for any subsequent test sections.
