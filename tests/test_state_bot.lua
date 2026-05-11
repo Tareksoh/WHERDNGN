@@ -3590,39 +3590,116 @@ do
                "AC.3b (B6): IsValidSWA caller branch returns true on first matching move (existential)")
 end
 
--- AC.4 (BG-1) — Sun Bel-fear gate uses strict > 100
+-- AC.4 (BG-1) — Sun Bel-fear gate uses strict > 100 (matches Saudi rule)
+-- AC.5 (OE-1) — PickOvercall mirrors that Bel-fear bias
+--
+-- v3.2.0 batch 3 (codex review): both source pins replaced by one
+-- behavioral PickOvercall boundary test. Pre-conversion, AC.4's pin
+-- was scanning for `myTotal > K.SUN_BEL_CUMULATIVE_GATE` which Codex
+-- noted is actually the OVERCALL strict-gate, not a PickDouble
+-- branch — the source pin was mislabelled. Both pins protect the
+-- same code path (overcall Bel-fear bias when our team cumulative >
+-- 100, with strict > comparison so 100 is not "ahead enough" to
+-- suppress).
+--
+-- Combined behavioral: H.13-style fixture, same hand, seat 3 (team
+-- A). Move cumulative.A from 100 to 101 and observe the decision
+-- flip from TAKE → WAIVE. This proves:
+--   1. strict > gate (100 still fires TAKE)
+--   2. Bel-fear actually moves the decision boundary (101 flips it)
+-- Both AC.4 and AC.5 retired in favor of this single boundary pair.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("myTotal > K%.SUN_BEL_CUMULATIVE_GATE then") ~= nil,
-               "AC.4 (BG-1): Sun Bel-fear gate uses strict > 100 (matches R.CanBel)")
-end
+    local prevDB = WHEREDNGNDB
+    WHEREDNGNDB = { advancedBots = true, m3lmBots = true }
 
--- AC.5 (OE-1) — PickOvercall mirrors Bel-fear bias
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("function Bot%.PickOvercall")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 4500)
-        assertTrue(body:find("overcallBelFear") ~= nil
-                   and body:find("K%.SUN_BEL_CUMULATIVE_GATE") ~= nil,
-                   "AC.5 (OE-1): PickOvercall biases sunStr down by Bel-fear when our.cum > 100")
+    local function setup()
+        S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+        S.s.dealer = 4
+        S.s.overcall = nil
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.bidCard = "9C"
+        S.BeginOvercall("9C", 4)
+        S.s.hostHands = {
+            [1] = { "JC","9C","KC","QC","8C","7C","JS","9S" },
+            [2] = { "8H","7H","8S","7S","8D","7D","KS","QS" },
+            [3] = { "AS","AH","AD","AC","TS","TH","TD","TC" },
+            [4] = { "JH","JD","9H","9D","QH","QD","KH","KD" },
+        }
     end
+
+    -- Boundary YES side: cumulative.A == 100 → strict > 100 gate
+    -- does NOT suppress → PickOvercall still returns TAKE on the
+    -- Sun-strong hand.
+    setup()
+    S.s.cumulative = { A = 100, B = 0 }
+    local pickAt100 = Bot.PickOvercall(3)
+    assertEq(pickAt100, "TAKE",
+        "AC.4 (BG-1 behavioral): cumulative=100 still 'ahead enough' boundary — strict > 100 gate keeps TAKE")
+    S.FinalizeOvercall()
+
+    -- Boundary NO side: cumulative.A == 101 → strict gate triggers
+    -- Bel-fear → sun strength biased down → decision flips to WAIVE
+    -- on the same hand.
+    setup()
+    S.s.cumulative = { A = 101, B = 0 }
+    local pickAt101 = Bot.PickOvercall(3)
+    assertEq(pickAt101, "WAIVE",
+        "AC.5 (OE-1 behavioral): cumulative=101 triggers overcall Bel-fear bias — same hand flips to WAIVE")
+    S.FinalizeOvercall()
+
+    WHEREDNGNDB = prevDB
 end
 
--- AC.6 (P4-1) — PickFour reads partner's open-Bel signal
+-- AC.6 (P4-1 / DEAD-1) — PickFour applies unconditional +5 partner-open-Bel bonus
 -- v0.11.18-final DEAD-1 (ultra audit): the v0.11.18 belOpen==false branch
 -- was DEAD CODE (PHASE_FOUR is unreachable when belOpen=false). Reframed
--- as unconditional +5 calibration. Test pin verifies the unconditional
--- bonus is in place.
+-- as unconditional +5 calibration.
+--
+-- v3.2.0 batch 3 (codex review): converted from source pin to
+-- behavioral. Pre-conversion the pin only verified the literal
+-- `strength = strength + 5` line existed in Bot.PickFour's body;
+-- nothing proved the bonus was load-bearing. This fixture is
+-- calibrated so post-bonus strength is exactly in the fire band
+-- (strength=80, jth=80 with zero jitter). Without the +5
+-- calibration the same hand would fall below threshold.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("function Bot%.PickFour")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 2500)
-        -- Pin the +5 bonus is unconditional at PHASE_FOUR (belOpen==true invariant)
-        assertTrue(body:find("strength = strength %+ 5") ~= nil,
-                   "AC.6 (P4-1 / DEAD-1): PickFour applies unconditional +5 partner-open-Bel bonus")
+    -- Save/restore RNG so the test is deterministic and doesn't
+    -- pollute other tests' randomness. jitter() inside Bot.lua uses
+    -- math.random(-amp, amp); forcing it to 0 pins the threshold.
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
     end
+
+    local prevDB = WHEREDNGNDB
+    WHEREDNGNDB = { advancedBots = true }
+    freshState()
+    S.s.isHost = true
+    S.s.contract = {
+        type = K.BID_HOKM, trump = "C", bidder = 1,
+        doubled = true, tripled = true, belOpen = true,
+    }
+    S.s.phase = K.PHASE_FOUR
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    -- Codex-provided fixture: post-bonus strength=80, jth=80 with
+    -- zero jitter. PickFour fires only because of the unconditional
+    -- +5 calibration. Pre-fix (without +5) the same hand returns
+    -- (false, false).
+    S.s.hostHands = {
+        [1] = {},
+        [2] = { "QD", "JC", "8S", "7H", "8H", "9C", "AD", "JD" },
+        [3] = {}, [4] = {},
+    }
+    Bot._partnerStyle = nil
+    local yes = Bot.PickFour(2)
+    assertTrue(yes,
+        "AC.6 (P4-1 / DEAD-1 behavioral): PickFour fires with +5 partner-open-Bel bonus at threshold (zero jitter, calibrated hand)")
+
+    math.random = origRandom
+    WHEREDNGNDB = prevDB
 end
 
 -- =====================================================================
@@ -3663,10 +3740,12 @@ do
 end
 
 -- AD.4 (ismctsdiag): single-card-shortcut tagged for diagnostic clarity
+-- v3.2.0 batch 3: AD.4a converted to behavioral test (see
+-- tests/test_botmaster.lua section F.1). AD.4b Slash message pin
+-- retained as-is; it pins a user-visible string and converting it
+-- would require an end-to-end ismctsdiag slash-command invocation
+-- test, which is out of scope for this batch.
 do
-    local bmSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/BotMaster.lua"):read("*a")
-    assertTrue(bmSrc:find('BM%._lastShortCircuit = "single%-card"') ~= nil,
-               "AD.4a (BM-03): BotMaster tags single-card-shortcut path")
     local slashSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Slash.lua"):read("*a")
     assertTrue(slashSrc:find("had only 1 legal card") ~= nil,
                "AD.4b (BM-03): Slash.lua differentiates single-card-shortcut message")
@@ -5091,11 +5170,13 @@ end
 
 -- AI.6 (agent #6 touching-honors in pickFollow): smother branch
 -- saves A/T when partner shows touch-honor signal.
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    assertTrue(botSrc:find("saveForPartnerTouch") ~= nil,
-               "AI.6 (agent #6): pickFollow smother reads partner topTouchSignal")
-end
+--
+-- v3.2.0 batch 3 (codex review): source pin RETIRED. The behavior is
+-- exhaustively exercised end-to-end by AK.4 below, which sets up the
+-- exact same partner topTouchSignal scenario and asserts the donate
+-- pick is QH (highest non-A/T point card) instead of AH (which would
+-- be the default donate). If this branch's wiring regresses, AK.4
+-- fails loudly. The source pin added no incremental coverage.
 
 -- AI.7 (agent #7 M5 defender mirror): trick-8 defender highestByRank
 -- when in make-or-break band.

@@ -348,6 +348,61 @@ do
 end
 
 -- =====================================================================
+-- F. v3.2.0 batch 3 — AD.4a single-card-shortcut diagnostic (behavioral)
+-- =====================================================================
+section("F. v3.2.0 batch 3 AD.4a single-card-shortcut")
+
+-- AD.4a (BM-03) BEHAVIORAL — converted from source pin
+-- `tests/test_state_bot.lua:3668` that scanned BotMaster.lua for the
+-- literal `BM._lastShortCircuit = "single-card"` assignment. Pre-fix
+-- the assertion only verified the line existed; this version proves
+-- the diagnostic actually gets set on the single-card code path AND
+-- that the returned card is the lone legal card.
+do
+    freshState()
+    WHEREDNGNDB.saudiMasterBots = true
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    S.s.phase = K.PHASE_PLAY
+    S.s.turn = 2
+    S.s.turnKind = "play"
+    -- Seat 2's hand has exactly 1 card. The trick already has a lead
+    -- (any suit); the must-follow legality logic doesn't matter for
+    -- this test because the only-1-card hand means there's only 1
+    -- possible play regardless. The single-card shortcut at
+    -- BotMaster.lua:1048 fires on `#legal == 1`.
+    S.s.hostHands = {
+        [1] = { "JS", "9S", "AS", "TS", "KS", "QS", "8S", "7S" },
+        [2] = { "9C" },
+        [3] = { "AD", "TD", "KD", "QD", "JD", "9D", "8D", "7D" },
+        [4] = { "AC", "TC", "KC", "QC", "JC", "AH", "8C", "7C" },
+    }
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = "C",
+                  plays = { { seat = 1, card = "AC" } } }
+    S.s.playedCardsThisRound = {}
+    S.s.akaCalled = nil
+
+    BM._lastShortCircuit = nil
+    BM._lastWorldsCompleted = nil
+    local preInRollout = Bot._inRollout
+    local pick = BM.PickPlay(2)
+
+    -- The single legal card is returned.
+    assertEq(pick, "9C",
+        "F.1a (AD.4a behavioral): single-card hand returns that card from BM.PickPlay")
+    -- The diagnostic tag is set so /baloot ismctsdiag distinguishes
+    -- this fast path from "0 worlds because budget cut on iter 1".
+    assertEq(BM._lastShortCircuit, "single-card",
+        "F.1b (AD.4a behavioral): _lastShortCircuit tagged 'single-card'")
+    assertEq(BM._lastWorldsCompleted, 0,
+        "F.1c (AD.4a behavioral): _lastWorldsCompleted = 0 (no rollouts ran)")
+    -- The _inRollout flag is restored (no leak even on the fast path).
+    assertEq(Bot._inRollout, preInRollout,
+        "F.1d (AD.4a behavioral): Bot._inRollout restored after single-card shortcut")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
