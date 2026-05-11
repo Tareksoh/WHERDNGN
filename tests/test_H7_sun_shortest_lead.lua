@@ -107,8 +107,15 @@ local S = WHEREDNGN.State
 --
 -- Two insertions:
 --
---   1. Add `cardsOfSuit` helper immediately after the closing `end`
---      of `lowestByRank`.
+--   1. Add `cardsOfSuit` helper immediately before `local function
+--      pickLead` so it lands at file-scope, in the same chunk closure
+--      as Bot.lua's re-bound `lowestByRank` local. (Pre-v3.2.0 batch
+--      5C this hunk anchored on `local function highestByRank`, which
+--      lived just above lowestByRank in Bot.lua. Batch 5C moved the
+--      play primitives — including highestByRank and lowestByRank —
+--      to Bot/PlayPrimitives.lua, so the anchor moved one function
+--      further down to `pickLead` — the next stable file-scope symbol
+--      that is deferred indefinitely from extraction.)
 --
 --   2. Add the Sun-shortest-lead branch immediately before the comment
 --      "-- Defenders / bidder's partner / Sun lead".  (In the patched
