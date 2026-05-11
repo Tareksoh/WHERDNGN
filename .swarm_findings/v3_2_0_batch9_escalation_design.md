@@ -274,17 +274,19 @@ Mirroring the AJ.9c/d/e/f pattern. Asserts:
 - 2 negative-export asserts: Bot/Escalation.lua does NOT introduce a new `B.Bot.Escalation` sub-table OR a re-binding header on Bot.lua's side (because none is needed)
 - 1 assert: Bot.lua's old Bidding re-binding header is REMOVED (since escalation no longer needs it)
 
-**Estimated AJ.9g delta**: 3 + 4 + 4 + 4 + 2 + 1 = **+18 new asserts**.
+**Actual AJ.9g delta (post-implementation)**: 3 helper-def + 4 picker-pub + 4 jitter-const + 6 Bidding-import + 5 toc-order + 2 negative-subtable + 5 Bot.lua state (no-rebind, styleTrumpTempo + OnEscalation + OnRoundEnd stay, no-bidding-header) + 3 escalation-helper-moved + 4 picker-moved + 1 styleTrumpTempo-not-in-esc = **45 new AJ.9g asserts**. Plus the retirement of the 6 AJ.9f-bind asserts (the Batch 8 Bidding re-binding header is now gone from Bot.lua) — net **+30 asserts** to the harness.
 
 ### 5E. Net test-count delta
 
 | Action | Asserts |
 |---|---|
 | Retarget 8 pins (file-path change, no count change) | 0 |
-| Add AJ.9g block | +18 |
-| **Total delta** | **+18** |
+| Add AJ.9g block (final implementation surface) | +45 |
+| Retire 6 AJ.9f-bind asserts (Bot.lua's Batch 8 Bidding header removed) | -6 |
+| Retarget side effects (no count change, file-path only) | -9 (body asserts inside if-fnStart that previously skipped now run on new file — net) |
+| **Total delta** | **+30** |
 
-Expected final harness: 1189 + 18 = **~1207** (verify on first harness run).
+Actual final harness: 1189 + 30 = **1219 / 1219 pass**. Verified on implementation branch `v3.2.0-cleanup-batch9-escalation` at commit `fd31215`.
 
 ---
 
@@ -367,12 +369,12 @@ Combined: ~700 lines move out of Bot.lua; ~12 lines of re-binding header in Bot.
 
 ### 8C. Tests added in implementation batch
 
-- AJ.9g source-pin block (~18 asserts): file presence + toc-order + jitter constants + public picker definitions.
+- AJ.9g source-pin block (45 asserts): file presence + toc-order + jitter constants + public picker definitions + Bidding helper imports + Bot.lua negative checks + style-ledger stay-asserts.
 - No new behavioral tests needed — AC.6 / AE.4 / AJ.13 / AK.7 already cover behavior.
 
 ### 8D. Estimated harness count delta
 
-**+18** (1189 → ~1207).
+**+30** (1189 → 1219). Actual implementation: AJ.9g block added 45 asserts; AJ.9f-bind retirement removed 6 asserts; retarget side-effects net to -9; total +30.
 
 ### 8E. Explicit deferrals
 
@@ -400,7 +402,7 @@ Combined: ~700 lines move out of Bot.lua; ~12 lines of re-binding header in Bot.
   - All 7 file-local symbols present (3 helpers — `styleBelTendency`, `selfStyleJitterBonus`, `escalationStrength` — plus 4 jitter consts) AND the 4 public pickers as `function Bot.PickDouble/PickTriple/PickFour/PickGahwa(...)`. Total = 11 moved symbols. (Inline copies of `jitter` + `shuffledSuits` are utility duplicates, NOT counted as moved symbols.)
   - 6-locals re-binding header from Bot.Bidding present (suitStrengthAsTrump, sunStrength, partnerBidBonus, partnerEscalatedBonus, combinedUrgency, opponentUrgency).
   - Inline `jitter` and `shuffledSuits` present.
-- Run full harness; expect **~1207 / 1207 pass**.
+- Run full harness; actual result on implementation branch: **1219 / 1219 pass**.
 - Run all 5 standalone smokes (H1, H7, numworlds, traced, bel-quality).
 - Feature branch: `v3.2.0-cleanup-batch9-escalation`.
 - Commit + push, **do not merge**.
@@ -417,8 +419,8 @@ Headline numbers:
 - **7 file-local moved symbols/consts** (`styleBelTendency`, `selfStyleJitterBonus`, `escalationStrength`, `BEL_JITTER`, `TRIPLE_JITTER`, `FOUR_JITTER`, `GAHWA_JITTER`) **plus 4 public picker functions** (`Bot.PickDouble`, `Bot.PickTriple`, `Bot.PickFour`, `Bot.PickGahwa`) = **11 moved symbols total**. Inline copies of `jitter` + `shuffledSuits` are utility duplicates (mirroring Batch 8's Bot/Bidding.lua pattern), NOT counted as moved symbols.
 - ~700 lines moved from Bot.lua to Bot/Escalation.lua.
 - Bot.lua additionally **sheds** the 6-locals Bidding re-binding header from Batch 8 (no longer needed).
-- 11 test loaders + 8 source-pin retargets + new AJ.9g block (~18 asserts).
-- Expected harness: **~1207 / 1207 pass** (1189 + 18).
+- 11 test loaders + 7 source-pin retargets (do-blocks; 8 individual assertions inside) + new AJ.9g block (45 asserts) + AJ.9f-bind retirement (-6 asserts).
+- Actual harness: **1219 / 1219 pass** (1189 + 30 net).
 - Risk class: **MEDIUM**.
 - Cleanly establishes the `Bot/<Subsystem>.lua` pattern for any future extraction (Memory, pickLead/pickFollow further down the road).
 
@@ -447,7 +449,7 @@ Headline numbers:
 | Source-pin inventory | 8 retargets (AA.1a/b, AB.2, AD.3, AD.7a/b, AH.3, AH.7, AI.4) — single file-path edit each; ~5 stay scanning Bot.lua (escalation-adjacent body checks); behavioral tests AC.6/AE.4/AJ.13/AK.7 unchanged |
 | Test gaps | None blocking. Existing AC.6/AE.4/AJ.13/AK.7 cover behavior. AH.3 floor-cap structural pin stays source-only (Codex's Batch 7 verdict). |
 | Expected implementation risk | **MEDIUM** (comparable to Batch 8 but simpler: fewer moving parts, no public sub-table, Bot.lua re-binding header shrinks instead of growing) |
-| Expected harness | **~1207 / 1207 pass** (1189 + 18 AJ.9g asserts) |
+| Actual harness | **1219 / 1219 pass** (1189 + 45 AJ.9g asserts − 6 AJ.9f-bind retirements − 9 retarget side-effects = +30 net) — verified on implementation branch `v3.2.0-cleanup-batch9-escalation` at commit `fd31215` |
 | Predicted files changed | 1 new (`Bot/Escalation.lua`) + 14 modified (Bot.lua, WHEREDNGN.toc, 11 test loaders, tests/test_state_bot.lua) |
 | Working tree status | clean except this design doc untracked at `.swarm_findings/v3_2_0_batch9_escalation_design.md` |
 

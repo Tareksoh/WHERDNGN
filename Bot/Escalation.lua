@@ -82,7 +82,8 @@ local function styleBelTendency(seat)
     if not m or m.bels < 1 then return nil end
     if m.bels >= 2 then return 1 end
     return 0
-end
+end
+
 
 -- Smarter Bel — gated by hand strength so a weak defender doesn't bel
 -- into stronger opposition. Sun contracts get a small bonus because

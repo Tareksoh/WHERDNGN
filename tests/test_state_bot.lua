@@ -5382,18 +5382,27 @@ do
 end
 
 -- AJ.9f (v3.2.0 cleanup batch 8): Bot/Bidding.lua presence, exports,
--- .toc load order, and Bot.lua re-binding header. The bidding-window
--- deciders (Bot.PickBid / Bot.PickPreempt / Bot.PickOvercall +
--- Bot.OpponentUrgency public) plus 14+1 file-local helpers
--- (suitStrengthAsTrump / sideSuitAceBonus / hokmMinShape / sunMinShape
--- / beloteSuit / beloteBypassQualifies / aceCountAndMardoofa /
--- withBidcard / sunStrength / partnerBidBonus / scoreUrgency /
--- opponentUrgency / matchPointUrgency / combinedUrgency /
--- partnerEscalatedBonus) moved out of Bot.lua to Bot/Bidding.lua.
--- Bot.lua re-binds 6 helpers (suitStrengthAsTrump + sunStrength +
--- partnerBidBonus + partnerEscalatedBonus + combinedUrgency +
--- opponentUrgency) consumed by escalation deciders. bidderHoldsBidcard
--- STAYS in Bot.lua (only consumed by pickLead/pickFollow).
+-- and .toc load order. The bidding-window deciders (Bot.PickBid /
+-- Bot.PickPreempt / Bot.PickOvercall + Bot.OpponentUrgency public)
+-- plus 14+1 file-local helpers (suitStrengthAsTrump / sideSuitAceBonus
+-- / hokmMinShape / sunMinShape / beloteSuit / beloteBypassQualifies /
+-- aceCountAndMardoofa / withBidcard / sunStrength / partnerBidBonus /
+-- scoreUrgency / opponentUrgency / matchPointUrgency / combinedUrgency
+-- / partnerEscalatedBonus) moved out of Bot.lua to Bot/Bidding.lua.
+--
+-- HISTORICAL NOTE on Bot.lua's Bidding re-binding header:
+--   Batch 8 originally added a 6-locals re-binding header to Bot.lua
+--   (suitStrengthAsTrump + sunStrength + partnerBidBonus +
+--   partnerEscalatedBonus + combinedUrgency + opponentUrgency) so the
+--   escalation deciders inside Bot.lua could close over the moved
+--   helpers as file-locals. Batch 9 (v3.2.0 cleanup batch 9, see AJ.9g
+--   below) MOVED those escalation deciders to Bot/Escalation.lua and
+--   the re-binding header migrated WITH them — Bot.lua no longer has
+--   a Bidding re-binding header. AJ.9g enforces both the presence of
+--   the header inside Bot/Escalation.lua AND its absence from Bot.lua.
+--
+-- bidderHoldsBidcard STAYS in Bot.lua (only consumed by pickLead/
+-- pickFollow).
 do
     local bidSrc = io.open(WHEREDNGN_TESTS_ROOT
                            .. "/Bot/Bidding.lua"):read("*a")
