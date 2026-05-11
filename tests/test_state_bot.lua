@@ -5317,12 +5317,30 @@ do
 end
 
 -- AJ.9 (deck changes): "4 Colors" + "Ba8ala SET" name renames.
+-- v3.2.0 cleanup batch 5A: the CARD_STYLES table moved out to
+-- UI/Themes.lua. Scan UI.lua + UI/Themes.lua concatenated so the pin
+-- stays valid no matter which file currently owns the deck table.
 do
-    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
-    assertTrue(uiSrc:find('name%s*=%s*"4 Colors"') ~= nil,
+    local uiSrc    = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    local themeSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI/Themes.lua"):read("*a")
+    local combined = uiSrc .. "\n" .. themeSrc
+    assertTrue(combined:find('name%s*=%s*"4 Colors"') ~= nil,
                "AJ.9a (deck): burgundy deck renamed to '4 Colors'")
-    assertTrue(uiSrc:find('name%s*=%s*"Ba8ala SET"') ~= nil,
+    assertTrue(combined:find('name%s*=%s*"Ba8ala SET"') ~= nil,
                "AJ.9b (deck): royal_noir deck renamed to 'Ba8ala SET'")
+end
+
+-- AJ.9c (v3.2.0 cleanup batch 5A): .toc must load UI/Themes.lua before
+-- UI.lua so the file-locals UI.lua binds from U.Theme exist when its
+-- chunk runs. Reordering this would break theme rendering at load.
+do
+    local tocSrc   = io.open(WHEREDNGN_TESTS_ROOT .. "/WHEREDNGN.toc"):read("*a")
+    local themePos = tocSrc:find("UI/Themes%.lua")
+    local uiPos    = tocSrc:find("\nUI%.lua")
+    assertTrue(themePos ~= nil, "AJ.9c-themes: WHEREDNGN.toc lists UI/Themes.lua")
+    assertTrue(uiPos    ~= nil, "AJ.9c-ui:     WHEREDNGN.toc lists UI.lua")
+    assertTrue(themePos and uiPos and themePos < uiPos,
+               "AJ.9c-order:  UI/Themes.lua loads BEFORE UI.lua")
 end
 
 print("=== Section AK: v1.0.7 test-debt closure (behavioral conversions) ===")

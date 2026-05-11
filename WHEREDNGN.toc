@@ -23,6 +23,7 @@ BotMaster.lua
 Net.lua
 
 # UI
+UI/Themes.lua
 UI.lua
 MinimapIcon.lua
 
