@@ -3052,22 +3052,10 @@ end
 print("")
 print("=== Section W: v0.11.14 2-Ace Sun bonus ===")
 
--- W.1 — Bot.PickBid applies the 2-Ace bonus. Source-pin: the
--- elseif that adds K.BOT_SUN_2ACE_BONUS is present in PickBid.
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("function Bot%.PickBid")
-    assertTrue(fnStart ~= nil, "W.1 setup: Bot.PickBid found")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 6000)
-        -- v0.11.16 audit BC-1 renamed local `aceCount` to `sunAces` in
-        -- the bonus block (post-bidcard recount). Either symbol satisfies.
-        local hasAceMatch = body:find("aceCount == 2") ~= nil
-                            or body:find("sunAces == 2") ~= nil
-        assertTrue(hasAceMatch and body:find("K%.BOT_SUN_2ACE_BONUS") ~= nil,
-                   "W.1 (v0.11.14): PickBid applies K.BOT_SUN_2ACE_BONUS for 2-Ace count")
-    end
-end
+-- W.1 (v3.2.0 cleanup batch 7): source pin RETIRED. Behavioral
+-- counterpart at AJ.14 calibrates a zero-jitter PickBid hand where
+-- K.BOT_SUN_2ACE_BONUS is load-bearing: with the bonus -> SUN,
+-- without the bonus -> PASS.
 
 -- W.2 — Behavioral: the user-trace 2-Ace hands fire Sun post-bonus.
 -- Sets up minimal state so PickBid can run and exercises both hands
@@ -3159,19 +3147,10 @@ do
              "X.1b: K.BOT_OVERCALL_SHORT_TRUMP_BONUS = 8")
 end
 
--- X.1c — Bot.PickOvercall applies the void/short bonus
-do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
-    local fnStart = botSrc:find("function Bot%.PickOvercall")
-    assertTrue(fnStart ~= nil, "X.1c setup: Bot.PickOvercall found")
-    if fnStart then
-        local body = botSrc:sub(fnStart, fnStart + 3000)
-        assertTrue(body:find("K%.BOT_OVERCALL_VOID_TRUMP_BONUS") ~= nil,
-                   "X.1c (Q1): PickOvercall references K.BOT_OVERCALL_VOID_TRUMP_BONUS")
-        assertTrue(body:find("trumpCount == 0") ~= nil,
-                   "X.1d (Q1): PickOvercall checks for trump-suit void")
-    end
-end
+-- X.1c + X.1d (v3.2.0 cleanup batch 7): source pins RETIRED.
+-- Behavioral counterpart at AJ.15 covers both branches: true void
+-- in contract trump -> TAKE via K.BOT_OVERCALL_VOID_TRUMP_BONUS;
+-- one trump -> WAIVE because only the short-trump bonus applies.
 
 -- X.2 — hokmMinShape allows J+9+count>=3 self-sufficient (no side Ace)
 -- Source-pin: the new path appears AFTER the count>=4 check and BEFORE
@@ -5564,6 +5543,84 @@ do
     assertEq(Bot.PickGahwa(1), false,
              "AJ.13d (F1): PickGahwa returns false on Sun contract")
 
+    restore()
+end
+
+-- AJ.14 (v3.2.0 cleanup batch 7, replaces W.1 source pin):
+-- behavioral counterpart for PickBid's 2-Ace Sun bonus. The hand
+-- is calibrated under zero jitter so the 2-Ace bonus is load-bearing:
+-- with K.BOT_SUN_2ACE_BONUS applied -> SUN; without it -> PASS.
+do
+    local restore = snapshotS({
+        "bidRound", "bidCard", "dealer", "hostHands", "cumulative", "bids",
+    })
+    local prevAdvanced = WHEREDNGNDB.advancedBots
+    WHEREDNGNDB.advancedBots = true
+
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == -K.BOT_BID_JITTER and b == K.BOT_BID_JITTER then return 0 end
+        if a == -3 and b == 3 then return 0 end
+        if a == nil then return origRandom() end
+        if b == nil then return origRandom(a) end
+        return origRandom(a, b)
+    end
+
+    S.s.bidRound = 1
+    S.s.bidCard = "7C"
+    S.s.dealer = 4
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.bids = {}
+    S.s.hostHands = {
+        [1] = { "7S", "TS", "QS", "AH", "AD" },
+    }
+
+    local result = Bot.PickBid(1)
+
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = prevAdvanced
+    restore()
+
+    assertEq(result, K.BID_SUN,
+             "AJ.14 (W.1 behavioral): 2-Ace bonus is load-bearing for zero-jitter PickBid Sun boundary")
+end
+
+-- AJ.15 (v3.2.0 cleanup batch 7, replaces X.1c + X.1d source pins):
+-- behavioral counterpart for PickOvercall's void-in-trump bonus.
+-- The void hand clears TAKE only because trumpCount == 0 applies
+-- K.BOT_OVERCALL_VOID_TRUMP_BONUS. The same face-strength hand with
+-- one trump card gets only the short-trump bonus and returns WAIVE.
+do
+    local restore = snapshotS({
+        "phase", "contract", "bidCard", "dealer", "hostHands",
+        "cumulative", "bids", "overcall",
+    })
+    local prevDB = WHEREDNGNDB
+    WHEREDNGNDB = { advancedBots = true, m3lmBots = true }
+
+    local function setupOvercall(hand)
+        S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+        S.s.dealer = 4
+        S.s.overcall = nil
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.bidCard = "9C"
+        S.s.cumulative = { A = 0, B = 0 }
+        S.s.bids = {}
+        S.BeginOvercall("9C", 4)
+        S.s.hostHands = { [3] = hand }
+    end
+
+    setupOvercall({ "AH", "TH", "KH", "QH", "AD", "TD", "AC", "KC" })
+    local pickVoid = Bot.PickOvercall(3)
+    assertEq(pickVoid, "TAKE",
+             "AJ.15a (X.1c/d behavioral): void in contract trump applies overcall bonus -> TAKE")
+
+    setupOvercall({ "AH", "TH", "KH", "QH", "AD", "TD", "AC", "KS" })
+    local pickShort = Bot.PickOvercall(3)
+    assertEq(pickShort, "WAIVE",
+             "AJ.15b (X.1c/d behavioral): one trump gets short bonus only -> WAIVE")
+
+    WHEREDNGNDB = prevDB
     restore()
 end
 
