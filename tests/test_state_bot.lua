@@ -7445,6 +7445,32 @@ do
             "AZ.25b (v3.1.14): LocalFour retry emits 2nd MSG_FOUR")
     end
 
+    -- AZ.25-Four-suppress: contract replaced between send and retry
+    --   Codex v3.1.14 verify notes flagged this as optional hardening
+    --   completing parity with AZ.23f/AZ.24d.
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 2          -- doublerSeat
+        S.s.phase = K.PHASE_FOUR
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = true, doublerSeat = 2, belOpen = true,
+                         tripled = true, tripleOpen = true,
+                         foured = nil }
+        S.s.cumulative = { A = 0, B = 0 }
+        N.LocalFour(true)
+        -- Simulate new round: contract REPLACED with a new table.
+        S.s.contract = { bidder = 3, type = K.BID_SUN, foured = true }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("4"), 1,
+            "AZ.25e (v3.1.14): SendFour retry suppressed when contract table replaced")
+    end
+
     -- AZ.25-Gahwa LocalGahwa integration
     do
         clearCaptures()
@@ -7472,6 +7498,32 @@ do
         pcall(retry.fn)
         assertEq(broadcastsMatching("5"), 2,
             "AZ.25d (v3.1.14): LocalGahwa retry emits 2nd MSG_GAHWA")
+    end
+
+    -- AZ.25-Gahwa-suppress: contract replaced between send and retry
+    --   Parity with AZ.23f/AZ.24d/AZ.25e per Codex verify notes.
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 1          -- bidder
+        S.s.phase = K.PHASE_GAHWA
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = true, doublerSeat = 2, belOpen = true,
+                         tripled = true, tripleOpen = true,
+                         foured = true, fourOpen = true,
+                         gahwa = nil }
+        S.s.cumulative = { A = 0, B = 0 }
+        N.LocalGahwa()
+        -- Simulate new round: contract REPLACED with a new table.
+        S.s.contract = { bidder = 3, type = K.BID_SUN, gahwa = true }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("5"), 1,
+            "AZ.25f (v3.1.14): SendGahwa retry suppressed when contract table replaced")
     end
 
     -- ---------------------------------------------------------------------
