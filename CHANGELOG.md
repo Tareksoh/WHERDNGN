@@ -1,5 +1,71 @@
 # Changelog
 
+## v3.2.0 — Maintenance / internal restructure
+
+Maintenance release focused on addon stability, test coverage, and
+internal structure. **No intended gameplay, UI, network-protocol,
+saved-variable, or scoring changes** — this release is groundwork
+for safer future user-visible updates.
+
+### Changed (internal restructure)
+
+Major bot logic split out of the previously-monolithic `Bot.lua`
+into focused sibling modules. The TOC load order keeps every new
+file ahead of `Bot.lua` so the public `Bot.*` API stays unchanged
+from a caller's perspective.
+
+- **`Bot/Tiers.lua`** — tier predicates (`Bot.IsM3lm`, `Bot.IsFzloky`,
+  `Bot.IsSaudiMaster`, `Bot.IsBotSeat`, …).
+- **`Bot/PlayPrimitives.lua`** — low-level legal-move helpers,
+  position-aware filters, and per-suit shape reads previously
+  inlined inside `Bot.PickPlay`.
+- **`Bot/Bidding.lua`** — `Bot.PickBid`, `Bot.PickAshkal`, and the
+  bidding-side helpers.
+- **`Bot/Escalation.lua`** — `Bot.PickDouble` / `PickTriple` /
+  `PickFour` / `PickGahwa` (the Saudi escalation chain: Bel → Bel×2
+  → Four → Gahwa / قهوة).
+- **`UI/Themes.lua`** — theme/style data lifted out of `UI.lua`.
+
+`Bot.lua` itself dropped from 8,451 lines (at the `v3.1.14` tag) to
+6,078 lines (-28%)
+with no behaviour change. The extracted modules are exposed via
+the same `B.Bot.*` / `WHEREDNGN.Bot.*` namespace they were before;
+no caller had to update an import path because the addon loads via
+`WHEREDNGN.toc` in order, not via `require`.
+
+### Improved (test coverage + hygiene)
+
+- Test harness grew from 1,106 pass to **1,219 pass** behavioral
+  pins. New coverage targets the bidding/escalation extractions,
+  network `Send*` retry pre-/post-apply guards, and source-pin
+  protected comment markers used by `tests/test_state_bot.lua`.
+- Consolidated repeated `broadcast(...)` retry patterns into the
+  `Net.Send*` helpers (continuation of the v3.1.10 / v3.1.11 /
+  v3.1.12 / v3.1.13 / v3.1.14 wire-retry hardening).
+- Removed dead helper code and dead branches surfaced during the
+  Codex-reviewed batch sweep (Batches 1-9).
+
+### Verification
+
+- `python tests/run.py`: **1219 passed, 0 failed**.
+- Standalone smokes (`test_H1_pin_J9_trump`, `test_H7_sun_shortest_lead`,
+  `test_numworlds_scaling`, `test_v0.5_traced_game`,
+  `test_bel_decision_quality`): all green.
+- Packaging dry-run against `git ls-files` + `.pkgmeta` ignore list:
+  263 files would ship, 768 excluded; no dev-artifact leakage.
+
+### Notes for upgraders
+
+- The CurseForge package zip contains exactly the runtime files
+  loaded by `WHEREDNGN.toc` plus `cards/`, `sounds/`, and `media/`
+  assets. Internal documentation (`docs/`, `.swarm_findings/`),
+  tests, and build tooling are excluded by `.pkgmeta`.
+- Saved variables (`WHEREDNGNDB`) layout is unchanged. A v3.1.x
+  install upgrading to v3.2.0 will load existing saved data
+  without migration.
+- No protocol-version bump. v3.1.x clients and v3.2.0 clients can
+  share a party without addon-message mismatch.
+
 ## v3.1.14 — Codex delta review: real Local* paths for SWA deny + escalation retries
 
 Two passes of Codex review of v3.1.12 and v3.1.13 surfaced the same
