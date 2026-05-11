@@ -311,7 +311,7 @@ Approximately **20 source pins** in `tests/test_state_bot.lua` currently scan `B
 
 Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400-ish). Per Codex's narrowed-export plan:
 
-- **14 file-local helper presence** asserts: `Bot/Bidding.lua` defines each of the 14 `local function` helpers.
+- **15 file-local helper presence** asserts: `Bot/Bidding.lua` defines each of the 15 `local function` helpers (the 14 originally planned plus `suitStrengthAsTrump` added mid-implementation).
 - **4 public-function presence** asserts: `Bot/Bidding.lua` declares `function Bot.OpponentUrgency`, `function Bot.PickBid`, `function Bot.PickPreempt`, `function Bot.PickOvercall`.
 - **1 test-internal export** assert: `Bot._beloteBypassQualifies = beloteBypassQualifies` in Bot/Bidding.lua.
 - **3 `.toc`-order** asserts: Tiers < PlayPrimitives, PlayPrimitives < Bidding, Bidding < Bot.lua.
@@ -325,8 +325,9 @@ Add a new **AJ.9f** block at the bottom of the AJ.9d/e cluster (around line 5400
 | Action | Asserts |
 |---|---|
 | Retarget ~22 pins (file-path change only, no count change) | 0 |
-| Add AJ.9f block (presence + toc-order + narrow exports + re-binding pins) | +32 |
-| **Total delta** | **+32** |
+| Add AJ.9f block (presence + toc-order + narrow exports + re-binding + bidderHoldsBidcard placement pins) | +41 |
+| Retarget side effect: 1 previously-skipped body-check now runs | -1 |
+| **Total delta** | **+40 net** |
 
 **Actual** final harness: 1149 + 40 = **1189 / 1189 pass** (AJ.9f added 41 asserts; net delta is +40 because retargeting picked up 1 additional body-check that previously skipped). Verified by harness run on implementation branch.
 
@@ -403,7 +404,7 @@ Actual: **1189 / 1189 pass** (1149 baseline + 41 new AJ.9f asserts − 1 net adj
 | # | Failure mode | Likelihood | Mitigation | Verification |
 |---|---|---|---|---|
 | 1 | **Load order**: `Bot/Bidding.lua` runs before `B.Bot.Primitives` exists or before `B.Bot.IsAdvanced` exists, causing nil-helper errors at first invocation | LOW | `.toc` places `Bot/Bidding.lua` AFTER `Bot/Tiers.lua` and `Bot/PlayPrimitives.lua`. The new file references `B.Bot.IsAdvanced` etc. via the shared `local Bot = B.Bot` reference — resolution happens at CALL time, not load time. AJ.9f order-pin asserts catch any `.toc` reorder. | Full harness + AJ.9f toc-order asserts |
-| 2 | **Local helper no longer visible**: a Bot.lua call site (e.g., escalation decider) calls `sunStrength` but the local is missing from the re-binding header | MEDIUM | Bot.lua's re-binding header is mechanical (7 locals from a fixed list). AJ.9f re-binding asserts pin each name. Behavioral tests for PickDouble/Triple (W.1's replacement AJ.14, plus AE.X) catch the failure. | Full harness + AJ.9f re-binding asserts |
+| 2 | **Local helper no longer visible**: a Bot.lua call site (e.g., escalation decider) calls `sunStrength` but the local is missing from the re-binding header | MEDIUM | Bot.lua's re-binding header is mechanical (6 locals from a fixed list — suitStrengthAsTrump + sunStrength + partnerBidBonus + partnerEscalatedBonus + combinedUrgency + opponentUrgency). AJ.9f re-binding asserts pin each name. Behavioral tests for PickDouble/Triple (W.1's replacement AJ.14, plus AE.X) catch the failure. | Full harness + AJ.9f re-binding asserts |
 | 3 | **Helper accidentally exported / not exported**: a file-local that should remain `local function` accidentally becomes `Bidding.X = X` (or vice versa), changing the public surface | LOW-MEDIUM | Codex review of `Bot/Bidding.lua` against the exact 14-helper + 4-public list in §3A. AJ.9f presence pins assert each file-local AND each public. | Codex review + AJ.9f presence asserts |
 | 4 | **Source pins retargeted incorrectly**: a pin's path is changed to Bot/Bidding.lua but the anchor doesn't match (e.g., comment text drift during the move) | MEDIUM | Move is **verbatim** (Codex's Batch 5C guardrail) — comments and code preserved exactly. AJ.9f presence asserts use the same anchor strings as the retargeted pins. Run the full harness to catch any anchor mismatch. | Full harness — any retarget mismatch causes the corresponding source-pin to fail |
 | 5 | **Behavior drift from manual move**: a subtle whitespace / comment / closure capture changes during the giant copy (~1 400 lines) and changes bot behavior | LOW-MEDIUM | Use the Python line-slice approach for verbatim move (same pattern that worked in Batch 5C for tahreebClassify's ~155-line audit comment). Run `git diff main...HEAD -- Bot.lua` to verify deletions; `git diff` cannot verify the new file content, so Codex review must compare against `old main:Bot.lua` slice. AE.1, AE.1c, W.2, X.4, AJ.12, AJ.14, AJ.15, H.10-H.14, AC.4-AC.5 cover the bidding decision space behaviorally — any drift in PickBid / PickPreempt / PickOvercall output flips an assert. | Behavioral coverage + Codex verbatim-comparison check |
@@ -448,12 +449,12 @@ Implementation scope:
 - `WHEREDNGN.toc` gains 1 line.
 - 11 test loader files each gain 1 line.
 - `tests/test_state_bot.lua` retargets ~19 source pins and gains the AJ.9f source-pin block (41 new asserts).
-- Expected final harness: **1178 / 1178 pass**.
+- Actual final harness: **1189 / 1189 pass** (verified on implementation branch `v3.2.0-cleanup-batch8-bidding` at commit `c699812`).
 
 ### Why this scope (not smaller)
 
 - **Picker co-location.** PickBid + PickPreempt + PickOvercall are the three bidding-window deciders. Co-locating them in one module is semantically coherent.
-- **Bot.lua re-binding header stays compact** at 7 locals — same shape as Batch 5C's primitives header. Smaller scopes (move helpers but keep PickPreempt/PickOvercall in Bot.lua) would inflate Bot.lua's re-binding to ~12+ locals.
+- **Bot.lua re-binding header stays compact** at 6 locals — same shape as Batch 5C's primitives header. Smaller scopes (move helpers but keep PickPreempt/PickOvercall in Bot.lua) would inflate Bot.lua's re-binding to ~12+ locals.
 - **Behavioral coverage is strong.** PickBid via AE.1, AE.1c, W.2, X.4, AJ.12, AJ.14. PickPreempt via the v0.11.16 calibration tests (S-section). PickOvercall via H.10-H.14, AC.4-AC.5, AJ.15. Any behavioral drift surfaces in the harness.
 - **One mechanical move beats two cleanup batches.** A two-step extraction (Batch 8a = helpers only, Batch 8b = pickers) means Bot.lua churns twice. Better to land the full move once.
 
