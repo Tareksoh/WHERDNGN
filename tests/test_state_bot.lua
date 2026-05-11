@@ -7104,6 +7104,510 @@ do
             "AZ.10b (v3.1.12): no MSG_BELOTE broadcast when validation fails")
     end
 
+    -- ---------------------------------------------------------------------
+    -- AZ.11 SendMeld: 250ms retry covers dropped MSG_MELD (v3.1.13)
+    --   Meld drops cost 20-100 raw points per missed declaration.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        -- Minimal meld struct: ApplyMeld accepts (kind, suit, top, cards).
+        local meld = { kind = "seq3", suit = "S", top = "K",
+                       cards = { "JS", "QS", "KS" } }
+        N.SendMeld(2, meld)
+        assertEq(broadcastsMatching("M"), 1,
+            "AZ.11a (v3.1.13): SendMeld emits initial MSG_MELD")
+        assertEq(#timerCallbacks, 1,
+            "AZ.11b (v3.1.13): SendMeld schedules a retry callback")
+        assertEq(timerCallbacks[1].delay, 0.25,
+            "AZ.11c (v3.1.13): retry delay is 0.25s")
+        fireTimers()
+        assertEq(broadcastsMatching("M"), 2,
+            "AZ.11d (v3.1.13): retry fires a second MSG_MELD when still in PLAY")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.12 SendMeld: retry self-suppresses when phase moved past PLAY/DEAL3
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        local meld = { kind = "carre", suit = "S", top = "A",
+                       cards = { "JS", "QS", "KS", "AS" } }
+        N.SendMeld(3, meld)
+        assertEq(broadcastsMatching("M"), 1, "AZ.12a: initial broadcast")
+        S.s.phase = K.PHASE_SCORE
+        fireTimers()
+        assertEq(broadcastsMatching("M"), 1,
+            "AZ.12b (v3.1.13): meld retry suppressed when phase moved to SCORE")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.13 SendAKA: 250ms retry covers dropped MSG_AKA
+    --   AKA is the only explicit partner-coord signal; drop = wrong play.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        -- Set akaCalled so the retry's self-suppress passes
+        S.s.akaCalled = { seat = 2, suit = "H" }
+        N.SendAKA(2, "H")
+        assertEq(broadcastsMatching("e"), 1,
+            "AZ.13a (v3.1.13): SendAKA emits initial MSG_AKA")
+        fireTimers()
+        assertEq(broadcastsMatching("e"), 2,
+            "AZ.13b (v3.1.13): retry fires a second MSG_AKA")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.14 SendAKA: retry suppresses when akaCalled was cleared
+    --   (e.g., trick advanced before retry fired — per-trick scoping).
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        S.s.akaCalled = { seat = 2, suit = "H" }
+        N.SendAKA(2, "H")
+        assertEq(broadcastsMatching("e"), 1, "AZ.14a: initial broadcast")
+        -- Simulate trick boundary clearing akaCalled
+        S.s.akaCalled = nil
+        fireTimers()
+        assertEq(broadcastsMatching("e"), 1,
+            "AZ.14b (v3.1.13): AKA retry suppressed when akaCalled cleared (trick advanced)")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.15 SendAKA: retry suppresses when a different AKA superseded
+    --   (rare but defensive — e.g., new trick with different caller).
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        S.s.akaCalled = { seat = 2, suit = "H" }
+        N.SendAKA(2, "H")
+        assertEq(broadcastsMatching("e"), 1, "AZ.15a: initial")
+        -- A different seat's AKA replaces ours
+        S.s.akaCalled = { seat = 3, suit = "D" }
+        fireTimers()
+        assertEq(broadcastsMatching("e"), 1,
+            "AZ.15b (v3.1.13): AKA retry suppressed when akaCalled changed seat/suit")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.16 SendBid: 250ms retry covers dropped MSG_BID (v3.1.13 batch 2)
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL1
+        N.SendBid(2, "HOKM")
+        assertEq(broadcastsMatching("B"), 1,
+            "AZ.16a (v3.1.13): SendBid emits initial MSG_BID")
+        fireTimers()
+        assertEq(broadcastsMatching("B"), 2,
+            "AZ.16b (v3.1.13): SendBid retry fires when still in DEAL1")
+    end
+
+    -- AZ.17 SendBid: retry suppressed when bid phase ended
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL2BID
+        N.SendBid(3, "SUN")
+        assertEq(broadcastsMatching("B"), 1, "AZ.17a: initial")
+        S.s.phase = K.PHASE_PLAY     -- bidding ended
+        fireTimers()
+        assertEq(broadcastsMatching("B"), 1,
+            "AZ.17b (v3.1.13): SendBid retry suppressed past bidding phases")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.18 SendContract: 250ms retry covers dropped MSG_CONTRACT
+    --   Round-pivot critical: drop = remotes stay on old contract.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.contract = { bidder = 2, type = K.BID_HOKM, trump = "S" }
+        N.SendContract(2, K.BID_HOKM, "S")
+        assertEq(broadcastsMatching("C"), 1,
+            "AZ.18a (v3.1.13): SendContract emits initial MSG_CONTRACT")
+        fireTimers()
+        assertEq(broadcastsMatching("C"), 2,
+            "AZ.18b (v3.1.13): SendContract retry fires when contract unchanged")
+    end
+
+    -- AZ.19 SendContract: retry suppressed if contract changed/cleared
+    do
+        clearCaptures()
+        S.s.contract = { bidder = 2, type = K.BID_HOKM, trump = "S" }
+        N.SendContract(2, K.BID_HOKM, "S")
+        assertEq(broadcastsMatching("C"), 1, "AZ.19a: initial")
+        -- Simulate contract changing (e.g., Sun-overcall flipped it)
+        S.s.contract = { bidder = 3, type = K.BID_SUN, trump = nil }
+        fireTimers()
+        assertEq(broadcastsMatching("C"), 1,
+            "AZ.19b (v3.1.13): SendContract retry suppressed when contract changed")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.20 SendBelote: 250ms retry covers dropped MSG_BELOTE
+    --   +20 raw multiplier-immune bonus; silent drop = score off by 20.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        S.s.beloteAnnounced = { [2] = true }
+        N.SendBelote(2)
+        assertEq(broadcastsMatching("$"), 1,    -- $ is the MSG_BELOTE tag
+            "AZ.20a (v3.1.13): SendBelote emits initial MSG_BELOTE")
+        fireTimers()
+        assertEq(broadcastsMatching("$"), 2,
+            "AZ.20b (v3.1.13): SendBelote retry fires when announcement still active")
+    end
+
+    -- AZ.21 SendBelote: retry suppressed if announcement cleared (round end)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        S.s.beloteAnnounced = { [2] = true }
+        N.SendBelote(2)
+        assertEq(broadcastsMatching("$"), 1, "AZ.21a: initial")
+        S.s.beloteAnnounced = {}    -- round ended, cleared
+        fireTimers()
+        assertEq(broadcastsMatching("$"), 1,
+            "AZ.21b (v3.1.13): SendBelote retry suppressed when beloteAnnounced cleared")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.22 SendBidCard: 250ms retry covers dropped MSG_BIDCARD
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_DEAL1
+        N.SendBidCard("JH")
+        assertEq(broadcastsMatching("b"), 1,
+            "AZ.22a (v3.1.13): SendBidCard emits initial MSG_BIDCARD")
+        fireTimers()
+        assertEq(broadcastsMatching("b"), 2,
+            "AZ.22b (v3.1.13): SendBidCard retry fires")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.23-25 (v3.1.14 — Codex delta review): integration tests for the
+    -- escalation retry path. v3.1.13's tests called N.SendDouble/Triple/
+    -- Four/Gahwa DIRECTLY with pre-apply state. The real call paths
+    -- (LocalDouble, bot dispatch) follow apply-then-send order — by the
+    -- time the 0.25s retry fires, the pre-apply guard has already
+    -- failed (flag set + phase advanced). The retry was dead code in
+    -- production. v3.1.14 switches the guard to post-apply identity
+    -- (same contract table + flag set + correct seat). These tests
+    -- exercise the actual N.Local* paths, not the Send* helpers in
+    -- isolation.
+    -- ---------------------------------------------------------------------
+
+    -- AZ.23 LocalDouble integration: full apply→send→retry path
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 2          -- defender, non-bidder
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = nil }
+        S.s.belPending = { 2, 4 }  -- both defenders eligible
+        S.s.cumulative = { A = 0, B = 0 }
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalDouble(true)
+        -- Initial broadcast happened during LocalDouble.
+        assertEq(broadcastsMatching("X"), 1,
+            "AZ.23a (v3.1.14): LocalDouble emits initial MSG_DOUBLE")
+        -- ApplyDouble has now run: contract.doubled=true, doublerSeat=2,
+        -- phase advanced to TRIPLE (since open=true, Hokm). The retry's
+        -- post-apply guard should still see the same contract table +
+        -- doubled flag + correct doublerSeat.
+        assertEq(S.s.contract.doubled, true,
+            "AZ.23b (v3.1.14): ApplyDouble set contract.doubled=true (pre-retry-fire)")
+        assertEq(S.s.contract.doublerSeat, 2,
+            "AZ.23c (v3.1.14): ApplyDouble set contract.doublerSeat=2")
+        -- Fire only the 0.25s retry, ignore any longer timers.
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        assertTrue(retry ~= nil,
+            "AZ.23d (v3.1.14): SendDouble 0.25s retry callback queued")
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("X"), 2,
+            "AZ.23e (v3.1.14): retry fires 2nd MSG_DOUBLE — post-apply guard works")
+    end
+
+    -- AZ.23-suppress: retry skipped when contract table replaced
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 2
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = nil }
+        S.s.belPending = { 2, 4 }
+        S.s.cumulative = { A = 0, B = 0 }
+        N.LocalDouble(true)
+        -- Simulate new round: contract is REPLACED with a new table
+        -- (ApplyContract in the next round creates a fresh contract).
+        S.s.contract = { bidder = 3, type = K.BID_SUN, trump = nil,
+                         doubled = true, doublerSeat = 4 }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("X"), 1,
+            "AZ.23f (v3.1.14): SendDouble retry suppressed when contract table replaced")
+    end
+
+    -- AZ.24 LocalTriple integration
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 1          -- bidder
+        S.s.phase = K.PHASE_TRIPLE
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = true, doublerSeat = 2, belOpen = true,
+                         tripled = nil }
+        S.s.cumulative = { A = 0, B = 0 }
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalTriple(true)
+        assertEq(broadcastsMatching("3"), 1,
+            "AZ.24a (v3.1.14): LocalTriple emits initial MSG_TRIPLE")
+        assertEq(S.s.contract.tripled, true,
+            "AZ.24b (v3.1.14): ApplyTriple set contract.tripled=true")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("3"), 2,
+            "AZ.24c (v3.1.14): retry fires 2nd MSG_TRIPLE")
+    end
+
+    -- AZ.24-suppress: contract replaced
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 1
+        S.s.phase = K.PHASE_TRIPLE
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = true, doublerSeat = 2, belOpen = true,
+                         tripled = nil }
+        N.LocalTriple(true)
+        S.s.contract = { bidder = 3, type = K.BID_SUN, tripled = true }
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("3"), 1,
+            "AZ.24d (v3.1.14): SendTriple retry suppressed when contract table replaced")
+    end
+
+    -- AZ.25a LocalFour integration
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 2          -- doublerSeat
+        S.s.phase = K.PHASE_FOUR
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = true, doublerSeat = 2, belOpen = true,
+                         tripled = true, tripleOpen = true,
+                         foured = nil }
+        S.s.cumulative = { A = 0, B = 0 }
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalFour(true)
+        assertEq(broadcastsMatching("4"), 1,
+            "AZ.25a (v3.1.14): LocalFour emits initial MSG_FOUR")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("4"), 2,
+            "AZ.25b (v3.1.14): LocalFour retry emits 2nd MSG_FOUR")
+    end
+
+    -- AZ.25-Gahwa LocalGahwa integration
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.localSeat = 1          -- bidder
+        S.s.phase = K.PHASE_GAHWA
+        S.s.contract = { bidder = 1, type = K.BID_HOKM, trump = "S",
+                         doubled = true, doublerSeat = 2, belOpen = true,
+                         tripled = true, tripleOpen = true,
+                         foured = true, fourOpen = true,
+                         gahwa = nil }
+        S.s.cumulative = { A = 0, B = 0 }
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        N.LocalGahwa()
+        assertEq(broadcastsMatching("5"), 1,
+            "AZ.25c (v3.1.14): LocalGahwa emits initial MSG_GAHWA")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("5"), 2,
+            "AZ.25d (v3.1.14): LocalGahwa retry emits 2nd MSG_GAHWA")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.26 LocalSWAResp(false) deny retry (Codex follow-up to v3.1.12).
+    --   v3.1.12 SendSWAResp got a 250ms retry, BUT LocalSWAResp(false)
+    --   cleared S.s.swaRequest immediately after calling SendSWAResp.
+    --   The retry's `S.s.swaRequest.caller == caller` guard then failed,
+    --   so the retry was dead code in the actual UI path. v3.1.14 fixes
+    --   this by keeping swaRequest alive through the retry window.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        -- Non-host defender (seat 2) denies caller (seat 1)'s SWA.
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.phase = K.PHASE_PLAY
+        S.s.localSeat = 2
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        -- Caller=1 (team A), denier=2 (team B) — cross-team check passes.
+        S.s.swaRequest = {
+            caller = 1, handCount = 3,
+            responses = {},
+            encodedHand = "AS",
+            ts = 0, windowSec = 5,
+        }
+        S.s.swaDenied = nil
+
+        N.LocalSWAResp(false)
+
+        -- Initial broadcast from SendSWAResp inside LocalSWAResp.
+        assertEq(broadcastsMatching("O"), 1,
+            "AZ.26a (v3.1.14): LocalSWAResp(false) emits initial MSG_SWA_RESP")
+        -- The denier's vote is now recorded in req.responses (was cleared
+        -- pre-fix; the UI lock-out semantic needs this to still hide buttons).
+        assertTrue(
+            S.s.swaRequest ~= nil
+            and S.s.swaRequest.responses
+            and S.s.swaRequest.responses[2] == false,
+            "AZ.26b (v3.1.14): deny records responses[localSeat]=false")
+        -- swaRequest is NOT immediately cleared (pre-fix it was).
+        assertTrue(S.s.swaRequest ~= nil,
+            "AZ.26c (v3.1.14): swaRequest still pinned after deny (allows retry)")
+
+        -- Fire the 250ms SendSWAResp retry — its guard now sees a still-
+        -- alive swaRequest and re-broadcasts.
+        --
+        -- The captured timer callbacks include BOTH the 0.25s retry
+        -- (from SendSWAResp) AND the 0.35s delayed clear + 3s toast
+        -- clear (from LocalSWAResp). We need to fire the 0.25s one
+        -- first — sort timer callbacks by delay before firing.
+        table.sort(timerCallbacks, function(a, b) return a.delay < b.delay end)
+        local retryCallback = timerCallbacks[1]
+        assertTrue(retryCallback and retryCallback.delay == 0.25,
+            "AZ.26d (v3.1.14): SendSWAResp 0.25s retry callback queued")
+        -- Fire just the retry, not the delayed clear yet.
+        local ok, err = pcall(retryCallback.fn)
+        if not ok then print("  retry callback err:", err) end
+        assertEq(broadcastsMatching("O"), 2,
+            "AZ.26e (v3.1.14): retry fires and emits 2nd MSG_SWA_RESP")
+        -- swaRequest is STILL alive at this point (delayed clear hasn't fired yet).
+        assertTrue(S.s.swaRequest ~= nil,
+            "AZ.26f (v3.1.14): swaRequest still alive between retry and delayed-clear")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.27 LocalSWAResp(false): delayed 0.35s clear actually clears request.
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.phase = K.PHASE_PLAY
+        S.s.localSeat = 2
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        S.s.swaRequest = {
+            caller = 1, handCount = 3, responses = {},
+            encodedHand = "AS", ts = 0, windowSec = 5,
+        }
+        S.s.swaDenied = nil
+
+        N.LocalSWAResp(false)
+        -- Find the 0.35s delayed clear callback.
+        local delayedClear
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.35 then delayedClear = e; break end
+        end
+        assertTrue(delayedClear ~= nil,
+            "AZ.27a (v3.1.14): 0.35s delayed-clear callback queued")
+        -- swaRequest alive pre-fire
+        assertTrue(S.s.swaRequest ~= nil,
+            "AZ.27b (v3.1.14): swaRequest alive before delayed clear fires")
+        -- Fire the delayed clear
+        local ok, err = pcall(delayedClear.fn)
+        if not ok then print("  delayed clear err:", err) end
+        assertTrue(S.s.swaRequest == nil,
+            "AZ.27c (v3.1.14): swaRequest cleared after delayed-clear fires")
+    end
+
+    -- ---------------------------------------------------------------------
+    -- AZ.28 swaDenied toast survives the delayed clear (3s toast separate).
+    -- ---------------------------------------------------------------------
+    do
+        clearCaptures()
+        S.s.isHost = false
+        S.s.paused = false
+        S.s.phase = K.PHASE_PLAY
+        S.s.localSeat = 2
+        S.s.seats = {
+            [1] = { name = "Foo-X" }, [2] = { name = "Bar-X" },
+            [3] = { name = "Baz-X" }, [4] = { name = "Qux-X" },
+        }
+        S.s.swaRequest = {
+            caller = 1, handCount = 3, responses = {},
+            encodedHand = "AS", ts = 0, windowSec = 5,
+        }
+        S.s.swaDenied = nil
+        N.LocalSWAResp(false)
+        -- swaDenied set on click (toast banner state).
+        assertTrue(S.s.swaDenied ~= nil and S.s.swaDenied.denier == 2,
+            "AZ.28a (v3.1.14): swaDenied toast set on click")
+        -- Fire only the 0.35s delayed clear; swaDenied should remain.
+        local delayedClear
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.35 then delayedClear = e; break end
+        end
+        pcall(delayedClear.fn)
+        assertTrue(S.s.swaDenied ~= nil,
+            "AZ.28b (v3.1.14): swaDenied toast survives the 0.35s request clear")
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)

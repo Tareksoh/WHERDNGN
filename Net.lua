@@ -215,6 +215,26 @@ local function dealHandsToHumans(hands)
     end
 end
 
+-- v3.1.13 (codex audit P2 — deferred retry coverage, batch 2): the
+-- bid-phase + escalation-chain + contract-finalization wire messages
+-- all get a 250ms re-broadcast mirror of the SendTurn pattern. Each
+-- receiver has its own idempotence guard (see comments per function),
+-- so a duplicate retry frame is a no-op.
+--
+-- Why these matter:
+--   • SendBid       — drop = remote sees blank for that seat; host's
+--                     bid loop confused on echo timing
+--   • SendContract  — drop = round-pivot; remotes stay on Hokm while
+--                     host transitions to Sun. v1.6.1 SendTurn
+--                     comment referenced "v0.11.11 NetU-01 MSG_CONTRACT
+--                     pattern" suggesting historical retry that was
+--                     never present in the current code.
+--   • SendBelote    — drop = +20 raw multiplier-immune bonus silently
+--                     lost on receiving clients
+--   • SendBidCard   — drop = round 1 bid card visual missing
+--   • SendDouble/   — drop = escalation chain misses a decision; AFK
+--     Triple/Four/    60s timer is the ultimate fallback but the
+--     Gahwa           feel-time is jarring
 function N.SendBidCard(card)
     -- Audit Cl22 fix: when card is nil, "%s" stringifies it to "nil",
     -- producing the wire frame "b;nil". Receivers store the literal
@@ -222,6 +242,17 @@ function N.SendBidCard(card)
     -- real card and tries to render. Coalesce to empty string so the
     -- field round-trips as a clear no-card sentinel.
     broadcast(("%s;%s"):format(K.MSG_BIDCARD, card or ""))
+    -- v3.1.13: 250ms re-broadcast. _OnBidCard's ApplyBidCard is
+    -- idempotent (just writes s.bidCard). Phase guard: bid-card is
+    -- visible during DEAL1/DEAL2BID phases.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_DEAL1
+               or S.s.phase == K.PHASE_DEAL2BID then
+                broadcast(("%s;%s"):format(K.MSG_BIDCARD, card or ""))
+            end
+        end)
+    end
 end
 
 function N.SendTurn(seat, kind)
@@ -260,10 +291,43 @@ end
 
 function N.SendBid(seat, bid)
     broadcast(("%s;%d;%s"):format(K.MSG_BID, seat, bid))
+    -- v3.1.13: 250ms re-broadcast. _OnBid's idempotence guard at
+    -- Net.lua:1339 (`if S.s.bids and S.s.bids[seat] ~= nil then return end`)
+    -- rejects a duplicate. Phase guard: bidding only.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_DEAL1
+               or S.s.phase == K.PHASE_DEAL2BID then
+                broadcast(("%s;%d;%s"):format(K.MSG_BID, seat, bid))
+            end
+        end)
+    end
 end
 
 function N.SendContract(bidder, btype, trump)
     broadcast(("%s;%d;%s;%s"):format(K.MSG_CONTRACT, bidder, btype, trump or ""))
+    -- v3.1.13: 250ms re-broadcast for the round-pivot contract message.
+    -- The v1.6.1 SendTurn comment referenced this pattern but it was
+    -- never present in current code. S.ApplyContract has its own
+    -- match-check on (bidder, type, trump) per the v0.11.x audit notes,
+    -- so duplicate frames are safe. Phase guard: ContractApply happens
+    -- post-bid; retry while the contract is still the current one.
+    -- v3.1.14 (Codex delta review optional cleanup): include trump in
+    -- the guard for consistency with the comment's claim of
+    -- (bidder, type, trump) match-keying. Pre-fix the guard only
+    -- compared bidder + type, so a Sun-overcall that re-broadcasts
+    -- with the SAME bidder/type but a CLEARED trump would still pass
+    -- — harmless in practice but defensive completeness.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.contract and S.s.contract.bidder == bidder
+               and S.s.contract.type == btype
+               and (S.s.contract.trump or "") == (trump or "") then
+                broadcast(("%s;%d;%s;%s"):format(
+                    K.MSG_CONTRACT, bidder, btype, trump or ""))
+            end
+        end)
+    end
 end
 
 -- Escalation broadcasts. v0.2.0+ wire format adds an Open/Closed flag:
@@ -272,27 +336,108 @@ end
 -- pre-v0.2.0 wire that lack the flag are treated as Open (default).
 -- Gahwa is terminal so no flag is meaningful there.
 function N.SendDouble(seat, open)
-    broadcast(("%s;%d;%s"):format(K.MSG_DOUBLE, seat,
-        (open == false) and "0" or "1"))
+    local frame = ("%s;%d;%s"):format(K.MSG_DOUBLE, seat,
+        (open == false) and "0" or "1")
+    broadcast(frame)
+    -- v3.1.14 (Codex delta review — escalation retry fix): switch from
+    -- pre-apply guards (`not contract.doubled and phase == DOUBLE`) to
+    -- POST-APPLY identity guards. The real call paths (LocalDouble,
+    -- bot dispatch) follow `S.ApplyDouble(seat, open)` → `N.SendDouble(...)`
+    -- in that order. ApplyDouble sets `contract.doubled = true` and
+    -- advances `s.phase` (to TRIPLE or PLAY) BEFORE the retry timer
+    -- fires, so the v3.1.13 pre-apply guard always failed in
+    -- production. Net result: the retry was dead code in real UI/bot
+    -- paths — same bug class Codex caught for the SWA deny.
+    --
+    -- Fix: capture the contract table at send time and guard on
+    -- (same table) AND (post-apply flag set) AND (we are the doubler).
+    -- The contract-table identity check prevents the retry from firing
+    -- against a NEW contract (e.g., next round) — ApplyDouble mutates
+    -- in place, so the table reference stays stable across the 0.25s
+    -- window unless the round ended.
+    local contractAtSend = S.s.contract
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.contract == contractAtSend
+               and S.s.contract
+               and S.s.contract.doubled
+               and S.s.contract.doublerSeat == seat then
+                broadcast(frame)
+            end
+        end)
+    end
 end
 
 function N.SendTriple(seat, open)
-    broadcast(("%s;%d;%s"):format(K.MSG_TRIPLE, seat,
-        (open == false) and "0" or "1"))
+    local frame = ("%s;%d;%s"):format(K.MSG_TRIPLE, seat,
+        (open == false) and "0" or "1")
+    broadcast(frame)
+    -- v3.1.14 (Codex delta review): post-apply guard, same shape as
+    -- SendDouble. ApplyTriple sets `contract.tripled = true` before
+    -- the retry fires.
+    local contractAtSend = S.s.contract
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.contract == contractAtSend
+               and S.s.contract
+               and S.s.contract.tripled then
+                broadcast(frame)
+            end
+        end)
+    end
 end
 
 function N.SendFour(seat, open)
-    broadcast(("%s;%d;%s"):format(K.MSG_FOUR, seat,
-        (open == false) and "0" or "1"))
+    local frame = ("%s;%d;%s"):format(K.MSG_FOUR, seat,
+        (open == false) and "0" or "1")
+    broadcast(frame)
+    -- v3.1.14 (Codex delta review): post-apply guard. ApplyFour sets
+    -- `contract.foured = true` before retry fires.
+    local contractAtSend = S.s.contract
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.contract == contractAtSend
+               and S.s.contract
+               and S.s.contract.foured then
+                broadcast(frame)
+            end
+        end)
+    end
 end
 
 function N.SendGahwa(seat)
-    broadcast(("%s;%d"):format(K.MSG_GAHWA, seat))
+    local frame = ("%s;%d"):format(K.MSG_GAHWA, seat)
+    broadcast(frame)
+    -- v3.1.14 (Codex delta review): post-apply guard. ApplyGahwa sets
+    -- `contract.gahwa = true` before retry fires.
+    local contractAtSend = S.s.contract
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.contract == contractAtSend
+               and S.s.contract
+               and S.s.contract.gahwa then
+                broadcast(frame)
+            end
+        end)
+    end
 end
 
 -- v1.0.11 (D HIGH-2): Baloot/Belote announcement broadcast.
 function N.SendBelote(seat)
     broadcast(("%s;%d"):format(K.MSG_BELOTE, seat))
+    -- v3.1.13: 250ms re-broadcast. _OnBelote calls S.ApplyBeloteAnnounce
+    -- which is idempotent (LocalBelote at Net.lua:2681 has the same
+    -- pre-check). +20 raw bonus drop is silently expensive — drop
+    -- on a single client means their final score display is off by 20
+    -- (or 20*mult if Belote multiplier rules apply).
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_PLAY
+               and S.s.beloteAnnounced and S.s.beloteAnnounced[seat] then
+                broadcast(("%s;%d"):format(K.MSG_BELOTE, seat))
+            end
+        end)
+    end
 end
 
 -- v1.0.11 (D HIGH-2): host-side auto-announce on bot K/Q-of-trump play.
@@ -369,9 +514,29 @@ function N.SendPreemptPass(seat)
 end
 
 function N.SendMeld(seat, meld)
-    broadcast(("%s;%d;%s;%s;%s;%s"):format(
+    local frame = ("%s;%d;%s;%s;%s;%s"):format(
         K.MSG_MELD, seat, meld.kind, meld.suit or "", meld.top or "",
-        C.EncodeHand(meld.cards or {})))
+        C.EncodeHand(meld.cards or {}))
+    broadcast(frame)
+    -- v3.1.13 (codex audit P2 — deferred retry coverage): defensive
+    -- 250ms re-broadcast. Meld declarations carry 20-100 raw points
+    -- each (seq3=20, seq4=50, seq5=100, carre=100-200). A dropped
+    -- MSG_MELD silently loses those points on every client that
+    -- missed the frame — the resync-replay path covers /reload, but
+    -- mid-round wire drops do not get a second chance via existing
+    -- machinery. Mirror v3.1.10 SendPlay pattern.
+    --
+    -- Idempotence on receive: S.ApplyMeld dedupes by (seat, kind, top,
+    -- suit) per Net.lua:2067 comment. Duplicate frames are no-ops.
+    -- Phase guard prevents stale retry after round-end.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_PLAY
+               or S.s.phase == K.PHASE_DEAL3 then
+                broadcast(frame)
+            end
+        end)
+    end
 end
 
 -- AKA (إكَهْ) signal. The caller's seat tells everyone they hold the
@@ -380,6 +545,27 @@ end
 -- voice cue.
 function N.SendAKA(seat, suit)
     broadcast(("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""))
+    -- v3.1.13 (codex audit P2): defensive 250ms re-broadcast. AKA is
+    -- the only explicit partner-coordination signal in Saudi Baloot
+    -- (CLAUDE.md:35). A dropped MSG_AKA misleads the partner-bot's
+    -- pickFollow — receiver-relief at Rules.lua:115-130 doesn't fire,
+    -- so the partner may over-trump the boss the AKA was meant to
+    -- protect. High-impact partner-coord loss, low-cost retry.
+    --
+    -- Idempotence: S.ApplyAKA writes s.akaCalled with the same
+    -- (seat, suit) on duplicate; per-trick scoping (s.akaCalled
+    -- cleared at trick end per State.lua:1586) means a stale retry
+    -- can't bleed into the next trick.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.phase == K.PHASE_PLAY
+               and S.s.akaCalled
+               and S.s.akaCalled.seat == seat
+               and S.s.akaCalled.suit == suit then
+                broadcast(("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""))
+            end
+        end)
+    end
 end
 
 -- SWA broadcast: caller declares they'll win all remaining tricks
@@ -4051,7 +4237,34 @@ function N.LocalSWAResp(accept)
             req.responses = req.responses or {}
             req.responses[S.s.localSeat] = true
         else
-            S.s.swaRequest = nil
+            -- v3.1.14 (Codex follow-up to v3.1.12 SWA fix): pre-fix this
+            -- branch cleared S.s.swaRequest IMMEDIATELY after calling
+            -- N.SendSWAResp. The v3.1.12 250ms retry inside SendSWAResp
+            -- guards on `S.s.swaRequest.caller == caller` — so the
+            -- immediate clear here invalidated the guard before the
+            -- 0.25s retry timer fired. Net result: the deny retry was
+            -- dead code in the actual UI path, the same drop scenario
+            -- v3.1.12 was meant to address remained latent.
+            --
+            -- Fix:
+            --   1. Record the deny in req.responses so the UI hides
+            --      Accept/Deny buttons (same shape as the accept branch).
+            --   2. Keep S.s.swaRequest ALIVE through the retry window.
+            --   3. Schedule a delayed local clear at 0.35s — after the
+            --      0.25s retry fires but before the user notices any
+            --      additional latency (well under perception threshold
+            --      for click feedback).
+            --   4. Identity guard the delayed clear: only fire if the
+            --      same request (same caller, deny still recorded by us)
+            --      is still pinned.
+            --
+            -- Preserved: the swaDenied toast (banner shown to the
+            -- denier for 3s confirming their vote). Toast schedule is
+            -- independent of the request-clear schedule.
+            req.responses = req.responses or {}
+            req.responses[S.s.localSeat] = false
+            local stashedReq = req
+            local denierSeat = S.s.localSeat
             S.s.swaDenied = {
                 caller = req.caller,
                 denier = S.s.localSeat,
@@ -4059,6 +4272,18 @@ function N.LocalSWAResp(accept)
             }
             if C_Timer and C_Timer.After then
                 local denyCaller = req.caller
+                -- Delayed local clear of swaRequest. 0.35s > the 0.25s
+                -- SendSWAResp retry, so the retry's guard sees the
+                -- request still alive and fires the second broadcast.
+                C_Timer.After(0.35, function()
+                    if S.s.swaRequest == stashedReq
+                       and S.s.swaRequest.responses
+                       and S.s.swaRequest.responses[denierSeat] == false then
+                        S.s.swaRequest = nil
+                        if B.UI and B.UI.Refresh then B.UI.Refresh() end
+                    end
+                end)
+                -- Existing 3s swaDenied toast clear (unchanged).
                 C_Timer.After(3.0, function()
                     if S.s.swaDenied
                        and S.s.swaDenied.caller == denyCaller then
@@ -4066,6 +4291,12 @@ function N.LocalSWAResp(accept)
                         if B.UI and B.UI.Refresh then B.UI.Refresh() end
                     end
                 end)
+            else
+                -- Test harness path (no C_Timer): clear immediately so
+                -- existing harness tests that depend on the prior
+                -- "deny clears request" semantic still pass. The retry
+                -- can't fire in this path anyway.
+                S.s.swaRequest = nil
             end
         end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end

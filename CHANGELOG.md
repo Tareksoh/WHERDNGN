@@ -1,5 +1,246 @@
 # Changelog
 
+## v3.1.14 — Codex delta review: real Local* paths for SWA deny + escalation retries
+
+Two passes of Codex review of v3.1.12 and v3.1.13 surfaced the same
+bug class twice — "helper-level retry test misses the Local*
+integration path." Both fixes target the actual UI call paths, not
+the Send* helpers in isolation.
+
+### Bug 1: SWA deny retry was dead in real path
+
+**The bug**:
+- `N.SendSWAResp` (v3.1.12) had a 250ms re-broadcast with guard
+  `S.s.phase == PHASE_PLAY and S.s.swaRequest and
+  S.s.swaRequest.caller == caller`.
+- But `N.LocalSWAResp(false)` cleared `S.s.swaRequest = nil` *immediately*
+  after calling `SendSWAResp`.
+- When the 250ms retry timer fired, the guard saw `S.s.swaRequest == nil`
+  and bailed.
+- Net result: in the actual non-host deny path triggered by the UI's
+  Deny button, the retry never ran. The exact symptom v3.1.12 was
+  meant to address ("defender's deny dropped → host auto-accepts the
+  SWA wrongly") remained latent.
+
+**The fix** (`Net.lua:4205-4262`):
+- Record `req.responses[localSeat] = false` so the UI hides the
+  Accept/Deny buttons (same shape as the accept branch).
+- Keep `S.s.swaRequest` alive through the retry window.
+- Schedule a delayed local clear at **0.35s** — after the 0.25s retry
+  fires but well under user perception threshold for click feedback.
+- Identity-guard the delayed clear: only fire if the same request
+  (same caller + deny still recorded by us) is still pinned.
+- Preserve the existing `swaDenied` toast (3s confirmation banner).
+
+### Why v3.1.12's tests didn't catch this
+
+v3.1.12 added behavioral tests for `N.SendSWAResp` *directly* (AZ.3),
+not for the `N.LocalSWAResp(false)` → SendSWAResp call path. The
+direct-test passed because the test set `S.s.swaRequest` itself and
+never cleared it. The bug existed only in the integration between the
+two functions.
+
+### Bug 2: Escalation retry pre-apply guards were dead in real path
+
+The exact same bug class hit v3.1.13's escalation chain retries:
+
+- `SendDouble` guard pre-fix: `S.s.phase == PHASE_DOUBLE and not
+  S.s.contract.doubled`
+- Same pre-apply pattern for SendTriple/SendFour/SendGahwa
+- But `LocalDouble` (and bot dispatch) calls `S.ApplyDouble(...)`
+  **before** `N.SendDouble(...)`. ApplyDouble sets
+  `contract.doubled = true` and advances `s.phase` (to TRIPLE/PLAY)
+  before the 0.25s retry timer fires.
+- Net result: the pre-apply guard always failed in production. The
+  v3.1.13 retries were dead code in every real UI/bot path.
+- AZ.23-25 tests in v3.1.13 passed because they called `N.SendDouble`
+  **directly** with pre-apply state — never exercised the actual
+  `LocalDouble` → ApplyDouble → SendDouble sequence.
+
+### The fix (`Net.lua:331-414`)
+
+Switch from pre-apply guards to **post-apply identity guards**.
+Capture the contract table reference at send time and verify post-
+apply state:
+
+```lua
+function N.SendDouble(seat, open)
+    local frame = ...
+    broadcast(frame)
+    local contractAtSend = S.s.contract
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.25, function()
+            if S.s.contract == contractAtSend
+               and S.s.contract
+               and S.s.contract.doubled
+               and S.s.contract.doublerSeat == seat then
+                broadcast(frame)
+            end
+        end)
+    end
+end
+```
+
+- `S.s.contract == contractAtSend`: contract-table identity prevents
+  the retry from firing against a NEW contract (next round). Apply*
+  mutates the contract table in place, so the reference stays stable
+  unless the round ended.
+- `S.s.contract.doubled`: post-apply flag must be set (the apply
+  happened before send).
+- `S.s.contract.doublerSeat == seat`: ApplyDouble records the actual
+  defender who Bel'd — ensures we're retrying for our own escalation,
+  not a different defender's.
+- Phase guard dropped entirely: ApplyDouble intentionally advances
+  the phase past PHASE_DOUBLE, so phase-checking would re-introduce
+  the bug.
+
+Same shape for SendTriple/SendFour/SendGahwa, each guarding on its
+corresponding flag (`contract.tripled`, `contract.foured`,
+`contract.gahwa`).
+
+### Optional cleanup: SendContract trump check
+
+`SendContract`'s retry guard previously compared only `bidder + type`
+but the comment claimed `(bidder, type, trump)` keying. Added
+`(S.s.contract.trump or "") == (trump or "")` for consistency.
+Harmless in practice (no observed wire pattern that flips trump
+without flipping bidder/type) but defensive completeness.
+
+### Tests
+
+**1058/1058 pass** (was 1040, +18 new behavioral pins after the
+AZ.23-25 replacement). All new tests start from `N.Local*` integration
+paths, not from `N.Send*` directly:
+
+- **AZ.23**: `LocalDouble(true)` integration — full
+  apply→send→retry sequence. Asserts: initial MSG_DOUBLE emitted,
+  `contract.doubled = true` and `doublerSeat = 2` after apply,
+  0.25s retry callback queued, retry fires 2nd MSG_DOUBLE. Plus a
+  contract-table-replaced suppress test (AZ.23f).
+- **AZ.24**: `LocalTriple(true)` integration + suppress test.
+- **AZ.25a-b**: `LocalFour(true)` integration.
+- **AZ.25c-d**: `LocalGahwa()` integration.
+- **AZ.26**: `LocalSWAResp(false)` produces TWO MSG_SWA_RESP
+  broadcasts (initial + retry) — the actual UI path, not direct
+  `SendSWAResp`. Verifies:
+  - `responses[localSeat] = false` is recorded
+  - `swaRequest` still pinned after the call
+  - 0.25s retry callback queued and fires a 2nd broadcast
+  - `swaRequest` still alive between retry-fire and delayed-clear
+- **AZ.27**: 0.35s delayed-clear callback clears `swaRequest`
+  when fired
+- **AZ.28**: `swaDenied` toast (3s timer) is independent of the
+  request-clear and survives
+
+### Process lesson
+
+The v3.1.10 codex review identified the pattern: "helper exists but
+call site bypasses it." v3.1.12 hit the pattern at the SWA bypass
+layer; v3.1.13 hit it again at the escalation pre-apply-guard layer.
+Both rounds of v3.1.x hardening had inadequate behavioral coverage
+that tested the helper in isolation rather than the integration.
+
+v3.1.14 codifies the lesson: **the AZ section now consistently
+starts from the user-facing entry point (`N.Local*`) and asserts
+the wire effect downstream, never the inverse**. Codex's
+FULL_ADDON_AUDIT.md guidance ("Do not treat source-string tests as
+sufficient — helper exists but Local* call site bypasses it") was
+the right north star; v3.1.14 finally applies it consistently across
+the wire-retry test surface.
+
+## v3.1.13 — Deferred Codex P2 closure: round-2 wire-retry sweep
+
+Proactive closure of nearly all remaining items from the v3.1.12 codex
+audit's deferred P2 list. Adds 250ms re-broadcast retry to **10
+additional message types** that were previously single-shot, closing
+the "drops silently lose state" gap for the bidding phase, contract
+finalization, escalation chain, melds, AKA signal, and Belote
+announcement. The user explicitly unblocked stacking these onto v3.1.13.
+
+### MSG_MELD retry
+
+**Why it matters**: Each meld declaration carries 20-100 raw points
+(seq3=20, seq4=50, seq5=100, carre=100-200). A dropped MSG_MELD
+silently loses those points on every client that missed the frame.
+The resync-replay path (host whispers all melds during /reload
+recovery) covers reconnect scenarios, but mid-round single-frame
+drops have no recovery — the meld is lost for the rest of the round
+on the affected client.
+
+**Fix** (`Net.lua:371-394`): 250ms re-broadcast, mirror v3.1.10
+SendPlay pattern. Phase guard limits retry to `PHASE_PLAY` or
+`PHASE_DEAL3` (the windows where melds can legitimately fire).
+Idempotence on receive: `S.ApplyMeld` already dedupes by `(seat,
+kind, top, suit)` per Net.lua:2067 comment.
+
+### MSG_AKA retry
+
+**Why it matters**: AKA (إكَهْ) is the only explicit partner-
+coordination signal in Saudi Baloot (CLAUDE.md:35). A dropped
+MSG_AKA misleads the partner-bot's pickFollow — the receiver-relief
+gate at Rules.lua:115-130 doesn't fire, so the partner may over-trump
+the boss the AKA was meant to protect. The wrong-play cost compounds
+across the round (lost trick + corrupted signal model in subsequent
+plays).
+
+**Fix** (`Net.lua:401-426`): 250ms re-broadcast with state guard.
+The retry only fires when `S.s.akaCalled` still matches the original
+`(seat, suit)` — per-trick scoping at State.lua:1586 clears
+`s.akaCalled` at trick end, so a stale retry can't bleed into the
+next trick if the original frame eventually arrived and got processed.
+
+### Batch 2 (additional, user-unblocked)
+
+Round-pivot + escalation-chain + bidding-phase retries:
+
+- **`SendBid`** — drop = bid not registered, host's bid loop confused.
+  Phase guard: DEAL1/DEAL2BID. Idempotence: `_OnBid` rejects when
+  `s.bids[seat]` is already set (Net.lua:1339).
+- **`SendContract`** — round-pivot critical; drop = remotes stay on
+  Hokm while host moves to Sun. The v1.6.1 SendTurn comment
+  referenced "v0.11.11 NetU-01 MSG_CONTRACT pattern" suggesting
+  historical retry that was never present in current code. Retry
+  guard: contract still matches (bidder, type).
+- **`SendBelote`** — +20 raw multiplier-immune bonus. Drop = score
+  display off by 20 on receiving clients. Guard: `beloteAnnounced[seat]`
+  still set.
+- **`SendBidCard`** — round 1 bid card visual. Guard: still in bid
+  phases. ApplyBidCard is idempotent.
+- **`SendDouble` / `SendTriple` / `SendFour` / `SendGahwa`** —
+  escalation chain. Each retry guarded by phase + the corresponding
+  flag (`contract.doubled` etc.) still being nil. The pre-fix AFK 60s
+  fallback meant a dropped escalation decision turned into a 60s
+  silent wait — now recovers in 250ms.
+
+### Tests
+
+**1040/1040 pass** (was 1007, +33 new behavioral pins). All tests in
+section AZ use captured broadcasts + manually-fired C_Timer.After:
+
+- AZ.11-12: SendMeld retry + phase self-suppress
+- AZ.13-15: SendAKA retry + state-mismatch self-suppress (3 paths)
+- AZ.16-17: SendBid retry + bid-phase self-suppress
+- AZ.18-19: SendContract retry + contract-change self-suppress
+- AZ.20-21: SendBelote retry + announcement-cleared self-suppress
+- AZ.22: SendBidCard retry
+- AZ.23-24: SendDouble retry + idempotence-flag self-suppress
+- AZ.25: SendTriple/SendFour/SendGahwa retry
+
+### Still deferred (lower priority, no user reports)
+
+Remaining single-shot wire sites:
+- **`MSG_SKIP_*` direct-construction sites (14 occurrences)** — no
+  Send* helper exists; would need helper creation for each
+  (SendSkipDouble, SendSkipTriple, etc.). Lower impact because the
+  escalation chain still advances via AFK on a missed skip.
+- **`MSG_PREEMPT_PASS`** — preempt window has its own 5s timeout.
+
+Architectural follow-up (deferred to v3.2.x):
+- Unified `broadcastWithRetry(fn, phaseGuard)` helper replacing the
+  ~16 inline retry blocks now in `Net.lua`. Would consolidate the
+  pattern but require updating the AZ behavioral tests to point at
+  the new helper. Deferred until refactor scope justifies the churn.
+
 ## v3.1.12 — Full-addon audit fixes (SWA + Takweesh/Kawesh + BALOOT) + behavioral tests
 
 External full-addon audit (Codex on head `929dd13`) flagged three P1/P2
