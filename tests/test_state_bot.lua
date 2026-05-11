@@ -103,6 +103,7 @@ load("Rules.lua")
 load("State.lua")
 load("Bot/Tiers.lua")
 load("Bot/PlayPrimitives.lua")
+load("Bot/Bidding.lua")
 load("Bot.lua")
 
 local K   = WHEREDNGN.K
@@ -2560,7 +2561,7 @@ end
 
 -- P.8 (Bot1-05 / C-01): Bot.lua duplicate T-cardinality block removed.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     -- Pre-v0.11.5: TWO byte-identical blocks of:
     --   if ok and bidCardRank == "T" then
     --       local tCount = 0 ... if tCount > 1 then ok = false end
@@ -2668,7 +2669,7 @@ end
 -- PickBid is ~330 lines (~30k chars) so we slice a generous 40k from
 -- the function start to cover R1 + R2 + fall-through decision sites.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickBid")
     assertTrue(fnStart ~= nil, "R.2 setup: Bot.PickBid found")
     if fnStart then
@@ -2713,7 +2714,7 @@ do
     -- the constant value AND the call-site form.
     assertEq(K.BOT_SUN_VOID_PENALTY_CAP, 8,
              "T.2 (v0.11.11): K.BOT_SUN_VOID_PENALTY_CAP = 8")
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("local function sunStrength")
     if fnStart then
         -- v0.11.20: window bumped to 4500 to accommodate AKQ-stopper
@@ -2728,7 +2729,7 @@ end
 
 -- T.3 — hokmMinShape Lever C tightened to require second trump = 9 or A.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("local function hokmMinShape")
     assertTrue(fnStart ~= nil, "T.3 setup: hokmMinShape found")
     if fnStart then
@@ -3156,7 +3157,7 @@ end
 -- Source-pin: the new path appears AFTER the count>=4 check and BEFORE
 -- the L07 any-Ace gate.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("local function hokmMinShape")
     assertTrue(fnStart ~= nil, "X.2 setup: hokmMinShape found")
     if fnStart then
@@ -3182,7 +3183,7 @@ end
 -- Bot.PickBid is ~330 lines; need a wide window to cover the R1
 -- Hokm-on-flipped block which sits ~280 lines into the function.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickBid")
     assertTrue(fnStart ~= nil, "X.3 setup: Bot.PickBid found")
     if fnStart then
@@ -3243,7 +3244,7 @@ print("=== Section Y: v0.11.16 Tier-1 audit fixes ===")
 
 -- Y.2 (A2) — Belote K+Q escape clause in hokmMinShape
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("local function hokmMinShape")
     if fnStart then
         local body = botSrc:sub(fnStart)
@@ -3266,7 +3267,7 @@ end
 -- Y.3 (A1) — R1 Sun uses sunHand (with bidcard)
 -- Y.3 (A1) — R1 Sun + R2 Hokm + PickPreempt + PickOvercall use bidcard
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local pickBid = botSrc:find("function Bot%.PickBid")
     if pickBid then
         -- v1.0.10: window bumped 25000→32000 to accommodate the new
@@ -3293,7 +3294,7 @@ end
 
 -- Y.4 (A4) — Takweesh rate flat 0.95
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local rateStart = botSrc:find("local TAKWEESH_RATE_BY_TRICK = {")
     if rateStart then
         local body = botSrc:sub(rateStart, rateStart + 200)
@@ -3345,14 +3346,14 @@ print("=== Section Z: v0.11.16 hotfix ===")
 
 -- Z.1 (GAP-01) — `belote` recomputed on post-bidcard hand
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     assertTrue(botSrc:find("local belote = beloteSuit%(withBidcard%(hand, S%.s%.bidCard%)%)") ~= nil,
                "Z.1 (GAP-01): belote computed on post-bidcard hand for K+Q-completion via bidcard")
 end
 
 -- Z.2 (OVC-bidcard) — PickOvercall hypHand precedes trumpCount loop
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local pickOvercall = botSrc:find("function Bot%.PickOvercall")
     if pickOvercall then
         local body = botSrc:sub(pickOvercall, pickOvercall + 4500)
@@ -3367,7 +3368,7 @@ end
 
 -- Z.3 (MD-01) — mardoofa recomputed on post-bidcard hand
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     assertTrue(botSrc:find("local _, sunMardoofa = aceCountAndMardoofa%(sunHand%)") ~= nil,
                "Z.3 (MD-01): mardoofa recomputed on post-bidcard sunHand")
 end
@@ -3381,7 +3382,7 @@ end
 
 -- Z.5 (BC-INLINE) — R1 Hokm-on-flipped uses withBidcard helper
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     -- Inline construction `hypHand[#hypHand + 1] = S.s.bidCard` should
     -- be GONE; replaced with withBidcard call.
     assertTrue(botSrc:find("hypHand%[#hypHand %+ 1%] = S%.s%.bidCard") == nil,
@@ -3670,7 +3671,7 @@ print("=== Section AD: v0.11.19 fixes ===")
 
 -- AD.1 (BC-MANDATORY): Belote bypass strength gate when shape passes
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     -- R1 Hokm-on-flipped: Belote escape fires unconditionally on shape
     assertTrue(botSrc:find("BC%-MANDATORY Belote") ~= nil,
                "AD.1a (BC-MANDATORY): R1 Hokm-on-flipped Mandatory-Belote bypass")
@@ -3756,7 +3757,7 @@ end
 
 -- AD.9 (btrace fix): hand log uses POST-bidcard sunAces / sunMardoofa
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     -- The btrace format string uses sunAces / sunMardoofa (post-bidcard
     -- recompute), not aceCount / mardoofaCount (pre-bidcard from line 1383).
     assertTrue(botSrc:find('sunAces=%%d sunMardoofa=%%d') ~= nil,
@@ -4576,7 +4577,7 @@ print("=== Section AF: v0.11.20 fixes ===")
 
 -- AF.1 — AKQ stopper bonus +8 -> +12
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("local function sunStrength")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 4500)
@@ -4587,7 +4588,7 @@ end
 
 -- AF.2 — R2 Advanced bump REMOVED (now a comment-only reference)
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     -- Pin the rationale comment that explains why it's removed.
     assertTrue(botSrc:find("Advanced R2 bump REMOVED") ~= nil,
                "AF.2 (Agent 1 calib): Advanced R2 bump removed (rationale documented)")
@@ -4595,7 +4596,7 @@ end
 
 -- AF.3 — PickPreempt 2-Ace + mardoofa bonus stack
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("function Bot%.PickPreempt")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 3000)
@@ -5062,7 +5063,7 @@ end
 
 -- AH.6 (PB-1 split partnerBidBonus): defender PASS suppression.
 do
-    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot/Bidding.lua"):read("*a")
     local fnStart = botSrc:find("local function partnerBidBonus")
     if fnStart then
         local body = botSrc:sub(fnStart, fnStart + 2000)
@@ -5377,6 +5378,112 @@ do
             botSrc:find("local " .. name .. "%s*=%s*Primitives%." .. name) ~= nil,
             ("AJ.9e-bind-%s: Bot.lua binds %s = Primitives.%s"):format(name, name, name))
     end
+end
+
+-- AJ.9f (v3.2.0 cleanup batch 8): Bot/Bidding.lua presence, exports,
+-- .toc load order, and Bot.lua re-binding header. The bidding-window
+-- deciders (Bot.PickBid / Bot.PickPreempt / Bot.PickOvercall +
+-- Bot.OpponentUrgency public) plus 14+1 file-local helpers
+-- (suitStrengthAsTrump / sideSuitAceBonus / hokmMinShape / sunMinShape
+-- / beloteSuit / beloteBypassQualifies / aceCountAndMardoofa /
+-- withBidcard / sunStrength / partnerBidBonus / scoreUrgency /
+-- opponentUrgency / matchPointUrgency / combinedUrgency /
+-- partnerEscalatedBonus) moved out of Bot.lua to Bot/Bidding.lua.
+-- Bot.lua re-binds 6 helpers (suitStrengthAsTrump + sunStrength +
+-- partnerBidBonus + partnerEscalatedBonus + combinedUrgency +
+-- opponentUrgency) consumed by escalation deciders. bidderHoldsBidcard
+-- STAYS in Bot.lua (only consumed by pickLead/pickFollow).
+do
+    local bidSrc = io.open(WHEREDNGN_TESTS_ROOT
+                           .. "/Bot/Bidding.lua"):read("*a")
+
+    -- Local-function definitions must exist in Bot/Bidding.lua.
+    local bidLocalNames = {
+        "suitStrengthAsTrump",
+        "sideSuitAceBonus", "hokmMinShape", "sunMinShape",
+        "beloteSuit", "beloteBypassQualifies", "aceCountAndMardoofa",
+        "withBidcard", "sunStrength",
+        "partnerBidBonus", "scoreUrgency", "opponentUrgency",
+        "matchPointUrgency", "combinedUrgency", "partnerEscalatedBonus",
+    }
+    for _, name in ipairs(bidLocalNames) do
+        assertTrue(
+            bidSrc:find("local function " .. name .. "[%(%s]") ~= nil,
+            ("AJ.9f-def-%s: Bot/Bidding.lua defines local function %s"):format(name, name))
+    end
+
+    -- Public functions on B.Bot.* (set in Bot/Bidding.lua).
+    local bidPublicNames = {
+        "OpponentUrgency", "PickBid", "PickPreempt", "PickOvercall",
+    }
+    for _, name in ipairs(bidPublicNames) do
+        assertTrue(
+            bidSrc:find("function Bot%." .. name .. "%(") ~= nil,
+            ("AJ.9f-pub-%s: Bot/Bidding.lua defines function Bot.%s"):format(name, name))
+    end
+
+    -- Test-internal export.
+    assertTrue(
+        bidSrc:find("Bot%._beloteBypassQualifies%s*=%s*beloteBypassQualifies") ~= nil,
+        "AJ.9f-test-export: Bot/Bidding.lua sets Bot._beloteBypassQualifies = beloteBypassQualifies")
+
+    -- BEL_JITTER local in Bot/Bidding.lua (PickPreempt needs it).
+    assertTrue(
+        bidSrc:find("local BEL_JITTER%s*=%s*10") ~= nil,
+        "AJ.9f-bel-jitter: Bot/Bidding.lua defines local BEL_JITTER = 10")
+
+    -- Narrowed Bot.Bidding.* exports — only 6 helpers exposed for Bot.lua re-binding.
+    local bidExportNames = {
+        "suitStrengthAsTrump", "sunStrength", "partnerBidBonus",
+        "partnerEscalatedBonus", "combinedUrgency", "opponentUrgency",
+    }
+    for _, name in ipairs(bidExportNames) do
+        assertTrue(
+            bidSrc:find("Bidding%." .. name .. "%s*=%s*" .. name) ~= nil,
+            ("AJ.9f-exp-%s: Bot/Bidding.lua exports Bidding.%s"):format(name, name))
+    end
+
+    -- scoreUrgency / matchPointUrgency intentionally NOT exported.
+    assertTrue(
+        bidSrc:find("Bidding%.scoreUrgency%s*=") == nil,
+        "AJ.9f-no-score-export: Bot/Bidding.lua does NOT export scoreUrgency (kept file-local)")
+    assertTrue(
+        bidSrc:find("Bidding%.matchPointUrgency%s*=") == nil,
+        "AJ.9f-no-mp-export: Bot/Bidding.lua does NOT export matchPointUrgency (kept file-local)")
+
+    -- .toc load order: Tiers < PlayPrimitives < Bidding < Bot.lua.
+    local tocSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/WHEREDNGN.toc"):read("*a")
+    local tierPos = tocSrc:find("Bot/Tiers%.lua")
+    local primPos = tocSrc:find("Bot/PlayPrimitives%.lua")
+    local bidPos  = tocSrc:find("Bot/Bidding%.lua")
+    local botPos  = tocSrc:find("\nBot%.lua")
+    assertTrue(bidPos ~= nil, "AJ.9f-toc-bid:    WHEREDNGN.toc lists Bot/Bidding.lua")
+    assertTrue(tierPos and primPos and tierPos < primPos,
+               "AJ.9f-toc-order-a: Tiers BEFORE PlayPrimitives")
+    assertTrue(primPos and bidPos and primPos < bidPos,
+               "AJ.9f-toc-order-b: PlayPrimitives BEFORE Bidding")
+    assertTrue(bidPos and botPos and bidPos < botPos,
+               "AJ.9f-toc-order-c: Bidding BEFORE Bot.lua")
+
+    -- Bot.lua re-binding header: 6 file-locals from Bidding.
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    local bidRebindNames = {
+        "suitStrengthAsTrump", "sunStrength", "partnerBidBonus",
+        "partnerEscalatedBonus", "combinedUrgency", "opponentUrgency",
+    }
+    for _, name in ipairs(bidRebindNames) do
+        assertTrue(
+            botSrc:find("local " .. name .. "%s*=%s*Bidding%." .. name) ~= nil,
+            ("AJ.9f-bind-%s: Bot.lua binds %s = Bidding.%s"):format(name, name, name))
+    end
+
+    -- bidderHoldsBidcard STAYS in Bot.lua (not in Bot/Bidding.lua).
+    assertTrue(
+        botSrc:find("local function bidderHoldsBidcard") ~= nil,
+        "AJ.9f-bhb-stays: bidderHoldsBidcard stays in Bot.lua (consumed by pickLead/pickFollow)")
+    assertTrue(
+        bidSrc:find("local function bidderHoldsBidcard") == nil,
+        "AJ.9f-bhb-not-in-bid: bidderHoldsBidcard is NOT in Bot/Bidding.lua")
 end
 
 -- =====================================================================

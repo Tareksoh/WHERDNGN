@@ -20,6 +20,7 @@ Rules.lua
 State.lua
 Bot/Tiers.lua
 Bot/PlayPrimitives.lua
+Bot/Bidding.lua
 Bot.lua
 BotMaster.lua
 Net.lua
