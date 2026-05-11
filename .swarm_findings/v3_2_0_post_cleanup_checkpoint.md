@@ -9,7 +9,8 @@ extraction batch from this doc — design/audit checkpoint only.
 
 | Field | Value |
 |---|---|
-| `main` commit | `6ae91e1` — test(H7): refresh stale comment about hunk-1 injection point |
+| `main` commit | `3b333eb` — docs: add v3.2.0 post-cleanup checkpoint |
+| Previous polish commit | `6ae91e1` — H7 stale-comment refresh |
 | Previous cleanup commit | `51c3be9` — Batch 5C |
 | Last shipped CurseForge tag | **v3.1.14** (commit `c1c624f`) |
 | Working tree | clean |
@@ -41,30 +42,39 @@ Plus design/inventory docs for batches 2, 3, 4, 5, 5B, 5C committed to
 
 ## 3. Module Map After Cleanup
 
-Current line counts (Lua files):
+Current line counts (Lua files). Counts are **non-blank lines** —
+empty rows skipped, comment-only rows included. Raw `wc -l` totals
+roughly 4% higher across the board if reproduced; the non-blank
+metric is the one Codex normalizes against batch-to-batch.
 
 | File | Lines | Role |
 |---|---|---|
-| `Bot.lua` | **8 070** | Heuristic AI: `PickBid` + lead/follow + escalation + AKA/SWA/Takweesh/Kawesh + preempt + memory recorder + style ledger + jitter + hand-strength math |
-| `Net.lua` | **6 430** | Addon-channel protocol: bid / play / contract / escalation / preempt / overcall / takweesh / SWA / outcome / review / resync; `broadcastWithRetry`; AFK routing |
-| `UI.lua` | **4 745** | All frames: main window, lobby panel, table panel, action panel, seat badges, center cards, banner, score/contract/round/gameID labels, scale controls, sound mute, peek-last-trick, theme setters |
-| `State.lua` | **2 570** | `S.s` global state table; phase transitions; per-trick / per-round bookkeeping; SaveSession debounce; ApplyResyncSnapshot; IsSeatBot |
-| `Rules.lua` | **1 335** | Legality + scoring: `IsLegalPlay`, `CurrentTrickWinner`, `ScoreRound`, meld detection, partner/seat helpers |
-| `BotMaster.lua` | **1 207** | Saudi-Master tier: ISMCTS sampler, rollout playout, partner-style hints, opp-urgency dispatcher |
-| `Slash.lua` | **775** | `/baloot` subcommands; debug surface |
-| `Constants.lua` | **750** | `K.*` constants; `K.SAUDI_NAMES`; bid-strength thresholds |
-| `WHEREDNGN.lua` | **724** | Event loop entry; PARTY_LEADER_CHANGED handling; addon-message dispatcher; tab nav |
-| `Bot/PlayPrimitives.lua` | **385** | (NEW in 5C) Play helpers under `B.Bot.Primitives` |
-| `UI/Themes.lua` | **261** | (NEW in 5A) Card/felt themes + `COL` palette + theme helpers under `U.Theme` |
-| `Cards.lua` | **221** | Card id / suit / rank / trick-rank / point-value primitives |
-| `Easter.lua` | **154** | Optional easter egg; deletable |
-| `MinimapIcon.lua` | **131** | LibDBIcon glue |
-| `Sound.lua` | **91** | Cue scheduler + arming |
-| `Bot/Tiers.lua` | **81** | (NEW in 5B) Tier predicates under `B.Bot.*` |
-| `Log.lua` | **57** | `B.Log.Debug` / `B.Log.Info` / etc. |
-| **Total** | **27 987** | |
+| `Bot.lua` | **7 875** | Heuristic AI: `PickBid` + lead/follow + escalation + AKA/SWA/Takweesh/Kawesh + preempt + memory recorder + style ledger + jitter + hand-strength math |
+| `Net.lua` | **6 205** | Addon-channel protocol: bid / play / contract / escalation / preempt / overcall / takweesh / SWA / outcome / review / resync; `broadcastWithRetry`; AFK routing |
+| `UI.lua` | **4 534** | All frames: main window, lobby panel, table panel, action panel, seat badges, center cards, banner, score/contract/round/gameID labels, scale controls, sound mute, peek-last-trick, theme setters |
+| `State.lua` | **2 464** | `S.s` global state table; phase transitions; per-trick / per-round bookkeeping; SaveSession debounce; ApplyResyncSnapshot; IsSeatBot |
+| `Rules.lua` | **1 265** | Legality + scoring: `IsLegalPlay`, `CurrentTrickWinner`, `ScoreRound`, meld detection, partner/seat helpers |
+| `BotMaster.lua` | **1 157** | Saudi-Master tier: ISMCTS sampler, rollout playout, partner-style hints, opp-urgency dispatcher |
+| `Slash.lua` | **732** | `/baloot` subcommands; debug surface |
+| `Constants.lua` | **706** | `K.*` constants; `K.SAUDI_NAMES`; bid-strength thresholds |
+| `WHEREDNGN.lua` | **706** | Event loop entry; PARTY_LEADER_CHANGED handling; addon-message dispatcher; tab nav |
+| `Bot/PlayPrimitives.lua` | **372** | (NEW in 5C) Play helpers under `B.Bot.Primitives` |
+| `UI/Themes.lua` | **247** | (NEW in 5A) Card/felt themes + `COL` palette + theme helpers under `U.Theme` |
+| `Cards.lua` | **196** | Card id / suit / rank / trick-rank / point-value primitives |
+| `Easter.lua` | **139** | Optional easter egg; deletable |
+| `MinimapIcon.lua` | **112** | LibDBIcon glue |
+| `Sound.lua` | **85** | Cue scheduler + arming |
+| `Bot/Tiers.lua` | **75** | (NEW in 5B) Tier predicates under `B.Bot.*` |
+| `Log.lua` | **48** | `B.Log.Debug` / `B.Log.Info` / etc. |
+| **Total addon Lua lines** | **26 918** | |
 
-### What remains in `Bot.lua` (8 070 lines)
+### What remains in `Bot.lua` (7 875 lines)
+
+(The `~xxxx-yyyy` ranges below are raw source-line addresses — what
+your editor shows when navigating Bot.lua — not non-blank counts.
+The section heading uses non-blank lines for batch-to-batch
+comparison; the internal address ranges use raw lines so you can
+jump directly to a function.)
 
 Top region (lines 1-128): module setup, tuning constants, tier
 breadcrumb (5B), play-primitive re-binding header (5C), `jitter`,
@@ -88,7 +98,7 @@ Bottom region:
 - ~7745-7945: `PickDouble`/`PickTriple`/`PickFour`/`PickGahwa` (escalation)
 - ~7945-8070: `PickPreempt`/`PickOvercall`/`PickKawesh`/`PickTakweesh`/`PickSWA`/`PickSWAResponse`
 
-### What remains in `UI.lua` (4 745 lines)
+### What remains in `UI.lua` (4 534 lines)
 
 - Module setup + theme re-binding header (5A) (~50 lines)
 - Helpers: `seatAtPos`, `posOfSeat`, `setBackdrop`, `makeCardFace`,
@@ -104,7 +114,7 @@ Bottom region:
 - Setters: `SetCardStyle`, `SetFeltTheme`, `SetTheme`,
   `GetCardStyles`, etc.
 
-### What remains in `Net.lua` (6 430 lines)
+### What remains in `Net.lua` (6 205 lines)
 
 - Module setup + `broadcastWithRetry` helper (Batch 2)
 - Send* helpers for every protocol message (17 retry sites + 1 inline
@@ -113,7 +123,7 @@ Bottom region:
 - AFK auto-pass / auto-preempt-pass routers
 - `MaybeRunBot` host bot dispatch + `runBot` retry timer
 
-### What remains in `State.lua` (2 570 lines)
+### What remains in `State.lua` (2 464 lines)
 
 - `S.s` table init + `Reset`
 - Phase transitions
@@ -331,14 +341,14 @@ agenda can pause without committing to an extraction.
 ### Why not immediate 5D?
 
 5A through 5C established the `<Module>/<Subsystem>.lua` extraction
-pattern and moved 1 040 lines (UI/Themes + Bot/Tiers +
-Bot/PlayPrimitives) out of the two elephants. The remaining elephants
-(`Bot.lua` 8 070, `Net.lua` 6 430, `UI.lua` 4 745) all contain
-state-coupled logic where the next reduction step needs a deliberate
-design choice (e.g., does `Bot/Bidding.lua` re-bind via UI.lua-style
-locals header or expose only on `Bot.PickBid` and let `_memory` reads
-stay opaque?). That's a design-pass question, not an "execute the
-next batch" question.
+pattern and moved 694 non-blank lines (UI/Themes 247 + Bot/Tiers 75
++ Bot/PlayPrimitives 372) out of the two elephants. The remaining
+elephants (`Bot.lua` 7 875, `Net.lua` 6 205, `UI.lua` 4 534) all
+contain state-coupled logic where the next reduction step needs a
+deliberate design choice (e.g., does `Bot/Bidding.lua` re-bind via
+UI.lua-style locals header or expose only on `Bot.PickBid` and let
+`_memory` reads stay opaque?). That's a design-pass question, not an
+"execute the next batch" question.
 
 ---
 
