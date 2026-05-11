@@ -127,18 +127,18 @@ inside the bidding / escalation surfaces. Line numbers are 1-based.
 
 ## 3. Recommended Batch 6 Implementation Scope
 
-**5 picks: 1 retirement + 4 new behavioral tests, replacing 7 source pins.**
+**5 picks: 1 retirement + 4 new behavioral tests, replacing 7 source pins (8 asserts retired total — Q.1 was originally a 2-assert block: a "setup: Bot.PickSWA function found" guard plus the substantive `#hand<=1` pin).**
 
 | Action | Replaces | Risk | Tests Δ |
 |---|---|---|---|
-| Retire Y.1 (cite AE.1 / AE.1c) | Y.1 (1 pin) | LOW | -1 |
-| Add AJ.10 (PickSWA boundaries) | Q.1 + Y.5 (2 pins) | LOW | +3 −2 = +1 net |
-| Add AJ.11 (PickAKA trick-1) | Y.7 (1 pin) | LOW-MEDIUM | +1 −1 = 0 net |
-| Add AJ.12 (Belote K+Q escape) | Y.2 (1 pin) | MEDIUM | +1 −1 = 0 net |
-| Add AJ.13 (Sun-no-rungs invariant) | AA.1c + AB.1 (2 pins) | LOW | +4 −2 = +2 net |
-| | | **Total** | **+2 net** |
+| Retire Y.1 (cite AE.1 / AE.1c) | Y.1 (1 pin / 1 assert) | LOW | -1 |
+| Add AJ.10 (PickSWA boundaries) | Q.1 (2 asserts) + Y.5 (1 assert) | LOW | +3 −3 = 0 net |
+| Add AJ.11 (PickAKA trick-1) | Y.7 (1 pin / 1 assert) | LOW-MEDIUM | +1 −1 = 0 net |
+| Add AJ.12 (Belote K+Q escape) | Y.2 (1 pin / 1 assert) | MEDIUM | +1 −1 = 0 net |
+| Add AJ.13 (Sun-no-rungs invariant) | AA.1c + AB.1 (2 pins / 2 asserts) | LOW | +4 −2 = +2 net |
+| | | **Total** | **+1 net** |
 
-Test count delta breakdown: **+9 behavioral asserts** (3 in AJ.10 + 1 in AJ.11 + 1 in AJ.12 + 4 in AJ.13), **−7 source-pin asserts retired** (Y.1, Q.1, Y.5, Y.7, Y.2, AA.1c, AB.1). Net: **+2**. Final count if implemented: 1150 + 2 = **1152**.
+Test count delta breakdown: **+9 behavioral asserts** (3 in AJ.10 + 1 in AJ.11 + 1 in AJ.12 + 4 in AJ.13), **−8 source-pin asserts retired** (Y.1 × 1; Q.1 × 2 — including the setup-found guard; Y.5 × 1; Y.7 × 1; Y.2 × 1; AA.1c × 1; AB.1 × 1). Net: **+1**. Final count if implemented: 1150 + 1 = **1151**.
 
 ### Why this scope, not more?
 
@@ -231,7 +231,7 @@ end
 
 **Why it would fail if regressed:** if either guard is removed, Bot.PickSWA would enter the substantive SWA-evaluation path with #hand outside the supported range. The empty-hand case would index `hand[1]` which is nil — likely error or false anyway; the 1-card case would attempt an SWA claim with no out-card to commit; the 7-card case would over-fire SWAs at hand sizes the bot is not calibrated for. The behavioral test catches all three deviations.
 
-**Test count delta: +3 new asserts, -2 source pins (Q.1, Y.5) = +1 net.**
+**Test count delta: +3 new asserts, -3 source-pin asserts (Q.1 was 2 asserts: setup-found guard + substantive #hand pin; Y.5 was 1 assert) = 0 net.**
 
 ### 4C. AJ.11 (NEW) — PickAKA fires at trickNum=1 (replaces Y.7)
 
@@ -458,7 +458,7 @@ When implementing Batch 6:
 - For pin DELETIONS (Y.1, Q.1, Y.5, Y.7, Y.2, AA.1c, AB.1) leave a one-line comment at the old position citing the new AJ.NN behavioral assert (mirrors batch-3 pattern at AD.4a, AI.6).
 - Run full harness AND test_H7 / test_H1 standalone smokes after the batch (to confirm no Bot.lua structural side-effects).
 - Stop on a feature branch `v3.2.0-cleanup-batch6` and push for Codex review before merge.
-- Expected harness count after merge: **1152** (+2 net).
+- Expected harness count after merge: **1151** (+1 net). (Originally projected 1152 / +2 net; corrected post-implementation because Q.1 retired 2 asserts rather than 1 — the substantive #hand<=1 pin plus its "setup: Bot.PickSWA function found" guard.)
 - No release tag.
 
 ---
@@ -473,8 +473,8 @@ When implementing Batch 6:
 4. NEW `AJ.12` — hokmMinShape Belote K+Q escape via PickBid R2 (jitter-frozen fixture), replaces Y.2.
 5. NEW `AJ.13` — Sun-no-rungs escalation invariant (4 asserts: PickDouble/Triple/Four/Gahwa all false under Sun), replaces AA.1c + AB.1.
 
-**Net source-pin reduction: 7 pins retired / behaviorally replaced.**
-**Net test count delta: +2** (1150 → 1152).
+**Net source-pin reduction: 7 pins retired / behaviorally replaced (8 underlying asserts removed — Q.1 was a 2-assert block).**
+**Net test count delta: +1** (1150 → 1151).
 **Risk class:** LOW for AJ.10 + AJ.13 + retire Y.1; LOW-MEDIUM for AJ.11; MEDIUM for AJ.12.
 
 Working tree status: clean except for this design doc (untracked at
