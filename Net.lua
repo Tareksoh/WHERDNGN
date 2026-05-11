@@ -55,6 +55,42 @@ local function broadcast(msg)
     end
 end
 
+-- v3.2.0 cleanup batch 2: extract the repeated `C_Timer.After(0.25)`
+-- guarded re-broadcast pattern into one local helper. Every retry-
+-- enabled Send* function used to inline the same shape:
+--
+--     broadcast(frame)
+--     if C_Timer and C_Timer.After then
+--         C_Timer.After(0.25, function()
+--             if <site-specific guard> then broadcast(frame) end
+--         end)
+--     end
+--
+-- 17 Send* helpers used this pattern (BidCard, Turn, Bid, Contract,
+-- Double/Triple/Four/Gahwa, Belote, Meld, AKA, SWAReq, SWAResp,
+-- Takweesh, Kawesh, Play, OvercallDecision) — each only differing in
+-- the guard closure. Consolidating into one helper means future
+-- behavior tweaks (delay, instrumentation, throttling) need exactly
+-- one edit instead of 17.
+--
+-- Behavior preserved: same 0.25s delay, same single retry, same
+-- broadcast() call. Guards are now closures that capture the
+-- relevant state at the call site (including pattern-C contractAtSend
+-- upvalues for the escalation chain).
+--
+-- Untouched in this batch: the inline retry inside _HostResolveOvercall
+-- (the v0.11.11 NetU-01 OPEN-1 second-layer retry that re-calls
+-- N.SendContract). Removing it would change the overcall MSG_CONTRACT
+-- broadcast count; deferred to a separate batch with explicit
+-- behavioral test coverage.
+local function broadcastWithRetry(frame, guardFn)
+    broadcast(frame)
+    if not (C_Timer and C_Timer.After) then return end
+    C_Timer.After(0.25, function()
+        if guardFn() then broadcast(frame) end
+    end)
+end
+
 local function whisper(target, msg)
     if not target or not msg or #msg == 0 then return end
     local ok, err = pcall(C_ChatInfo.SendAddonMessage, K.PREFIX, msg, "WHISPER", target)
@@ -241,22 +277,21 @@ function N.SendBidCard(card)
     -- string "nil" in s.bidCard, which UI's truthy check treats as a
     -- real card and tries to render. Coalesce to empty string so the
     -- field round-trips as a clear no-card sentinel.
-    broadcast(("%s;%s"):format(K.MSG_BIDCARD, card or ""))
-    -- v3.1.13: 250ms re-broadcast. _OnBidCard's ApplyBidCard is
-    -- idempotent (just writes s.bidCard). Phase guard: bid-card is
-    -- visible during DEAL1/DEAL2BID phases.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.phase == K.PHASE_DEAL1
-               or S.s.phase == K.PHASE_DEAL2BID then
-                broadcast(("%s;%s"):format(K.MSG_BIDCARD, card or ""))
-            end
-        end)
-    end
+    --
+    -- v3.1.13 retry: _OnBidCard's ApplyBidCard is idempotent (just
+    -- writes s.bidCard). Phase guard: bid-card is visible during
+    -- DEAL1/DEAL2BID phases.
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%s"):format(K.MSG_BIDCARD, card or ""),
+        function()
+            return S.s.phase == K.PHASE_DEAL1
+                or S.s.phase == K.PHASE_DEAL2BID
+        end
+    )
 end
 
 function N.SendTurn(seat, kind)
-    broadcast(("%s;%d;%s"):format(K.MSG_TURN, seat, kind))
     -- v1.6.1 (user-reported wire desync): defensive 250ms re-broadcast,
     -- mirror of v0.11.11 NetU-01 MSG_CONTRACT pattern. WoW's CHAT_MSG_ADDON
     -- channel can silently drop frames under throttle pressure (heavy
@@ -276,58 +311,51 @@ function N.SendTurn(seat, kind)
     --   • 250ms is tighter than any natural turn change (BOT_DELAY_BID
     --     and BOT_DELAY_PLAY are both >= 1.5s; human delays even longer)
     --     so the re-broadcast cannot carry stale info.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.isHost and S.s.turn == seat
-               and S.s.turnKind == kind then
-                broadcast(("%s;%d;%s"):format(K.MSG_TURN, seat, kind))
-            end
-        end)
-    end
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s"):format(K.MSG_TURN, seat, kind),
+        function()
+            return S.s.isHost and S.s.turn == seat
+               and S.s.turnKind == kind
+        end
+    )
     -- Host arms the AFK auto-action timer for human seats. Bots
     -- self-act via MaybeRunBot and aren't subject to the timeout.
     if S.s.isHost then N.StartTurnTimer(seat, kind) end
 end
 
 function N.SendBid(seat, bid)
-    broadcast(("%s;%d;%s"):format(K.MSG_BID, seat, bid))
-    -- v3.1.13: 250ms re-broadcast. _OnBid's idempotence guard at
-    -- Net.lua:1339 (`if S.s.bids and S.s.bids[seat] ~= nil then return end`)
-    -- rejects a duplicate. Phase guard: bidding only.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.phase == K.PHASE_DEAL1
-               or S.s.phase == K.PHASE_DEAL2BID then
-                broadcast(("%s;%d;%s"):format(K.MSG_BID, seat, bid))
-            end
-        end)
-    end
+    -- v3.1.13 retry: _OnBid's idempotence guard at Net.lua:1339
+    -- (`if S.s.bids and S.s.bids[seat] ~= nil then return end`) rejects
+    -- a duplicate. Phase guard: bidding only.
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s"):format(K.MSG_BID, seat, bid),
+        function()
+            return S.s.phase == K.PHASE_DEAL1
+                or S.s.phase == K.PHASE_DEAL2BID
+        end
+    )
 end
 
 function N.SendContract(bidder, btype, trump)
-    broadcast(("%s;%d;%s;%s"):format(K.MSG_CONTRACT, bidder, btype, trump or ""))
-    -- v3.1.13: 250ms re-broadcast for the round-pivot contract message.
-    -- The v1.6.1 SendTurn comment referenced this pattern but it was
-    -- never present in current code. S.ApplyContract has its own
-    -- match-check on (bidder, type, trump) per the v0.11.x audit notes,
-    -- so duplicate frames are safe. Phase guard: ContractApply happens
-    -- post-bid; retry while the contract is still the current one.
-    -- v3.1.14 (Codex delta review optional cleanup): include trump in
-    -- the guard for consistency with the comment's claim of
-    -- (bidder, type, trump) match-keying. Pre-fix the guard only
-    -- compared bidder + type, so a Sun-overcall that re-broadcasts
-    -- with the SAME bidder/type but a CLEARED trump would still pass
-    -- — harmless in practice but defensive completeness.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.contract and S.s.contract.bidder == bidder
+    -- v3.1.13 retry for the round-pivot contract message. The v1.6.1
+    -- SendTurn comment referenced this pattern but it was never present
+    -- in current code. S.ApplyContract has its own match-check on
+    -- (bidder, type, trump) per the v0.11.x audit notes, so duplicate
+    -- frames are safe.
+    -- v3.1.14 (Codex delta review optional cleanup): trump equality
+    -- check included for consistency with the (bidder, type, trump)
+    -- match-keying claim.
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s;%s"):format(K.MSG_CONTRACT, bidder, btype, trump or ""),
+        function()
+            return S.s.contract and S.s.contract.bidder == bidder
                and S.s.contract.type == btype
-               and (S.s.contract.trump or "") == (trump or "") then
-                broadcast(("%s;%d;%s;%s"):format(
-                    K.MSG_CONTRACT, bidder, btype, trump or ""))
-            end
-        end)
-    end
+               and (S.s.contract.trump or "") == (trump or "")
+        end
+    )
 end
 
 -- Escalation broadcasts. v0.2.0+ wire format adds an Open/Closed flag:
@@ -336,90 +364,67 @@ end
 -- pre-v0.2.0 wire that lack the flag are treated as Open (default).
 -- Gahwa is terminal so no flag is meaningful there.
 function N.SendDouble(seat, open)
-    local frame = ("%s;%d;%s"):format(K.MSG_DOUBLE, seat,
-        (open == false) and "0" or "1")
-    broadcast(frame)
-    -- v3.1.14 (Codex delta review — escalation retry fix): switch from
+    -- v3.1.14 (Codex delta review — escalation retry fix): switched from
     -- pre-apply guards (`not contract.doubled and phase == DOUBLE`) to
     -- POST-APPLY identity guards. The real call paths (LocalDouble,
     -- bot dispatch) follow `S.ApplyDouble(seat, open)` → `N.SendDouble(...)`
     -- in that order. ApplyDouble sets `contract.doubled = true` and
-    -- advances `s.phase` (to TRIPLE or PLAY) BEFORE the retry timer
-    -- fires, so the v3.1.13 pre-apply guard always failed in
-    -- production. Net result: the retry was dead code in real UI/bot
-    -- paths — same bug class Codex caught for the SWA deny.
-    --
-    -- Fix: capture the contract table at send time and guard on
-    -- (same table) AND (post-apply flag set) AND (we are the doubler).
-    -- The contract-table identity check prevents the retry from firing
-    -- against a NEW contract (e.g., next round) — ApplyDouble mutates
-    -- in place, so the table reference stays stable across the 0.25s
-    -- window unless the round ended.
+    -- advances `s.phase` BEFORE the retry timer fires, so any pre-apply
+    -- guard always failed in production. Capture the contract table at
+    -- send time and guard on (same table) + (flag set) + (doublerSeat
+    -- match) — the contract-table identity check prevents the retry
+    -- from firing against a NEW contract (next round) while ApplyDouble
+    -- mutates in place.
+    -- v3.2.0 batch 2: routed via broadcastWithRetry; closure captures
+    -- contractAtSend.
+    local frame = ("%s;%d;%s"):format(K.MSG_DOUBLE, seat,
+        (open == false) and "0" or "1")
     local contractAtSend = S.s.contract
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.contract == contractAtSend
-               and S.s.contract
-               and S.s.contract.doubled
-               and S.s.contract.doublerSeat == seat then
-                broadcast(frame)
-            end
-        end)
-    end
+    broadcastWithRetry(frame, function()
+        return S.s.contract == contractAtSend
+           and S.s.contract
+           and S.s.contract.doubled
+           and S.s.contract.doublerSeat == seat
+    end)
 end
 
 function N.SendTriple(seat, open)
-    local frame = ("%s;%d;%s"):format(K.MSG_TRIPLE, seat,
-        (open == false) and "0" or "1")
-    broadcast(frame)
-    -- v3.1.14 (Codex delta review): post-apply guard, same shape as
+    -- v3.1.14 / v3.2.0 batch 2: post-apply guard, same shape as
     -- SendDouble. ApplyTriple sets `contract.tripled = true` before
     -- the retry fires.
+    local frame = ("%s;%d;%s"):format(K.MSG_TRIPLE, seat,
+        (open == false) and "0" or "1")
     local contractAtSend = S.s.contract
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.contract == contractAtSend
-               and S.s.contract
-               and S.s.contract.tripled then
-                broadcast(frame)
-            end
-        end)
-    end
+    broadcastWithRetry(frame, function()
+        return S.s.contract == contractAtSend
+           and S.s.contract
+           and S.s.contract.tripled
+    end)
 end
 
 function N.SendFour(seat, open)
+    -- v3.1.14 / v3.2.0 batch 2: post-apply guard. ApplyFour sets
+    -- `contract.foured = true` before retry fires.
     local frame = ("%s;%d;%s"):format(K.MSG_FOUR, seat,
         (open == false) and "0" or "1")
-    broadcast(frame)
-    -- v3.1.14 (Codex delta review): post-apply guard. ApplyFour sets
-    -- `contract.foured = true` before retry fires.
     local contractAtSend = S.s.contract
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.contract == contractAtSend
-               and S.s.contract
-               and S.s.contract.foured then
-                broadcast(frame)
-            end
-        end)
-    end
+    broadcastWithRetry(frame, function()
+        return S.s.contract == contractAtSend
+           and S.s.contract
+           and S.s.contract.foured
+    end)
 end
 
 function N.SendGahwa(seat)
-    local frame = ("%s;%d"):format(K.MSG_GAHWA, seat)
-    broadcast(frame)
-    -- v3.1.14 (Codex delta review): post-apply guard. ApplyGahwa sets
+    -- v3.1.14 / v3.2.0 batch 2: post-apply guard. ApplyGahwa sets
     -- `contract.gahwa = true` before retry fires.
+    local frame = ("%s;%d"):format(K.MSG_GAHWA, seat)
     local contractAtSend = S.s.contract
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.contract == contractAtSend
-               and S.s.contract
-               and S.s.contract.gahwa then
-                broadcast(frame)
-            end
-        end)
-    end
+    broadcastWithRetry(frame, function()
+        return S.s.contract == contractAtSend
+           and S.s.contract
+           and S.s.contract.gahwa
+    end)
 end
 
 -- v3.2.0 cleanup batch 1: extract repeated `MSG_SKIP_*` broadcasts
@@ -453,20 +458,19 @@ end
 
 -- v1.0.11 (D HIGH-2): Baloot/Belote announcement broadcast.
 function N.SendBelote(seat)
-    broadcast(("%s;%d"):format(K.MSG_BELOTE, seat))
-    -- v3.1.13: 250ms re-broadcast. _OnBelote calls S.ApplyBeloteAnnounce
-    -- which is idempotent (LocalBelote at Net.lua:2681 has the same
-    -- pre-check). +20 raw bonus drop is silently expensive — drop
-    -- on a single client means their final score display is off by 20
-    -- (or 20*mult if Belote multiplier rules apply).
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.phase == K.PHASE_PLAY
-               and S.s.beloteAnnounced and S.s.beloteAnnounced[seat] then
-                broadcast(("%s;%d"):format(K.MSG_BELOTE, seat))
-            end
-        end)
-    end
+    -- v3.1.13 retry: _OnBelote calls S.ApplyBeloteAnnounce which is
+    -- idempotent (LocalBelote at Net.lua:2681 has the same pre-check).
+    -- +20 raw bonus drop is silently expensive — drop on a single
+    -- client means their final score display is off by 20 (or 20*mult
+    -- if Belote multiplier rules apply).
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d"):format(K.MSG_BELOTE, seat),
+        function()
+            return S.s.phase == K.PHASE_PLAY
+               and S.s.beloteAnnounced and S.s.beloteAnnounced[seat]
+        end
+    )
 end
 
 -- v1.0.11 (D HIGH-2): host-side auto-announce on bot K/Q-of-trump play.
@@ -543,29 +547,25 @@ function N.SendPreemptPass(seat)
 end
 
 function N.SendMeld(seat, meld)
-    local frame = ("%s;%d;%s;%s;%s;%s"):format(
-        K.MSG_MELD, seat, meld.kind, meld.suit or "", meld.top or "",
-        C.EncodeHand(meld.cards or {}))
-    broadcast(frame)
     -- v3.1.13 (codex audit P2 — deferred retry coverage): defensive
     -- 250ms re-broadcast. Meld declarations carry 20-100 raw points
     -- each (seq3=20, seq4=50, seq5=100, carre=100-200). A dropped
     -- MSG_MELD silently loses those points on every client that
     -- missed the frame — the resync-replay path covers /reload, but
     -- mid-round wire drops do not get a second chance via existing
-    -- machinery. Mirror v3.1.10 SendPlay pattern.
+    -- machinery.
     --
     -- Idempotence on receive: S.ApplyMeld dedupes by (seat, kind, top,
     -- suit) per Net.lua:2067 comment. Duplicate frames are no-ops.
     -- Phase guard prevents stale retry after round-end.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.phase == K.PHASE_PLAY
-               or S.s.phase == K.PHASE_DEAL3 then
-                broadcast(frame)
-            end
-        end)
-    end
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    local frame = ("%s;%d;%s;%s;%s;%s"):format(
+        K.MSG_MELD, seat, meld.kind, meld.suit or "", meld.top or "",
+        C.EncodeHand(meld.cards or {}))
+    broadcastWithRetry(frame, function()
+        return S.s.phase == K.PHASE_PLAY
+            or S.s.phase == K.PHASE_DEAL3
+    end)
 end
 
 -- AKA (إكَهْ) signal. The caller's seat tells everyone they hold the
@@ -573,7 +573,6 @@ end
 -- over-trump. Soft signal — no rule enforcement, just a banner +
 -- voice cue.
 function N.SendAKA(seat, suit)
-    broadcast(("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""))
     -- v3.1.13 (codex audit P2): defensive 250ms re-broadcast. AKA is
     -- the only explicit partner-coordination signal in Saudi Baloot
     -- (CLAUDE.md:35). A dropped MSG_AKA misleads the partner-bot's
@@ -585,16 +584,16 @@ function N.SendAKA(seat, suit)
     -- (seat, suit) on duplicate; per-trick scoping (s.akaCalled
     -- cleared at trick end per State.lua:1586) means a stale retry
     -- can't bleed into the next trick.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.phase == K.PHASE_PLAY
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""),
+        function()
+            return S.s.phase == K.PHASE_PLAY
                and S.s.akaCalled
                and S.s.akaCalled.seat == seat
-               and S.s.akaCalled.suit == suit then
-                broadcast(("%s;%d;%s"):format(K.MSG_AKA, seat, suit or ""))
-            end
-        end)
-    end
+               and S.s.akaCalled.suit == suit
+        end
+    )
 end
 
 -- SWA broadcast: caller declares they'll win all remaining tricks
@@ -627,7 +626,6 @@ function N.SendSWAOut(caller, valid, addA, addB, totA, totB, sweep, bidderMade, 
 end
 
 function N.SendSWAReq(seat, encodedHand)
-    broadcast(("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, encodedHand or ""))
     -- v3.1.12 (codex audit P1 — SWA reliability): defensive 250ms
     -- re-broadcast, same pattern as v1.6.1 SendTurn + v3.1.10 SendPlay.
     -- A dropped MSG_SWA_REQ otherwise hard-stalls the caller: they have
@@ -638,22 +636,19 @@ function N.SendSWAReq(seat, encodedHand)
     -- ~3952: `if S.s.swaRequest and S.s.swaRequest.caller then return end`)
     -- that rejects a duplicate request when one is already pending —
     -- so a duplicate retry frame is a no-op on the host.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s"):format(K.MSG_SWA_REQ, seat, encodedHand or ""),
+        function()
             -- Self-suppress if the SWA has already resolved (no longer
             -- in PLAY phase) or local request was cleared.
-            if S.s.phase == K.PHASE_PLAY and S.s.swaRequest
-               and S.s.swaRequest.caller == seat then
-                broadcast(("%s;%d;%s"):format(
-                    K.MSG_SWA_REQ, seat, encodedHand or ""))
-            end
-        end)
-    end
+            return S.s.phase == K.PHASE_PLAY and S.s.swaRequest
+               and S.s.swaRequest.caller == seat
+        end
+    )
 end
 
 function N.SendSWAResp(responder, accept, caller)
-    broadcast(("%s;%d;%s;%d"):format(
-        K.MSG_SWA_RESP, responder, accept and "1" or "0", caller))
     -- v3.1.12 (codex audit P1): defensive 250ms re-broadcast. A dropped
     -- deny MSG_SWA_RESP is the worst single-frame loss in the SWA flow:
     -- the responder clears their own swaRequest immediately (LocalSWAResp
@@ -663,18 +658,20 @@ function N.SendSWAResp(responder, accept, caller)
     --
     -- Idempotence: _OnSWAResp records responses[responder] = accept
     -- per-responder; a duplicate frame writes the same value. Safe.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
+    -- v3.2.0 batch 2: routed via broadcastWithRetry. The v3.1.14
+    -- LocalSWAResp(false) path stays intact — that function keeps
+    -- swaRequest alive through the retry window via a separate 0.35s
+    -- delayed-clear timer outside this helper.
+    broadcastWithRetry(
+        ("%s;%d;%s;%d"):format(
+            K.MSG_SWA_RESP, responder, accept and "1" or "0", caller),
+        function()
             -- Self-suppress if the request resolved (s.swaRequest nil)
             -- or moved on to a different caller.
-            if S.s.phase == K.PHASE_PLAY and S.s.swaRequest
-               and S.s.swaRequest.caller == caller then
-                broadcast(("%s;%d;%s;%d"):format(
-                    K.MSG_SWA_RESP, responder, accept and "1" or "0",
-                    caller))
-            end
-        end)
-    end
+            return S.s.phase == K.PHASE_PLAY and S.s.swaRequest
+               and S.s.swaRequest.caller == caller
+        end
+    )
 end
 
 -- v3.1.12 (codex audit P1 — Takweesh/Kawesh reliability): retry helpers
@@ -688,37 +685,34 @@ end
 -- takweeshReview-non-nil guard at ~2963; HostHandleKawesh phase-gates
 -- on DEAL1), so a duplicate retry frame is a no-op.
 function N.SendTakweesh(seat)
-    broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            -- Takweesh is valid in PHASE_PLAY (rule-engine scan) and
-            -- briefly in PHASE_TAKWEESH_REVIEW (just-began review).
-            -- Outside those phases the host already moved on; retry
-            -- would be a stale ghost call.
-            if S.s.phase == K.PHASE_PLAY
-               or S.s.phase == K.PHASE_TAKWEESH_REVIEW then
-                broadcast(("%s;%d"):format(K.MSG_TAKWEESH, seat))
-            end
-        end)
-    end
+    -- Takweesh is valid in PHASE_PLAY (rule-engine scan) and briefly
+    -- in PHASE_TAKWEESH_REVIEW (just-began review). Outside those
+    -- phases the host already moved on; retry would be a stale ghost
+    -- call.
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d"):format(K.MSG_TAKWEESH, seat),
+        function()
+            return S.s.phase == K.PHASE_PLAY
+                or S.s.phase == K.PHASE_TAKWEESH_REVIEW
+        end
+    )
 end
 
 function N.SendKawesh(seat)
-    broadcast(("%s;%d"):format(K.MSG_KAWESH, seat))
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            -- Kawesh is round-1 bidding only (DEAL1). After a successful
-            -- redeal the phase transitions immediately; the retry's
-            -- phase guard prevents stale re-Kawesh on the new hand.
-            if S.s.phase == K.PHASE_DEAL1 then
-                broadcast(("%s;%d"):format(K.MSG_KAWESH, seat))
-            end
-        end)
-    end
+    -- Kawesh is round-1 bidding only (DEAL1). After a successful
+    -- redeal the phase transitions immediately; the retry's phase
+    -- guard prevents stale re-Kawesh on the new hand.
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d"):format(K.MSG_KAWESH, seat),
+        function()
+            return S.s.phase == K.PHASE_DEAL1
+        end
+    )
 end
 
 function N.SendPlay(seat, card)
-    broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
     -- v3.1.10 (user-reported wire desync): defensive 250ms re-broadcast,
     -- same pattern as v1.6.1's SendTurn fix. WoW's CHAT_MSG_ADDON channel
     -- silently drops frames under throttle pressure; user observed plays
@@ -732,25 +726,16 @@ function N.SendPlay(seat, card)
     --   • Idempotent on receive: _OnPlay's idempotence guard at
     --     Net.lua:1978-1982 rejects any seat already present in
     --     s.trick.plays, so a duplicate add is a no-op.
-    --   • Self-suppressing: gate on (still in PLAY phase + same trick
-    --     state). If the trick has resolved (4 plays + MSG_TRICK
-    --     arrived → s.trick reset) the seat won't be in current
-    --     plays and the re-broadcast is harmless (receivers see it
-    --     for a phase that already passed → ignored by phase guard).
+    --   • Self-suppressing: gate on (still in PLAY phase). If the
+    --     trick has resolved (4 plays + MSG_TRICK arrived → s.trick
+    --     reset) the receiver-side phase guard suppresses anyway.
     --   • 250ms < typical inter-play delay (1.5s+ bots, longer humans),
     --     so the retry cannot collide with a fresh play.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            -- Only the original sender (host for bot/AFK plays, human
-            -- for self-play) re-broadcasts. The re-broadcast goes out
-            -- regardless of whether the seat is already in s.trick.plays
-            -- locally, because receivers may have missed the first
-            -- frame even if the sender's loopback was fine.
-            if S.s.phase == K.PHASE_PLAY then
-                broadcast(("%s;%d;%s"):format(K.MSG_PLAY, seat, card))
-            end
-        end)
-    end
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s"):format(K.MSG_PLAY, seat, card),
+        function() return S.s.phase == K.PHASE_PLAY end
+    )
 end
 
 function N.SendTrick(winner, points)
@@ -1802,7 +1787,6 @@ function N.SendOvercallOpen()
 end
 
 function N.SendOvercallDecision(seat, decision)
-    broadcast(("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION, seat, decision))
     -- v3.1.10 (user-reported "Sun button did nothing"): defensive 250ms
     -- re-broadcast, same pattern as v1.6.1 SendTurn. User observed
     -- pressing "Take as Sun" and nothing happening — the wire frame
@@ -1822,14 +1806,11 @@ function N.SendOvercallDecision(seat, decision)
     --     phase guard (Net.lua:1524).
     --   • 250ms is well within the 5-second overcall window, so any
     --     legitimate first-arrival hits before the second.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function()
-            if S.s.phase == K.PHASE_OVERCALL then
-                broadcast(("%s;%d;%s"):format(
-                    K.MSG_OVERCALL_DECISION, seat, decision))
-            end
-        end)
-    end
+    -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    broadcastWithRetry(
+        ("%s;%d;%s"):format(K.MSG_OVERCALL_DECISION, seat, decision),
+        function() return S.s.phase == K.PHASE_OVERCALL end
+    )
 end
 
 function N.SendOvercallResolve(taken, by, otype)

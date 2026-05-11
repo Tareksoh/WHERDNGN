@@ -7700,6 +7700,148 @@ do
             "AZ.29e (v3.2.0): SendSkipDouble queues no C_Timer retry (one-shot by design)")
     end
 
+    -- ---------------------------------------------------------------------
+    -- AZ.30 (v3.2.0 batch 2): behavioral coverage for senders that
+    -- migrated to broadcastWithRetry. SendTurn / SendPlay /
+    -- SendOvercallDecision were the three migrated senders without
+    -- prior AZ coverage exercising both the initial broadcast and the
+    -- retry fire-then-suppress dynamics. The helper itself is module-
+    -- local (per Codex review) and isn't tested directly — it's
+    -- exercised end-to-end through these senders.
+    -- ---------------------------------------------------------------------
+
+    -- AZ.30 SendTurn: initial + retry, with suppress-on-state-change
+    do
+        clearCaptures()
+        S.s.isHost = true
+        S.s.phase = K.PHASE_PLAY
+        S.s.turn = 2
+        S.s.turnKind = "play"
+        N.SendTurn(2, "play")
+        assertEq(broadcastsMatching("T"), 1,
+            "AZ.30a (v3.2.0): SendTurn emits initial MSG_TURN")
+        -- The retry timer is queued. Fire only the 0.25s callback
+        -- (SendTurn does NOT also arm StartTurnTimer in test env because
+        -- the seat's isBot field isn't set, so the AFK timer code path
+        -- doesn't add additional 60s timers to the captured queue).
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        assertTrue(retry ~= nil,
+            "AZ.30b (v3.2.0): SendTurn schedules a 0.25s retry callback")
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("T"), 2,
+            "AZ.30c (v3.2.0): SendTurn retry fires 2nd MSG_TURN when guard passes")
+    end
+
+    -- AZ.30-suppress (turn changed)
+    do
+        clearCaptures()
+        S.s.isHost = true
+        S.s.phase = K.PHASE_PLAY
+        S.s.turn = 2
+        S.s.turnKind = "play"
+        N.SendTurn(2, "play")
+        assertEq(broadcastsMatching("T"), 1, "AZ.30d setup: initial")
+        -- Turn advanced before retry fires
+        S.s.turn = 3
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("T"), 1,
+            "AZ.30d (v3.2.0): SendTurn retry suppressed when S.s.turn changes before fire")
+    end
+
+    -- AZ.30-kind-suppress (turnKind changed)
+    do
+        clearCaptures()
+        S.s.isHost = true
+        S.s.phase = K.PHASE_PLAY
+        S.s.turn = 2
+        S.s.turnKind = "play"
+        N.SendTurn(2, "play")
+        assertEq(broadcastsMatching("T"), 1, "AZ.30e setup: initial")
+        S.s.turnKind = "bid"   -- changed mid-window
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("T"), 1,
+            "AZ.30e (v3.2.0): SendTurn retry suppressed when turnKind changes before fire")
+    end
+
+    -- AZ.31 SendPlay: initial + retry, with suppress-on-phase-change
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        N.SendPlay(2, "AS")
+        assertEq(broadcastsMatching("P"), 1,
+            "AZ.31a (v3.2.0): SendPlay emits initial MSG_PLAY")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        assertTrue(retry ~= nil,
+            "AZ.31b (v3.2.0): SendPlay schedules a 0.25s retry callback")
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("P"), 2,
+            "AZ.31c (v3.2.0): SendPlay retry fires 2nd MSG_PLAY when phase still PLAY")
+    end
+
+    -- AZ.31-suppress (phase moved on before retry)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_PLAY
+        N.SendPlay(2, "KH")
+        assertEq(broadcastsMatching("P"), 1, "AZ.31d setup: initial")
+        S.s.phase = K.PHASE_SCORE   -- trick/round resolved before retry
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("P"), 1,
+            "AZ.31d (v3.2.0): SendPlay retry suppressed when phase moves past PLAY")
+    end
+
+    -- AZ.32 SendOvercallDecision: initial + retry, with suppress-on-phase-change
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_OVERCALL
+        N.SendOvercallDecision(2, "TAKE")
+        assertEq(broadcastsMatching("<"), 1,
+            "AZ.32a (v3.2.0): SendOvercallDecision emits initial MSG_OVERCALL_DECISION")
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        assertTrue(retry ~= nil,
+            "AZ.32b (v3.2.0): SendOvercallDecision schedules a 0.25s retry callback")
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("<"), 2,
+            "AZ.32c (v3.2.0): SendOvercallDecision retry fires 2nd frame when phase still OVERCALL")
+    end
+
+    -- AZ.32-suppress (window closed before retry)
+    do
+        clearCaptures()
+        S.s.phase = K.PHASE_OVERCALL
+        N.SendOvercallDecision(2, "WAIVE")
+        assertEq(broadcastsMatching("<"), 1, "AZ.32d setup: initial")
+        S.s.phase = K.PHASE_DOUBLE   -- overcall window resolved
+        local retry
+        for _, e in ipairs(timerCallbacks) do
+            if e.delay == 0.25 then retry = e; break end
+        end
+        pcall(retry.fn)
+        assertEq(broadcastsMatching("<"), 1,
+            "AZ.32d (v3.2.0): SendOvercallDecision retry suppressed when phase moves past OVERCALL")
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)
@@ -7775,28 +7917,28 @@ do
     -- SendPlay retry block
     assertTrue(netSrc:find("v3%.1%.10 %(user%-reported wire desync%)") ~= nil,
         "AX.1 (v3.1.10): SendPlay retry marker present")
-    -- The retry should be in SendPlay specifically (next to MSG_PLAY format).
-    assertTrue(netSrc:find("function N%.SendPlay%(seat, card%)\n    broadcast.-MSG_PLAY.-MSG_PLAY") ~= nil,
-        "AX.2 (v3.1.10): SendPlay broadcasts MSG_PLAY twice (initial + retry)")
-    -- 0.25 second delay (mirror SendTurn). Use balanced search across
-    -- a window of the SendPlay function rather than strict adjacency.
+    -- v3.2.0 batch 2: SendPlay now routes via broadcastWithRetry. Source
+    -- pins updated to look for the helper call instead of the literal
+    -- inline retry shape. Behavioral coverage lives in AZ (full
+    -- captured-broadcast + manually-fired-timer assertions starting
+    -- from N.SendPlay / N.LocalSWAResp / N.Local* paths).
     do
         local sp = netSrc:match("function N%.SendPlay.-\nend")
-        assertTrue(sp and sp:find("C_Timer%.After%(0%.25") ~= nil
-                  and sp:find("S%.s%.phase == K%.PHASE_PLAY") ~= nil,
-            "AX.3 (v3.1.10): SendPlay retry uses 0.25s delay + PHASE_PLAY guard")
+        assertTrue(sp and sp:find("broadcastWithRetry%(") ~= nil,
+            "AX.2 (v3.1.10/v3.2.0): SendPlay calls broadcastWithRetry helper")
+        assertTrue(sp and sp:find("S%.s%.phase == K%.PHASE_PLAY") ~= nil,
+            "AX.3 (v3.1.10/v3.2.0): SendPlay retry guard checks PHASE_PLAY")
     end
 
     -- SendOvercallDecision retry block
     assertTrue(netSrc:find('v3%.1%.10 %(user%-reported "Sun button did nothing"%)') ~= nil,
         "AX.4 (v3.1.10): SendOvercallDecision retry marker present")
-    assertTrue(netSrc:find("function N%.SendOvercallDecision%(seat, decision%)\n    broadcast.-MSG_OVERCALL_DECISION.-MSG_OVERCALL_DECISION") ~= nil,
-        "AX.5 (v3.1.10): SendOvercallDecision broadcasts MSG_OVERCALL_DECISION twice")
     do
         local sod = netSrc:match("function N%.SendOvercallDecision.-\nend")
-        assertTrue(sod and sod:find("C_Timer%.After%(0%.25") ~= nil
-                  and sod:find("S%.s%.phase == K%.PHASE_OVERCALL") ~= nil,
-            "AX.6 (v3.1.10): SendOvercallDecision retry uses 0.25s delay + PHASE_OVERCALL guard")
+        assertTrue(sod and sod:find("broadcastWithRetry%(") ~= nil,
+            "AX.5 (v3.1.10/v3.2.0): SendOvercallDecision calls broadcastWithRetry helper")
+        assertTrue(sod and sod:find("S%.s%.phase == K%.PHASE_OVERCALL") ~= nil,
+            "AX.6 (v3.1.10/v3.2.0): SendOvercallDecision retry guard checks PHASE_OVERCALL")
     end
 end
 
