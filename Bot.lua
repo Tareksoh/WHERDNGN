@@ -4511,6 +4511,22 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 -- * Tier-graded fire: 30% M3lm, 40% Saudi Master.
                 --   Master is more aggressive on psychological reads
                 --   per bot-personalities.md tier spec.
+                --
+                -- v3.2.1 F2 (audit L-1 / U-1): THIS BRANCH IS CURRENTLY
+                -- UNREACHABLE in production. The `pos2Lower` predicate
+                -- (set inside this block) implies partner is currently
+                -- winning the trick — but the enclosing scope (`#winners
+                -- > 0` opp-winning block at Bot.lua:4169, reached only
+                -- after `if partnerWinning then ... return` at Bot.lua
+                -- :3362-3887 falls through) guarantees partnerWinning
+                -- == false here. The conjunction
+                -- `partnerWinning=true ∧ partnerWinning=false` is
+                -- unsatisfiable, so the «تخليه يمسك» play never
+                -- executes. The branch is preserved for a future
+                -- relocation that fires above the partnerWinning return
+                -- (decision deferred to a separate design pass). See
+                -- .swarm_findings/v3_2_1_pickplay_audit.md §F2 (Option
+                -- D-c: comment-flag only) for the rationale.
                 if Bot.IsM3lm and Bot.IsM3lm()
                    and contract.type == K.BID_SUN
                    and trick.leadSuit and trick.plays and #trick.plays >= 2

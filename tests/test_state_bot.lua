@@ -9426,6 +9426,32 @@ do
     WHEREDNGNDB.m3lmBots = nil
 end
 
+-- =====================================================================
+-- CD. v3.2.1 F2 (audit L-1 / U-1): pos-3 Sun hold-back is unreachable
+--
+-- The v1.4.4 «تخليه يمسك» branch (Bot.lua ~4492-4564) sits inside the
+-- opp-winning `#winners > 0` block, reached only after the much
+-- earlier `if partnerWinning then ... return` block (Bot.lua:3362-
+-- 3887) has fallen through (partnerWinning == false). The branch's
+-- own `pos2Lower` predicate implies partner is currently winning,
+-- so the conjunction is unsatisfiable. v3.2.1 does NOT reactivate
+-- the branch (separate design pass) — this section just pins the
+-- F2 comment marker so a future cleanup batch doesn't accidentally
+-- delete the historical code without addressing the reachability
+-- question.
+-- =====================================================================
+section("CD. v3.2.1 F2 — pos-3 Sun hold-back unreachable (comment-only flag)")
+
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.2%.1 F2") ~= nil,
+        "CD.1a (F2): F2 marker present in Bot.lua")
+    assertTrue(botSrc:find("audit L%-1 / U%-1") ~= nil,
+        "CD.1b (F2): audit reference 'L-1 / U-1' anchored in Bot.lua")
+    assertTrue(botSrc:find("UNREACHABLE in production") ~= nil,
+        "CD.1c (F2): unreachability claim documented near the branch")
+end
+
 -- CC.3: source-pin coverage for F4 markers + audit reference.
 do
     local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
