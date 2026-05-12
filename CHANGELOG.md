@@ -1,5 +1,40 @@
 # Changelog
 
+## v3.2.2 — Predictability touch-up
+
+Small maintenance release. **No gameplay, UI, protocol, saved-
+variable, or scoring changes.** v3.1.x / v3.2.x clients remain
+addon-message-compatible.
+
+### Fixed
+
+- **Tie-randomizes one Hokm bot side-card choice so equal-rank
+  non-trumps no longer leak hand order.** Specifically: after a
+  Hokm bidder-team bot has watched all three side-suit Aces fall
+  in earlier tricks, its fallback "lead my highest non-trump"
+  pick used a strict comparison that broke ties (e.g. K♠ vs K♥,
+  same trick-rank) by hand-iteration order — a tiny tell a
+  careful human observer could read across rounds. The pick now
+  routes through the same tie-randomizing helper the rest of the
+  bot already uses. Behaviour with no ties is unchanged.
+
+### Verification
+
+- Full harness: **1,245 checks passed, 0 failed** (was 1,241 at
+  v3.2.1; +4 new behavioural and source-pin assertions in section
+  BE of `tests/test_state_bot.lua`).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+
+### Notes
+
+- Design rationale and the four sites the original audit flagged
+  but that were intentionally NOT changed (no ties possible in
+  three of them; the fourth lives below an earlier
+  `partnerWinning` early-return so it's structurally unreachable
+  the same way the v3.2.1 F2 hold-back branch is) live in
+  `.swarm_findings/v3_2_2_tie_randomization_design.md`.
+
 ## v3.2.1 — Pickplay bot fixes
 
 A focused user-visible bot-play bugfix release on top of the v3.2.0
