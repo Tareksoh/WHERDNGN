@@ -2605,7 +2605,16 @@ local function pickLead(legal, contract, seat)
             if t.winner == partner then partnerWonAny = true; break end
         end
         local underContractPressure = false
-        if contract.bidder and S.s.tricks and trickCount >= 4 then
+        -- v3.2.1 F3 (audit U-2): hoisted out of the prior `trickCount
+        -- >= 4` gate. The bypass is CONSUMED only when `trickCount
+        -- <= 3` (see roundEndDeferActive below); gating its
+        -- COMPUTATION on `>= 4` made the bypass term vacuously false
+        -- whenever it could actually matter, so the v1.4.8 bidder-
+        -- pressure escape was dead. With the gate removed, raw=0 at
+        -- trick 1 already trips `raw < baseTarget - 30` for any sane
+        -- target, so bidder team at early tricks now correctly
+        -- establishes the T-boss instead of deferring it.
+        if contract.bidder and S.s.tricks then
             local myTeam = R.TeamOf(seat)
             local isBidderTeam = (R.TeamOf(contract.bidder) == myTeam)
             if isBidderTeam then

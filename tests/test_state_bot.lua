@@ -9149,6 +9149,150 @@ do
 end
 
 -- =====================================================================
+-- BB. v3.2.1 F3 (audit U-2): underContractPressure bypass live at
+-- early tricks
+--
+-- Pre-v3.2.1: the v1.4.8 audit-HIGH-2 "if bidder team is failing
+-- fast, take the T-boss now" bypass was COMPUTED only when
+-- `trickCount >= 4` but CONSUMED only when `trickCount <= 3`. The
+-- two gates are mutually exclusive — the bypass never affected any
+-- decision. Sun bidder-team bots at tricks 1-3 with no captures
+-- still deferred T-boss instead of grabbing it.
+--
+-- v3.2.1 F3 hoists the computation out of the `>= 4` gate so the
+-- bypass actually fires when the deferral would otherwise activate.
+-- =====================================================================
+section("BB. v3.2.1 F3 — bidder-team T-boss bypass live at early tricks")
+
+-- BB.1: Sun M3lm bidder-self at trick 1, partner has no captures yet,
+-- T♥ is the live boss of a 3-card H suit (A♥ already played in a
+-- prior round simulation via playedCardsThisRound). Pre-fix: defer.
+-- Post-fix: bypass fires (raw=0 < 65-30) → establish (return T♥).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    S.s.tricks = {}  -- trick 1
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Mark A♥ as played so liveBoss(H) = T.
+    S.s.playedCardsThisRound = { AH = true }
+    -- Hand at seat 1: 3H (T,9,8) + 3D (9,8,7) + 2C (8,7). H is the
+    -- only suit with a holdable boss (T♥); D's boss is A♦ but we
+    -- don't hold it; C is too short.
+    S.s.hostHands = {
+        [1] = { "TH", "9H", "8H", "9D", "8D", "7D", "8C", "7C" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(1)
+    assertEq(card, "TH",
+        ("BB.1 (F3, U-2): Sun M3lm bidder-self at trick 1 takes T♥ boss "
+         .. "(bypass active, got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BB.2: Same setup but bot is a DEFENDER (seat 2 — bidder=1 is
+-- team A {1,3}; seat 2 → team B {2,4}). isBidderTeam=false →
+-- underContractPressure stays false (no bypass). roundEndDeferActive
+-- =true → deferral still fires → bot does NOT establish T♥, falls
+-- through to a non-T♥ lead.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = { AH = true }
+    -- Same hand shape now at seat 2 (defender, team B).
+    S.s.hostHands = {
+        [1] = {},
+        [2] = { "TH", "9H", "8H", "9D", "8D", "7D", "8C", "7C" },
+        [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(2)
+    assertTrue(card ~= "TH",
+        ("BB.2 (F3, U-2): Sun M3lm DEFENDER at trick 1 still defers T♥ "
+         .. "(no bypass for non-bidder team; got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BB.3: Bidder partner-won-any test. If partner DID win a prior
+-- trick, the deferral gate `partnerWonAny=false` flips and the
+-- deferral itself doesn't fire — bot establishes T-boss regardless
+-- of bypass. Confirms the bypass change doesn't break the
+-- partnerWonAny semantics.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Partner (seat 3) won trick 1; we're at trick 2 lead.
+    S.s.tricks = {
+        { winner = 3, leadSuit = "S", plays = {
+            { seat = 1, card = "7S" }, { seat = 2, card = "8S" },
+            { seat = 3, card = "AS" }, { seat = 4, card = "9S" },
+        } },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = { AH = true, AS = true, ["7S"] = true,
+                                  ["8S"] = true, ["9S"] = true }
+    S.s.hostHands = {
+        [1] = { "TH", "9H", "8H", "9D", "8D", "7D", "8C", "7C" },
+        [2] = {}, [3] = {}, [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(1)
+    -- partnerWonAny=true → roundEndDeferActive=false regardless of
+    -- bypass → establishes T♥.
+    assertEq(card, "TH",
+        ("BB.3 (F3, U-2): Sun M3lm bidder establishes T♥ when partner "
+         .. "already won (deferral gate flipped; got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BB.4: source-pin coverage for the F3 marker.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.2%.1 F3") ~= nil,
+        "BB.4a (F3): F3 marker present in Bot.lua")
+    assertTrue(botSrc:find("audit U%-2") ~= nil,
+        "BB.4b (F3): audit reference 'U-2' anchored in Bot.lua")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
