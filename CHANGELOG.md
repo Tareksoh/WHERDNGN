@@ -1,5 +1,67 @@
 # Changelog
 
+## v3.2.1 — Pickplay bot fixes
+
+A focused user-visible bot-play bugfix release on top of the v3.2.0
+restructure. Four documented bot mistakes in Hokm and Sun are now
+corrected. **No protocol, saved-variable, UI, or scoring changes.**
+v3.1.x / v3.2.0 / v3.2.1 clients are addon-message-compatible.
+
+### Fixed
+
+- **Hokm bidder-team bots no longer cash side-suit Aces into known
+  opponent voids.** When an opponent has been observed void in a
+  side suit (very common after a single earlier ruff or discard),
+  the bidder used to lead its non-trump Ace anyway and feed the
+  opponent a free ~11-point trump-ruff. The void-aware skip now
+  covers all the bidder-side A-cash paths and the related single-
+  opp boss-lead exploit (the latter is now defender-only). Sun
+  contracts are unchanged — no trump exists in Sun, so leading
+  Aces into voids is still correct play there.
+- **Sun bidder-team bots under early contract pressure can now
+  establish a T-boss instead of always deferring it for the end.**
+  The "save the T for round-end" behavior was meant to apply to
+  defended teams comfortable with their lead; the v1.4.8 escape
+  for a struggling bidder was wired but its preconditions were
+  mutually exclusive with the consume site, so it never fired.
+  Hoisted out of the dead gate so a behind-schedule bidder at
+  tricks 1-3 with no captures yet takes the T-boss now.
+- **Hokm Faranka Exception #3 now works without the King of trump.**
+  Saudi-canonical rule (video #04): when J of trump is already
+  played and you hold the 9 of trump, the 9 is the new top live
+  trump and Faranka (withhold to ambush) is allowed. The previous
+  F-16 "no K-cover, no Faranka" anti-rule wrongly suppressed this
+  exception on K-less hands. The 9 itself is invincible once J is
+  dead, so no K-cover is needed.
+- **Old pos-3 Sun «تخليه يمسك» hold-back branch flagged as
+  unreachable.** The code for this psychological-bait play is
+  structurally dead — its preconditions require partner to be
+  currently winning, but it sits below an earlier "partner is
+  winning, return" exit. Rather than silently pretending it works,
+  the branch is now flagged in-source as unreachable so a future
+  focused redesign can move it to a fork where it can actually
+  fire. No runtime behavior change for this item.
+
+### Verification
+
+- Full harness: **1,241 checks passed, 0 failed** (was 1,219 at
+  v3.2.0; +22 new behavioral and source-pin assertions in
+  `tests/test_state_bot.lua` covering each of the four fixes).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+
+### Notes
+
+- Per-fix design rationale and the underlying audit (5-agent
+  parallel pass of `pickLead` / `pickFollow`) is in
+  `.swarm_findings/v3_2_1_pickplay_audit.md`.
+- Two additional predictability fixes surfaced by the same audit
+  (tie-break randomization in 4 inline `highestByRank`-shaped
+  loops + BotMaster's forced-ruff override) are deferred to a
+  follow-up batch — they need their own multi-iteration
+  statistical tests rather than the deterministic assertions used
+  in this release.
+
 ## v3.2.0 — Maintenance / internal restructure
 
 Maintenance release focused on addon stability, test coverage, and
