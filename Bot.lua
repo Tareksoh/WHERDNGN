@@ -3943,6 +3943,7 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- trump-aware as of v0.8.5 (was buggy plain-rank-order
         -- pre-v0.8.5). When it returns "9", J has been played AND 9
         -- is still live — which exactly matches the rule's WHEN.
+        local exception3Path = false  -- v3.2.1 F4: tracks Exc-#3 trigger
         if not farankaTriggered and onBidderTeam
            and S.HighestUnplayedRank
            and S.HighestUnplayedRank(contract.trump) == "9" then
@@ -3952,7 +3953,10 @@ local function pickFollow(legal, hand, trick, contract, seat)
                     hold9 = true; break
                 end
             end
-            if hold9 then farankaTriggered = true end
+            if hold9 then
+                farankaTriggered = true
+                exception3Path = true
+            end
         end
 
         -- Exception #4: bidder-team + both opps void in trump.
@@ -4019,7 +4023,20 @@ local function pickFollow(legal, hand, trick, contract, seat)
         -- legitimate F-30b risk-free Farankas on K-less hands.
         -- Sources: D-RT-03 S-1 Option A (per-exception scoping);
         -- A-Src-29 confirms F-16 is absent from #04 Hokm corpus.
-        if farankaTriggered and not oppsVoidPath then
+        --
+        -- v3.2.1 F4 (audit L-9): also exempt Exception #3
+        -- (`exception3Path`). When J of trump is dead and we hold
+        -- 9, our 9 IS the new top live trump in Hokm rank
+        -- (J=8 > 9=7 > everything-else); F-16's "K-cover" premise
+        -- assumes a higher-than-our-withhold trump exists that
+        -- needs covering — but on Exception #3 the 9 has no live
+        -- trump above it, so no opp card can punish withholding
+        -- regardless of whether we hold K. Per decision-trees.md
+        -- §10 row 278 (Common, video #04). Pre-v3.2.1 the F-16
+        -- veto wrongly suppressed this Saudi-canonical Exception
+        -- whenever the bidder team's hand happened to lack K of
+        -- trump.
+        if farankaTriggered and not oppsVoidPath and not exception3Path then
             local hasKtrump = false
             for _, c in ipairs(hand) do
                 if C.IsTrump(c, contract) and C.Rank(c) == "K" then

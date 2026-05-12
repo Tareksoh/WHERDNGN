@@ -9293,6 +9293,154 @@ do
 end
 
 -- =====================================================================
+-- CC. v3.2.1 F4 (audit L-9): Hokm Faranka Exception #3 exempts F-16
+-- K-cover veto
+--
+-- Pre-v3.2.1: the F-16 anti-rule ("don't Faranka without K of trump
+-- as cover") was scoped to skip Exception #4 (`oppsVoidPath`, both
+-- opps observed-void in trump). But it still fired for Exception #3
+-- (J dead, we hold the 9-as-new-top-live-trump), wrongly suppressing
+-- the Saudi-canonical withhold on K-less hands. Per decision-trees
+-- .md §10 row 278 (Common, video #04): when J of trump is dead our
+-- 9 IS the new top live trump — there's no higher trump for an opp
+-- to punish with, so the K-cover premise is structurally extinct
+-- (same as Exception #4).
+-- =====================================================================
+section("CC. v3.2.1 F4 — Hokm Faranka Exception #3 exempts F-16 K-cover")
+
+-- CC.1: Exception #3 + no K of trump. We must hold led-suit cards
+-- (NOT void) so legality permits a non-ruff play; we need a winner
+-- + loser in legal for the Faranka block to have a non-winner to
+-- duck with. Hand has A♥ (winner over current KH-lead) + 7♥
+-- (loser) + 9♦ (Exception #3 trigger, lone trump as new boss).
+-- Pre-fix: F-16 vetoes → bot plays A♥ via natural play (highest
+-- winner). Post-fix: exception3Path=true skips F-16 → Faranka
+-- fires → returns 7♥ (lowest non-winner; trump-preserving Faranka
+-- block prefers non-trump losers).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Trick in progress: opp seat 4 led 8H, partner seat 1 played
+    -- QH, opp seat 2 played KH (currently winning). Our pos = 4.
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "QH" },
+            { seat = 2, card = "KH" },
+        },
+    }
+    S.s.tricks = {}
+    -- JD played earlier (so HighestUnplayedRank("D") == "9"). Mark
+    -- the in-flight trick cards as played too so HUR consults a
+    -- consistent state.
+    S.s.playedCardsThisRound = {
+        JD    = true,
+        ["8H"] = true, QH = true, KH = true,
+    }
+    -- Bot at seat 3 (team A, bidder's partner). Hand has H cards
+    -- (must-follow active): A♥ winner + 7♥ loser; plus 9♦ as
+    -- Exception #3 trigger (new top live trump with J♦ dead).
+    -- No K♦ → F-16 would normally veto.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "7H", "9D", "7C", "8C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.turn = 3
+    S.s.turnKind = "play"
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- legal = {AH, 7H} (must-follow H). winners = {AH}. Faranka
+    -- with exception3Path=true → returns lowestByRank({7H}) = 7H.
+    assertEq(card, "7H",
+        ("CC.1 (F4, L-9): Hokm bidder-team Exception #3 Farankas with " ..
+         "non-winner loser when no K♦ (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- CC.2: Negative regression — Exception #2 (only 2 trumps, K-less)
+-- still vetoed by F-16. The F4 carve-out applies ONLY to
+-- Exception #3, NOT to other K-less Faranka triggers.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "QH" },
+            { seat = 2, card = "KH" },
+        },
+    }
+    S.s.tricks = {}
+    -- J♦ NOT played → HighestUnplayedRank("D") == "J" → Exception
+    -- #3 does NOT trigger. Exception #2 (2 trumps) is the candidate.
+    S.s.playedCardsThisRound = {
+        ["8H"] = true, QH = true, KH = true,
+    }
+    -- Hand has H cards (must-follow active): A♥ winner + 7♥ loser;
+    -- plus 9♦ + 7♦ (2 trumps, Exception #2 trigger). No K♦ — F-16
+    -- should veto since exception3Path=false here.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "7H", "9D", "7D", "8C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.turn = 3
+    S.s.turnKind = "play"
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Exception #2 fires (2 trumps, bidder-team), but F-16 vetoes
+    -- because we lack K♦ AND exception3Path=false. Bot falls
+    -- through to natural play; with #winners=1 ({A♥}) bot plays a
+    -- winner, NOT the Faranka non-winner 7♥. Confirms F4 carve-out
+    -- applies ONLY to Exception #3.
+    assertTrue(card ~= "7H",
+        ("CC.2 (F4, L-9): F-16 still vetoes K-less Exception #2; no " ..
+         "Faranka non-winner (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- CC.3: source-pin coverage for F4 markers + audit reference.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.2%.1 F4") ~= nil,
+        "CC.3a (F4): F4 marker present in Bot.lua")
+    assertTrue(botSrc:find("exception3Path") ~= nil,
+        "CC.3b (F4): exception3Path flag exists in Bot.lua")
+    assertTrue(botSrc:find("audit L%-9") ~= nil,
+        "CC.3c (F4): audit reference 'L-9' anchored in Bot.lua")
+    -- Confirm the F-16 gate now includes the exception3Path skip.
+    assertTrue(botSrc:find("not oppsVoidPath and not exception3Path") ~= nil,
+        "CC.3d (F4): F-16 gate carves out both Exception #4 and #3")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
