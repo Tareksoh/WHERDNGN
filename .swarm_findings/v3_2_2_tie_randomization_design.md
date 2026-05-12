@@ -357,9 +357,22 @@ end
 |---|---|---|
 | BE.1 | behavioural | F5 site 1 — tie randomization wired |
 | BE.2 | behavioural | F5 site 1 — non-tie unchanged |
-| BE.3 | source-pin | F5 site 1 marker + audit D-1 reference anchored |
+| BE.3 | source-pin (block) | F5 site 1 marker + audit D-1 reference |
+| ↳ BE.3a | source-pin | `v3.2.2 F5 site 1` marker present in Bot.lua |
+| ↳ BE.3b | source-pin | `audit D-1` reference anchored in Bot.lua |
 
-Total: **3 new checks**. Expected harness delta: `1241 → 1244`.
+Total: **4 new checks**. Expected harness delta: `1241 → 1245`.
+
+> **v0.3 amendment (post-Codex implementation review):** BE.3 was
+> originally specified as a single source-pin entry. In the actual
+> implementation (commit `697cb4d`), BE.3 was split into two
+> separate `assertTrue` calls — BE.3a for the version-marker pin
+> and BE.3b for the audit-reference pin — so a future regression
+> can distinguish "marker was deleted" from "audit reference was
+> deleted" without re-running the suite manually. BE.3 is still
+> one conceptual test block (one `do ... end`), but it produces
+> two harness checks. Net new check count is 4 (not 3); harness
+> delta is `1241 → 1245` (not `→ 1244`).
 
 #### Deferred future test ideas (NOT in v3.2.2)
 
@@ -403,8 +416,10 @@ assertions cover both directions cleanly:
   return tiedSet[1] end`). Single assertion proves non-tie
   semantics are unchanged.
 
-So 2 deterministic behavioural tests + 1 source-pin = full
-coverage of the one approved site with zero flakiness.
+So 2 deterministic behavioural tests + 1 source-pin block (which
+fires 2 distinct assertions, BE.3a + BE.3b — see §4.3 v0.3
+amendment) = full coverage of the one approved site with zero
+flakiness.
 
 ---
 
@@ -432,17 +447,20 @@ Created off `main` (currently `17a0e95`).
 ## §7 Expected harness delta
 
 Pre-implementation: 1,241 / 0.
-Post-implementation: **1,244 / 0** (+3 new BE.* checks).
+Post-implementation: **1,245 / 0** (+4 new BE.* checks: BE.1,
+BE.2, BE.3a, BE.3b — see §4.3 v0.3 amendment for the BE.3 split
+rationale).
 
 Behavioural test BE.1 **MUST fail pre-fix and pass post-fix** — it
 is the wire-proof for F5 site 1's tie-randomization fix. Non-tie
 test BE.2 **MUST pass in both pre-fix and post-fix** states — it
-pins the behaviour-preserving invariant. Source-pin BE.3 **fails
-pre-fix and passes post-fix** because the v3.2.2 F5 marker is
-added by the runtime edit; so writing tests first, BE.3 will fail
-until the runtime fix lands.
+pins the behaviour-preserving invariant. Source-pin BE.3a + BE.3b
+both **fail pre-fix and pass post-fix** because the v3.2.2 F5
+marker and `audit D-1` reference are added by the runtime edit;
+writing tests first, both BE.3 assertions fail until the runtime
+fix lands.
 
-A 3-check delta is very small relative to the v3.2.1 batch's +22
+A 4-check delta is very small relative to the v3.2.1 batch's +22
 (BA/BB/CC/CD). Reviewable in a single Codex pass.
 
 ---
@@ -496,15 +514,17 @@ then can implementation resume.
    pinning the doc into git history alongside the v3.2.1 audit.
 2. Branch `pickplay-tie-randomization-v3.2.2` off `main`
    (currently `17a0e95`).
-3. Write tests BE.1-BE.3 FIRST. Run harness. Confirm BE.1 FAILS
-   (the behavioural proof), BE.2 PASSES (the non-tie regression
-   guard), and BE.3 FAILS until the v3.2.2 F5 marker is added by
-   the runtime edit.
+3. Write tests BE.1-BE.3 FIRST (BE.3 is one source-pin `do` block
+   containing two assertions, BE.3a + BE.3b — see §4.3 v0.3
+   amendment). Run harness. Confirm BE.1 FAILS (the behavioural
+   proof), BE.2 PASSES (the non-tie regression guard), and both
+   BE.3a + BE.3b FAIL until the v3.2.2 F5 marker is added by the
+   runtime edit.
 4. Apply the runtime edit for F5 site 1 (`Bot.lua:2033-2040`).
    The edit builds a `nonTrumps` filtered pool and routes through
    the existing `highestByRank(nonTrumps, contract)` re-binding.
-5. Run harness. Confirm BE.1, BE.2, and BE.3 all PASS. Full
-   harness at **1,244 / 0**.
+5. Run harness. Confirm BE.1, BE.2, BE.3a, and BE.3b all PASS.
+   Full harness at **1,245 / 0**.
 6. Commit: `fix(Bot.lua): F5 site 1 — tie-randomize Hokm side-Ace
    exhaustion (audit D-1)`.
 7. Stop. Open for Codex review.
