@@ -2030,14 +2030,18 @@ local function pickLead(legal, contract, seat)
             end
             if sideAcesLeft == 0 then
                 -- Lead our highest non-trump (unblocked tricks).
-                local bestSide, bestSideR = nil, -1
+                -- v3.2.2 F5 site 1 (audit D-1): route tied non-trump
+                -- max-rank choices through highestByRank so equal-rank
+                -- cards do not leak hand iteration order.
+                local nonTrumps = {}
                 for _, c in ipairs(legal) do
                     if not C.IsTrump(c, contract) then
-                        local r = C.TrickRank(c, contract)
-                        if r > bestSideR then bestSide, bestSideR = c, r end
+                        nonTrumps[#nonTrumps + 1] = c
                     end
                 end
-                if bestSide then return bestSide end
+                if #nonTrumps > 0 then
+                    return highestByRank(nonTrumps, contract)
+                end
             end
         end
         -- Advanced: trump-poor (<4) AND we have a non-trump A → cash

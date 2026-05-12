@@ -9467,6 +9467,155 @@ do
 end
 
 -- =====================================================================
+-- BE. v3.2.2 F5 site 1 (audit D-1): tie-randomize Hokm side-Ace
+-- exhaustion fallback in pickLead.
+--
+-- Pre-v3.2.2 the side-Ace exhaustion fallback used a strict-`>`
+-- loop to pick the highest non-trump card. Ties at the same
+-- TrickRank (e.g., K♠ and K♥, both `RANK_PLAIN["K"] = 6`) were
+-- broken by hand-iteration order — broadcasting hand position to
+-- a careful observer (the v1.1.0 unpredictability concern). v3.2.2
+-- routes through `Primitives.highestByRank` which uses
+-- `pickRandomTied` for ties. F5 sites 2/3/4 and F6 are deferred
+-- (no ties possible or branch is unreachable; see
+-- .swarm_findings/v3_2_2_tie_randomization_design.md).
+-- =====================================================================
+section("BE. v3.2.2 F5 site 1 — Hokm side-Ace exhaustion tie randomization")
+
+-- BE.1: behavioural — tied non-trump bosses are randomized.
+-- Pre-fix: strict-`>` loop returns the FIRST K (KS by iteration
+-- order). Post-fix: pool→highestByRank→pickRandomTied(stub=2) →
+-- KH. Stubbing math.random(2)=2 forces "second tied".
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 3 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- All 3 non-trump Aces marked as played (so sideAcesLeft == 0).
+    -- Place each Ace in a different opp's `played` table.
+    Bot._memory[1].played["AS"] = true
+    Bot._memory[2].played["AH"] = true
+    Bot._memory[4].played["AC"] = true
+    -- The gate also requires `#S.s.tricks >= 3`. Populate 3 dummy
+    -- prior tricks; the exact contents don't matter for the gate.
+    S.s.tricks = {
+        { winner = 1, leadSuit = "S",
+          plays = { {seat=1,card="AS"},{seat=2,card="7S"},
+                    {seat=3,card="8S"},{seat=4,card="9S"} } },
+        { winner = 2, leadSuit = "H",
+          plays = { {seat=2,card="AH"},{seat=3,card="7H"},
+                    {seat=4,card="8H"},{seat=1,card="9H"} } },
+        { winner = 4, leadSuit = "C",
+          plays = { {seat=4,card="AC"},{seat=1,card="7C"},
+                    {seat=2,card="8C"},{seat=3,card="9C"} } },
+    }
+    -- Lead position → trick is empty.
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Hand at seat 3 (bidder, team A): K♠, K♥ tied at non-trump
+    -- TrickRank=6; 7♦ is trump filler so trumpCount>0 but the
+    -- fallback returns from the non-trump pool.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KS", "KH", "7D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    -- Stub math.random to force pickRandomTied → tied[2]. Save and
+    -- restore the original to avoid cross-test contamination.
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == 2 and b == nil then return 2 end
+        if a == nil then return origRandom() end
+        if b == nil then return origRandom(a) end
+        return origRandom(a, b)
+    end
+    local card = Bot.PickPlay(3)
+    math.random = origRandom
+    -- Pool order is {KS, KH} (iteration order from hand). With
+    -- stub→2, pickRandomTied returns tied[2] = KH. Pre-fix loops
+    -- with strict `>` and would return KS (first iteration).
+    assertEq(card, "KH",
+        ("BE.1 (F5 site 1, audit D-1): tied non-trump bosses " ..
+         "randomize; stub→2 picks KH (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- BE.2: behavioural — non-tie input returns unique max regardless
+-- of math.random stub. Proves the fix preserves non-tie semantics.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 3 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[1].played["AS"] = true
+    Bot._memory[2].played["AH"] = true
+    Bot._memory[4].played["AC"] = true
+    S.s.tricks = {
+        { winner = 1, leadSuit = "S",
+          plays = { {seat=1,card="AS"},{seat=2,card="7S"},
+                    {seat=3,card="8S"},{seat=4,card="9S"} } },
+        { winner = 2, leadSuit = "H",
+          plays = { {seat=2,card="AH"},{seat=3,card="7H"},
+                    {seat=4,card="8H"},{seat=1,card="9H"} } },
+        { winner = 4, leadSuit = "C",
+          plays = { {seat=4,card="AC"},{seat=1,card="7C"},
+                    {seat=2,card="8C"},{seat=3,card="9C"} } },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Hand: K♠ (rank 6, unique max non-trump) > Q♥ (rank 5); 7♦
+    -- is trump. No ties.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KS", "QH", "7D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == 2 and b == nil then return 2 end
+        if a == nil then return origRandom() end
+        if b == nil then return origRandom(a) end
+        return origRandom(a, b)
+    end
+    local card = Bot.PickPlay(3)
+    math.random = origRandom
+    -- Unique non-trump max is K♠; whatever the stub returns, the
+    -- 1-element tied-set short-circuit in pickRandomTied means K♠
+    -- is the only option.
+    assertEq(card, "KS",
+        ("BE.2 (F5 site 1, audit D-1): unique max returned " ..
+         "regardless of stub (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- BE.3: source-pin — confirm the v3.2.2 F5 site 1 marker and
+-- audit reference are present in Bot.lua. Fails before the runtime
+-- edit lands (the marker is added by the implementation commit).
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.2%.2 F5 site 1") ~= nil,
+        "BE.3a (F5 site 1): v3.2.2 F5 site 1 marker present in Bot.lua")
+    assertTrue(botSrc:find("audit D%-1") ~= nil,
+        "BE.3b (F5 site 1): audit reference 'D-1' anchored in Bot.lua")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
