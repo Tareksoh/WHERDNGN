@@ -1244,13 +1244,20 @@ local function pickLead(legal, contract, seat)
             if su ~= contract.trump and S.HighestUnplayedRank(su) == r then
                 -- v3.1.2 (Q4 Fix #1, void-aware): in Hokm, "highest
                 -- unplayed in non-trump" is a guaranteed trick ONLY
-                -- when at least one opp can still follow the suit
-                -- (no trump-ruff). If BOTH opps are void in this
-                -- suit, leading the boss guarantees losing it to a
-                -- trump-ruff. Skip in that case — falls through to
-                -- the "free trick" branch below which now also
-                -- handles Hokm-void correctly (leads LOWEST instead).
-                if not opponentsVoidInAll(seat, su) then
+                -- when BOTH opps can still follow the suit (no trump-
+                -- ruff). Even ONE void opp will ruff the boss.
+                --
+                -- v3.2.1 F1 (audit L-2): tightened the gate from
+                -- `opponentsVoidInAll` (both-void only) to
+                -- `anyOpponentVoidIn` (any single void). The v3.1.2
+                -- fix was the conservative initial step ("guaranteed
+                -- loss" case); v3.2.1 closes the single-void leak the
+                -- audit identified as "every Hokm game with an
+                -- observed side-suit void = free 11-point ruff". The
+                -- 4 bidder-team A-cash arms (2038-2354) and the B-77
+                -- single-opp exploit (2401, now defender-only) are
+                -- downstream defense-in-depth.
+                if not anyOpponentVoidIn(seat, su) then
                     return c
                 end
             end
@@ -2035,10 +2042,19 @@ local function pickLead(legal, contract, seat)
         end
         -- Advanced: trump-poor (<4) AND we have a non-trump A → cash
         -- the Ace first; trump-pull on the next round.
+        --
+        -- v3.2.1 F1 (audit L-2): in Hokm, skip the Ace if any opponent
+        -- is observed void in the Ace's suit — leading the boss
+        -- guarantees losing it to a trump-ruff. Mirrors the v3.1.2 Q4
+        -- Fix #1 pattern at Bot.lua:1244-1257. Sun has no trump, so no
+        -- ruff threat; Sun behavior unchanged.
         if Bot.IsAdvanced() and trumpCount < 4 then
             for _, c in ipairs(legal) do
                 if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
-                    return c
+                    if contract.type ~= K.BID_HOKM
+                       or not anyOpponentVoidIn(seat, C.Suit(c)) then
+                        return c
+                    end
                 end
             end
         end
@@ -2078,9 +2094,13 @@ local function pickLead(legal, contract, seat)
                 end
             end
             if conservativeOpp then
+                -- v3.2.1 F1 (audit L-2): skip Ace if opp known void in
+                -- its suit (this block is Hokm-gated above).
                 for _, c in ipairs(legal) do
                     if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
-                        return c
+                        if not anyOpponentVoidIn(seat, C.Suit(c)) then
+                            return c
+                        end
                     end
                 end
             end
@@ -2164,9 +2184,13 @@ local function pickLead(legal, contract, seat)
             if trumpJSeen and trump9Seen then
                 -- Both gone from pool. Cash a side-suit Ace if we
                 -- have one; otherwise fall through to highestTrump.
+                -- v3.2.1 F1 (audit L-2): skip Ace if opp known void in
+                -- its suit (Hokm-only — block is Hokm-gated above).
                 for _, c in ipairs(legal) do
                     if C.Rank(c) == "A" and not C.IsTrump(c, contract) then
-                        return c
+                        if not anyOpponentVoidIn(seat, C.Suit(c)) then
+                            return c
+                        end
                     end
                 end
             end
@@ -2357,7 +2381,17 @@ local function pickLead(legal, contract, seat)
         for _, c in ipairs(nonTrumps) do
             local r = C.Rank(c)
             local v = (r == "A" and 11) or (r == "T" and 10) or 0
-            if v > pointVal then pointCard, pointVal = c, v end
+            -- v3.2.1 F1 (audit L-2): in Hokm, skip a point card if any
+            -- opponent is observed void in its suit (boss-into-ruff).
+            -- Sun has no trump → no ruff threat → keep current behavior.
+            local voidSkip = false
+            if contract.type == K.BID_HOKM
+               and anyOpponentVoidIn(seat, C.Suit(c)) then
+                voidSkip = true
+            end
+            if not voidSkip and v > pointVal then
+                pointCard, pointVal = c, v
+            end
         end
         if pointCard and pointVal >= 10 then
             return pointCard
@@ -2407,7 +2441,17 @@ local function pickLead(legal, contract, seat)
     -- wins outright the other half. Sun is already covered by the
     -- general Sun-led-Ace heuristic. Advanced+ since it relies on
     -- HighestUnplayedRank tracking.
+    --
+    -- v3.2.1 F1 (audit L-2): narrow to DEFENDERS only. The "partner
+    -- over-ruffs roughly half the time" gamble has acceptable EV for
+    -- defenders (low downside), but for the BIDDER team the same
+    -- coin-flip risks contract failure on a single missed over-ruff.
+    -- The 4 sibling A-cash arms in the bidder-team block (Bot.lua
+    -- :2046-2178) now reject voided-suit Aces; this branch is the
+    -- final leak path for trumpless bidder-self hands with no other
+    -- safe Ace. Keep the exploit live for defenders.
     if Bot.IsAdvanced() and contract.type == K.BID_HOKM
+       and not isBidderTeam
        and S.HighestUnplayedRank then
         for _, c in ipairs(nonTrumps) do
             local su = C.Suit(c)

@@ -8950,6 +8950,205 @@ do
 end
 
 -- =====================================================================
+-- BA. v3.2.1 F1 (audit L-2): blind A-leads check opp voids in Hokm
+--
+-- Pre-v3.2.1: the v3.1.2 Q4 Fix #1 guarded the "highest-unplayed"
+-- pickLead arm with `opponentsVoidInAll` (skip boss only when BOTH
+-- opps void). The L-2 audit found that even ONE void opp will ruff
+-- the boss — so single-void scenarios still leaked. Four downstream
+-- A-cash arms (bidder-team trumpCount<4, conservativeOpp, J+9 trump-
+-- lock, defender bidder-drought) also lacked any void check, and the
+-- B-77 single-opp-void exploit (Bot.lua:2401) gambled the boss for
+-- both bidder team and defenders.
+--
+-- v3.2.1 F1 changes:
+--   • L1244 Q4 gate tightened: opponentsVoidInAll → anyOpponentVoidIn
+--   • 2038, 2080, 2167 (bidder-team A-cash arms) skip A when
+--     anyOpponentVoidIn(seat, A.suit), Hokm only (Sun unchanged)
+--   • 2354 (defender drought point-card cash) same Hokm-only skip
+--   • 2401 (B-77 boss exploit) narrowed: `not isBidderTeam` —
+--     defenders keep the gamble; bidder team falls through.
+-- =====================================================================
+section("BA. v3.2.1 F1 — Hokm A-leads avoid known opp voids")
+
+-- BA.1: Hokm Advanced bidder-team, side-suit Ace, ONE opp void.
+-- Pre-fix: L1244 (Q4 gate is both-void only) returns the Ace.
+-- Post-fix: L1244 single-void gate skips Ace; bot falls through to
+-- safer choice. Test asserts result is NOT the vulnerable Ace.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 3 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Opp seat 2 (team A) ruffed earlier → observed void in H.
+    Bot._memory[2].void.H = true
+    -- Verify the OTHER opp (seat 4) is NOT void in H — single-void test.
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Seat 3 (bidder, team B) holds A♥+K♥+J♠+9♠+8♦+7♦+8C+7C.
+    -- Trump (S) count = 2 (<4). Non-trump A in voided suit (H).
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "KH", "JS", "9S", "8D", "7D", "8C", "7C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    assertTrue(card ~= "AH",
+        ("BA.1a (F1, L-2): Hokm bidder skips A♥ when one opp void in H "
+         .. "(got %s)"):format(tostring(card)))
+    -- Defense-in-depth: card must not be a non-trump Ace at all (no
+    -- other Aces in this hand, so this also implies "not the vulnerable
+    -- Ace"). Acceptable: trump pull (JS/9S), or any non-A♥ non-trump.
+    assertTrue(card ~= nil, "BA.1b (F1): PickPlay returns a valid card")
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- BA.2: Hokm Advanced bidder TRUMPLESS — the L-2 audit's "leak after
+-- 4-site fix via 2401" path. With L1244 tightened AND 2401 narrowed
+-- to defenders, even a trumpless bidder with sole non-trump A in a
+-- voided suit no longer leads the Ace.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 3 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[2].void.H = true
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Seat 3 (bidder) trumpless: 3H+3D+2C, sole A in voided H.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "QH", "JH", "9D", "8D", "7D", "8C", "7C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    assertTrue(card ~= "AH",
+        ("BA.2 (F1, L-2): trumpless Hokm bidder avoids A♥-into-void-ruff "
+         .. "even after fallthrough to B-77 (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- BA.3: Sun A-cash is UNCHANGED. Sun has no trump → no ruff threat,
+-- so leading the Ace into an observed void is still correct play.
+-- Codex prompt: "Keep Sun behavior unchanged where no trump-ruff
+-- exists."
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 3 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Set the "void" anyway — Sun semantics should ignore it.
+    Bot._memory[2].void.H = true
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "KH", "QH", "9D", "8D", "7D", "8C", "7C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Sun: A♥ is HighestUnplayedRank in H; Q4 path's contract.type ==
+    -- K.BID_HOKM gate is the OUTER check, so Sun never enters that
+    -- branch at all and falls through to "highest" lead. The pickLead
+    -- Sun-establishing branch may also pick A♥ via T-or-A-boss rule.
+    -- Either way: the bot cashes A♥ in Sun, NOT a low card.
+    assertEq(card, "AH",
+        ("BA.3 (F1, L-2): Sun A♥ cash unchanged (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- BA.4: B-77 single-opp-void exploit STILL fires for defenders.
+-- Defenders have acceptable-EV on the gamble (low downside); the
+-- v3.2.1 narrowing only excluded bidder team. This test pins the
+-- preserved defender behavior.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    -- Bidder seat 2 (team A); defender seat 3 (team B).
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 2 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Opp seat 2 (bidder) is the ONE void; seat 4 (team A, partner of
+    -- bidder) is NOT void.
+    -- B-77 fires when: Hokm + Advanced + boss + anyOpponentVoidIn +
+    -- not opponentsVoidInAll + (post-v3.2.1) not isBidderTeam.
+    -- Defender seat 3 satisfies isBidderTeam=false.
+    -- BUT: the Q4 gate at L1244 ALSO sees this same scenario and now
+    -- (post-v3.2.1) skips boss on any single void. So L1244 will skip
+    -- A♥, and the bot falls through to defender block where B-77 at
+    -- 2401 fires.
+    Bot._memory[2].void.H = true
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- Defender holds A♥+Q♥+J♥+9♦+8♦+7♦+8♣+7♣ (3 H including boss).
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "QH", "JH", "9D", "8D", "7D", "8C", "7C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- v3.2.1 also tightened L1244 to single-void skip. So defender's
+    -- "highest unplayed" arm at L1244 now skips A♥ too; defender falls
+    -- through to defender-block branches. B-77 at 2401 has the same
+    -- "single-void boss-lead" condition AND survives the new
+    -- `not isBidderTeam` gate (we're defender). So B-77 returns A♥.
+    -- Net: defender STILL cashes A♥ — preserved intentional behavior.
+    assertEq(card, "AH",
+        ("BA.4 (F1, L-2): defender Hokm B-77 exploit preserved (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+end
+
+-- BA.5: source-pin coverage for the F1 markers.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- Expect at least 5 F1 markers (one per site fix: L1244, 2038,
+    -- 2080, 2167, 2354) plus one on the B-77 narrowing at 2401.
+    local count = 0
+    for _ in botSrc:gmatch("v3%.2%.1 F1") do count = count + 1 end
+    assertTrue(count >= 6,
+        ("BA.5a (F1): expected ≥6 v3.2.1 F1 markers in Bot.lua (got %d)"):format(count))
+    assertTrue(botSrc:find("audit L%-2") ~= nil,
+        "BA.5b (F1): audit reference 'L-2' anchored in Bot.lua")
+    assertTrue(botSrc:find("not isBidderTeam") ~= nil,
+        "BA.5c (F1): B-77 narrowing gate 'not isBidderTeam' present")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
