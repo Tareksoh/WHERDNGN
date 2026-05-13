@@ -1,5 +1,63 @@
 # Changelog
 
+## v3.2.3 — Pos-3 Sun bot fix
+
+A focused bot-play bugfix release. **No UI, protocol, saved-
+variable, scoring, or network changes.** v3.1.x / v3.2.x clients
+remain addon-message-compatible.
+
+### Fixed
+
+- **M3lm+ Sun bots at pos-3 now use the relocated
+  Takbeer/Tasgheer certainty rule when partner is already winning
+  and pos-4 is known void in the led suit.** Previously the
+  branch lived below the partner-winning early-return inside
+  `pickFollow` and was structurally unreachable — its gate
+  required `partnerWinning` while the enclosing scope guaranteed
+  the opposite. The branch now sits in the live partner-winning
+  block (between Tahreeb sender and Rule 1B) and donates the
+  highest safe non-A/T card to partner's certain trick, after
+  smother and Tahreeb have had priority.
+
+The relocation ships four safeguards so the new branch can't
+hurt existing behaviour:
+
+- **Does not override smother's led-suit point-card donation.**
+  Smother still fires first and donates the highest A/T/K/Q/J of
+  the led suit when its own gates pass.
+- **Does not override Tahreeb signal encoding.** Tahreeb's T-1
+  Bargiya / "want, no A/no T" / T-4 dump-ordering arms all run
+  before this branch; if any of them returns, the relocated
+  Takbeer never fires.
+- **Filtered with not-wouldWin** so it cannot steal partner's
+  current trick — a same-suit K/Q/J that would beat partner's
+  current play is rejected from the donate pool.
+- **Routed through `highestByRank`** so tied donor cards
+  randomize rather than leaking hand-iteration order. This
+  closes the v3.2.2-deferred F5/D-1 tie-randomization site at
+  this branch as part of making it reachable.
+
+The companion pos-3 Sun «تخليه يمسك» hold-back branch (the
+deception-play that was flagged unreachable in v3.2.1) remains
+intentionally deferred to a future dedicated deception-play
+audit — it has a probabilistic 30%/40% fire rate that needs its
+own test-framework design.
+
+### Verification
+
+- Full harness: **1,258 checks passed, 0 failed** (was 1,245 at
+  v3.2.2; +13 new behavioural and source-pin assertions in
+  section BF of `tests/test_state_bot.lua`).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+
+### Notes
+
+- Per-fix design rationale, 4 rounds of Codex review, and the
+  fixture-design decisions for each BF test live in
+  `.swarm_findings/v3_2_3_pos3_sun_relocation_design.md`.
+- No protocol-version bump. Saved-variable layout unchanged.
+
 ## v3.2.2 — Predictability touch-up
 
 Small maintenance release. **No gameplay, UI, protocol, saved-
