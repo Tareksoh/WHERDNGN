@@ -10479,6 +10479,192 @@ do
 end
 
 -- =====================================================================
+-- BJ. v3.2.5 HIGH-pickplay regression coverage (Batch B/T-10, test-only)
+--
+-- Backfills behavioural regression guards for the T-10 Tahreeb-
+-- return T-supply branch:
+--
+--   BJ.1/2 (audit T-10) — Tahreeb-receiver T-supply count>=3 +
+--                          "want" flavor at Bot.lua:1776-1788.
+--                          When partner emits a confirmed
+--                          small→big "want" Tahreeb signal AND
+--                          the bot holds T of the preferred suit
+--                          with 3+ cards, video #10 says "lead
+--                          T back to partner" with 100% reliability
+--                          («نسبه نجاحه كبيره اللي هي 100%»). The
+--                          v1.1.0 H1 fix specifically restricts
+--                          this T-supply override to the "want"
+--                          flavor; other flavors keep legacy
+--                          low-lead behavior.
+--   BJ.3/4 — source pins on EXISTING bot-only / asymmetry doc
+--            markers (test-only batch; no new runtime markers
+--            added).
+--
+-- The partner-bot gate at Bot.lua:1294 (Bot.IsBotSeat(R.Partner(seat)))
+-- is intentional and audit-endorsed: the v1.4.5 sender-side audit
+-- explicitly preserved the sender-vs-receiver asymmetry («Receiver-
+-- side reads of human signals are still appropriately discounted...
+-- that asymmetry is correct per audit guidance» at Bot.lua:3580-3583).
+-- BJ.3 + BJ.4 lock the two doc markers that anchor this asymmetry.
+--
+-- Design doc: .swarm_findings/v3_2_5_t10_tahreeb_return_design.md
+-- =====================================================================
+section("BJ. v3.2.5 HIGH-pickplay regression coverage (T-10)")
+
+-- BJ.1: T-10 POSITIVE — partner-bot "want" Tahreeb signal in H,
+-- bot holds T + 2 cover in H. Expect T-supply lead-back (TH).
+-- Hokm trump=S, bot seat 3 (partner=seat 1), M3lm. Partner's
+-- tahreebSent.H = {"7", "9"} classifies as "want" (score 2) →
+-- selected as tahreebPrefSuit with tahreebPrefFlavor = "want".
+-- Bot's hand has TH + 9H + 8H (count=3 in non-trump pref suit H),
+-- hasT=true. T-10 branch at L1776-1788 fires: returns tCard = TH.
+-- Counterfactual: if T-10 doesn't fire, fallback at L1792 returns
+-- lowestByRank({TH, 9H, 8H}) = 8H. The TH vs 8H wire discriminator
+-- proves the T-supply lead-back path specifically.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 4 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Lead context: trick 1, no plays yet, no prior tricks. Hokm
+    -- has no trick-1 mardoofa block (Sun-only), and sweep-pursuit-
+    -- early needs trickNum>=3 (gated at L1081) — both upstream
+    -- shadows are inactive.
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {}
+    -- Hand at seat 3: TH + 9H + 8H + JD. H is non-trump (trump=S),
+    -- so fromPref counts all 3 H cards; JD is trump (not counted
+    -- by fromPref's per-suit filter at L1748-1758).
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "TH", "9H", "8H", "JD" },
+        [4] = {},
+    }
+    -- All seats marked isBot so Bot.IsBotSeat(1) passes the L1294
+    -- partner-bot gate.
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    -- Lazy-init partnerStyle via OnPlayObserved (mirrors F.3 setup).
+    -- Then seed partner seat 1's H signal with ascending {7, 9}
+    -- → tahreebClassify returns "want" (weight 2). Other suits
+    -- stay empty so H wins the score loop.
+    if not Bot._partnerStyle then
+        Bot.OnPlayObserved(1, "8S", nil)
+    end
+    if Bot._partnerStyle and Bot._partnerStyle[1] then
+        Bot._partnerStyle[1].tahreebSent.H = { "7", "9" }
+    end
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: T-10 fires → returns TH (the T of pref
+    -- suit). The TH vs 8H discriminator proves the v1.1.0 H1
+    -- "want-flavor + count>=3 → lead T back" path specifically;
+    -- a regression where T-10 silently fell through to legacy
+    -- low-lead would return 8H.
+    assertEq(card, "TH",
+        ("BJ.1 (v3.2.5 T-10): partner-bot want signal + T-supply " ..
+         "count=3 returns TH (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BJ.2: T-10 NEGATIVE — partner-bot signal selects H as
+-- tahreebPrefSuit, but flavor is NOT "want", so T-10 doesn't
+-- fire. Same fixture as BJ.1 except partner's H signal is a
+-- single Ace without lenAtAce → tahreebClassify returns
+-- "bargiya_hint" (score 1). H still wins the score loop
+-- (only non-zero entry), so tahreebPrefSuit = "H" with
+-- tahreebPrefFlavor = "bargiya_hint". The if tahreebPrefSuit
+-- then block at L1727 enters, count=3 and hasT=true, but the
+-- T-10 elseif at L1776 requires tahreebPrefFlavor == "want"
+-- → false. Falls to L1792 else: lowestByRank({TH, 9H, 8H}).
+-- In Hokm non-trump RANK_PLAIN (7=1, 8=2, 9=3, T=7), the
+-- lowest is 8H (rank 2).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 4 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {}
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "TH", "9H", "8H", "JD" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    if not Bot._partnerStyle then
+        Bot.OnPlayObserved(1, "8S", nil)
+    end
+    if Bot._partnerStyle and Bot._partnerStyle[1] then
+        -- Single Ace without lenAtAce → "bargiya_hint" flavor,
+        -- score 1. H still wins (only non-zero suit) but flavor
+        -- is not "want" → T-10 specifically doesn't fire.
+        Bot._partnerStyle[1].tahreebSent.H = { "A" }
+    end
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: T-10's want-flavor restriction holds →
+    -- falls back to lowestByRank({TH, 9H, 8H}) = 8H. A returned
+    -- TH would indicate T-10 fired despite the flavor guard —
+    -- a real regression of v1.1.0 H1's explicit flavor
+    -- restriction, not a fixture problem. Per design-doc §6 stop
+    -- condition #3: if this returns TH, treat as a runtime
+    -- regression signal.
+    assertEq(card, "8H",
+        ("BJ.2 (v3.2.5 T-10 NEG): bargiya_hint flavor → T-10 " ..
+         "doesn't fire; bot plays lowest 8H not T-supply TH " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BJ.3 + BJ.4: source-pin block — two sub-asserts on EXISTING
+-- in-source markers in Bot.lua that anchor the sender/receiver
+-- asymmetry. This is a test-only batch; no new runtime markers
+-- are added. The partner-bot gate at Bot.lua:1294 is intentional
+-- and audit-endorsed (per the v1.4.5 sender-side comment at
+-- Bot.lua:3580-3583 and the inline doc at Bot.lua:1278-1279).
+-- BJ.3 / BJ.4 lock the two single-line phrases that document
+-- the asymmetry; if either is removed, the architectural
+-- rationale is no longer in-source and a re-audit is required.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- BJ.3: receiver-side bot-only-honor doc marker at
+    -- Bot.lua:1278. Single-line anchor verified against current
+    -- main HEAD.
+    assertTrue(botSrc:find("relevant seat is a bot") ~= nil,
+        "BJ.3 (v3.2.5 T-10): receiver-side Tahreeb bot-only-honor doc marker present")
+    -- BJ.4: v1.4.5 sender/receiver asymmetry doc marker at
+    -- Bot.lua:3580. The full comment continues onto L3581 with
+    -- "still appropriately discounted (humans may not strictly
+    -- follow the convention)" — but the single-line anchor on
+    -- L3580 is what we pin (the L3581 wrap would fail Lua's
+    -- single-line find).
+    assertTrue(botSrc:find("Receiver%-side reads of human signals are") ~= nil,
+        "BJ.4 (v3.2.5 T-10): v1.4.5 sender/receiver asymmetry doc marker present")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
