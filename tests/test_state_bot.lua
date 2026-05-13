@@ -9616,6 +9616,440 @@ do
 end
 
 -- =====================================================================
+-- BF. v3.2.3 F5-3 relocation: pos-3 Sun Takbeer/Tasgheer donate
+--
+-- F5-3 was identified by the v3.2.1 audit as unreachable (it sat
+-- below the partnerWinning early-return at Bot.lua:3886). v3.2.3
+-- relocates the branch from the dead opp-winning location
+-- (old Bot.lua:4464-4491) to the live partnerWinning block, between
+-- Tahreeb sender end (~L3737) and Rule 1B start (~L3739).
+--
+-- Final ordering inside the partnerWinning block:
+--   Smother → Tahreeb sender → F5-3 → Rule 1B
+--
+-- Required shape (per design doc §4.1 + Codex amendments v0.2-v0.4):
+--   • Build a `donate` pool, route through highestByRank for ties
+--     (closes the v3.2.2-deferred F5/D-1 tie-randomization site at
+--     F5-3 as part of making it reachable).
+--   • Filter each candidate with `not wouldWin(c, trick, contract,
+--     seat)` to prevent stealing partner's current trick via a
+--     same-suit K/Q/J.
+--   • Drop the original `#winners == 0` gate (semantically tied to
+--     the opp-winning context where this branch used to live; the
+--     not-wouldWin filter replaces it in partnerWinning context).
+--
+-- See .swarm_findings/v3_2_3_pos3_sun_relocation_design.md for the
+-- full design + 4 rounds of Codex review.
+-- =====================================================================
+section("BF. v3.2.3 F5-3 — pos-3 Sun Takbeer donate relocation")
+
+-- BF.1: F5-3 reachability + correct card.
+-- Sun pos-3, void in led S, pos-4 known void, hand {KH, TH, QH}
+-- (K/T/Q shape kills Tahreeb's "want, no A/no T" arm because T is
+-- present; no A kills T-1 Bargiya; #cards=3 kills T-4 doubleton).
+-- F5-3 builds donate pool = {KH, QH} (T filtered out), returns KH
+-- via highestByRank.
+-- Pre-fix: fallback lowestByRank → QH (Q=rank 5 lowest).
+-- Post-fix: F5-3 → KH (K=rank 6 highest non-A/T).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true  -- pos-4 (seat 4) void in led S
+    S.s.tricks = {}
+    -- Trick: pos-1 partner seat 1 led 9S; pos-2 opp seat 2 played 7S.
+    -- Partner currently winning. We're at seat 3 (pos-3).
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["9S"] = true, ["7S"] = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KH", "TH", "QH" },  -- void in S; K/T/Q in H
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Wire-proof: pre-relocation returns QH via fallback; post-
+    -- relocation returns KH via F5-3 → highestByRank({KH, QH}).
+    assertEq(card, "KH",
+        ("BF.1 (v3.2.3 F5-3 wire-proof): pos-3 Sun partner-winning + " ..
+         "pos-4 void → F5-3 donates highest non-A/T (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.2: F5-3 fires regardless of partner being a bot or a human.
+-- Same fixture as BF.1 except partner (seat 1) is human. Tahreeb
+-- gate (v1.4.5) does NOT require partner-bot, so the K/T/Q shape
+-- still avoids Tahreeb's return paths regardless of partner type.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["9S"] = true, ["7S"] = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KH", "TH", "QH" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = false },  -- partner human
+        [2] = { isBot = true },
+        [3] = { isBot = true },
+        [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    assertEq(card, "KH",
+        ("BF.2 (v3.2.3 F5-3): partner-human, F5-3 still fires " ..
+         "(no partner-bot gate; got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.3: Tahreeb's T-1 Bargiya wins the overlap (regression guard,
+-- passes BOTH pre- and post-relocation). Hand includes a side-suit
+-- A with cover (AH + 9H), satisfying T-1 Bargiya. Tahreeb returns
+-- AH first; F5-3 never reached.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["9S"] = true, ["7S"] = true }
+    -- Hand has A+cover in H (T-1 Bargiya fires).
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "9H", "8C", "7C", "8D", "7D" },  -- 6 cards
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Tahreeb T-1 Bargiya returns A of side suit (H is the only
+    -- suit with A). Both pre- and post-relocation Tahreeb fires
+    -- first.
+    assertEq(card, "AH",
+        ("BF.3 (v3.2.3 F5-3): Tahreeb T-1 Bargiya wins overlap; F5-3 " ..
+         "doesn't steal the signal (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.4: F5-3 does NOT override smother (Interpretation A invariant).
+-- Hand {AS, KS, 8H} → must-follow S → legal {AS, KS}. Both AS and
+-- KS are smother point cards → #pointCards = 2 → smother's gateOk
+-- = true → returns AS (highest point in led suit).
+-- Both pre- and post-relocation pass.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["9S"] = true, ["7S"] = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "KS", "8H" },  -- must-follow S → legal {AS, KS}
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Smother fires (#pointCards = 2 satisfies gateOk), returns
+    -- highest point in led = AS.
+    assertEq(card, "AS",
+        ("BF.4 (v3.2.3 F5-3): smother's A-donate stays canonical when " ..
+         "#pointCards>=2 (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.5: F5-3 does NOT fire when pos-4 not known void.
+-- Same fixture as BF.1 but Bot._memory[4].void.S = nil. F5-3's
+-- pos4Void gate fails → fall through → fallback lowestByRank
+-- returns QH (lowest non-trump).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- NOTE: Bot._memory[4].void.S is intentionally left unset.
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["9S"] = true, ["7S"] = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KH", "TH", "QH" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- F5-3 doesn't fire (pos-4 not known void) → falls through.
+    -- Result is NOT KH (would only be KH if F5-3 fired).
+    assertTrue(card ~= "KH",
+        ("BF.5 (v3.2.3 F5-3): pos-4 void unknown → F5-3 doesn't fire " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.6: F5-3 does NOT fire when not at pos-3.
+-- Lead seat = 4 (opp), pos-2 = seat 1 (partner) plays winning card,
+-- pos-3 = seat 2 (opp) plays loser, we're at pos-4 (seat 3).
+-- (#trick.plays + 1) == 4, not 3 → F5-3's pos gate fails.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    -- Trick: pos-1 opp seat 4 led 7S; pos-2 partner seat 1 played
+    -- 9S (winning); pos-3 opp seat 2 played 8S. We're at pos-4
+    -- (seat 3). #trick.plays = 3, so (#plays + 1) = 4 ≠ 3.
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 4, card = "7S" },
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "8S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["7S"]=true, ["9S"]=true, ["8S"]=true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KH", "TH", "QH" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- F5-3 doesn't fire (we're pos-4 not pos-3). Falls through.
+    assertTrue(card ~= "KH",
+        ("BF.6 (v3.2.3 F5-3): not pos-3 → F5-3 doesn't fire " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.7: not-wouldWin filter regression guard.
+-- Sun pos-3, partner led JS (mid), opp pos-2 played 7S, partner
+-- winning. Bot hand {KS, 9S, 8S, 7H} → must-follow S → legal
+-- {KS, 9S, 8S}. KS would beat partner's JS (K=6 > J=4) → filter
+-- must reject KS. Smother gateOk false (#pointCards=1, completed=0,
+-- not lastSeat) → falls through. Both pre-fix (Rule 1B) and
+-- post-fix (F5-3 + filter) return 9S.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "JS" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["JS"] = true, ["7S"] = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KS", "9S", "8S", "7H" },  -- must-follow → {KS,9S,8S}
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Pre-fix Rule 1B → 9S (second-lowest, doesn't wouldWin).
+    -- Post-fix F5-3 → 9S (rejected KS via filter, highest non-A/T
+    -- non-wouldWin = 9S).
+    assertEq(card, "9S",
+        ("BF.7 (v3.2.3 F5-3): bot doesn't return wouldWin candidate " ..
+         "KS; returns 9S in both states (got %s)"):format(tostring(card)))
+    assertTrue(card ~= "KS",
+        "BF.7 (v3.2.3 F5-3): would-steal candidate KS rejected")
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BF.8: source-pin block for the v3.2.3 F5-3 markers + dead-block
+-- removal.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("v3%.2%.3 F5%-3") ~= nil,
+        "BF.8a (v3.2.3 F5-3): v3.2.3 F5-3 marker present in Bot.lua")
+    assertTrue(botSrc:find("relocated") ~= nil,
+        "BF.8b (v3.2.3 F5-3): relocation noted in Bot.lua comment")
+    assertTrue(botSrc:find("not wouldWin%(c, trick, contract, seat%)") ~= nil,
+        "BF.8c (v3.2.3 F5-3): not-wouldWin filter substring present")
+    -- The OLD dead block at L4464-4491 must be removed. Pin its
+    -- distinctive comment ("v1.4.1 (Concern 4 — Takbeer/Tasgheer
+    -- certainty gate") no longer appears anywhere in Bot.lua.
+    assertTrue(botSrc:find("v1%.4%.1 %(Concern 4 — Takbeer/Tasgheer") == nil,
+        "BF.8d (v3.2.3 F5-3): old dead block at L4464-4491 removed")
+end
+
+-- BF.9: F5-3 tie-randomization wired (closes v3.2.2-deferred F5/D-1
+-- site at F5-3). Hand {KH, QH, KC, QC} — two K-high doubletons:
+--   - no A → no T-1 Bargiya
+--   - each doubleton has hi=K → T-4 dump-ordering carve-out skips
+--   - no 3-card suit → "want, no A/no T" doesn't fire
+-- F5-3 donate pool = {KH, QH, KC, QC} (all non-A/T, no wouldWin
+-- since non-led suits in Sun). highestByRank picks max rank K (6),
+-- tied = {KH, KC} (in iteration order through donate pool).
+-- pickRandomTied calls math.random(2); stub returns 2 → tied[2] = KC.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    Bot._memory[4].void.S = true
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "9S" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["9S"] = true, ["7S"] = true }
+    -- Void in S; two K-high doubletons in H and C.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KH", "QH", "KC", "QC" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    -- Stub math.random(2) → 2 to force pickRandomTied to pick the
+    -- second tied card. Arity-aware shim matches AJ.12 / BE pattern.
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == 2 and b == nil then return 2 end
+        if a == nil then return origRandom() end
+        if b == nil then return origRandom(a) end
+        return origRandom(a, b)
+    end
+    local card = Bot.PickPlay(3)
+    math.random = origRandom
+    -- Three-way distinction:
+    --   Pre-relocation       → QC (fallback lowestByRank with stub)
+    --   Post-relocation strict → KH (first K encountered, BUG case)
+    --   Post-relocation tie-rand → KC (correct)
+    assertEq(card, "KC",
+        ("BF.9 (v3.2.3 F5-3 tie-rand): tied K bosses across two suits " ..
+         "randomize via highestByRank+pickRandomTied; stub=2 picks KC " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

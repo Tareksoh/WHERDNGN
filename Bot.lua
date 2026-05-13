@@ -3736,6 +3736,57 @@ local function pickFollow(legal, hand, trick, contract, seat)
             end
         end
 
+        -- v3.2.3 F5-3 (audit doc): pos-3 Sun Takbeer/Tasgheer
+        -- certainty gate, relocated from the old dead block at
+        -- old Bot.lua:4444-4495 (which sat in the opp-winning
+        -- region BELOW partnerWinning's early-return at L3886 →
+        -- structurally unreachable; gate required `partnerWinning`
+        -- but execution path guaranteed `partnerWinning=false`
+        -- there). Now placed between Tahreeb sender end and Rule
+        -- 1B so the branch is reachable in its intended context.
+        --
+        -- Saudi-canonical rule (videos 21/22/23, decision-trees.md
+        -- rows 123-128): when partner is CERTAIN to win the trick
+        -- (pos-4 known void in led suit) and we're at pos-3 in Sun,
+        -- donate the highest non-A/T point card to partner's pile.
+        -- Filter out A and T to preserve our own strong-suit
+        -- winners for future tricks.
+        --
+        -- Per-card not-wouldWin filter: the donate candidate must
+        -- not beat partner's current play — without it, a same-
+        -- suit K/Q/J could steal the partner-winning trick. This
+        -- replaces the original `#winners == 0` gate (which was
+        -- semantically tied to the opp-winning context where this
+        -- branch used to live).
+        --
+        -- highestByRank(donate, contract) closes the v3.2.2-
+        -- deferred F5/D-1 tie-randomization site at F5-3 as part
+        -- of making the branch reachable: a manual `donateRank` /
+        -- `cr > donateRank` strict ranking loop would re-introduce
+        -- the v1.1.0 hand-order leak in newly-live code.
+        if Bot.IsM3lm and Bot.IsM3lm()
+           and contract.type == K.BID_SUN
+           and (#trick.plays + 1) == 3
+           and trick.leadSuit and Bot._memory then
+            local pos4Seat = (seat % 4) + 1
+            local pos4Mem = Bot._memory[pos4Seat]
+            local pos4Void = pos4Mem and pos4Mem.void
+                             and pos4Mem.void[trick.leadSuit]
+            if pos4Void then
+                local donate = {}
+                for _, c in ipairs(legal) do
+                    local r = C.Rank(c)
+                    if r ~= "A" and r ~= "T"
+                       and not wouldWin(c, trick, contract, seat) then
+                        donate[#donate + 1] = c
+                    end
+                end
+                if #donate > 0 then
+                    return highestByRank(donate, contract)
+                end
+            end
+        end
+
         -- v0.7.2 Section 4 rule 1B (Definite, video 09 "biggest
         -- mistake"): partner-winning + we must follow + we can't
         -- beat their lead AND smother above didn't fire (no
@@ -4441,58 +4492,21 @@ local function pickFollow(legal, hand, trick, contract, seat)
                 end
                 -- All legal cards are winners — fall through.
             elseif pos == 3 then
-                -- v1.4.1 (Concern 4 — Takbeer/Tasgheer certainty
-                -- gate, decision-trees.md rows 123-128, videos 21/22/23):
-                -- M3lm+ pos-3 partner-certain Takbeer extension.
-                -- Existing pos-3 logic (below) already does
-                -- "highestByRank(winners)" — implicit Takbeer when WE
-                -- have a winner. The certainty gate adds: when
-                -- PARTNER is certain winner (pos-4 known void in led
-                -- suit, Sun contract) AND we have NO winners
-                -- ourselves, play highest LOSER from led suit (or
-                -- highest non-trump if void). This donates points to
-                -- partner's winning pile that the default
-                -- low-loser fallback would discard.
-                --
-                -- Caveats per videos:
-                --   * Sun-only (Hokm trump-led has different conventions)
-                --   * Pos-4 void verified via Bot._memory[pos4].void
-                --   * Skip if we're a STRONG suit holder ourselves
-                --     (don't burn our own future winners). Heuristic:
-                --     skip the donate if our highest card is A or T.
-                --
-                -- "Behavior is not off" gate: this fires ONLY when the
-                -- existing winners-based Takbeer can't (no winners),
-                -- so it's a pure addition to previously-default-low
-                -- behavior. Doesn't override the existing logic.
-                if Bot.IsM3lm and Bot.IsM3lm()
-                   and contract.type == K.BID_SUN
-                   and partnerWinning and #winners == 0
-                   and trick.leadSuit and Bot._memory then
-                    local pos4Seat = (seat % 4) + 1
-                    local pos4Mem = Bot._memory[pos4Seat]
-                    local pos4Void = pos4Mem and pos4Mem.void
-                                     and pos4Mem.void[trick.leadSuit]
-                    if pos4Void then
-                        -- Partner-certain: pos-4 cannot follow led
-                        -- suit, can't beat partner. Donate highest.
-                        -- Filter: don't play A or T (preserve own
-                        -- strong-suit winners for future tricks).
-                        local donate = nil
-                        local donateRank = -1
-                        for _, c in ipairs(legal) do
-                            local r = C.Rank(c)
-                            if r ~= "A" and r ~= "T" then
-                                local cr = C.TrickRank(c, contract)
-                                if cr > donateRank then
-                                    donate = c
-                                    donateRank = cr
-                                end
-                            end
-                        end
-                        if donate then return donate end
-                    end
-                end
+                -- v3.2.3 (Codex-reviewed): the v1.4.1 "Concern 4 —
+                -- Takbeer/Tasgheer certainty gate" block that used to
+                -- live here (~50 lines, gate `partnerWinning and
+                -- #winners == 0`) was structurally unreachable from
+                -- this opp-winning region (enclosing scope guarantees
+                -- partnerWinning=false). The block was relocated into
+                -- the live `if partnerWinning then` block above,
+                -- between Tahreeb sender end and Rule 1B start (search
+                -- for `v3.2.3 F5-3` in this file). The relocation also
+                -- closes the v3.2.2-deferred F5/D-1 tie-randomization
+                -- site at F5-3 by routing through
+                -- `highestByRank(donate, contract)` instead of a
+                -- strict-`>` ranking loop. See
+                -- .swarm_findings/v3_2_3_pos3_sun_relocation_design.md
+                -- for the full design + 4 rounds of Codex review.
                 -- v1.4.4 (pos-3 hold-back — psychological bait, video #20).
                 -- «تخليه يمسك» — let opp think they're holding the suit;
                 -- you ambush next round. Saudi-pro convention; the Sun
