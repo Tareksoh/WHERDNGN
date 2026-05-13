@@ -263,27 +263,45 @@ which is only on trick 8 after full sweep), else
 | Contract | Hokm, any trump suit `T` |
 | Seat | On bidder team (bidder = our seat OR `R.Partner(our seat)`) |
 | Tier | M3lm+ (the Faranka exceptions block is M3lm-gated upstream) |
-| Trick context | **Trump-led** must-follow trick: opp leads trump card; current winner is a trump above some of our holdings; legal set = our trump cards |
-| Hand shape (positive) | `myTrumpCount == 2`, includes K of T (F-16 K-cover); the two trumps split into **one winner** (rank > current winner) + **one non-winner** (rank < current winner) |
-| Hand shape (negative) | `myTrumpCount == 2` but **no K of trump** ⇒ F-16 vetoes; same one-winner / one-non-winner split |
-| Memory | `playedCardsThisRound` includes the trump cards from this trick (e.g. `AD`, `QD`, `8D`); J of T explicitly NOT played ⇒ `S.HighestUnplayedRank("D") == "J"` ⇒ E3 inactive. `Bot._memory[opp].void.D` unset ⇒ E4 inactive (`oppsVoidPath = false`) |
-| Upstream shadows | Trick 1 mardoofa probe (lead-side only — N/A here, we're following), F5-3 pos-3 Sun Takbeer (Sun-only), any pre-must-follow short-circuit |
-| Downstream fallback when not firing | Non-Faranka path → highest-rank legal trump (the **winner**) |
+| Trick context | **Side-suit-led** must-follow trick (e.g. led suit `H` ≠ trump `D`): opp leads a non-trump card; we have led-suit cards in hand ⇒ legal set = our led-suit cards |
+| Hand shape (positive) | Hand contains **2 trumps** (counted by `myTrumpCount` over hand, not legal) AND ≥2 led-suit cards split into **one winner** + **one non-winner**; K of trump is in hand for F-16 K-cover |
+| Hand shape (negative) | Same hand shape but **no K of trump** ⇒ F-16 vetoes |
+| Memory | `playedCardsThisRound` includes the cards from this trick (`8H`, `QH`, `KH`); `JD` explicitly NOT played ⇒ `S.HighestUnplayedRank("D") == "J"` ⇒ E3 inactive. `Bot._memory[opp].void.D` unset ⇒ E4 inactive (`oppsVoidPath = false`) |
+| Upstream shadows | Trick 1 mardoofa probe (Sun-only + lead-side), F5-3 pos-3 Sun Takbeer (Sun-only), AKA-receiver relief (requires AKA on led suit — not set), pickFollow pos-4 single-legal short-circuit (gated by `#legal == 1`, avoided by 2+ led-suit cards in hand) |
+| Downstream fallback when not firing | Non-Faranka pos-4 natural play → highest-rank winner among `winners` (the legal led-suit winner, e.g. `AH`) |
 
 **Wire discriminator (positive vs negative):**
 
-- **E2 fires + F-16 satisfied (K in hand):** Faranka block returns
-  a **non-winner trump** (the K covers the withheld trump). The
-  winner stays in hand.
+- **E2 fires + F-16 satisfied (K in hand):** Faranka block prefers
+  non-trump non-winners (`nonTrumpLosers`) over trump non-winners
+  to keep trump in reserve, then returns `lowestByRank` of that
+  pool. With one led-suit winner and one led-suit non-winner in
+  legal, the **led-suit non-winner** is what comes out (e.g. `7H`).
 - **E2 trigger fires + F-16 vetoes (no K in hand):** Faranka is
-  suppressed; natural play returns the **winner trump** to take
-  the trick.
+  suppressed; natural pos-4 play returns the **led-suit winner**
+  (e.g. `AH`) to take the trick.
 
-Because the legal set on a trump-led trick is the bot's trump
-cards, and Faranka by definition returns a non-winner, the
-winner-vs-non-winner split inside the legal set is the wire-clean
-discriminator. The legal set is exactly two cards (`myTrumpCount
-== 2`), so each test asserts a specific card string.
+**Why side-suit-led, not trump-led:** the Saudi/Belote must-overcut
+rule at `Rules.lua:175-196` makes a trump-led non-winner trump
+illegal whenever the hand contains a higher trump. So a trump-led
+fixture with `{winner-trump, non-winner-trump}` in hand collapses
+`legal` to just the winner-trump, short-circuiting Bot.PickPlay
+at `Bot.lua:5714` (`if #legal == 1 then return legal[1] end`)
+before pickFollow's Faranka block is ever entered. The
+side-suit-led fixture sidesteps this by putting the winner /
+non-winner split inside the led-suit legal set (where must-overcut
+doesn't apply), while the trump count needed by E2 lives in the
+**hand** (counted by the `myTrumpCount` loop iterating `hand`, not
+`legal`, at `Bot.lua:3971-3975`).
+
+**Cross-check vs BH.2:** BH.2's hand `{AH, 7H, JD, 8C}` has
+`myTrumpCount == 1` (one `JD`) ⇒ E2 doesn't trigger; E4 fires
+instead via both-opps-void seeding. BI.1's hand `{AH, 7H, KD, 9D}`
+swaps the trump shape to `myTrumpCount == 2` (KD+9D) ⇒ E2
+triggers, and we leave opp memory unset so E4 stays false. Both
+fixtures return `7H` on the wire, but for different exception
+reasons — the test isolation comes from the memory seeding
+difference, not the wire card.
 
 ### 2.2 T-10 surface
 
@@ -339,7 +357,7 @@ through BH.4 required.
 
 | Candidate | Complexity | Wire-clean? | Risk | Notes |
 |---|---|---|---|---|
-| **T-1.E2** | LOW-MED | YES (winner-trump vs non-winner-trump on a trump-led trick) | LOW | Same family as BH.2/BH.3. Trump-led must-follow with hand = exactly 2 trumps (one above and one below the current trick winner). Legal set = the 2 trumps. Faranka returns the non-winner; non-Faranka returns the winner. |
+| **T-1.E2** | LOW-MED | YES (led-suit winner vs led-suit non-winner on a side-suit-led trick) | LOW | Same fixture family as BH.2/BH.3. Side-suit-led must-follow: legal set = our led-suit cards (one winner + one non-winner). Hand also carries 2 trumps off-legal so `myTrumpCount == 2` triggers E2 via hand-iteration. Faranka returns the led-suit non-winner; non-Faranka returns the led-suit winner. |
 | **T-10** | MED | YES (T of pref suit vs lower in same suit) | LOW-MED | Needs partner-style ledger + flavor-classification path live. Existing F.3 pattern for `tahreebSent` is the template. Need to avoid trick-1 mardoofa and sweep-pursuit-early upstream gates (use trickNum=2). |
 | **T-2** | MED-HIGH | YES but fragile | MED | Needs prior-tricks history + HighestUnplayedRank stub consistency + hand calibration. Three coupled state surfaces means more places for a fixture to drift. |
 
@@ -353,18 +371,23 @@ Rationale:
 - Same fixture family as BH.2/BH.3 — Codex review surface is
   already calibrated to "Faranka exception positive/negative pair +
   source pin on the carve-out marker".
-- Wire discriminator is unambiguous: **winner trump vs non-winner
-  trump on a trump-led trick**. The Faranka block only returns a
-  non-winner, so a legal set containing exactly one winner and one
-  non-winner yields a clean wire test (`KD` vs `9D` in BI.1;
-  `9D` vs `7D` in BI.2).
+- Wire discriminator is unambiguous: **led-suit winner vs led-suit
+  non-winner inside the side-suit-led legal set**. The Faranka
+  block prefers `nonTrumpLosers`, so a legal set of one led-suit
+  winner + one led-suit non-winner yields a clean wire test (`7H`
+  for Faranka vs `AH` for natural play).
 - F-16 interaction is locked from both sides: BI.1 holds K of
-  trump (F-16 satisfied → Faranka fires → returns non-winner);
-  BI.2 drops the K (F-16 vetoes → natural play → returns winner).
+  trump in hand (F-16 satisfied → Faranka fires → returns
+  `7H`); BI.2 drops the K (F-16 vetoes → natural play returns
+  `AH`).
 - No probabilistic surfaces, no partner-style ledger surgery, no
   prior-trick history construction. `playedCardsThisRound`
   seeding handles E3 avoidance without an explicit
   `HighestUnplayedRank` stub override.
+- The side-suit-led fixture also avoids the trump-led
+  must-overcut trap (see §2.1) that would otherwise collapse the
+  legal set to a single card and short-circuit `Bot.PickPlay`
+  before pickFollow runs.
 
 **Optional B2 candidate: T-10.** Feasible if Codex wants to push
 through both in one slice. Test pattern is well-precedented
@@ -396,40 +419,51 @@ that:
 
 - Hokm contract, trump `D`.
 - Bidder seat 1, bot seat 3 on bidder team, bot is M3lm+.
-- Current trick: seat 4 leads `AD`, seat 1 plays `QD`, seat 2
-  plays `8D`; bot seat 3 acts last.
-- `playedCardsThisRound` includes `AD`, `QD`, `8D`. **`JD` is NOT
+- Current trick: seat 4 leads `8H`, seat 1 plays `QH`, seat 2
+  plays `KH`; bot seat 3 acts last.
+- `playedCardsThisRound` includes `8H`, `QH`, `KH`. **`JD` is NOT
   marked played** ⇒ `S.HighestUnplayedRank("D") == "J"` ⇒
-  Exception #3 stays false.
-- Opp void-trump memory unset ⇒ `oppsVoidPath = false` ⇒
+  Exception #3 stays false; the F-30b secondary trigger (HUR==nil)
+  also stays false.
+- Opp void-trump memory **unset** (no `Bot._memory[s].void.D`
+  assignment for any opp seat) ⇒ `oppsVoidPath = false` ⇒
   Exception #4 stays false.
-- Led suit is trump `D`, so the Hokm must-follow rule restricts
-  the legal set to the bot's `D` cards.
-- Current trick winner is `AD` (Hokm trump rank 6).
+- Led suit is `H` (side suit ≠ trump), and the bot's hand
+  includes ≥2 H cards, so the Hokm must-follow rule restricts the
+  legal set to the bot's H cards (NOT trumps).
+- Current trick winner is `KH` (highest H card played so far).
 
 **BI.1 fixture intent:**
 
-- Bot hand: `{ "9D", "KD", "8C", "7C" }`.
-- Legal = `{ "9D", "KD" }` (must-follow on trump-led).
-- `9D` is a **winner** (Hokm trump rank 7 > AD rank 6).
-- `KD` is a **non-winner** (Hokm trump rank 4 < AD rank 6).
-- `myTrumpCount == 2` and `onBidderTeam == true` ⇒ Exception #2
-  triggers.
-- F-16 K-cover satisfied by `KD`.
-- Faranka block returns the **non-winner** ⇒ `KD`.
+- Bot hand: `{ "AH", "7H", "KD", "9D" }`.
+- Legal = `{ "AH", "7H" }` (must-follow on H; trumps stay
+  off-legal but in hand).
+- `AH` is a **winner** in led suit H (`AH > KH` in RANK_PLAIN).
+- `7H` is a **non-winner** (`7H < KH`).
+- `myTrumpCount == 2` (counts `KD` + `9D` in hand). `onBidderTeam
+  == true` (seat 3 partners with bidder seat 1). ⇒ Exception #2
+  triggers (`Bot.lua:3979-3981`).
+- F-16 K-cover satisfied: `KD` is K of trump in hand. F-16 at
+  `Bot.lua:4094-4102` runs but doesn't veto.
+- Faranka block at `Bot.lua:4119-4143` enters: `winners = {AH}`,
+  `nonWinners = {7H}`, `nonTrumpLosers = {7H}`. Returns
+  `lowestByRank({7H}) = 7H`.
 
-**Expected assertion:** strictly assert returned card is `"KD"`.
+**Expected assertion:** strictly assert returned card is `"7H"`.
 
 **Counterfactual integrity:** if E2 or Faranka does not fire,
-natural play returns `9D` (the legal winner). The assertion `==
-"KD"` discriminates the Faranka path from any non-Faranka
-fallback, including a regression where the F-16 K-cover veto
-short-circuits incorrectly.
+natural pos-4 play returns `AH` (the legal winner). The strict
+assertion `card == "7H"` discriminates the Faranka path from any
+non-Faranka fallback, including a regression where the F-16
+K-cover veto short-circuits incorrectly.
 
-**Wire-discriminator integrity:** including `8C`/`7C` in the hand
-(illegal under must-follow) ensures no off-path fallback can
-accidentally return them. The wire-clean choice is between `9D`
-(winner / natural) and `KD` (non-winner / Faranka).
+**Wire-discriminator integrity:** including `KD`/`9D` in the hand
+(off-legal but counted) ensures `myTrumpCount == 2` while
+contributing nothing to legal. The wire-clean choice is between
+`AH` (winner / natural) and `7H` (non-winner / Faranka). If the
+test returns `KD`, `9D`, or any non-led-suit card, that signals a
+must-follow regression — stop and report rather than treating it
+as a Faranka bug.
 
 **Pre-fix state:** would PASS post-fix as written (E2 has shipped
 since v0.9.2). This is a **regression guard**, not a wire-proof
@@ -440,25 +474,25 @@ for a new fix.
 ### 5.2 BI.2 — Exception #2 negative (F-16 vetoes via no-K)
 
 **Fixture intent:** identical shared setup as BI.1 (same trick:
-seat 4 `AD`, seat 1 `QD`, seat 2 `8D`; current winner `AD`).
+seat 4 `8H`, seat 1 `QH`, seat 2 `KH`; current winner `KH`).
 
-- Bot hand: `{ "9D", "7D", "8C", "7C" }`.
-- Legal = `{ "9D", "7D" }`.
-- `9D` is a **winner** (Hokm trump rank 7 > AD rank 6).
-- `7D` is a **non-winner** (Hokm trump rank 1 < AD rank 6).
-- `myTrumpCount == 2` and `onBidderTeam == true` ⇒ Exception #2
-  trigger flag fires.
+- Bot hand: `{ "AH", "7H", "9D", "7D" }`.
+- Legal = `{ "AH", "7H" }` (must-follow H, same as BI.1).
+- `AH` is the led-suit **winner**.
+- `7H` is the led-suit **non-winner**.
+- `myTrumpCount == 2` (`9D` + `7D` in hand). `onBidderTeam ==
+  true` ⇒ Exception #2 trigger flag fires.
 - F-16 K-cover veto: **no K of trump in hand** ⇒
-  `farankaTriggered = false` after L4094-4102.
-- Natural play returns the legal winner ⇒ `9D`.
+  `farankaTriggered = false` after `Bot.lua:4094-4102`.
+- Natural pos-4 play returns the legal winner ⇒ `AH`.
 - Counterfactual broken F-16 (Faranka allowed to fire without K)
-  would return the non-winner `7D`.
+  would return the non-winner `7H`.
 
-**Expected assertion:** strictly assert returned card is `"9D"`.
+**Expected assertion:** strictly assert returned card is `"AH"`.
 
 **Wire role:** regression guard for the F-16 K-cover veto on E2.
 A regression where F-16's K-check is removed or inverted would
-return `7D` and the assertion would catch it.
+return `7H` and the assertion would catch it.
 
 ---
 
@@ -523,34 +557,43 @@ Recommended slice: **T-1.E2 only** ⇒ `1269 / 0`.
 Stop and report (do NOT silently work around) if any of these
 happen during implementation:
 
-1. **Fixture passes for the wrong branch.** If BI.1 returns `"KD"`
-   but trace evidence shows non-Faranka path was used (e.g. E4's
-   `oppsVoidPath` accidentally lit up, or E3's `exception3Path`
-   tripped on a misseeded `HighestUnplayedRank`), the fixture is
-   shadowed — re-audit memory/played seeding.
+1. **Fixture passes for the wrong branch.** If BI.1 returns
+   `"7H"` but trace evidence shows non-Faranka path was used
+   (e.g. E4's `oppsVoidPath` accidentally lit up via stale memory
+   seeding, or E3's `exception3Path` tripped on a misseeded
+   `HighestUnplayedRank`), the fixture is shadowed. Re-audit
+   memory / played seeding and confirm only E2 lights up
+   `farankaTriggered`.
 2. **F-16 veto unexpectedly fires in BI.1.** If
-   `farankaTriggered` is set false by L4094-4102 despite `KD` in
-   hand, the `C.IsTrump` stub or `contract.trump` value is wrong;
-   re-audit fixture.
-3. **Must-follow legal set is not `{9D, KD}` in BI.1 (or
-   `{9D, 7D}` in BI.2).** If `Rules.IsLegalPlay` accepts `8C` or
-   `7C`, the Hokm must-follow rule is not firing on the trump
-   lead — re-audit fixture (likely a missing contract field or a
-   stale led-suit value).
-4. **BI.2 returns `"7D"` instead of `"9D"`.** That would indicate
-   F-16 failed to veto Faranka — flag as a real regression rather
-   than a fixture bug, since the F-16 K-cover veto is precisely
-   what BI.2 is designed to guard. Stop and report.
-5. **`S.HighestUnplayedRank("D") != "J"` despite `JD` not in
-   `playedCardsThisRound`.** Indicates the harness stub computes
+   `farankaTriggered` is set back to false at
+   `Bot.lua:4094-4102` despite `KD` in hand, the `C.IsTrump` stub
+   or `contract.trump` value is wrong; re-audit fixture.
+3. **Must-follow legal set is not `{AH, 7H}`.** If
+   `R.IsLegalPlay` accepts a `D` card or `Bot.PickPlay` returns a
+   trump, the Hokm must-follow rule is not firing on the H-led
+   trick — re-audit fixture (likely a missing contract field, a
+   stale led-suit value, or `S.s.akaCalled` left dirty from a
+   prior test).
+4. **BI.2 returns `"7H"` instead of `"AH"`.** That would
+   indicate F-16 failed to veto Faranka — flag as a real
+   regression rather than a fixture bug, since the F-16 K-cover
+   veto is precisely what BI.2 is designed to guard. Stop and
+   report.
+5. **BI.1 or BI.2 returns a trump card (`KD`, `9D`, `7D`).**
+   That signals a must-follow regression at the legality layer;
+   the side-suit-led legal set should not contain any trumps when
+   the bot has H cards. Stop and audit `Rules.lua` legality flow
+   before adjusting the fixture.
+6. **`S.HighestUnplayedRank("D") != "J"` despite `JD` not in
+   `playedCardsThisRound`.** Indicates the HUR stub computes
    from a different source than `playedCardsThisRound`. Re-audit
    the stub layer before adjusting the fixture.
-6. **Existing BA/BB/BE/BF/BH/F.* tests regress.** Any pre-existing
+7. **Existing BA/BB/BE/BF/BH/F.* tests regress.** Any pre-existing
    harness check breaks ⇒ stop and report.
-7. **Runtime change becomes necessary.** This is a test-only
+8. **Runtime change becomes necessary.** This is a test-only
    batch. If a runtime edit appears required to make a test pass,
    stop and report — do NOT proceed.
-8. **Source-pin substring missing.** If BI.4a/b/c substrings
+9. **Source-pin substring missing.** If BI.4a/b/c substrings
    don't appear in current `Bot.lua`, stop and re-audit existing
    markers — do NOT edit `Bot.lua` to add the marker.
 
@@ -580,13 +623,18 @@ Deferrals tracked for later design passes:
 
 ## 8. Open Questions for Codex Review
 
-The Codex amendment round resolved the previously open questions
-around section naming (BI approved), BI.2 discriminator (trump-led
-fixture with winner/non-winner split), BI.3 inclusion (skip),
+The Codex amendment rounds resolved the previously open questions
+around section naming (BI approved), BI.3 inclusion (skip),
 HUR-stub coverage (no explicit stub needed when
 `playedCardsThisRound` is seeded), and the `onBidderTeam` prologue
-(clone BH.2). The only remaining flag is a downstream observation
-that is **not** in scope for this batch:
+(clone BH.2). The trump-led fixture proposed in the first Codex
+amendment was empirically shown to be structurally unreachable
+(see §2.1 "Why side-suit-led, not trump-led" and the v3.2.5
+batch-B implementation stop report), and Codex re-approved the
+side-suit-led BH.2-family fixtures documented in §5.1 / §5.2.
+
+The only remaining flag is a downstream observation that is
+**not** in scope for this batch:
 
 1. **T-10 partner-bot gate (Bot.lua:1294):** the receiver-side
    logic gates on `Bot.IsBotSeat(p)`. The v1.4.5 sender-side
