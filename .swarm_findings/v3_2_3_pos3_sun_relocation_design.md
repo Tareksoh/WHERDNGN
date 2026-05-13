@@ -18,7 +18,7 @@ different complexity profiles:
 
 | Branch | Complexity | Test profile | Conflicts with smother |
 |---|---|---|---|
-| **F5-3** (Takbeer donate non-A/T, audit-doc) | deterministic, narrow gates, "pure-addition" semantics per its own v1.4.1 comment | 8 behavioural + 4 source-pin sub-asserts = 12 new harness checks | **Resolvable by ordering** (place AFTER smother AND AFTER Tahreeb sender, BEFORE Rule 1B → smother stays canonical for led-suit point cards; Tahreeb's signal beats F5-3's pure point-feed on overlap; F5-3 covers the residual cases). **Also closes the v3.2.2-deferred F5/D-1 tie-randomization site** at F5-3 — making the branch reachable means the relocated implementation must use a `donate` pool + `highestByRank` rather than a strict-`>` ranking loop, BF.9 wire-proofs this. |
+| **F5-3** (Takbeer donate non-A/T, audit-doc) | deterministic, narrow gates, "pure-addition" semantics per its own v1.4.1 comment | 8 BF behavioural blocks emitting **9 assertion checks** (BF.7 emits 2 assertions for tighter diagnostics) + 4 source-pin sub-asserts = **13 new harness checks** | **Resolvable by ordering** (place AFTER smother AND AFTER Tahreeb sender, BEFORE Rule 1B → smother stays canonical for led-suit point cards; Tahreeb's signal beats F5-3's pure point-feed on overlap; F5-3 covers the residual cases). **Also closes the v3.2.2-deferred F5/D-1 tie-randomization site** at F5-3 — making the branch reachable means the relocated implementation must use a `donate` pool + `highestByRank` rather than a strict-`>` ranking loop, BF.9 wire-proofs this. |
 | **F2** (pos-3 «تخليه يمسك» hold-back, deception) | probabilistic 30%/40% fire-rate, broader gates, deception-intent vs canonical-Takbeer | needs deterministic `math.random` stub fixture + tied-suit setup that doesn't trigger smother / Tahreeb sender first; multi-iteration parity check | **Intercepts smother** when conditions match — F2 wants to NOT donate K, smother would donate K; F2 must fire BEFORE smother → broader gameplay change |
 
 F5-3 fits the established v3.2.2 BE-tests pattern (deterministic
@@ -702,11 +702,20 @@ of making the branch reachable.
 | BF.4 | behavioural | regression (Interpretation A) — F5-3 doesn't override smother A-donate | PASS (smother already fires) | PASS (smother still first) |
 | BF.5 | behavioural | regression — F5-3 doesn't fire without pos-4 void | PASS (F5-3 dead) | PASS (gate stops it) |
 | BF.6 | behavioural | regression — F5-3 doesn't fire at non-pos-3 | PASS (F5-3 dead) | PASS (gate stops it) |
-| BF.7 | behavioural | **regression-guard for filter** — bot doesn't return wouldWin candidate | PASS (Rule 1B returns 9S) | PASS (F5-3 returns 9S after filter) |
+| BF.7 (2 harness checks: 7a `assertEq(card, "9S")` + 7b `assertTrue(card ~= "KS")`) | behavioural | **regression-guard for filter** — bot doesn't return wouldWin candidate | PASS both 7a + 7b (Rule 1B returns 9S) | PASS both 7a + 7b (F5-3 returns 9S after filter) |
 | BF.8 | source-pin (4 sub-asserts: 8a marker / 8b relocation-noted / 8c not-wouldWin filter substring / 8d dead-block-removed) | structural proof | **FAIL on all four** (8a/b/c: new markers not yet inserted; 8d: old dead block still present, so the `== nil` assertion fails) | PASS all 4 |
 | BF.9 | behavioural | **wire-proof** — F5-3 tie-randomization (closes v3.2.2-deferred F5/D-1 site) | FAIL (returns `QC` via fallback `lowestByRank` with stub) | PASS (returns `KC` via `highestByRank` + `pickRandomTied` with stub=2) |
 
-Total: **8 behavioural assertions + 4 source-pin sub-asserts = 12 new harness checks**.
+Total: **9 behavioural assertion checks** (BF.1, BF.2, BF.3,
+BF.4, BF.5, BF.6, BF.7a, BF.7b, BF.9) **+ 4 source-pin sub-
+asserts** (BF.8a, BF.8b, BF.8c, BF.8d) **= 13 new harness
+checks**. The "BF block" count is 8 (BF.1 through BF.9 excluding
+BF.8 which is the source-pin block), but BF.7 emits 2 separate
+assertions in the same `do ... end` block for tighter
+diagnostics (one wire-pin on the exact card returned, one
+negative pin on the would-steal candidate being rejected) — so
+the **harness-check** count is 9 behavioural + 4 source-pin =
+13.
 
 Expected pre-relocation harness state when only the tests have
 landed (no runtime edits): **exactly 7 failing checks** — BF.1,
@@ -727,13 +736,17 @@ BF.2, BF.9, BF.8a, BF.8b, BF.8c, BF.8d.
   appears (`botSrc:find(...) == nil`), which is false until the
   removal step.
 
-Other five checks (BF.3, BF.4, BF.5, BF.6, BF.7) **PASS** pre-
-relocation by design — they assert behaviours that exist whether
-or not F5-3 is relocated (smother priority, Tahreeb overlap,
-pos-4-void required, pos-3 required, no-steal regression).
+Other **six harness checks** (five BF blocks producing six
+passing checks: **BF.3, BF.4, BF.5, BF.6, BF.7a, BF.7b**) **PASS**
+pre-relocation by design — they assert behaviours that exist
+whether or not F5-3 is relocated (smother priority, Tahreeb
+overlap, pos-4-void required, pos-3 required, no-steal
+regression). BF.7 emits two assertions that both pass pre- and
+post-fix; that's why the passing-count is 6 even though only 5
+BF blocks are in the pass list.
 
 Expected harness delta after both tests AND runtime fix land:
-**1,245 → 1,257** (+12 BF.* checks all passing).
+**1,245 → 1,258** (+13 BF.* checks all passing).
 
 ---
 
@@ -828,7 +841,7 @@ proceed) if any of:
 | 2 | Branch `pos3-sun-relocation-v3.2.3` off `main` |
 | 3 | Tests first: write BF.1–BF.9 in section BF of `tests/test_state_bot.lua`. Pre-runtime-edit expected: BF.1 + BF.2 + BF.9 + BF.8a-d FAIL (**7 fails**); BF.3 + BF.4 + BF.5 + BF.6 + BF.7 PASS. Confirm exactly 7 fails, not more. |
 | 4 | Runtime: REMOVE the dead L4464-4491 block. ADD the relocated F5-3 between Tahreeb sender end (~L3737) and Rule 1B start (~L3739). **Required shape:** a `donate` pool collected by `for _, c in ipairs(legal)` with `r ~= "A" and r ~= "T" and not wouldWin(c, trick, contract, seat)`, then `if #donate > 0 then return highestByRank(donate, contract) end`. Do NOT use a manual `donateRank` / `cr > donateRank` strict ranking loop — that would re-introduce the v1.1.0 hand-order leak BF.9 explicitly catches. |
-| 5 | Run harness — expected 1,257 / 0 (+12 BF.* checks) |
+| 5 | Run harness — expected **1,258 / 0** (+13 BF.* checks: 9 behavioural assertion checks where BF.7 emits two assertions, plus 4 source-pin sub-asserts) |
 | 6 | Standalone smokes — expected 11 / 9 / 0 |
 | 7 | Commit: `fix(Bot.lua): relocate F5-3 pos-3 Sun Takbeer donate above Rule 1B` (commit message should also mention closing v3.2.2-deferred F5/D-1 tie-randomization at this site) |
 | 8 | Stop for Codex review |
