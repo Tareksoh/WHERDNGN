@@ -10050,6 +10050,230 @@ do
 end
 
 -- =====================================================================
+-- BH. v3.2.5 HIGH-pickplay regression coverage (Batch A, test-only)
+--
+-- Backfills behavioural regression guards for two Saudi-canonical
+-- "Definite" branches from the v3.2.1 audit's HIGH-risk gap list:
+--
+--   BH.1 (audit T-6) — Tahreeb "want, no A/no T" sender at
+--                      Bot.lua:3676-3701 (Sun, pickFollow). The
+--                      receiver decodes ascending sequence as
+--                      "lead this suit back, partner has cards
+--                      but no A/T" (signals.md §8, Definite per
+--                      videos 01/09/10).
+--   BH.2/3 (audit T-1.E4) — Hokm Faranka Exception #4 (both opps
+--                      observed-void in trump) at Bot.lua:4017-
+--                      4060. Allows withholding top trump as a
+--                      risk-free Faranka even when F-16 K-cover
+--                      veto would otherwise apply (decision-trees
+--                      .md §10, Definite per video #04).
+--   BH.4 — source pins on EXISTING in-source markers (test-only
+--          batch; no new runtime markers added).
+--
+-- Design doc: .swarm_findings/v3_2_4_high_pickplay_coverage_design.md
+-- =====================================================================
+section("BH. v3.2.5 HIGH-pickplay regression coverage")
+
+-- BH.1: T-6 Tahreeb "want, no A/no T" sender fires.
+-- Sun pos-3 + partnerWinning + voidInLed + M3lm. Candidate suit H
+-- has 3 cards with no A and no T (KH/9H/8H, eligible for the
+-- "want, no Ace/no T" sub-arm). A 1-card D side (7D) forces the
+-- fallback's `lowestByRank(legal)` to a different card if T-6
+-- doesn't fire — making T-6's per-suit lowest (8H) observably
+-- distinct from fallback's all-legal lowest (7D).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    S.s.tricks = {}
+    -- Trick: pos-1 partner seat 1 led KS (mid card S). pos-2 opp
+    -- seat 2 played 7S (loser). Partner currently winning since
+    -- KS > 7S in led suit, no trump in Sun. We're at pos-3 (seat 3).
+    S.s.trick = {
+        leadSuit = "S",
+        plays = {
+            { seat = 1, card = "KS" },
+            { seat = 2, card = "7S" },
+        },
+    }
+    S.s.playedCardsThisRound = { KS = true, ["7S"] = true }
+    -- Bot at seat 3 (team A, partner of seat 1). Void in S.
+    -- Hand: 3-card H no-A no-T + 1-card D.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KH", "9H", "8H", "7D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict positive assertion: the Tahreeb "want, no A/no T"
+    -- sub-arm picks the lowest from the CANDIDATE SUIT (H), not
+    -- from all legal. Lowest of {KH, 9H, 8H} in Sun's RANK_PLAIN
+    -- (7=1, 8=2, 9=3, J=4, Q=5, K=6, T=7, A=8) is 8H (rank 2).
+    -- If T-6 didn't fire, fallback's lowestByRank(legal) would
+    -- return 7D (rank 1) instead. The strict positive form
+    -- (card == "8H") is the only assertion that proves T-6's
+    -- per-suit scope fired — a weaker negative `card ~= "7D"`
+    -- would pass for many other cards that aren't 7D.
+    assertEq(card, "8H",
+        ("BH.1 (v3.2.5 T-6): Tahreeb want-no-A/no-T sender returns " ..
+         "lowest of candidate suit H (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BH.2: T-1 Exception #4 POSITIVE — both opps observed-void in
+-- trump → Faranka fires risk-free.
+-- Hokm trump=D, bidder seat 1, bot seat 3 (team A with bidder),
+-- M3lm. Must-follow H trick where the bot's hand has H cards →
+-- legal restricted to H = {AH, 7H}. AH wins (beats KH in led
+-- suit), 7H is the non-trump loser. JD and 8C are illegal
+-- under Hokm must-follow (we hold H so must follow H). With
+-- both opps memory-void in trump D, Exception #4 fires, F-16
+-- veto is skipped via oppsVoidPath, and the Faranka block
+-- returns the lowest non-trump loser = 7H.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Both opps observed-void in trump D → Exception #4 path.
+    Bot._memory[2].void.D = true
+    Bot._memory[4].void.D = true
+    S.s.tricks = {}
+    -- Trick: opp seat 4 leads 8H, partner seat 1 plays QH, opp
+    -- seat 2 plays KH (currently winning). Bot at seat 3 acts
+    -- last (pos-4 lastSeat=true).
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "QH" },
+            { seat = 2, card = "KH" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true, QH = true, KH = true }
+    -- Hand: {AH, 7H, JD, 8C}. Must-follow H → legal = {AH, 7H}.
+    -- myTrumpCount = 1 (JD only) → Exception #2 doesn't fire.
+    -- HighestUnplayedRank(D) = "J" (JD in hand, unplayed; J is
+    -- highest in TRUMP_HOKM_ORDER) → Exception #3 doesn't fire.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "7H", "JD", "8C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: Exception #4 fires → Faranka block
+    -- returns lowestByRank(nonTrumpLosers) = 7H. The 7H ↔ AH
+    -- positive/negative pair (BH.2 vs BH.3) is the wire-
+    -- discriminator that proves Exception #4 specifically.
+    assertEq(card, "7H",
+        ("BH.2 (v3.2.5 T-1 Exc#4): both-opps-void Faranka returns " ..
+         "non-trump loser 7H (got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BH.3: T-1 Exception #4 NEGATIVE PAIR — only one opp void →
+-- Exception #4 doesn't fire → natural opp-winning play returns
+-- the winning Ace.
+-- Same fixture as BH.2 except Bot._memory[2].void.D is left nil
+-- (only seat 4 void). oppTrumpExhausted = false → Exception #4
+-- skipped. F-30b secondary: HighestUnplayedRank(D) = "J" (not
+-- nil) → skipped. farankaTriggered stays false → falls through
+-- to natural opp-winning play. At pos-4 with winners={AH}, the
+-- bot returns highestByRank(winners) = AH (Takbeer over-cut).
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- ONLY seat 4 void; seat 2 NOT void → Exception #4 fails.
+    Bot._memory[4].void.D = true
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "QH" },
+            { seat = 2, card = "KH" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true, QH = true, KH = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "7H", "JD", "8C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: without both-opps-void, Exception #4
+    -- doesn't fire and the natural opp-winning fallback at pos-4
+    -- returns AH (the winning trump rank in led suit). The 7H
+    -- vs AH discriminator proves Exception #4 was the specific
+    -- path in BH.2; without it, the bot plays the winner.
+    assertEq(card, "AH",
+        ("BH.3 (v3.2.5 T-1 Exc#4 NEG): one-opp-void → Exception #4 " ..
+         "doesn't fire; bot plays winner AH not Faranka loser 7H " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BH.4: source-pin block — three sub-asserts on EXISTING in-
+-- source markers in Bot.lua. This is a test-only batch; no new
+-- runtime markers are added. These pins lock in the structural
+-- anchors that the behavioural tests rely on, so a future
+-- runtime cleanup that accidentally removes one of these
+-- comments / flag names triggers a harness failure instead of
+-- silently breaking BH.1 / BH.2 / BH.3.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- BH.4a: v0.11.18-final U-2 marker (Tahreeb want-no-A/T arm,
+    -- Sun-only gate). Already in Bot.lua since v0.11.18.
+    assertTrue(botSrc:find("v0%.11%.18%-final U%-2") ~= nil,
+        "BH.4a (v3.2.5 T-6): v0.11.18-final U-2 marker present in Bot.lua")
+    -- BH.4b: oppsVoidPath flag — Exception #4 path indicator.
+    -- Added in v0.10.3 audit; consumed by F-16 carve-out at the
+    -- relocated F5-3 site and at the original Faranka block.
+    assertTrue(botSrc:find("oppsVoidPath") ~= nil,
+        "BH.4b (v3.2.5 T-1 Exc#4): oppsVoidPath flag present in Bot.lua")
+    -- BH.4c: v0.10.3 F-30b secondary trigger marker — structural
+    -- trump-exhaustion path inside the Faranka exceptions block.
+    assertTrue(botSrc:find("v0%.10%.3 F%-30b") ~= nil,
+        "BH.4c (v3.2.5 T-1): v0.10.3 F-30b secondary-trigger marker present")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
