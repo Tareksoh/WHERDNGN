@@ -10238,7 +10238,7 @@ do
     local card = Bot.PickPlay(3)
     -- Strict assertion: without both-opps-void, Exception #4
     -- doesn't fire and the natural opp-winning fallback at pos-4
-    -- returns AH (the winning trump rank in led suit). The 7H
+    -- returns AH (the winning led-suit Ace). The 7H
     -- vs AH discriminator proves Exception #4 was the specific
     -- path in BH.2; without it, the bot plays the winner.
     assertEq(card, "AH",
@@ -10263,8 +10263,9 @@ do
     assertTrue(botSrc:find("v0%.11%.18%-final U%-2") ~= nil,
         "BH.4a (v3.2.5 T-6): v0.11.18-final U-2 marker present in Bot.lua")
     -- BH.4b: oppsVoidPath flag — Exception #4 path indicator.
-    -- Added in v0.10.3 audit; consumed by F-16 carve-out at the
-    -- relocated F5-3 site and at the original Faranka block.
+    -- Added in v0.10.3 audit; consumed by the F-16 K-cover veto
+    -- carve-out in the Hokm Faranka exceptions block to allow
+    -- Faranka when both opps are observed-void in trump.
     assertTrue(botSrc:find("oppsVoidPath") ~= nil,
         "BH.4b (v3.2.5 T-1 Exc#4): oppsVoidPath flag present in Bot.lua")
     -- BH.4c: v0.10.3 F-30b secondary trigger marker — structural
