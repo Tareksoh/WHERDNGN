@@ -10275,6 +10275,210 @@ do
 end
 
 -- =====================================================================
+-- BI. v3.2.5 HIGH-pickplay regression coverage (Batch B, test-only)
+--
+-- Backfills behavioural regression guards for the remaining HIGH-risk
+-- Saudi-canonical Faranka branch from the v3.2.1 audit:
+--
+--   BI.1/2 (audit T-1.E2) — Hokm Faranka Exception #2 (bidder-team
+--                            with myTrumpCount == 2) at Bot.lua:
+--                            3971-3981, with the F-16 K-cover veto
+--                            interaction at Bot.lua:4094-4102.
+--                            Withhold the led-suit non-winner as a
+--                            Faranka when (a) we hold 2 trumps in
+--                            hand and are on the bidder team AND
+--                            (b) K of trump is present to satisfy
+--                            F-16's K-cover premise. When K is
+--                            absent, F-16 vetoes and natural pos-4
+--                            play takes the trick.
+--                            (decision-trees.md §10, Definite per
+--                            video #04 + v0.9.2 #49 bidder-team
+--                            relaxation.)
+--   BI.4 — source pins on EXISTING F-16 K-cover veto block markers
+--          (test-only batch; no new runtime markers added).
+--
+-- BI.1/2 use a side-suit-led must-follow fixture (H-led, hand has
+-- H cards). The trump-led variant initially proposed in design was
+-- structurally unreachable: Saudi/Belote must-overcut at Rules.lua:
+-- 175-196 strips the non-winner trump from legal whenever the hand
+-- contains an overcut, short-circuiting Bot.PickPlay before
+-- pickFollow's Faranka block runs. The side-suit-led fixture places
+-- the winner/non-winner split inside the led-suit legal set (where
+-- must-overcut doesn't apply) while counting the 2 trumps off-legal
+-- in hand for E2's trigger.
+--
+-- Design doc: .swarm_findings/v3_2_5_high_pickplay_batch_b_design.md
+-- =====================================================================
+section("BI. v3.2.5 HIGH-pickplay regression coverage (Batch B)")
+
+-- BI.1: T-1 Exception #2 POSITIVE — bidder-team with 2 trumps in
+-- HAND (not in legal) AND K of trump present.
+-- Side-suit H-led must-follow trick: seat 4 leads 8H, seat 1 QH,
+-- seat 2 KH; current winner = KH (highest H played so far). Bot's
+-- hand has H cards so must-follow restricts legal to {AH, 7H}.
+-- The two trumps {KD, 9D} stay off-legal but are counted by
+-- Bot.lua's myTrumpCount loop iterating `hand` at L3971-3975 →
+-- myTrumpCount = 2 → Exception #2 trigger fires (onBidderTeam = true
+-- since seat 3 partners with bidder seat 1). F-16 K-cover veto at
+-- L4094-4102 runs (oppsVoidPath/exception3Path both false) but
+-- passes because KD is K of trump. Faranka block at L4119-4143
+-- enters: winners = {AH}, nonWinners = {7H}, nonTrumpLosers = {7H},
+-- returns lowestByRank({7H}) = 7H. The 7H ↔ AH wire discriminator
+-- (Faranka non-trump loser vs natural pos-4 winner) proves the E2
+-- Faranka path fired specifically.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Opp void-trump memory unset → Exception #4 (oppsVoidPath)
+    -- stays false. JD NOT in playedCardsThisRound below →
+    -- S.HighestUnplayedRank("D") == "J" → Exception #3 stays false
+    -- (E3 check is `== "9"`) AND the F-30b secondary trigger stays
+    -- false (F-30b check is `== nil`). With E3 and E4 inactive,
+    -- the F-16 K-cover veto carve-outs do NOT apply, so F-16 runs
+    -- and must pass via K of trump in hand.
+    S.s.tricks = {}
+    -- Side-suit-led trick: opp seat 4 leads 8H, partner seat 1
+    -- plays QH, opp seat 2 plays KH (currently winning KH > QH > 8H
+    -- in RANK_PLAIN). Bot at seat 3 acts last (pos-4). Led suit H
+    -- is NOT trump → must-follow restricts legal to the bot's H
+    -- cards (trumps stay off-legal).
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "QH" },
+            { seat = 2, card = "KH" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true, QH = true, KH = true }
+    -- Hand: {AH, 7H, KD, 9D}. Must-follow H → legal = {AH, 7H};
+    -- KD/9D are off-legal. myTrumpCount = 2 (KD + 9D in hand),
+    -- onBidderTeam = true (seat 3 partners with bidder seat 1).
+    -- F-16 K-cover satisfied: KD is K of trump.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "7H", "KD", "9D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: Exception #2 fires + F-16 satisfied →
+    -- Faranka returns the non-trump loser 7H. The 7H vs AH
+    -- discriminator (non-winner vs winner inside the led-suit
+    -- legal set) proves the Faranka path specifically; a
+    -- regression where E2 silently fell through to natural play
+    -- would return AH.
+    assertEq(card, "7H",
+        ("BI.1 (v3.2.5 T-1 Exc#2): bidder-team 2-trump K-cover " ..
+         "Faranka returns non-trump loser 7H (got %s)")
+            :format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BI.2: T-1 Exception #2 NEGATIVE — F-16 K-cover veto.
+-- Same H-led trick and shared setup as BI.1, but the bot's hand
+-- drops the K of trump (KD/9D → 9D/7D). Exception #2 trigger still
+-- fires (myTrumpCount == 2 via 9D + 7D, onBidderTeam true) but
+-- F-16's K-cover veto at Bot.lua:4094-4102 trips because no K of
+-- trump is in hand. farankaTriggered is set back to false, the
+-- Faranka block is skipped, and natural pos-4 play returns the
+-- legal winner AH. The AH ↔ 7H discriminator proves F-16 vetoed
+-- correctly: if F-16's K-check were removed or inverted, the
+-- Faranka would fire and return the non-winner 7H — the strict
+-- assertion would catch the regression.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.contract = { type = K.BID_HOKM, trump = "D", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Same memory + played-cards setup as BI.1 to keep E3 and E4
+    -- carve-outs inactive (so F-16 actually runs).
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "QH" },
+            { seat = 2, card = "KH" },
+        },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true, QH = true, KH = true }
+    -- Hand: {AH, 7H, 9D, 7D}. Must-follow H → legal = {AH, 7H};
+    -- 9D/7D are off-legal. myTrumpCount = 2 (9D + 7D in hand),
+    -- onBidderTeam = true. NO K of trump → F-16 vetoes.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "7H", "9D", "7D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: F-16 vetoes Faranka → natural pos-4 play
+    -- returns the legal winner AH. A returned 7H would indicate
+    -- F-16 failed to veto and Faranka fired without K-cover — a
+    -- real regression of the v0.10.0 anti-rule, not a fixture
+    -- problem. Per design-doc §6 stop condition #4: if this
+    -- returns 7H, treat as a runtime regression signal.
+    assertEq(card, "AH",
+        ("BI.2 (v3.2.5 T-1 Exc#2 NEG): no-K-of-trump → F-16 vetoes " ..
+         "Faranka; bot plays winner AH not non-winner 7H (got %s)")
+            :format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+end
+
+-- BI.4: source-pin block — three sub-asserts on EXISTING in-
+-- source markers in Bot.lua's F-16 K-cover veto block. This is
+-- a test-only batch; no new runtime markers are added. These
+-- pins lock the structural anchors that BI.1 / BI.2 depend on,
+-- so a future runtime cleanup that accidentally removes one of
+-- these comments triggers a harness failure instead of silently
+-- breaking BI.1 / BI.2.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- BI.4a: v0.10.0 X3 anti-rule F-16 marker — anchors the
+    -- F-16 K-cover veto block's origin (the v0.10.0 anti-rule
+    -- adoption that BI.2 specifically guards).
+    assertTrue(botSrc:find("v0%.10%.0 X3 anti%-rule F%-16") ~= nil,
+        "BI.4a (v3.2.5 T-1 Exc#2): v0.10.0 X3 anti-rule F-16 marker present")
+    -- BI.4b: v0.10.3 audit (A-Src-29 marker — anchors the F-16
+    -- carve-out for Exception #4 (oppsVoidPath). BI.1/BI.2 rely
+    -- on this carve-out being scoped (not firing for E2), so its
+    -- comment block staying in place is a structural invariant.
+    assertTrue(botSrc:find("v0%.10%.3 audit %(A%-Src%-29") ~= nil,
+        "BI.4b (v3.2.5 T-1 Exc#2): v0.10.3 audit (A-Src-29 marker present")
+    -- BI.4c: v3.2.1 F4 marker — anchors the F-16 carve-out for
+    -- Exception #3 (exception3Path). Same structural rationale
+    -- as BI.4b: BI.1's E2 fixture requires that the E3 carve-out
+    -- does NOT apply (E3 inactive via HighestUnplayedRank == "J"),
+    -- so the carve-out's existence is what we're proving stays
+    -- in place.
+    assertTrue(botSrc:find("v3%.2%.1 F4") ~= nil,
+        "BI.4c (v3.2.5 T-1 Exc#2): v3.2.1 F4 marker present")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
