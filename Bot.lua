@@ -5953,11 +5953,28 @@ function Bot.PickTakweesh(seat)
     for tIdx, t in ipairs(S.s.tricks or {}) do
         for _, p in ipairs(t.plays or {}) do
             if p.illegal and R.TeamOf(p.seat) ~= myTeam then
-                -- Realism gate: was the violation later revealed
-                -- by the violator playing the led-suit in a
-                -- subsequent trick? If yes → bot can call
+                -- v3.2.6 (AKA/Takweesh investigation) carve-out:
+                -- false AKA is publicly knowable at the moment of
+                -- the lead from playedCardsThisRound + the AKA
+                -- banner (S.s.akaCalled). No later reveal is
+                -- needed for a bot caller to "observe" the
+                -- violation — both the host's HostBeginTakweeshReview
+                -- scan (Net.lua:3360-3372) and the rule-engine's
+                -- State.ApplyPlay false-AKA marker at
+                -- State.lua:1466-1493 already treat the violation
+                -- as authoritative without realism-gating. Bringing
+                -- Bot.PickTakweesh in line restores the v1.2.1 (A2)
+                -- / v1.6.0 noise-AKA design intent: noise-AKA is a
+                -- bluff with a real probability of being caught.
+                if p.illegalReason == "false AKA" then
+                    found = p; break
+                end
+                -- Realism gate (v1.5.1, preserved for revoke /
+                -- off-suit cases): was the violation later
+                -- revealed by the violator playing the led-suit
+                -- in a subsequent trick? If yes → bot can call
                 -- Takweesh from publicly-visible info. If no →
-                -- skip (the violation, while real, isn't yet
+                -- skip (the revoke, while real, isn't yet
                 -- publicly proven).
                 if t.leadSuit and laterPlayedLeadSuit(p.seat, t.leadSuit, tIdx) then
                     found = p; break

@@ -11088,6 +11088,463 @@ do
 end
 
 -- =====================================================================
+-- BM. v3.2.6 AKA / Takweesh — Bot.PickTakweesh false-AKA carve-out
+--
+-- Backfills behavioural regression guards for the v3.2.6 runtime
+-- fix that adds an `illegalReason == "false AKA"` carve-out to
+-- Bot.PickTakweesh's realism gate:
+--
+--   BM.1 — false AKA is immediately bot-catchable (motivates the
+--          v3.2.6 carve-out). Pre-fix FAILS; post-fix passes.
+--   BM.2A — non-false-AKA illegal still needs realism reveal
+--           (control: revoke-style without later reveal → no
+--           Takweesh).
+--   BM.2B — non-false-AKA illegal WITH later reveal → Takweesh
+--           fires (control: revoke-style realism gate preserved).
+--   BM.3  — same-team Takweesh scan rejects (HostBeginTakweeshReview
+--           filter at Net.lua:3362 + symmetric filter at
+--           HostResolveTakweesh).
+--   BM.4  — Bot.PickAKANoise deterministic emission at SaudiMaster
+--           tier with math.random stub.
+--   BM.5  — Bot.PickAKANoise declines when bot DOES hold the
+--           actual boss A.
+--
+-- Background: Saudi-canonical Takweesh is a "publicly-observable
+-- proof of foul" call. The v1.5.1 realism gate was designed for
+-- revoke / off-suit illegal plays where the proof comes from the
+-- violator later playing the led suit (revealing they had it
+-- during the original off-suit play). False-AKA marking at
+-- State.lua:1466-1493 is a DIFFERENT kind of public knowledge:
+-- the host (and every client) can derive the violation directly
+-- from playedCardsThisRound + the AKA banner the moment the lead
+-- card hits the table. No later reveal is needed.
+--
+-- The v3.2.6 carve-out at Bot.lua:5957 lets bot callers treat
+-- false-AKA markers as immediately observable, matching the
+-- host's HostBeginTakweeshReview scan at Net.lua:3360-3372 which
+-- already accepts the illegal flag directly with no realism
+-- gating. Restores v1.2.1 (A2) / v1.6.0 noise-AKA design intent.
+--
+-- Design + investigation docs:
+--   .swarm_findings/v3_2_5_release_readiness_checkpoint.md
+--   .swarm_findings/v3_2_6_aka_takweesh_investigation.md
+-- =====================================================================
+section("BM. v3.2.6 AKA / Takweesh fix")
+
+-- BM.1: false AKA is immediately bot-catchable.
+-- Hokm trump=C, bot seat 3 (team A), opp seat 2 (team B) earlier
+-- led KH announcing AKA on H while AH was still unplayed. The
+-- host marked that lead as illegal with illegalReason = "false
+-- AKA" (per the J.3 regression coverage of State.lua:1466-1493).
+-- Subsequent tricks do NOT record seat 2 playing any H card —
+-- the v1.5.1 realism gate's laterPlayedLeadSuit(seat=2, "H", ...)
+-- check therefore returns false. Pre-v3.2.6 fix this blocked the
+-- bot from catching the false AKA; post-fix the
+-- illegalReason == "false AKA" carve-out at Bot.lua:5957 bypasses
+-- the realism gate and treats the marker as immediately
+-- observable.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Stub math.random to 0.5 — well below the flat 0.95 Takweesh
+    -- rate (TAKWEESH_RATE_BY_TRICK table at Bot.lua:5895-5898), so
+    -- the rate roll at Bot.lua:5984 passes deterministically.
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    -- Prior completed trick (trickNum 1): seat 2 led KH false-AKA
+    -- on H. Seats 3/4/1 followed. Subsequent tricks do not
+    -- include any H play by seat 2.
+    S.s.tricks = {
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 2, card = "KH",
+                  illegal = true, illegalReason = "false AKA" },
+                { seat = 3, card = "8H" },
+                { seat = 4, card = "9H" },
+                { seat = 1, card = "JH" },
+            },
+            winner = 2,
+        },
+        -- Second completed trick: seat 4 led non-H. Seat 2
+        -- does NOT play H here, so laterPlayedLeadSuit fails.
+        {
+            leadSuit = "D",
+            plays = {
+                { seat = 4, card = "9D" },
+                { seat = 1, card = "8D" },
+                { seat = 2, card = "QD" },
+                { seat = 3, card = "7D" },
+            },
+            winner = 2,
+        },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {
+        KH = true, ["8H"] = true, ["9H"] = true, JH = true,
+        ["9D"] = true, ["8D"] = true, QD = true, ["7D"] = true,
+    }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
+    -- Strict assertion: post-v3.2.6 carve-out → bot returns the
+    -- seat-2 false-AKA play record. Pre-fix this returns nil
+    -- because laterPlayedLeadSuit(seat=2, "H", 1) walks subsequent
+    -- tricks finds no H play by seat 2.
+    assertTrue(picked ~= nil,
+        "BM.1 (v3.2.6): false AKA marker on opp lead → Bot.PickTakweesh returns the illegal play (carve-out at Bot.lua:5957)")
+    if picked then
+        assertEq(picked.illegalReason, "false AKA",
+            "BM.1 (v3.2.6): returned record IS the false-AKA play (not a stray revoke)")
+        assertEq(picked.seat, 2,
+            "BM.1 (v3.2.6): returned record belongs to opp seat 2 (not same-team)")
+    end
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BM.2A: non-false-AKA illegal without later reveal → no Takweesh.
+-- Control test that the v1.5.1 realism gate for revoke-style
+-- violations is preserved unchanged. Opp seat 2 played off-suit
+-- (e.g. illegalReason = "must follow suit") and never later
+-- played the led suit. Bot.PickTakweesh should NOT call.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    -- Prior completed trick: seat 4 led 8H. Seats 1/2/3 followed.
+    -- Seat 2 played 7C (off-suit), illegal under must-follow.
+    -- Note: in real play this wouldn't be marked .illegal=true
+    -- because the host's rule engine would reject it BEFORE the
+    -- play applies. For the test we directly seed the marker,
+    -- mirroring how a buggy/forked peer might inject such a
+    -- record. The point is to verify the realism gate path stays
+    -- intact for non-false-AKA reasons.
+    S.s.tricks = {
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 4, card = "8H" },
+                { seat = 1, card = "JH" },
+                { seat = 2, card = "7C",
+                  illegal = true, illegalReason = "must follow suit" },
+                { seat = 3, card = "9H" },
+            },
+            winner = 1,
+        },
+        -- Second completed trick: seat 2 plays D, NOT H. No later
+        -- reveal of "had H during the off-suit play."
+        {
+            leadSuit = "D",
+            plays = {
+                { seat = 1, card = "8D" },
+                { seat = 2, card = "QD" },
+                { seat = 3, card = "7D" },
+                { seat = 4, card = "9D" },
+            },
+            winner = 2,
+        },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {
+        ["8H"] = true, JH = true, ["7C"] = true, ["9H"] = true,
+        ["8D"] = true, QD = true, ["7D"] = true, ["9D"] = true,
+    }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
+    -- Strict assertion: v1.5.1 realism gate blocks the call →
+    -- bot returns nil. The v3.2.6 carve-out is scoped to
+    -- false-AKA only; revoke-style still needs proof.
+    assertEq(picked, nil,
+        "BM.2A (v3.2.6 control): non-false-AKA illegal without later reveal → Bot.PickTakweesh returns nil (v1.5.1 realism gate preserved)")
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BM.2B: non-false-AKA illegal WITH later reveal → Takweesh fires.
+-- Same fixture as BM.2A except a subsequent trick records seat 2
+-- playing an H card (revealing they had H during the off-suit
+-- 7C play). The realism gate now passes; bot calls Takweesh.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    S.s.tricks = {
+        -- Trick 1: seat 2's off-suit 7C (illegal: must follow H).
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 4, card = "8H" },
+                { seat = 1, card = "JH" },
+                { seat = 2, card = "7C",
+                  illegal = true, illegalReason = "must follow suit" },
+                { seat = 3, card = "9H" },
+            },
+            winner = 1,
+        },
+        -- Trick 2: seat 4 leads QH. Seat 2 plays AH — REVEALS
+        -- seat 2 had H during trick 1's off-suit play.
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 4, card = "QH" },
+                { seat = 1, card = "TH" },
+                { seat = 2, card = "AH" },
+                { seat = 3, card = "7H" },
+            },
+            winner = 2,
+        },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {
+        ["8H"] = true, JH = true, ["7C"] = true, ["9H"] = true,
+        QH = true, TH = true, AH = true, ["7H"] = true,
+    }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
+    -- Strict assertion: v1.5.1 realism gate fires after the
+    -- later reveal → bot catches the revoke.
+    assertTrue(picked ~= nil,
+        "BM.2B (v3.2.6 control): non-false-AKA illegal WITH later reveal → Bot.PickTakweesh catches (v1.5.1 realism gate fires correctly)")
+    if picked then
+        assertEq(picked.illegalReason, "must follow suit",
+            "BM.2B (v3.2.6 control): caught the revoke, not a stray false-AKA")
+    end
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BM.3: same-team Takweesh scan rejects.
+-- Seat 1 announced false AKA on H, leading KH while AH unplayed.
+-- The host marks the play illegal. Seat 3 (team A, same team as
+-- seat 1) calls Takweesh. Both HostBeginTakweeshReview's scan at
+-- Net.lua:3362 AND HostResolveTakweesh's scan at Net.lua:3545
+-- filter out same-team illegal plays (R.TeamOf(p.seat) ~=
+-- callerTeam). Result: scan finds nothing → caller treated as
+-- false caller → caller's team penalized.
+do
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    -- Set up a false-AKA marker on seat 1's lead (team A).
+    S.s.hostHands = {
+        [1] = { "KH", "QH", "9H", "8C", "7C", "JC", "9C", "TC" },
+        [2] = { "AH", "TH", "JH", "AS", "TS", "KS", "QS", "JS" },
+        [3] = { "AC", "KC", "QC", "9S", "8S", "7S", "AD", "TD" },
+        [4] = { "7H", "8H", "KD", "QD", "JD", "9D", "8D", "7D" },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.tricks = {}
+    S.s.playedCardsThisRound = {}
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    -- Seat 1 announces AKA on H, leads KH (false: AH still
+    -- unplayed in seat 2's hand). State.ApplyPlay marks the play
+    -- illegal with illegalReason = "false AKA". See J.3 for the
+    -- marking-layer regression coverage.
+    S.ApplyAKA(1, "H")
+    S.ApplyPlay(1, "KH")
+    local lead = S.s.trick.plays[1]
+    assertEq(lead.illegal, true,
+        "BM.3 setup: seat-1 KH-led-on-AKA-H → marked illegal (false AKA)")
+    assertEq(lead.illegalReason, "false AKA",
+        "BM.3 setup: illegalReason = 'false AKA'")
+    -- Seat 3 (team A, same team as seat 1) calls Takweesh.
+    -- HostBeginTakweeshReview scans for opposing-team illegal
+    -- plays only — finds nothing despite seat 1's marker.
+    -- Test-file local `N` is a number at L509 (tournament-round
+    -- count); the Net module lives at WHEREDNGN.Net.
+    local Net = WHEREDNGN.Net
+    if Net and Net.HostBeginTakweeshReview then
+        Net.HostBeginTakweeshReview(3)
+        -- Strict assertion: review struct has illegalSeat == nil
+        -- (no opposing illegal found). Per Net.lua:3384 this is
+        -- the "no proof" sentinel that HostResolveTakweesh then
+        -- treats as a false call.
+        assertTrue(S.s.takweeshReview ~= nil,
+            "BM.3 (v3.2.6): HostBeginTakweeshReview created review struct on same-team call")
+        if S.s.takweeshReview then
+            assertEq(S.s.takweeshReview.illegalSeat, nil,
+                "BM.3 (v3.2.6): same-team filter at Net.lua:3362 → no opposing illegal play found despite seat-1's false-AKA marker (caller's team will be penalized)")
+        end
+    end
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BM.4: Bot.PickAKANoise deterministic emission at SaudiMaster.
+-- v1.2.1 (A2) / v1.6.0 noise-AKA emission path. When (a)
+-- SaudiMaster tier, (b) bot leads K or Q non-trump, (c) bot does
+-- NOT hold the actual A of that suit, the noise path emits the
+-- led-card's suit as a deceptive AKA at ~8% probability (v1.6.0
+-- rate). With math.random stub returning 0.0, the
+-- math.random() >= 0.08 check at Bot.lua:5658 is false → noise
+-- path enters and returns the suit.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.saudiMasterBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.0 end
+        if b == nil then return a end
+        return 0
+    end
+    -- Lead context: trick 1, no plays yet (PickAKANoise checks
+    -- #S.s.trick.plays > 0 and returns nil if so).
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {}
+    -- Bot at seat 3, leading KD. KD is non-trump (trump=S), is K
+    -- (qualifying cover), and the bot does NOT hold AD anywhere
+    -- in its hand. The noise path qualifies.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "KD", "9D", "8C", "7C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local noiseSuit = Bot.PickAKANoise(3, "KD")
+    -- Strict assertion: noise path emits "D" (the led-card's
+    -- suit). A returned nil would mean either (a) the rate roll
+    -- blocked emission (math.random stub returned >= 0.08), or
+    -- (b) one of the structural gates rejected. Both contradict
+    -- the v1.2.1 (A2) / v1.6.0 noise-AKA design.
+    assertEq(noiseSuit, "D",
+        "BM.4 (v3.2.6): SaudiMaster + K non-trump lead + no A → PickAKANoise returns 'D' for deceptive AKA (v1.2.1 A2, v1.6.0 8% rate)")
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.saudiMasterBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BM.5: Bot.PickAKANoise declines when bot DOES hold the actual A.
+-- The carve-out at Bot.lua:5670-5678 prevents the noise path from
+-- firing when the bot legitimately holds the boss — that would
+-- be a delayed-but-honest AKA, not deception. Same fixture as
+-- BM.4 except the hand includes AD.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.saudiMasterBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.0 end
+        if b == nil then return a end
+        return 0
+    end
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {}
+    -- Bot hand includes AD this time. The "we DO have the A;
+    -- not a noise opportunity" carve-out at Bot.lua:5673-5677
+    -- short-circuits → returns nil.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AD", "KD", "8C", "7C" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local noiseSuit = Bot.PickAKANoise(3, "KD")
+    -- Strict assertion: bot holds AD → noise path declines.
+    -- A non-nil return would indicate the AD-in-hand carve-out
+    -- regressed (the noise path would then leak the bot's actual
+    -- boss-holding shape via a "deceptive" AKA that is in fact
+    -- accurate).
+    assertEq(noiseSuit, nil,
+        "BM.5 (v3.2.6): SaudiMaster + bot holds actual AD → PickAKANoise returns nil (no noise opportunity per Bot.lua:5673-5677)")
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.saudiMasterBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
