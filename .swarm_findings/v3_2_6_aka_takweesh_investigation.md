@@ -672,7 +672,7 @@ wording is a separate, optional follow-up.**
    AKA"`. Defer to a separate implementation prompt with
    Codex re-approval.
 
-2. **Add tests** (BM section, 6 checks per Codex amend round 2):
+2. **Add tests** (BM section, 7 test blocks emitting 15 harness checks per Codex amend round 2):
    - BM.1 — false AKA in a COMPLETED trick is bot-catchable
      (FAILS pre-round-1-fix, passes post). Wire-proof for
      completed-trick carve-out A.
@@ -695,7 +695,7 @@ wording is a separate, optional follow-up.**
    the v3.2.6 BM batch; flag for a paired v3.2.6b UX slice if
    Codex agrees.
 
-4. **NO defer-indefinite.** All five BM tests are
+4. **NO defer-indefinite.** All seven BM blocks are
    deterministic and tractable.
 
 ### 9.4 Release impact (Codex amend round 2)

@@ -11108,6 +11108,12 @@ end
 --           tier with math.random stub.
 --   BM.5  — Bot.PickAKANoise declines when bot DOES hold the
 --           actual boss A.
+--   BM.6  — false AKA in the CURRENT trick is bot-catchable
+--           (Codex amend round 2 — current-trick carve-out at
+--           Bot.lua:5986-6004). Pre-amend FAILS; post-amend
+--           passes. Companion wire-proof to BM.1 covering the
+--           in-progress-trick case the v1.5.1 rule previously
+--           blocked.
 --
 -- Background: Saudi-canonical Takweesh is a "publicly-observable
 -- proof of foul" call. The v1.5.1 realism gate was designed for
