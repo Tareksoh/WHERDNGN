@@ -2473,16 +2473,38 @@ local function renderActions()
             -- full prose tooltip but TAKWEESH (the most consequential
             -- accusation in Saudi Baloot) had nothing. Critical
             -- asymmetry on a paired-button row.
+            -- v3.2.7 (post-v3.2.6 UX follow-up,
+            -- .swarm_findings/v3_2_7_takweesh_tooltip_design.md):
+            -- expand wording to (a) reflect both qualifying
+            -- patterns (false-AKA marker, later same-suit reveal
+            -- after off-suit) per the v3.2.6 Bot.PickTakweesh
+            -- carve-out + the original v1.5.1 realism gate; and
+            -- (b) explicitly warn that only OPPOSING-team illegal
+            -- plays qualify — calling Takweesh on a same-team
+            -- teammate's illegal play counts as a wrong call
+            -- (HostBeginTakweeshReview / HostResolveTakweesh scan
+            -- filter at Net.lua:3362 + 3545). Pre-v3.2.7 the
+            -- tooltip was silent on the same-team rule, causing
+            -- the v3.2.6 investigation's Scenario B UX hazard
+            -- when a human teammate of a noise-AKA-emitting bot
+            -- pre-emptively clicked TAKWEESH.
+            -- Two phrases are deliberately kept on single source
+            -- lines so the BN.1 / BN.2 source-pin tests can anchor
+            -- the v3.2.7 clarifications via single-line Lua-pattern
+            -- finds (see .swarm_findings/v3_2_7_takweesh_tooltip_design.md).
+            -- Re-flowing across line breaks would defeat the pin
+            -- without changing the rendered tooltip.
             addConfirmAction("|cffff5555TAKWEESH|r",
                 "|cffff5555TAKWEESH? again to confirm|r",
                 function() net().LocalTakweesh() end,
                 "TAKWEESH — accuse the most recent illegal play "
                 .. "(Saudi 'tikweesh', accusation of foul). If the "
-                .. "play was actually illegal AND the violator later "
-                .. "showed they had the led suit (publicly observable "
-                .. "proof), the offending team takes a ~30-pt qaid "
-                .. "penalty. Wrong call costs YOUR team the same "
-                .. "penalty. Use only when you're sure.")
+                .. "play was actually illegal and publicly provable "
+                .. "(for example, a false AKA marker or a later same-suit reveal after an off-suit play), "
+                .. "the offending team takes a ~30-pt qaid penalty. "
+                .. "Only OPPOSING-team illegal plays qualify; "
+                .. "calling Takweesh on your own teammate counts as a wrong call. "
+                .. "Wrong call costs YOUR team the same penalty. Use only when you're sure.")
             -- SWA (سوا) — claim-the-rest. Saudi-table convention:
             -- ≤3 cards = instant, 4+ cards requires opponent
             -- permission (handled by N.LocalSWA branch). Toggle the

@@ -11630,6 +11630,54 @@ do
 end
 
 -- =====================================================================
+-- BN. v3.2.7 TAKWEESH tooltip clarification (UX text-only)
+--
+-- Source-pin coverage for the v3.2.7 tooltip wording change at
+-- UI.lua:2476-2502. The change is text-only; the underlying
+-- same-team filter behaviour was already wire-locked by BM.3 in
+-- v3.2.6. BN.1/BN.2 lock the two content-bearing phrases that
+-- document the v3.2.7 clarifications:
+--
+--   BN.1 — "Only OPPOSING-team illegal plays qualify" marker.
+--          The same-team rule clarification — the v3.2.6
+--          investigation's Scenario B UX hazard fix. If a future
+--          tooltip re-flow drops this phrase, the harness fails
+--          and triggers re-audit before re-shipping.
+--   BN.2 — "false AKA marker or a later same-suit reveal" marker.
+--          Captures both qualifying patterns documented in v3.2.6
+--          (false-AKA carve-out at Bot.lua:5957 + 5986-6004, and
+--          the v1.5.1 realism gate for revoke/off-suit). Locks
+--          the tooltip's parenthetical that names them.
+--
+-- Design doc: .swarm_findings/v3_2_7_takweesh_tooltip_design.md
+-- =====================================================================
+section("BN. v3.2.7 TAKWEESH tooltip clarification (UX text-only)")
+
+do
+    local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+    -- BN.1: v3.2.7 same-team Takweesh rule clarification.
+    -- The phrase "Only OPPOSING-team illegal plays qualify" is
+    -- the user's primary pre-confirmation safeguard against
+    -- same-team Takweesh clicks (the v3.2.6 investigation's
+    -- Scenario B UX hazard). UI.lua keeps the phrase on a
+    -- single source line so the Lua-pattern find can match
+    -- across the .. concatenation; a future re-flow that
+    -- breaks the phrase across lines would defeat this pin
+    -- and trip the test, prompting re-audit.
+    assertTrue(uiSrc:find("Only OPPOSING%-team illegal plays qualify") ~= nil,
+        "BN.1 (v3.2.7): TAKWEESH tooltip warns same-team Takweesh = wrong call")
+    -- BN.2: v3.2.7 qualifying-patterns clarification.
+    -- The phrase "false AKA marker or a later same-suit reveal"
+    -- captures both publicly-provable patterns the host's
+    -- HostBeginTakweeshReview scan accepts (v3.2.6 false-AKA
+    -- carve-out at Bot.lua:5957 + 5986-6004, and the v1.5.1
+    -- revoke-style realism gate at Bot.lua:5979-5982). Kept on
+    -- a single source line in UI.lua for the same reason as BN.1.
+    assertTrue(uiSrc:find("false AKA marker or a later same%-suit reveal") ~= nil,
+        "BN.2 (v3.2.7): TAKWEESH tooltip names both qualifying patterns (false AKA + later same-suit reveal)")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
