@@ -1,5 +1,70 @@
 # Changelog
 
+## v3.2.7 — TAKWEESH tooltip clarification
+
+A small UX-only release. **No gameplay logic, protocol,
+saved-variable, scoring, .toc, .pkgmeta, .github, or packaging
+changes.** v3.1.x / v3.2.x clients remain
+addon-message-compatible.
+
+### Changed
+
+- **TAKWEESH button tooltip now explicitly states that only
+  opposing-team illegal plays qualify.** Pre-v3.2.7 the tooltip
+  described the off-suit/revoke realism pattern only and was
+  silent on the same-team rule — a confused player on the
+  same team as a noise-AKA-emitting bot could click TAKWEESH
+  intending to "expose" the bot teammate, and the host's
+  scan (which filters same-team illegal plays) would resolve
+  the call as a wrong call, penalizing the clicker's own
+  team. The new tooltip text adds the sentence: *"Only
+  OPPOSING-team illegal plays qualify; calling Takweesh on
+  your own teammate counts as a wrong call."*
+- **TAKWEESH tooltip now names both qualifying proof
+  patterns.** The two patterns the host scan actually accepts
+  are (a) a false-AKA marker (publicly knowable immediately
+  from the trick log + AKA banner, per the v3.2.6 fix), and
+  (b) a later same-suit reveal after an off-suit play (the
+  v1.5.1 revoke-style realism gate). The tooltip previously
+  described only the second pattern; the new text mentions
+  both.
+
+### Unchanged
+
+- **Same-team Takweesh behaviour is unchanged.** The host's
+  `HostBeginTakweeshReview` / `HostResolveTakweesh` scans
+  still filter `R.TeamOf(p.seat) ~= callerTeam` exactly as
+  before. Bots still do not Takweesh their own teammate's
+  illegal plays. The v3.2.7 change is **purely tooltip wording**
+  — it clarifies the existing rule to humans without altering
+  any runtime gate.
+- **Bot Takweesh behaviour is unchanged.** The v3.2.6
+  `Bot.PickTakweesh` false-AKA carve-out (both completed-
+  trick and current-trick) ships as it did in v3.2.6; the
+  v3.2.7 tooltip just describes what the bot already does.
+
+### Verification
+
+- Full harness: **1,297 checks passed, 0 failed** (was 1,295
+  at v3.2.6; +2 source-pin asserts in section BN of
+  `tests/test_state_bot.lua` locking the two new tooltip
+  phrases against a future re-flow that drops them).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+
+### Notes
+
+- Design rationale and the wording-choice trade-off (expanded
+  vs minimal form) live in
+  `.swarm_findings/v3_2_7_takweesh_tooltip_design.md` (285
+  lines).
+- Two phrases in the tooltip source are deliberately kept on
+  single source lines inside `UI.lua`'s string-concatenation
+  block so the BN source-pin tests can anchor them; the
+  rendered tooltip text is identical to the Codex-approved
+  wording.
+- No protocol-version bump. Saved-variable layout unchanged.
+
 ## v3.2.6 — Bot Takweesh false-AKA fix
 
 A focused bot-play bugfix release that also bundles the v3.2.5
