@@ -2694,6 +2694,22 @@ function N._HostStepPlay()
         S.ApplyTurn(nxt, "play")
         N.SendTurn(nxt, "play")
         N.MaybeRunBot()
+        -- v3.2.8 host-turn visual refresh: user-reported bug —
+        -- in a 4-human game, when a remote human played into the
+        -- seat immediately before the host (so `nxt` ended up as
+        -- the host's seat), the host's local glow stayed on the
+        -- prior player. Non-host clients saw the turn advance
+        -- correctly because they received the N.SendTurn(nxt,
+        -- "play") MSG_TURN broadcast above and their UI redraws
+        -- on the wire callback. The host's loop ran S.ApplyTurn
+        -- locally with no redraw trigger, so the seat-glow
+        -- update never reached the host's UI. The 4-play
+        -- resolution branch below already calls B.UI.Refresh()
+        -- after S.ApplyTrickEnd / _HostStepAfterTrick; this
+        -- mid-trick <4 plays branch was missing the symmetric
+        -- call. Defensive nil-check mirrors the existing call
+        -- below so test stubs without B.UI continue to work.
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
     end
     -- Hold the full 4-card view long enough for the player to read it,

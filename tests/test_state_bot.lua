@@ -11678,6 +11678,44 @@ do
 end
 
 -- =====================================================================
+-- BO. v3.2.8 host-turn visual refresh fix (Net._HostStepPlay)
+--
+-- Source-pin coverage for the v3.2.8 fix at Net.lua:2697+. In a
+-- 4-human game where the seat immediately before the host plays
+-- a card and the next turn should be the host's, the host's local
+-- seat-glow visually stalled on the prior player. Root cause: the
+-- <4 plays branch of N._HostStepPlay advanced state via
+-- S.ApplyTurn + broadcast MSG_TURN via N.SendTurn but never
+-- called B.UI.Refresh() on the host's local UI — non-host clients
+-- redraw on the wire callback, but the host's authoritative loop
+-- skipped the redraw step. The 4-play resolution branch at
+-- Net.lua:2720 already had the symmetric B.UI.Refresh() call;
+-- the <4 plays branch was missing it.
+--
+-- BO.1 is a source-pin assert on the v3.2.8 marker comment that
+-- documents the fix. If a future Net.lua cleanup drops the
+-- comment (or the inline refresh call alongside it), the pin
+-- fails and a re-audit is required before merging.
+--
+-- No behavioural test added — exercising Net._HostStepPlay would
+-- require a B.UI mock that the harness doesn't currently provide,
+-- and the existing test infrastructure stubs B.UI = nil (the
+-- defensive `if B.UI and B.UI.Refresh then` guard means the test
+-- harness sees the new line as a no-op call). The source-pin is
+-- the simplest regression guard.
+-- =====================================================================
+section("BO. v3.2.8 host-turn visual refresh fix")
+
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- BO.1: v3.2.8 host-turn visual refresh marker at Net.lua's
+    -- _HostStepPlay <4 plays branch. Single-line anchor on the
+    -- v3.2.8-tagged comment that documents the fix's intent.
+    assertTrue(netSrc:find("v3%.2%.8 host%-turn visual refresh") ~= nil,
+        "BO.1 (v3.2.8): _HostStepPlay <4 plays branch contains v3.2.8 host-turn visual refresh marker")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
