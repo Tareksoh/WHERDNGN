@@ -10665,6 +10665,204 @@ do
 end
 
 -- =====================================================================
+-- BK. v3.2.5 HIGH-pickplay regression coverage (T-2 sweep pursuit)
+--
+-- Backfills behavioural regression guards for the T-2 sweep-pursuit-
+-- early Kaboot lead branch at Bot.lua:1081-1136 (the v1.0.3 U-7
+-- Kaboot-feasibility hand-shape gate) and the fire site at
+-- Bot.lua:1138-1190:
+--
+--   BK.1/2 (audit T-2) — sweep-pursuit-early fires when our team
+--                         has won every prior trick at trickNum 3-7
+--                         AND the v1.0.3 U-7 Kaboot-feasibility
+--                         check passes (sum of trump J/9/A in legal
+--                         hand + side-suit bosses >= 8-trickNum+1).
+--                         When the gate passes, pickLead returns
+--                         the highest-face-value safe boss
+--                         (highestByFaceValue(safeBosses)). When
+--                         the gate fails (one opp prior win), the
+--                         branch is skipped and pickLead falls to
+--                         lowestByRank(legal) for an all-trump
+--                         no-non-trump hand. Per decision-trees.md
+--                         Section 7 (Definite, video #15) +
+--                         v0.5.19 Section 7 rules 1+2 (Common,
+--                         videos 06+07+15).
+--   BK.3 — source pin on EXISTING v1.0.3 U-7 Kaboot-feasibility
+--          marker (test-only batch; no new runtime markers added).
+--
+-- BK.1/2 use a deliberately-minimal fixture: trickNum=7 with hand
+-- {JS, 9S} (2 trumps). Both cards auto-count for the feasibility
+-- gate (trump J/9/A always counts at Bot.lua:1115-1119) so no
+-- playedCardsThisRound seeding is required to make HUR return the
+-- expected ranks. The all-trump 2-card hand also gives a clean
+-- wire discriminator via the no-non-trump fallback at Bot.lua:
+-- 2892-2937: positive returns JS (safeBosses[1] via boss-scan at
+-- L1170-1180); negative returns 9S (lowestByRank of trump pair in
+-- TRUMP_HOKM_ORDER where 9 trump-rank 7 < J trump-rank 8).
+--
+-- Design doc: .swarm_findings/v3_2_5_t2_sweep_pursuit_design.md
+-- =====================================================================
+section("BK. v3.2.5 HIGH-pickplay regression coverage (T-2 sweep pursuit)")
+
+-- BK.1: T-2 POSITIVE — sweep-pursuit-early fires + boss-lead.
+-- Hokm trump=S, bidder seat 1, bot seat 3 (same team A), M3lm.
+-- 6 prior tricks all won by team A → mySwept = 6, trickNum = 7,
+-- sweepPursuitEarly = (6 == 7-1) → true. Bot.lua:1104-1136 U-7
+-- feasibility check runs: hand {JS, 9S} contributes 2 auto-count
+-- winners (J/9 always count), remainingNeeded = 8-7+1 = 2, gate
+-- passes. Branch fires at L1138. safeBosses scan: JS is trump
+-- boss (HUR("S") returns "J" since JS is unplayed and the
+-- TRUMP_HOKM_ORDER walk lands there first); 9S is NOT boss.
+-- safeBosses = {JS} → highestByFaceValue({JS}) returns JS.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Prior-tricks history: 6 entries, all winners on team A
+    -- (seats 1 and 3 alternating). The gate at Bot.lua:1083 only
+    -- reads t.winner; plays content is irrelevant. Keep plays = {}
+    -- for cosmetic consistency with existing tests (AK.3 at L5994,
+    -- AB.4 at L1877 etc.).
+    S.s.tricks = {
+        { winner = 1, plays = {} },
+        { winner = 3, plays = {} },
+        { winner = 1, plays = {} },
+        { winner = 3, plays = {} },
+        { winner = 1, plays = {} },
+        { winner = 3, plays = {} },
+    }
+    -- Lead context: we are leading trick 7 (no plays yet).
+    S.s.trick = { leadSuit = nil, plays = {} }
+    -- playedCardsThisRound = {} is sufficient. HUR walks
+    -- TRUMP_HOKM_ORDER for trump=S and returns "J" (JS unplayed
+    -- because it's in our hand). The 24 cards played across the 6
+    -- prior tricks don't need to be enumerated here — the only HUR
+    -- call from sweep-pursuit-early is HUR("S") via the boss-scan,
+    -- and the feasibility check's J/9/A auto-count path doesn't
+    -- consult HUR at all for these two cards.
+    S.s.playedCardsThisRound = {}
+    -- Hand at seat 3: J and 9 of trump. Auto-counts as 2
+    -- feasible winners (trump J + trump 9 at Bot.lua:1115).
+    -- remainingNeeded = 8-7+1 = 2 → gate passes.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "JS", "9S" },
+        [4] = {},
+    }
+    -- All seats marked isBot (consistency with BH/BI/BJ prologue).
+    -- T-2 itself doesn't consult Bot.IsBotSeat — kept for cosmetic
+    -- parity.
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: sweep-pursuit-early fires + boss-scan
+    -- finds JS → returns highestByFaceValue({JS}) = JS. A
+    -- returned 9S would indicate either (a) the gate failed
+    -- (mySwept != trickNum-1), (b) the feasibility check failed
+    -- (J/9 auto-count regressed), or (c) the boss-scan didn't
+    -- find JS (HUR mis-reported "S"'s top). The JS vs 9S
+    -- discriminator is the wire-proof for the sweep-pursuit-
+    -- early fire path.
+    assertEq(card, "JS",
+        ("BK.1 (v3.2.5 T-2): sweep-pursuit-early + U-7 feasibility " ..
+         "fires + boss-scan returns trump-boss JS (got %s)")
+            :format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BK.2: T-2 NEGATIVE — sweep-pursuit-early gate fails (one opp
+-- prior win). Same fixture as BK.1 except trick 2's winner is
+-- changed to opp seat 2. mySwept = 5 (not 6), so the gate at
+-- Bot.lua:1088 (`sweepPursuitEarly = mySwept == trickNum - 1`)
+-- evaluates to (5 == 6) = false. The inner M3lm feasibility
+-- check is skipped (already false). Branch at L1138 doesn't
+-- fire. Falls through to the rest of pickLead. Hand {JS, 9S} is
+-- all-trump; saveHighTrump at L2305-2313 is false (bot on
+-- bidder team — see L2307 `not isBidderTeam` gate). Reaches the
+-- no-non-trump fallback at L2937: `lowestByRank(legal, contract)`
+-- with all-trump legal. In TRUMP_HOKM_ORDER, J=8 > 9=7, so the
+-- lowest is 9S (trump rank 7). Returns 9S.
+do
+    WHEREDNGNDB.advancedBots = true
+    WHEREDNGNDB.m3lmBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Same prior-trick history as BK.1 except trick 2 is now
+    -- won by opp seat 2 (team B). mySwept = 5, not 6.
+    S.s.tricks = {
+        { winner = 1, plays = {} },
+        { winner = 2, plays = {} },  -- opp win → sweep-pursuit fails
+        { winner = 1, plays = {} },
+        { winner = 3, plays = {} },
+        { winner = 1, plays = {} },
+        { winner = 3, plays = {} },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {}
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "JS", "9S" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: sweep-pursuit-early gate fails →
+    -- branch skipped → no-non-trump fallback returns
+    -- lowestByRank({JS, 9S}) = 9S. A returned JS would indicate
+    -- the `mySwept == trickNum - 1` gate is regressed (e.g.
+    -- weakened to `mySwept >= trickNum - 2`) and sweep-pursuit
+    -- fired despite the opp's trick-2 win. Per design-doc §9
+    -- stop condition #3: if this returns JS, treat as a runtime
+    -- regression signal.
+    assertEq(card, "9S",
+        ("BK.2 (v3.2.5 T-2 NEG): one-opp-prior-win → sweep-pursuit-" ..
+         "early gate fails; bot plays lowest trump 9S not boss JS " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    WHEREDNGNDB.m3lmBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BK.3: source-pin sub-assert on the EXISTING in-source v1.0.3
+-- U-7 Kaboot-feasibility hand-shape gate marker at Bot.lua:1089.
+-- This is a test-only batch; no new runtime markers are added.
+-- BK.1's positive case relies on the U-7 feasibility check
+-- accepting our {JS, 9S} hand as 2 feasible winners; the pin
+-- locks the source marker that anchors this guard so a future
+-- runtime cleanup that accidentally removes the comment triggers
+-- a harness failure instead of silently breaking BK.1.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- BK.3: v1.0.3 (U-7) Kaboot-feasibility hand-shape gate
+    -- marker at Bot.lua:1089. Single-line anchor verified against
+    -- current main HEAD.
+    assertTrue(botSrc:find("v1%.0%.3 %(U%-7%) Kaboot%-feasibility hand%-shape gate") ~= nil,
+        "BK.3 (v3.2.5 T-2): v1.0.3 U-7 Kaboot-feasibility marker present")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
