@@ -10863,6 +10863,231 @@ do
 end
 
 -- =====================================================================
+-- BL. v3.2.5 HIGH-pickplay regression coverage (T-4 Sun pos-4 Faranka)
+--
+-- Backfills behavioural regression guards for the Sun pos-4 Faranka
+-- branch at Bot.lua:3155-3364:
+--
+--   BL.1/2 (audit T-4) — Sun pos-4 Faranka outer gate (v0.5.21,
+--                         video #06) + v1.4.0 (Concern 5) anti-
+--                         trigger row 167 carve-out. Outer gate
+--                         requires Sun + lastSeat + partnerWinning
+--                         + bidder-team. Inner block enters when
+--                         hasA + cover (T or K) + suitCount==2 +
+--                         NOT holdsTopTwoUnplayed. With Advanced
+--                         tier (NOT M3lm), the M3lm-gated random
+--                         branches at Bot.lua:3345 and 3352 skip,
+--                         and the branch deterministically returns
+--                         the cover.
+--   BL.3 — source pins on EXISTING v0.5.21 outer-gate marker and
+--          v1.4.0 anti-trigger row 167 marker (test-only batch;
+--          no new runtime markers added).
+--
+-- IMPORTANT FRAMING (Codex review correction):
+-- BL.1's cover KH (RANK_PLAIN trick-rank 6) actually BEATS
+-- partner's played JH (rank 4) and opp's 9H (rank 3) in Sun. When
+-- the bot returns KH, the bot takes the current trick — partner
+-- does NOT keep the trick after our play. That is NOT the
+-- canonical Saudi v0.5.21 / video #06 "duck and let partner take"
+-- strategic outcome described in the runtime comment at Bot.lua:
+-- 3159. Our fixture violates the cover-rank-strictly-lower-than-
+-- table premise by construction to keep the wire-discriminator
+-- clean (KH vs AH).
+--
+-- The test wire-proves:
+--   (a) Branch priority: T-4 returns the cover (preserving A in
+--       hand), beating the smother fallback which would return A.
+--   (b) Anti-trigger row 167 polarity: in BL.2, seeding TH into
+--       playedCardsThisRound makes holdsTopTwoUnplayed=true and
+--       forces the T-4 inner block to bypass, falling through to
+--       smother which returns A.
+--
+-- The test does NOT wire-prove "partner remains the current trick
+-- winner after our play." Implementation docstrings here must
+-- reflect this — no "duck under JH" / "partner keeps the trick"
+-- language.
+--
+-- Tier choice: Advanced (NOT M3lm). The M3lm-gated 5-factor
+-- random capture path at Bot.lua:3345 + 3352 stays inactive, so
+-- the branch deterministically returns cover without needing a
+-- math.random stub. This is a regression guard for the
+-- structural gates, not the probabilistic 5-factor framework
+-- itself (the latter's per-factor effects are wire-invisible at
+-- the returned-card level due to the [0.05, 0.95] clamp +
+-- borderline wobble + random roll — see design doc §10
+-- deferrals).
+--
+-- Design doc: .swarm_findings/v3_2_5_t4_sun_pos4_faranka_design.md
+-- =====================================================================
+section("BL. v3.2.5 HIGH-pickplay regression coverage (T-4 Sun pos-4 Faranka)")
+
+-- BL.1: T-4 POSITIVE — Sun pos-4 outer gate + Advanced (NOT M3lm)
+-- fires; T-4 inner block returns cover (KH) preserving A in hand.
+-- Sun contract, bidder seat 1, bot seat 3 (same team A), Advanced.
+-- Trick: seat 4 leads 8H, seat 1 plays JH (partner-wins since
+-- JH > 9H > 8H in RANK_PLAIN), seat 2 plays 9H. Bot at seat 3 acts
+-- last (pos-4, lastSeat=true). Outer gate at Bot.lua:3179-3181
+-- passes (Sun, lastSeat, partnerWinning, bidder-team). Hand
+-- {AH, KH, 8C, 7D}: legal under must-follow H = {AH, KH}. hasA,
+-- cover=KH, suitCount=2. holdsTopTwoUnplayed walk: A unplayed
+-- (in hand) → first; T unplayed (not in playedCardsThisRound,
+-- not in legal) → second; K in hand → cover K ≠ secondUnplayed
+-- T → holdsTopTwoUnplayed = FALSE. Inner block enters at L3232.
+-- captureRate computed but never consulted (Advanced not M3lm).
+-- Both M3lm-gated random branches at L3345/L3352 skip. Falls to
+-- `return cover` at L3362 → returns KH. NOTE: KH beats JH (6 > 4
+-- in RANK_PLAIN); the bot takes the trick. The test pins
+-- BRANCH PRIORITY (T-4 returns cover, preserving AH), not
+-- partner-retention.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- No prior tricks needed for T-4's outer gate; keep tricks
+    -- empty so sweep/Kaboot anti-triggers in the 5-factor block
+    -- stay quiet (they're skipped anyway under Advanced tier,
+    -- but cosmetic consistency keeps the fixture clean).
+    S.s.tricks = {}
+    -- Current trick: 8H (seat 4 lead), JH (seat 1 partner),
+    -- 9H (seat 2 opp); bot seat 3 acts last. JH > 9H > 8H in
+    -- RANK_PLAIN (J=4, 9=3, 8=2) → partner seat 1 is currently
+    -- winning. partnerWinning = (curWinner=1 == R.Partner(3)=1)
+    -- → true.
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "JH" },
+            { seat = 2, card = "9H" },
+        },
+    }
+    -- TH NOT marked played → holdsTopTwoUnplayed walk lands
+    -- secondUnplayed = T, cover K ≠ T → false. T-4 inner block
+    -- enters.
+    S.s.playedCardsThisRound = {
+        ["8H"] = true, JH = true, ["9H"] = true,
+    }
+    -- Hand: {AH, KH, 8C, 7D}. Sun must-follow H → legal =
+    -- {AH, KH}; 8C/7D illegal. hasA=true, cover=KH, suitCount=2.
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "KH", "8C", "7D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: T-4 inner block enters + Advanced
+    -- (not M3lm) deterministically falls to `return cover` =
+    -- KH. The KH vs AH wire-discriminator proves branch priority
+    -- (T-4 over smother); a regression where the outer gate or
+    -- hand-shape predicate fails would return AH via the smother
+    -- fallback at Bot.lua:3530.
+    assertEq(card, "KH",
+        ("BL.1 (v3.2.5 T-4): Sun pos-4 outer gate + Advanced " ..
+         "fires T-4 inner block; returns cover KH preserving AH " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BL.2: T-4 NEGATIVE — anti-trigger row 167 (holdsTopTwoUnplayed
+-- = true) bypasses the T-4 inner block; falls to smother which
+-- returns AH (highest point card in led suit). Same fixture as
+-- BL.1 except playedCardsThisRound additionally marks TH played.
+-- holdsTopTwoUnplayed walk: A unplayed (in hand) → first; T
+-- played → skip; K unplayed (in hand) → second. cover K =
+-- secondUnplayed K → holdsTopTwoUnplayed = TRUE. The if-block
+-- at Bot.lua:3232 (`if hasA and cover and suitCount == 2 and not
+-- holdsTopTwoUnplayed then`) does NOT enter — the inner 5-factor
+-- block + `return cover` are bypassed. Falls through to the
+-- smother branch at Bot.lua:3366. Smother gathers pointCards =
+-- {AH, KH} sorted descending by TrickRank (RANK_PLAIN: A=8,
+-- K=6), returns pointCards[1] = AH.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_SUN, trump = nil, bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 4, card = "8H" },
+            { seat = 1, card = "JH" },
+            { seat = 2, card = "9H" },
+        },
+    }
+    -- v1.4.0 anti-trigger row 167: seed TH played so the
+    -- holdsTopTwoUnplayed walk finds (firstUnplayed=A,
+    -- secondUnplayed=K). Cover K = secondUnplayed → true → T-4
+    -- bypassed. Compare to BL.1 which omits TH from played.
+    S.s.playedCardsThisRound = {
+        ["8H"] = true, JH = true, ["9H"] = true, TH = true,
+    }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AH", "KH", "8C", "7D" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.meldsByTeam = { A = {}, B = {} }
+    S.s.target = 152
+    local card = Bot.PickPlay(3)
+    -- Strict assertion: anti-trigger row 167 fires →
+    -- holdsTopTwoUnplayed=true → T-4 inner block bypassed → falls
+    -- to smother → returns highest point card AH. A returned KH
+    -- would indicate the v1.4.0 row 167 detection is regressed
+    -- (e.g., the playedCardsThisRound consultation removed). Per
+    -- design-doc §8.5 stop condition #3: if this returns KH,
+    -- treat as a runtime regression signal.
+    assertEq(card, "AH",
+        ("BL.2 (v3.2.5 T-4 NEG): TH played → holdsTopTwoUnplayed " ..
+         "→ T-4 bypassed; smother returns AH not Faranka cover KH " ..
+         "(got %s)"):format(tostring(card)))
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BL.3: source-pin block — two sub-asserts on EXISTING in-source
+-- markers in Bot.lua. This is a test-only batch; no new runtime
+-- markers are added. BL.3a anchors the v0.5.21 outer gate that
+-- BL.1 exercises. BL.3b anchors the v1.4.0 anti-trigger row 167
+-- carve-out that BL.2 exercises. Either marker disappearing
+-- indicates a runtime cleanup affecting T-4's structural
+-- anchors, triggering a re-audit.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    -- BL.3a: v0.5.21 Section 5 Sun pos-4 Faranka marker at
+    -- Bot.lua:3155. Single-line anchor verified against current
+    -- main HEAD.
+    assertTrue(botSrc:find("v0%.5%.21 Section 5 Sun pos%-4 Faranka") ~= nil,
+        "BL.3a (v3.2.5 T-4): v0.5.21 Section 5 Sun pos-4 Faranka marker present")
+    -- BL.3b: v1.4.0 Concern 5 anti-trigger row 167 marker at
+    -- Bot.lua:3201. Single-line anchor up to "fix" (the full
+    -- comment continues with " — Faranka anti-trigger row 167)"
+    -- through an em-dash; the prefix is single-line.
+    assertTrue(botSrc:find("v1%.4%.0 %(Concern 5 audit fix") ~= nil,
+        "BL.3b (v3.2.5 T-4): v1.4.0 Concern 5 audit-fix marker present")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
