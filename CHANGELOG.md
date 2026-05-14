@@ -1,5 +1,82 @@
 # Changelog
 
+## v3.2.8 — Host-turn visual fix (4-human games)
+
+A focused user-visible bugfix release that also bundles a small
+internal comment cleanup. **No protocol, saved-variable,
+scoring, .toc, .pkgmeta, .github, or packaging changes.**
+v3.1.x / v3.2.x clients remain addon-message-compatible.
+
+### Fixed
+
+- **Host-only visual turn stall in 4-human games.** When the
+  player at the seat immediately before the host played their
+  card and the next turn should have been the host's, the
+  host's local seat-glow stalled on the previous player — the
+  card landed correctly on the table, and all *other* clients
+  showed the turn advance, but the host's own UI kept the turn
+  indicator on the prior seat. Root cause: in the host's
+  authoritative `Net._HostStepPlay`, the mid-trick `<4 plays`
+  branch advanced state via `S.ApplyTurn` and broadcast
+  `MSG_TURN` to other clients via `N.SendTurn`, then returned
+  without calling `B.UI.Refresh()` on the host's local UI.
+  Non-host clients redrew on the MSG_TURN wire callback, but
+  the host's authoritative loop had no redraw trigger of its
+  own. The 4-play trick-resolution branch already had the
+  symmetric refresh call; the mid-trick branch was missing it.
+  The fix adds a single defensive
+  `if B.UI and B.UI.Refresh then B.UI.Refresh() end` call after
+  the authoritative mid-trick turn advance — mirroring the
+  pattern already used in the 4-play branch. Turn logic,
+  networking, timers, scoring, and bot decisions are all
+  unchanged.
+
+### Internal cleanup (bundled)
+
+- **Stale comment line references replaced with named
+  subsystem anchors in `Bot.lua` and `Bot/PlayPrimitives.lua`.**
+  Four runtime comment sites referenced absolute Bot.lua line
+  numbers (`Bot.lua:4842+`, `Bot.lua:4886+`, `Bot.lua:2322+`,
+  `Bot.lua:~2474`) that became stale during the v3.2.0 cleanup
+  batches — especially Batch 5C, which extracted play
+  primitives (`tahreebClassify`, `lowestByRank`, etc.) to
+  `Bot/PlayPrimitives.lua`, shrinking `Bot.lua` from ~8,428
+  to ~6,200 lines and shifting line numbers by ~1,150. The
+  refs are now replaced with named subsystem anchors
+  (e.g. *"Tahreeb 'want' arm in pickFollow, Sun-only"* and
+  *"tahreebClassify in Bot/PlayPrimitives.lua"*) so future
+  re-extractions don't re-stale them. **Comment-only change**
+  — no behavior, no test pin changes, no runtime decision
+  affected.
+
+### Verification
+
+- Full harness: **1,298 checks passed, 0 failed** (was 1,297
+  at v3.2.7; +1 source-pin assert in section BO of
+  `tests/test_state_bot.lua` locking the v3.2.8 host-turn
+  refresh marker comment in `Net.lua`).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- Wire-discriminator pre-fix verification: BO.1 FAILS pre-fix
+  (`1297 / 1` with the `Net.lua` change stashed), passes
+  post-fix. Wire-proves the `Net._HostStepPlay` change is the
+  cause.
+
+### Notes
+
+- The host-turn fix lands first because it affects players;
+  the internal comment cleanup was the design item identified
+  in `.swarm_findings/v3_2_0_botlua_comment_audit.md` and was
+  approved as a separate comment-only commit, then bundled
+  here because it's bit-neutral and ships with the same
+  runtime archive.
+- The v3.2.0 audit doc itself was also committed in this
+  release cycle (commit `62c7f75`, `docs: commit v3.2.0
+  Bot.lua comment-audit design doc`) — preserving the
+  reproducer script in Appendix A for future comment-audit
+  passes.
+- No protocol-version bump. Saved-variable layout unchanged.
+
 ## v3.2.7 — TAKWEESH tooltip clarification
 
 A small UX-only release. **No gameplay logic, protocol,
