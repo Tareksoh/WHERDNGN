@@ -1,5 +1,122 @@
 # Changelog
 
+## v3.2.6 — Bot Takweesh false-AKA fix
+
+A focused bot-play bugfix release that also bundles the v3.2.5
+test-only coverage work (no v3.2.5 tag was shipped). **No UI,
+protocol, saved-variable, scoring, .toc, or packaging changes.**
+v3.1.x / v3.2.x clients remain addon-message-compatible.
+
+### Fixed
+
+- **Bot opponents now catch false-AKA bluffs immediately,
+  including bluffs played in the current trick.** Saudi-Master
+  bots emit a ~8% "noise AKA" on K/Q leads where they don't
+  hold the actual Ace (the v1.2.1 / v1.6.0 signal-deception
+  layer). When such a play is made, the host's rule engine
+  marks the lead `illegal` with `illegalReason = "false AKA"`
+  immediately — the violation is derivable from the public
+  trick log + AKA banner, no later reveal needed. Human
+  opponents clicking the TAKWEESH button already caught the
+  bluff via the host's scan; **bot opponents previously
+  almost never did**, because `Bot.PickTakweesh` applied a
+  revoke-style "did the violator later play the led suit?"
+  realism gate that was designed for off-suit revokes and
+  doesn't fit public-knowledge false-AKA semantics. Result
+  was an asymmetric table: a human across from a SaudiMaster
+  bot punishes noise-AKA at ~100% of click rate, while a bot
+  across from another SaudiMaster bot punished at near 0%.
+  Bots now match the host's authority model.
+
+The fix has two carve-outs, both targeting only
+`illegalReason == "false AKA"`:
+
+- **Completed-tricks carve-out** — when scanning prior tricks
+  for an opposing illegal play, a `"false AKA"` marker
+  bypasses the v1.5.1 `laterPlayedLeadSuit` realism gate.
+  Other illegal reasons (revoke / off-suit) still require
+  the later same-suit reveal.
+- **Current-trick carve-out** — `Bot.PickTakweesh` now also
+  scans `S.s.trick.plays` for opposing `"false AKA"` markers,
+  matching `HostBeginTakweeshReview`'s own current-trick scan.
+  The v1.5.1 "do NOT scan in-progress trick" rule still
+  applies for revoke / off-suit reasons (they need a later
+  reveal, which is structurally impossible mid-trick).
+
+### Unchanged
+
+- **Revoke / off-suit Takweesh realism gate is unchanged.**
+  Bots still need a later same-suit reveal by the violator
+  before calling Takweesh on an off-suit play. The fix is
+  narrowly scoped to false-AKA semantics; the BM.2A/B control
+  tests lock the existing v1.5.1 behaviour as a regression
+  guard against accidentally widening the carve-out.
+- **Same-team Takweesh behaviour is unchanged.** Bots will
+  not Takweesh their own teammate's illegal play (filter at
+  `Bot.lua:5955`), and the host's `HostBeginTakweeshReview` /
+  `HostResolveTakweesh` scans both reject same-team illegal
+  plays — so a human pressing TAKWEESH on their own bot
+  teammate's false AKA still resolves as a wrong call and
+  penalizes the caller's team. A tooltip clarification to
+  explicitly warn against same-team calls was identified
+  during investigation and is deferred to a future UX slice
+  (`.swarm_findings/v3_2_6_aka_takweesh_investigation.md` §9.3).
+
+### Bundled v3.2.5 test-only coverage
+
+This release also ships the v3.2.5 audit-driven test-only
+coverage work that landed on `main` between v3.2.3 and v3.2.6.
+**Zero runtime changes from the v3.2.5 batches** — they are
+behavioural regression guards for already-correct Saudi-
+canonical pickplay branches identified in the v3.2.1 audit:
+
+- **BH** — Sun Tahreeb "want, no A/no T" sender + Hokm
+  Faranka Exception #4 (`oppsVoidPath`).
+- **BI** — Hokm Faranka Exception #2 + F-16 K-cover veto.
+- **BJ** — Tahreeb-receiver T-supply count≥3 "want" branch.
+- **BK** — sweep-pursuit-early Kaboot lead + v1.0.3 U-7
+  feasibility gate.
+- **BL** — Sun pos-4 Faranka outer gate + v1.4.0 row 167
+  anti-trigger.
+
+If you didn't observe any gameplay change between v3.2.3 and
+v3.2.6 in those areas, that is correct — the v3.2.5 work was
+internal validation only. The behavioural change in v3.2.6 is
+the AKA/Takweesh fix above.
+
+### Verification
+
+- Full harness: **1,295 checks passed, 0 failed** (was 1,258 at
+  v3.2.3; +22 from BH/BI/BJ/BK/BL test-only work, +15 from BM
+  AKA/Takweesh tests in section BM of `tests/test_state_bot.lua`).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- Wire-discriminator pre-fix verification: BM.1 (completed-
+  trick false-AKA) FAILS pre-runtime-fix (`1289 / 1` with the
+  Bot.PickTakweesh changes stashed); BM.6 (current-trick
+  false-AKA) FAILS pre-current-trick-carve-out (`1292 / 1` after
+  only the first carve-out lands). Both wire-prove the
+  Bot.PickTakweesh changes are the cause.
+
+### Notes
+
+- Per-fix design rationale, two-round Codex review history, and
+  the BM fixture-construction decisions live in
+  `.swarm_findings/v3_2_6_aka_takweesh_investigation.md` (712
+  lines).
+- The release-readiness analysis that led to bundling v3.2.5
+  into this v3.2.6 tag rather than shipping two close-spaced
+  releases lives in
+  `.swarm_findings/v3_2_5_release_readiness_checkpoint.md`
+  (238 lines).
+- Per-batch design docs for BH / BI / BJ / BK / BL each live
+  in `.swarm_findings/` (see commits between `c5c8fba` and
+  `5986361` on `main`).
+- No protocol-version bump. Saved-variable layout unchanged.
+- No `.toc` / `.pkgmeta` / `.github/` / packaging changes —
+  the BigWigsMods packager will substitute `@project-version@`
+  from the eventual v3.2.6 tag automatically.
+
 ## v3.2.3 — Pos-3 Sun bot fix
 
 A focused bot-play bugfix release. **No UI, protocol, saved-
