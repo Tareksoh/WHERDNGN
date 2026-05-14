@@ -5983,9 +5983,36 @@ function Bot.PickTakweesh(seat)
         end
         if found then break end
     end
-    -- v1.5.1: do NOT scan in-progress trick — a violation in the
-    -- current trick has zero opportunity for "later reveal," so
-    -- the realism gate would always fail. Skip entirely.
+    -- v3.2.6 (AKA/Takweesh investigation, Codex amend round 2):
+    -- ALSO scan the in-progress trick for opposing false-AKA
+    -- plays. The v1.5.1 rule below stays correct for revoke /
+    -- off-suit illegal plays — they need a later same-suit
+    -- reveal to be publicly proven, which is structurally
+    -- impossible inside the current trick. But false AKA is
+    -- different: State.ApplyPlay marks the false-AKA lead via
+    -- the public-knowledge predicate (playedCardsThisRound +
+    -- s.akaCalled banner), so the violation is publicly
+    -- knowable the moment the lead card hits the table.
+    -- HostBeginTakweeshReview's scan at Net.lua:3370-3372
+    -- already accepts current-trick false-AKA plays (via the
+    -- `if not foundIllegal and S.s.trick` follow-up after the
+    -- completed-tricks loop); a human clicking TAKWEESH
+    -- immediately after the leader's false AKA catches it
+    -- correctly. The bot caller should match that authority.
+    --
+    -- v1.5.1 rule unchanged for revoke / off-suit: do NOT scan
+    -- in-progress trick for those reasons — the realism gate
+    -- would always fail.
+    if not found and S.s.trick and S.s.trick.plays then
+        for _, p in ipairs(S.s.trick.plays) do
+            if p.illegal
+               and p.illegalReason == "false AKA"
+               and R.TeamOf(p.seat) ~= myTeam then
+                found = p
+                break
+            end
+        end
+    end
     if not found then return nil end
 
     if math.random() < rate then return found end

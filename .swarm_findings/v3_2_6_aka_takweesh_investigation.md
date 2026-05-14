@@ -575,44 +575,92 @@ the revoke-style realism check.
   UX hazard. Recommend clearer tooltip + review-banner wording
   to be added in a separate Codex round.
 
-### 9.2 Proposed runtime fix candidate (not yet implementation)
+### 9.2 Proposed runtime fix (implemented; v3.2.6 Codex amend round 2)
 
-In `Bot.PickTakweesh` at `Bot.lua:5953-5968`, inside the
-`p.illegal and R.TeamOf(p.seat) ~= myTeam` scan, special-case
-`illegalReason == "false AKA"` to bypass the realism gate:
+The v3.2.6 fix has **two carve-outs**, both targeting
+`illegalReason == "false AKA"` only. Revoke / off-suit illegal
+plays keep the v1.5.1 realism gate unchanged.
+
+**Carve-out A — completed-tricks scan** (`Bot.lua:5955-5982`):
 
 ```lua
 if p.illegal and R.TeamOf(p.seat) ~= myTeam then
-    -- v3.2.6 fix: false AKA is publicly knowable from
-    -- playedCardsThisRound + AKA banner at the moment of
-    -- the lead; no later same-suit reveal is needed for
-    -- a bot to "observe" the violation.
     if p.illegalReason == "false AKA" then
         found = p; break
     end
-    -- Revoke-style realism gate (v1.5.1, unchanged):
     if t.leadSuit and laterPlayedLeadSuit(p.seat, t.leadSuit, tIdx) then
         found = p; break
     end
 end
 ```
 
-Risk profile:
-- **Scope:** ~5 lines, single function, single branch.
+**Carve-out B — current-trick scan** (`Bot.lua:5986-6004`,
+Codex amend round 2):
+
+```lua
+if not found and S.s.trick and S.s.trick.plays then
+    for _, p in ipairs(S.s.trick.plays) do
+        if p.illegal
+           and p.illegalReason == "false AKA"
+           and R.TeamOf(p.seat) ~= myTeam then
+            found = p
+            break
+        end
+    end
+end
+```
+
+**Why a separate current-trick scan?** False AKA is publicly
+knowable the moment `State.ApplyPlay` marks the lead at
+`State.lua:1466-1493` — the derivation is purely from
+`playedCardsThisRound` + the `s.akaCalled` banner, both of
+which every client tracks identically. The host's
+`HostBeginTakweeshReview` already does a current-trick scan at
+`Net.lua:3370-3372` after the completed-tricks loop:
+
+```lua
+if not foundIllegal and S.s.trick then
+    foundIllegal = scanIllegal(S.s.trick.plays)
+end
+```
+
+A human pressing TAKWEESH the moment after an opp leads a
+false AKA catches the bluff via that current-trick scan. The
+v1.5.1 round-1 fix at `Bot.lua:5969` ("do NOT scan in-progress
+trick") was correct for revoke / off-suit cases — those need a
+later same-suit reveal which is structurally impossible inside
+the current trick — but blocked bot callers from matching the
+host/human authority for false AKA. Carve-out B brings them
+back in line.
+
+**Why ONLY false AKA in the current-trick scan?** Revoke /
+off-suit violations in the current trick have zero opportunity
+for "later reveal" by definition (the trick hasn't completed,
+no subsequent trick exists). The v1.5.1 rationale at
+`Bot.lua:5969-5971` still holds for those reasons. BM.2A
+remains a regression guard against accidentally widening the
+current-trick scan to all reasons.
+
+**Risk profile:**
+
+- **Scope:** ~22 lines net added to a single function, two
+  related branches.
 - **Reach:** affects bot Takweesh decision only. Does NOT
   touch host scan, marking layer, AKA receiver relief, or
   scoring. The host's `HostBeginTakweeshReview` /
-  `HostResolveTakweesh` already accept false-AKA markers
-  without realism-gating (correctly), so the fix only brings
-  bot callers in line with the host's authority model.
-- **Regression risk:** LOW. The non-false-AKA branch is
-  preserved verbatim — BM.2 acts as the control test.
+  `HostResolveTakweesh` already accept false-AKA markers (and
+  the host already includes a current-trick scan), so the fix
+  only brings bot callers in line with the host's authority
+  model.
+- **Regression risk:** LOW. Non-false-AKA branches are
+  preserved verbatim. BM.2A (revoke without reveal) + BM.2B
+  (revoke with reveal) act as controls.
 - **Gameplay impact:** raises the cost of SaudiMaster
   noise-AKA from ~0% punishment to ~95% punishment per
-  qualifying lead (the existing rate roll still applies). This
-  restores the v1.2.1 (A2) / v1.6.0 design intent that
-  noise-AKA is a *bluff* with a real probability of being
-  caught.
+  qualifying lead. With the current-trick carve-out, opp bots
+  punish noise-AKA leads on the **very next seat's turn** —
+  the noise-AKA bluff costs the bidder team the round if any
+  opp bot is at sufficient tier.
 
 ### 9.3 Action recommendation
 
@@ -624,15 +672,20 @@ wording is a separate, optional follow-up.**
    AKA"`. Defer to a separate implementation prompt with
    Codex re-approval.
 
-2. **Add tests** (BM section, 5 checks):
-   - BM.1 — false AKA is immediately bot-catchable (FAILS
-     pre-fix, passes post-fix). The wire-discriminator for the
-     §9.2 fix.
-   - BM.2 — non-false-AKA illegal still needs realism reveal
-     (control; preserves revoke-style gate).
-   - BM.3 — same-team Takweesh call resolves as false call.
+2. **Add tests** (BM section, 6 checks per Codex amend round 2):
+   - BM.1 — false AKA in a COMPLETED trick is bot-catchable
+     (FAILS pre-round-1-fix, passes post). Wire-proof for
+     completed-trick carve-out A.
+   - BM.2A — non-false-AKA illegal WITHOUT later reveal stays
+     blocked (control; v1.5.1 realism gate preserved).
+   - BM.2B — non-false-AKA illegal WITH later reveal catches
+     (control; v1.5.1 realism gate fires correctly).
+   - BM.3 — same-team Takweesh scan rejects.
    - BM.4 — `PickAKANoise` deterministic emission.
    - BM.5 — `PickAKANoise` declines when bot holds actual A.
+   - **BM.6** (Codex amend round 2) — false AKA in the
+     CURRENT trick is bot-catchable (FAILS pre-round-2-amend,
+     passes post). Wire-proof for current-trick carve-out B.
 
 3. **UI tooltip wording (deferred to a separate Codex
    round):** extend the TAKWEESH tooltip at `UI.lua:2479-2485`
@@ -645,16 +698,15 @@ wording is a separate, optional follow-up.**
 4. **NO defer-indefinite.** All five BM tests are
    deterministic and tractable.
 
-### 9.4 Release impact
+### 9.4 Release impact (Codex amend round 2)
 
-- The BM test slice would lift baseline `1280 → 1285` if BM.2
-  splits into 2 sub-asserts (BM.2A no-reveal + BM.2B
-  with-reveal), or `1280 → 1284` if combined. Final count
-  depends on the test layout.
-- If BM.1 currently FAILS, the slice must land **after** the
-  §9.2 runtime fix (or BM.1 must be gated with `assertTrue`
-  documenting the expected-FAIL behavior pre-fix and removed
-  in the fix commit).
+- Final implemented harness count: **`1295 / 0`** (baseline
+  `1280 / 0` + 15 BM checks: BM.1×3 + BM.2A×1 + BM.2B×2 +
+  BM.3×4 + BM.4×1 + BM.5×1 + BM.6×3).
+- Pre-fix BM.1 FAILS (verified by stashing Bot.lua and
+  re-running: `1289 / 1`). Pre-amend BM.6 FAILS (verified by
+  stashing Bot.lua post-round-1 and re-running: `1292 / 1`).
+  Both wire-discriminators target the v3.2.6 carve-outs.
 - The v3.2.5 release recommendation remains "HOLD" per the
   paired release-readiness checkpoint. The v3.2.6 runtime fix
   + BM tests + tooltip wording (optional) is the right next

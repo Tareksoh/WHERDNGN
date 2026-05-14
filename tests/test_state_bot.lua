@@ -11544,6 +11544,85 @@ do
     if Bot.ResetMemory then Bot.ResetMemory() end
 end
 
+-- BM.6 (v3.2.6 Codex amend round 2): false AKA in the
+-- CURRENT trick is also bot-catchable.
+-- Companion to BM.1 (completed-trick false-AKA). Same
+-- structural premise — false AKA is publicly knowable the
+-- moment State.ApplyPlay marks the lead — but here the
+-- violation lives in `S.s.trick.plays` (no prior completed
+-- tricks at all). HostBeginTakweeshReview at Net.lua:3370-3372
+-- already scans the in-progress trick after the completed-
+-- tricks loop; a human pressing TAKWEESH immediately after
+-- the leader's false AKA catches it. Bot caller should match.
+--
+-- The pre-fix v1.5.1 rule ("do NOT scan in-progress trick")
+-- only made sense for revoke / off-suit illegal plays, where
+-- the realism gate would always fail inside the current
+-- trick. The Codex amend adds a current-trick scan that ONLY
+-- accepts illegalReason == "false AKA" — revoke-style still
+-- skipped (BM.2A control still holds).
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    -- Stub math.random below the flat 0.95 Takweesh rate.
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    -- No completed prior tricks. Current trick: opp seat 2
+    -- just led KH announcing AKA on H, but AH is still
+    -- unplayed in someone else's hand → State.ApplyPlay
+    -- marked the lead illegal with illegalReason = "false AKA"
+    -- (replicating J.3's marker behavior). Bot at seat 3 is
+    -- next to act (pos 2). Bot.PickTakweesh(3) should catch
+    -- the marker even though the current trick has no later
+    -- plays yet.
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 2, card = "KH",
+              illegal = true, illegalReason = "false AKA" },
+        },
+    }
+    S.s.playedCardsThisRound = { KH = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S", "8S", "7S" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
+    -- Strict assertion: current-trick false-AKA scan finds the
+    -- seat-2 illegal play. A returned nil would indicate the
+    -- v3.2.6 round-2 carve-out at Bot.lua:5986-6004 has
+    -- regressed (or never landed), and the bot is back to the
+    -- pre-fix v1.5.1 "do NOT scan in-progress trick" rule.
+    assertTrue(picked ~= nil,
+        "BM.6 (v3.2.6 round 2): current-trick false-AKA marker → Bot.PickTakweesh returns the illegal play (current-trick carve-out)")
+    if picked then
+        assertEq(picked.illegalReason, "false AKA",
+            "BM.6 (v3.2.6 round 2): returned record IS the current-trick false-AKA play")
+        assertEq(picked.seat, 2,
+            "BM.6 (v3.2.6 round 2): returned record belongs to opp seat 2 (current-trick same-team filter holds)")
+    end
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
 -- =====================================================================
 -- Summary
 -- =====================================================================
