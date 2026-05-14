@@ -414,9 +414,10 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
         -- "suit-preference" signal interpretation only applies to
         -- truly free non-trump discards. The READER side at
         -- pickLead's firstDiscard branch already filters trump (see
-        -- e.g. Bot.lua:~2474 in baitedSuit reader, similar pattern
-        -- in firstDiscard consumer); we now mirror at the WRITER
-        -- side so the ledger doesn't carry polluted entries.
+        -- e.g. the baitedSuit reader in pickLead's
+        -- fzlokyAvoidSuit consumer, similar pattern in firstDiscard
+        -- consumer); we now mirror at the WRITER side so the ledger
+        -- doesn't carry polluted entries.
         local s_contract = S.s and S.s.contract
         local isTrumpDiscard = s_contract and s_contract.type == K.BID_HOKM
                                and s_contract.trump
@@ -816,16 +817,18 @@ function Bot.OnPlayObserved(seat, card, leadSuit)
                     -- "want_hint" rule fires for any single 7/8/9
                     -- discard, but the bot SENDER emits low cards
                     -- through TWO distinct paths:
-                    --   (a) bottom-up "want" sender (Bot.lua:4842+):
-                    --       lowest from a 3+ no-A no-T suit. Intent:
-                    --       "want this suit, no Ace." Single event
-                    --       reads as "want_hint" — correct.
-                    --   (b) T-4 dump-larger sender (Bot.lua:4886+):
-                    --       LARGER first from a 2-card no-honor
-                    --       doubleton. Intent: "descending = dontwant."
-                    --       Single event of 9 (or 8 from 8+7) would
-                    --       be mis-read as "want_hint" — sender's
-                    --       suit-size was 2, not 3+.
+                    --   (a) bottom-up "want" sender (Tahreeb "want"
+                    --       arm in pickFollow, Sun-only): lowest from
+                    --       a 3+ no-A no-T suit. Intent: "want this
+                    --       suit, no Ace." Single event reads as
+                    --       "want_hint" — correct.
+                    --   (b) T-4 dump-larger sender (Tahreeb T-4 arm
+                    --       in pickFollow): LARGER first from a
+                    --       2-card no-honor doubleton. Intent:
+                    --       "descending = dontwant." Single event of
+                    --       9 (or 8 from 8+7) would be mis-read as
+                    --       "want_hint" — sender's suit-size was 2,
+                    --       not 3+.
                     -- Stash `lenAtFirstDiscard` so the classifier can
                     -- distinguish: only return "want_hint" when
                     -- sender held ≥3 cards in the suit at discard time.
@@ -3671,8 +3674,9 @@ local function pickFollow(legal, hand, trick, contract, seat)
             -- Now requires no A AND no T for canonical "want without
             -- Ace" semantics. Sun-only gate (v0.11.18-final U-2):
             -- Hokm partnerships use trump-pull, not side-suit
-            -- want-back. Receiver decoder at Bot.lua:2322+
-            -- (tahreebClassify) treats ascending sequence as "want".
+            -- want-back. Receiver decoder (tahreebClassify in
+            -- Bot/PlayPrimitives.lua) treats ascending sequence as
+            -- "want".
             if contract.type == K.BID_SUN then
             for _, su in ipairs(shuffledSuits()) do
                 local cards = bySuit[su]

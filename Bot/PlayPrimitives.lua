@@ -288,11 +288,13 @@ local function tahreebClassify(signals)
         -- v3.0.6 SENDER-INTENT alignment: gate "want_hint" on the
         -- sender's pre-discard suit-size. Bot SENDERS emit low cards
         -- via TWO paths:
-        --   (a) bottom-up "want" arm (Bot.lua:4842+) discards lowest
-        --       from a 3+ no-A no-T suit. Intent: "want this suit"
+        --   (a) bottom-up "want" arm (Tahreeb "want" sender in
+        --       pickFollow, Sun-only) discards lowest from a 3+
+        --       no-A no-T suit. Intent: "want this suit"
         --       → single-low correctly reads as "want_hint".
-        --   (b) T-4 dump-larger arm (Bot.lua:4886+) discards LARGER
-        --       first from a 2-card no-honor doubleton. Intent:
+        --   (b) T-4 dump-larger arm (Tahreeb T-4 sender in
+        --       pickFollow) discards LARGER first from a 2-card
+        --       no-honor doubleton. Intent:
         --       "descending = dontwant" (full pattern needs 2 events).
         --       Single 9 from 9+7 doubleton — or single 8 from 8+7 —
         --       would mis-read as "want_hint" without this gate.
