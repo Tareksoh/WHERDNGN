@@ -11716,6 +11716,49 @@ do
 end
 
 -- =====================================================================
+-- BP. v3.2.9 host bid-turn / contract / round-2 local-refresh fix
+--
+-- Companion to v3.2.8's _HostStepPlay refresh. Same root cause: in
+-- 4-human games the host advances S.s.turn via S.ApplyTurn +
+-- broadcasts MSG_TURN via N.SendTurn, but SendAddonMessage doesn't
+-- loopback to the sender — so the host's own MSG_TURN handler never
+-- fires and HandleMessage's dispatcher Refresh at Net.lua:1280 is
+-- bypassed for host-direct mutation paths.
+--
+-- BP source-pin block locks the three v3.2.9 refresh markers inside
+-- N._HostStepBid:
+--
+--   BP.1 — action == "next" branch (mid-bid turn advance).
+--   BP.2 — action == "contract" branch (contract finalization).
+--   BP.3 — action == "round2" branch (round-2 bid kickoff).
+--
+-- Failure mode pre-fix: host's bid-turn-glow stales on prior bidder
+-- when next bidder is the host itself, or stale post-contract UI
+-- affordance state. Detected by the v3.2.9 audit in
+-- .swarm_findings/v3_2_5_release_readiness_checkpoint.md follow-up
+-- and traced to the same root cause as v3.2.8 (HandleMessage
+-- dispatcher Refresh doesn't fire on host's own broadcast loopback).
+--
+-- Design provenance: multi-human gameplay bug audit (in-session
+-- design report).
+-- =====================================================================
+section("BP. v3.2.9 host bid/contract/round-2 local-refresh fix")
+
+do
+    local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+    -- BP.1: v3.2.9 bid-phase analog marker (action == "next").
+    -- Single-line anchor on the comment that documents the fix.
+    assertTrue(netSrc:find("v3%.2%.9 bid%-phase analog of v3%.2%.8") ~= nil,
+        "BP.1 (v3.2.9): _HostStepBid 'next' branch contains v3.2.9 bid-phase analog refresh marker")
+    -- BP.2: v3.2.9 contract-finalization refresh marker.
+    assertTrue(netSrc:find("v3%.2%.9 contract%-finalization host%-side refresh") ~= nil,
+        "BP.2 (v3.2.9): _HostStepBid 'contract' branch contains v3.2.9 contract-finalization refresh marker")
+    -- BP.3: v3.2.9 round-2 bid-kickoff refresh marker.
+    assertTrue(netSrc:find("v3%.2%.9 round%-2 bid%-kickoff host%-side refresh") ~= nil,
+        "BP.3 (v3.2.9): _HostStepBid 'round2' branch contains v3.2.9 round-2 bid-kickoff refresh marker")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")

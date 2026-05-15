@@ -2594,11 +2594,25 @@ end
 -- Loopback handlers skip self, so this is the canonical path on host.
 
 function N._HostStepBid()
+    -- v3.2.9 host bid-turn visual refresh (extension of v3.2.8
+    -- _HostStepPlay fix). Same root cause: in 4-human games the host
+    -- authoritative path advances S.s.turn via S.ApplyTurn + broadcasts
+    -- MSG_TURN to non-host clients via N.SendTurn, but
+    -- C_ChatInfo.SendAddonMessage does not loopback to the sender, so
+    -- the host's own MSG_TURN handler never fires and its dispatcher
+    -- Refresh at L1280 is bypassed for host-direct mutation paths.
+    -- The three elseif branches below each terminate with no UI redraw
+    -- trigger; without the defensive B.UI.Refresh() call, the host's
+    -- bid-glow can stale on a prior bidder when the next bidder is
+    -- itself, or stale post-contract UI affordances after a contract
+    -- finalizes. Refresh markers are pinned by BP source-pin tests.
     local action, payload = S.HostAdvanceBidding()
     if action == "next" then
         S.ApplyTurn(payload.seat, "bid")
         N.SendTurn(payload.seat, "bid")
         N.MaybeRunBot()
+        -- v3.2.9 bid-phase analog of v3.2.8 host-turn refresh
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
     elseif action == "contract" then
         -- Triple-on-Ace pre-emption (الثالث): a round-2 SUN bid where
         -- the bid card is an Ace AND there are eligible earlier seats
@@ -2674,6 +2688,15 @@ function N._HostStepBid()
             end
         end
         N.MaybeRunBot()
+        -- v3.2.9 contract-finalization host-side refresh. The
+        -- contract path may dispatch through MaybeRunBot (bot Bel
+        -- decision) or fall through to a human Bel window; either
+        -- way the host's own UI needs a redraw to update the
+        -- post-contract affordance state (Bel/Triple/Four buttons,
+        -- bid-card highlight clear, phase banner). Preempt and
+        -- overcall sub-branches that already returned above with
+        -- their own Refresh / phase-driven UI flow are unaffected.
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
     elseif action == "round2" then
         S.HostBeginRound2()
         N.SendDealPhase("2")
@@ -2681,6 +2704,9 @@ function N._HostStepBid()
         S.ApplyTurn(first, "bid")
         N.SendTurn(first, "bid")
         N.MaybeRunBot()
+        -- v3.2.9 round-2 bid-kickoff host-side refresh (sibling of
+        -- the action == "next" Refresh above).
+        if B.UI and B.UI.Refresh then B.UI.Refresh() end
     elseif action == "redeal" then
         N._HostRedeal("allpass")
     end
