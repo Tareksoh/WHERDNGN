@@ -9186,18 +9186,115 @@ do
                 "if s.inviteAllow ~= nil and not s.inviteAllow[nname] then",
                 1, true) ~= nil,
             "CA.10f (v3.2.11): State authoritative gate uses ~= nil (not truthiness)")
+        -- v3.2.11 + Codex blocker fix: the channel literals are now
+        -- sanctioned in exactly TWO places — the groupChannel() selector
+        -- and the _OnLobby non-PARTY trust gate. Any 3rd raw occurrence
+        -- means channel logic is scattering again and must be reviewed.
         local _, instLits = netSrc:gsub('"INSTANCE_CHAT"', '')
-        assertEq(instLits, 1,
-            "CA.10g (v3.2.11): exactly one \"INSTANCE_CHAT\" literal (groupChannel only)")
+        assertEq(instLits, 2,
+            "CA.10g (v3.2.11+blocker): \"INSTANCE_CHAT\" only in groupChannel + _OnLobby trust gate")
         local _, raidLits = netSrc:gsub('"RAID"', '')
-        assertEq(raidLits, 1,
-            "CA.10h (v3.2.11): exactly one \"RAID\" literal (groupChannel only)")
+        assertEq(raidLits, 2,
+            "CA.10h (v3.2.11+blocker): \"RAID\" only in groupChannel + _OnLobby trust gate")
         assertTrue(
             netSrc:find("safeOnPlayObserved", 1, true) ~= nil,
             "CA.10i (v3.2.11): v3.2.10 safeOnPlayObserved intact (no-touch guard)")
         assertTrue(
             netSrc:find("N._SafeOnPlayObserved", 1, true) ~= nil,
             "CA.10j (v3.2.11): v3.2.10 N._SafeOnPlayObserved handle intact (no-touch guard)")
+
+        -- CA.11 — Codex blocker fix: _OnLobby non-PARTY trust gate.
+        -- MSG_LOBBY carries no allowCSV (Q2), so an uninvited raid
+        -- listener must NOT be able to adopt lobby/host state from it.
+        do
+            -- (a/b) uninvited raid receiver: _OnHost suppressed.
+            setGroup("raid")
+            S.Reset()
+            S.s.localName = "Me-R"; S.s.isHost = false
+            S.s.phase = K.PHASE_IDLE; S.s.pendingHost = nil
+            S.s.raidLobby = nil; S.s.peerVersions = {}
+            WHEREDNGNDB.lastGameID = nil
+            N._OnHost("Host-R", "GID1", ver, "Alice-R,Bob-R")
+            assertTrue(S.s.pendingHost == nil,
+                "CA.11a (v3.2.11): uninvited _OnHost leaves pendingHost nil")
+            assertFalse(S.s.raidLobby,
+                "CA.11b (v3.2.11): uninvited _OnHost leaves raidLobby nil")
+            -- then a real MSG_LOBBY over RAID must be ignored entirely.
+            N._OnLobby("Host-R", "GID1",
+                { "Host-R", "Alice-R", "Bob-R", "Cara-R" }, "0000", ver,
+                "RAID")
+            assertTrue(S.s.hostName == nil,
+                "CA.11c (v3.2.11): uninvited RAID _OnLobby does NOT adopt hostName")
+            assertTrue(S.s.phase == K.PHASE_IDLE,
+                "CA.11d (v3.2.11): uninvited RAID _OnLobby does NOT change phase")
+            assertTrue(S.s.gameID == nil,
+                "CA.11e (v3.2.11): uninvited RAID _OnLobby does NOT set gameID")
+            assertTrue(S.s.seats[2] == nil,
+                "CA.11f (v3.2.11): uninvited RAID _OnLobby does NOT populate seats")
+
+            -- (g..j) invited raid receiver: _OnHost opts in, then a
+            -- RAID MSG_LOBBY from that host applies normally.
+            setGroup("raid")
+            S.Reset()
+            S.s.localName = "Me-R"; S.s.isHost = false
+            S.s.phase = K.PHASE_IDLE; S.s.pendingHost = nil
+            S.s.raidLobby = nil; S.s.peerVersions = {}
+            WHEREDNGNDB.lastGameID = nil
+            N._OnHost("Host-R", "GID2", ver, "Me-R,Alice-R")
+            assertTrue(S.s.pendingHost ~= nil,
+                "CA.11g (v3.2.11): invited _OnHost sets pendingHost")
+            assertTrue(S.s.raidLobby == true,
+                "CA.11h (v3.2.11): invited _OnHost sets raidLobby")
+            N._OnLobby("Host-R", "GID2",
+                { "Host-R", "Me-R", "Alice-R", "Bot 4" }, "0001", ver,
+                "RAID")
+            assertTrue(S.s.gameID == "GID2",
+                "CA.11i (v3.2.11): invited RAID _OnLobby applies lobby (gameID)")
+            assertTrue(S.s.seats[2] ~= nil,
+                "CA.11j (v3.2.11): invited RAID _OnLobby applies lobby (seats)")
+
+            -- (k) PARTY legacy: applies even without pendingHost.
+            setGroup("party")
+            S.Reset()
+            S.s.localName = "Me-R"; S.s.isHost = false
+            S.s.phase = K.PHASE_IDLE; S.s.pendingHost = nil
+            S.s.raidLobby = nil; S.s.peerVersions = {}
+            WHEREDNGNDB.lastGameID = nil
+            N._OnLobby("Host-R", "GID3",
+                { "Host-R", "Me-R", "B3", "B4" }, "0011", ver, "PARTY")
+            assertTrue(S.s.gameID == "GID3",
+                "CA.11k (v3.2.11): PARTY _OnLobby still applies without pendingHost (legacy)")
+
+            -- (l) reload recovery: WHEREDNGNDB.lastGameID == gameID
+            -- accepts a RAID MSG_LOBBY even with no pendingHost.
+            setGroup("raid")
+            S.Reset()
+            S.s.localName = "Me-R"; S.s.isHost = false
+            S.s.phase = K.PHASE_IDLE; S.s.pendingHost = nil
+            S.s.raidLobby = nil; S.s.peerVersions = {}
+            WHEREDNGNDB.lastGameID = "GID4"
+            N._OnLobby("Host-R", "GID4",
+                { "Host-R", "Me-R", "B3", "B4" }, "0011", ver, "RAID")
+            assertTrue(S.s.gameID == "GID4",
+                "CA.11l (v3.2.11): RAID _OnLobby accepted via lastGameID reload-recovery")
+            WHEREDNGNDB.lastGameID = nil
+        end
+
+        -- CA.12 — blocker-review polish: HostRemoveInvitee returns nil
+        -- when the normalized name was not actually on the list.
+        do
+            setGroup("raid")
+            S.Reset()
+            S.s.localName = "Host-R"
+            S.HostBeginLobby()
+            S.HostAddInvitee("Bob-R")
+            assertEq(S.HostRemoveInvitee("Ghost-R"), nil,
+                "CA.12a (v3.2.11): HostRemoveInvitee returns nil for a never-invited name")
+            assertEq(S.HostRemoveInvitee("Bob-R"), "Bob-R",
+                "CA.12b (v3.2.11): HostRemoveInvitee returns normalized name on real removal")
+            assertEq(S.HostRemoveInvitee("Bob-R"), nil,
+                "CA.12c (v3.2.11): removing the same name twice returns nil the second time")
+        end
 
         -- Restore the AZ-block default group stubs so anything after this
         -- block (and the teardown) sees the expected PARTY-resolving state.

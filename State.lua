@@ -784,6 +784,10 @@ function S.HostRemoveInvitee(name)
     if not s.isHost or s.phase ~= K.PHASE_LOBBY then return end
     if s.inviteAllow == nil or not name then return end
     local nn = (S.NormalizeName and S.NormalizeName(name)) or name
+    -- v3.2.11 blocker-review polish: only report success if the
+    -- normalized name was actually on the list, so `/baloot uninvite X`
+    -- can't falsely say "uninvited X" for a never-invited name.
+    if not s.inviteAllow[nn] then return end
     s.inviteAllow[nn] = nil
     return nn
 end

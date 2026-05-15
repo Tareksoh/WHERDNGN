@@ -1217,7 +1217,7 @@ function N.HandleMessage(prefix, message, channel, sender)
     elseif tag == K.MSG_LOBBY then
         N._OnLobby(sender, fields[2],
             { fields[3] or "", fields[4] or "", fields[5] or "", fields[6] or "" },
-            fields[7], fields[8])
+            fields[7], fields[8], channel)
     elseif tag == K.MSG_START then
         N._OnStart(sender, tonumber(fields[2]), tonumber(fields[3]))
     elseif tag == K.MSG_DEAL then
@@ -1542,7 +1542,7 @@ function N._OnJoin(sender, gameID, version)
     end
 end
 
-function N._OnLobby(sender, gameID, names, botMask, hostVersion)
+function N._OnLobby(sender, gameID, names, botMask, hostVersion, channel)
     if fromSelf(sender) then return end
     -- 12th-audit fix (Codex): active host must NEVER apply another
     -- peer's MSG_LOBBY — we ARE the host. Without this guard, a
@@ -1573,6 +1573,24 @@ function N._OnLobby(sender, gameID, names, botMask, hostVersion)
         end
         if B.UI and B.UI.Refresh then B.UI.Refresh() end
         return
+    end
+    -- v3.2.11 blocker fix (Codex review): MSG_LOBBY deliberately does
+    -- NOT carry the allowCSV (Q2 keeps suppression MSG_HOST-only), so on
+    -- a RAID/INSTANCE_CHAT channel an uninvited raid listener could
+    -- otherwise fall through below and adopt hostName from seat 1 via
+    -- S.ApplyLobby — defeating the private raid-lobby boundary. On
+    -- RAID/INSTANCE_CHAT ONLY, require an explicit trust anchor before
+    -- adopting any lobby state: a known host, a matching pendingHost
+    -- (set by an invited-receiver MSG_HOST), or a reload/rejoin
+    -- lastGameID. PARTY stays legacy/unrestricted. The all-empty
+    -- host-gone reset path above already gates on host/pendingHost, so
+    -- it keeps working for the trusted-host case.
+    local nonParty = (channel == "RAID" or channel == "INSTANCE_CHAT")
+    if nonParty then
+        local trusted = fromHost(sender)
+            or (S.s.pendingHost and S.s.pendingHost.gameID == gameID)
+            or (WHEREDNGNDB and WHEREDNGNDB.lastGameID == gameID)
+        if not trusted then return end
     end
     -- 4th-audit X9-3 fix: tighten host adoption. Previously any peer
     -- who broadcast MSG_LOBBY first could claim hostName when our
