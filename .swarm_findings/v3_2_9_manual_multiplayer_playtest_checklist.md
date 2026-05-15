@@ -417,32 +417,82 @@ recovery paths.
 
 ---
 
+## Pre-flight static verification
+
+Done by the maintainer against `main` **before** handing this
+checklist to testers. This is NOT the playtest — manual
+PASS/FAIL still requires a real 4-human WoW session (especially
+the PT.C2/PT.C3 subjective lag-perception calls, which only a
+human watching the screen can answer).
+
+- ✅ **All four v3.2.8 / v3.2.9 host-refresh markers are
+  present on `main`.** Verified by grep:
+  - `v3.2.9 bid-phase analog of v3.2.8 host-turn refresh`
+    (PT.A1/A2/A7 fix site, `_HostStepBid` `action == "next"`)
+  - `v3.2.9 contract-finalization host-side refresh`
+    (PT.A4/A5 fix site, `action == "contract"`)
+  - `v3.2.9 round-2 bid-kickoff host-side refresh`
+    (PT.A3 fix site, `action == "round2"`)
+  - `v3.2.8 host-turn visual refresh`
+    (PT.B1 fix site, `_HostStepPlay` `<4 plays`)
+  The build under test genuinely contains the fixes — a PT.A*
+  / PT.B1 FAIL is therefore a real regression, not a "tester
+  ran an old build" artifact.
+- ✅ **`N.LocalPlay` and `N.LocalBid` still intentionally have
+  NO local `B.UI.Refresh()`.** Verified: both functions end
+  with `S.Apply* → N.Send* → if isHost then _HostStep*()` and
+  no terminal refresh. Deferred audit findings #4 (`LocalPlay`)
+  and #5 (`LocalBid`) are intact, so **PT.C2 and PT.C3 remain
+  meaningful human gates** — a non-host's own click has no
+  local redraw trigger on `main` today; whether the WoW
+  animator masks the resulting lag is exactly the subjective
+  question the playtest must answer.
+- ⚠️ **Manual PASS/FAIL still requires a real 4-human WoW
+  playtest.** Static verification confirms the code is
+  fix-complete and the deferred gate is live; it cannot
+  substitute for human observation of seat-glow timing,
+  card-display latency, or subjective lag perception.
+
 ## Code-path reference (for FAIL triage)
 
-When a test fails, look up its mapped code path here for a
-starting point. All paths are in current `main` (commit
-`280c733`).
+When a test fails, locate its mapped code path here. **The
+line numbers below are approximate and drift as the file
+evolves — marker-grep is authoritative.** For the four
+host-refresh fix sites, grep the marker text rather than
+trusting any line number:
 
-| Test group | Code path | File:line |
+```
+grep -n "v3.2.9 bid-phase analog"                 Net.lua   # PT.A1 / A2 / A7
+grep -n "v3.2.9 contract-finalization host-side refresh" Net.lua   # PT.A4 / A5
+grep -n "v3.2.9 round-2 bid-kickoff host-side refresh"   Net.lua   # PT.A3
+grep -n "v3.2.8 host-turn visual refresh"          Net.lua   # PT.B1
+```
+
+| Test group | Code path | Marker-grep / approx. location |
 |---|---|---|
-| **PT.A1 / A2 / A7** | `_HostStepBid` `action == "next"` branch + v3.2.9 marker comment + Refresh | `Net.lua:2598-2613` (Refresh marker at L2612) |
-| **PT.A3** | `_HostStepBid` `action == "round2"` branch + v3.2.9 marker + Refresh | `Net.lua:2697-2706` (Refresh marker at L2705) |
-| **PT.A4 / A5** | `_HostStepBid` `action == "contract"` main path + v3.2.9 marker + Refresh | `Net.lua:2683-2696` (Refresh marker at L2695) |
-| **PT.A6** | `_HostStepBid` `action == "contract"` pre-empt sub-branch + pre-existing Refresh | `Net.lua:2647` (pre-v3.2.9) |
-| **PT.B1** | `_HostStepPlay` `<4 plays` branch + v3.2.8 marker + Refresh | `Net.lua:2697-2712` (v3.2.8 fix at L2712) |
-| **PT.B2 / B3** | `_HostStepPlay` 4-play branch C_Timer → `S.ApplyTrickEnd` + `_HostStepAfterTrick` + Refresh | `Net.lua:2720-2738` (Refresh at L2736) |
-| **PT.B4** | `_HostTurnTimeout` + terminal Refresh | `Net.lua:5489` |
-| **PT.C1 / C2** | `N.LocalPlay` (DEFERRED — no Refresh after `SendPlay`) | `Net.lua:3255-3303` (audit finding #4) |
-| **PT.C3** | `N.LocalBid` (DEFERRED — no Refresh after `SendBid`) | `Net.lua:2957-2968` (audit finding #5) |
-| **PT.C4** | `N.LocalDouble` / Bel broadcast path | `Net.lua:2974+` |
-| **PT.D1** | `N._OnTakweesh` + `HostBeginTakweeshReview` scan | `Net.lua:3313` + `:3347` |
-| **PT.D2** | TAKWEESH tooltip wording + host-scan same-team filter | `UI.lua:2476-2502` (v3.2.7) + `Net.lua:3362` |
-| **PT.D3** | `N._OnAKA` + AKA-receiver relief | `Net.lua:1097-1280` dispatcher + `Rules.lua:141-159` |
-| **PT.D4** | SWA permission flow | `Net.lua:719+` (`SendSWAReq`) + `Net.lua:6215+` (bot SWA dispatch) |
-| **PT.D5** | `Bot.PickTakweesh` false-AKA carve-outs (v3.2.6) | `Bot.lua:5953-6004` (both completed-trick and current-trick carve-outs) |
-| **PT.E1** | `LocalPause` / `HostPause` paths | `Net.lua` search `paused` |
-| **PT.E2** | Resync replay handlers | `N._OnResyncRes` at `Net.lua:1272-1278` + `Net.lua:1094` dispatcher |
-| **PT.E3** | Heartbeat self-heal | `N._OnHeartbeat` at `Net.lua:4046-4120` (heal sites at L4079 + L4115) |
+| **PT.A1 / A2 / A7** | `_HostStepBid` `action == "next"` branch + v3.2.9 marker + Refresh | `grep "v3.2.9 bid-phase analog" Net.lua` (≈ Net.lua:2614, approx) |
+| **PT.A3** | `_HostStepBid` `action == "round2"` branch + v3.2.9 marker + Refresh | `grep "v3.2.9 round-2 bid-kickoff host-side refresh" Net.lua` (≈ Net.lua:2707, approx) |
+| **PT.A4 / A5** | `_HostStepBid` `action == "contract"` main path + v3.2.9 marker + Refresh | `grep "v3.2.9 contract-finalization host-side refresh" Net.lua` (≈ Net.lua:2691, approx) |
+| **PT.A6** | `_HostStepBid` `action == "contract"` pre-empt sub-branch + pre-existing Refresh | `grep "preemptEligible" Net.lua` near the pre-empt window open (pre-v3.2.9 Refresh, ≈ Net.lua:2647, approx) |
+| **PT.B1** | `_HostStepPlay` `<4 plays` branch + v3.2.8 marker + Refresh | `grep "v3.2.8 host-turn visual refresh" Net.lua` (≈ Net.lua:2723, approx) |
+| **PT.B2 / B3** | `_HostStepPlay` 4-play branch C_Timer → `S.ApplyTrickEnd` + `_HostStepAfterTrick` + Refresh | `grep -n "function N._HostStepPlay" Net.lua`, then the 4-play C_Timer body (≈ Net.lua:2720-2738, approx) |
+| **PT.B4** | `_HostTurnTimeout` + terminal Refresh | `grep -n "function N._HostTurnTimeout" Net.lua`, terminal `B.UI.Refresh()` (≈ Net.lua:5489, approx) |
+| **PT.C1 / C2** | `N.LocalPlay` — DEFERRED, no Refresh after `SendPlay` (finding #4) | `grep -n "function N.LocalPlay" Net.lua` (≈ Net.lua:3281, approx) |
+| **PT.C3** | `N.LocalBid` — DEFERRED, no Refresh after `SendBid` (finding #5) | `grep -n "function N.LocalBid" Net.lua` (≈ Net.lua:2983, approx) |
+| **PT.C4** | `N.LocalDouble` / Bel broadcast path | `grep -n "function N.LocalDouble" Net.lua` |
+| **PT.D1** | `N._OnTakweesh` + `HostBeginTakweeshReview` scan | `grep -n "function N._OnTakweesh\|function N.HostBeginTakweeshReview" Net.lua` |
+| **PT.D2** | TAKWEESH tooltip wording + host-scan same-team filter | `grep -n "OPPOSING-team illegal plays qualify" UI.lua` (v3.2.7) + `grep -n "callerTeam" Net.lua` (host-scan filter) |
+| **PT.D3** | `N._OnAKA` + AKA-receiver relief | `grep -n "function N._OnAKA" Net.lua` + `grep -n "akaRelief" Rules.lua` |
+| **PT.D4** | SWA permission flow | `grep -n "function N.SendSWAReq" Net.lua` + bot SWA dispatch in `MaybeRunBot` |
+| **PT.D5** | `Bot.PickTakweesh` false-AKA carve-outs (v3.2.6) | `grep -n "false AKA" Bot.lua` (both completed-trick and current-trick carve-outs) |
+| **PT.E1** | `LocalPause` / `HostPause` paths | `grep -n "S.s.paused" Net.lua` |
+| **PT.E2** | Resync replay handlers | `grep -n "function N._OnResyncRes" Net.lua` + the L1094 `HandleMessage` dispatcher |
+| **PT.E3** | Heartbeat self-heal | `grep -n "function N._OnHeartbeat" Net.lua` (heal sites contain the `HEAL` freezelog markers) |
+
+> Approx. line numbers are a current-snapshot convenience only;
+> they were estimated, not grepped, and drift across releases.
+> Always resolve the actual location with the marker-grep
+> commands above before editing or triaging.
 
 ---
 
