@@ -1,5 +1,100 @@
 # Changelog
 
+## v3.2.9 — Host bid/contract visual fix (4-human games)
+
+A focused user-visible bugfix release. Bid-phase analog of the
+v3.2.8 play-phase host-turn visual fix. **No turn logic,
+networking, timers, scoring, bot decisions, protocol,
+saved-variable, .toc, .pkgmeta, .github, or packaging changes.**
+v3.1.x / v3.2.x clients remain addon-message-compatible.
+
+### Fixed
+
+- **Host-only stale visual state during 4-human bidding and
+  contract flow.** Same root cause as the v3.2.8 play-phase
+  fix: in 4-human games, `Net._HostStepBid` advanced state via
+  `S.ApplyTurn` and broadcast `MSG_TURN` to non-host clients
+  via `N.SendTurn`, then returned without calling
+  `B.UI.Refresh()` on the host's local UI.
+  `C_ChatInfo.SendAddonMessage` does not loopback to the
+  sender, so the host's own MSG_TURN handler never fires and
+  `HandleMessage`'s dispatcher Refresh at `Net.lua:1280` is
+  bypassed for host-direct mutation paths. Non-host clients
+  redrew correctly on the wire callback; the host's UI did not.
+  Three sites in `_HostStepBid` all had the same shape and
+  all shipped the bug:
+
+  - **Mid-bid turn advance** (`action == "next"`): when a
+    previous bidder bid and the next bidder is the host
+    itself, the host's bid-turn-glow stayed on the prior
+    bidder.
+  - **Contract finalization** (`action == "contract"`):
+    after a bidder won the contract, the host's post-contract
+    UI affordances (Bel/Triple/Four buttons, bid-card
+    highlight clear, phase banner) didn't redraw until the
+    next message arrived. (The preempt and overcall
+    sub-branches already had their own Refresh; they were
+    unaffected.)
+  - **Round-2 bid kickoff** (`action == "round2"`): after an
+    all-pass redeal triggered round-2 bidding, the host's UI
+    showed stale state until the first round-2 bid landed.
+
+  The fix adds one defensive
+  `if B.UI and B.UI.Refresh then B.UI.Refresh() end` call at
+  the end of each branch — mirroring the v3.2.8 pattern
+  exactly. **Single-site root cause:** `_HostStepBid` is
+  called from `_OnBid` (wire path, already dispatcher-
+  covered), `LocalBid`-host (uncovered), `MaybeRunBot` bot-bid
+  (uncovered), and `_HostTurnTimeout` AFK (covered by the
+  existing fallback Refresh). Fixing inside `_HostStepBid`
+  covers all direct callers.
+
+### Unchanged
+
+- Turn logic, networking, timers, scoring, and bot decisions
+  are all unchanged. The fix only adds host-side UI redraw
+  triggers — it does not alter when state advances, what
+  cards bots pick, or any wire-protocol behaviour.
+
+### Deferred
+
+- **Findings #4/#5 from the multi-human gameplay bug audit**
+  (`N.LocalPlay` / `N.LocalBid` non-host optimistic refresh)
+  remain deferred. These are MED-severity cases where a
+  non-host human's own click doesn't trigger an immediate
+  local UI redraw — their action only displays on screen when
+  the host echoes back the corresponding MSG_TURN / MSG_BID.
+  In practice the echo arrives within 50-200ms; the worst
+  case is the 4th-play-of-trick where the host waits 2.2s
+  before broadcasting MSG_TRICK, so the non-host's own card
+  may have up to 2.2s visible lag before appearing on the
+  table. Whether this is user-visible depends on whether the
+  WoW UI animator masks the delay — needs playtest before
+  scoping a fix. Re-opens as a separate slice if confirmed
+  visible.
+
+### Verification
+
+- Full harness: **1,301 checks passed, 0 failed** (was 1,298
+  at v3.2.8; +3 source-pin asserts in section BP of
+  `tests/test_state_bot.lua` locking the three v3.2.9 refresh
+  markers in `Net.lua`).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- Wire-discriminator pre-fix verification: all three BP
+  source-pins FAIL pre-fix (`1298 / 3` with the `Net.lua`
+  changes stashed), pass post-fix. Wire-proves all three
+  `_HostStepBid` Refresh insertions are the cause.
+
+### Notes
+
+- Design rationale and the full multi-human-flow audit (which
+  ranked findings CRITICAL → LOW) lives in the in-session
+  design report; the merged v3.2.9 commit is the
+  HIGH-severity slice (findings #1/#2/#3). Findings #4/#5
+  remain in the deferred queue.
+- No protocol-version bump. Saved-variable layout unchanged.
+
 ## v3.2.8 — Host-turn visual fix (4-human games)
 
 A focused user-visible bugfix release that also bundles a small
