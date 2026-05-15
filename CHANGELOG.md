@@ -1,5 +1,34 @@
 # Changelog
 
+## v3.2.12 — Duplicate human-play freeze fix
+
+A focused runtime bugfix release for a confirmed human→bot turn stall in mixed human/bot multiplayer. **No turn-order rules, legal-play rules, scoring, bot card-choice logic, protocol, saved-variable layout, .toc, .pkgmeta, .github, or packaging changes.** v3.1.x / v3.2.x clients remain addon-message-compatible.
+
+### Fixed
+
+- **Duplicate/retried human `MSG_PLAY` can no longer rewind the host turn back to an already-played human.** In a 2-human + 2-bot game, Dedah played a card, the card appeared on the table, and the host correctly advanced to Bot 3. A duplicate/retry of Dedah’s `MSG_PLAY` then arrived after that advance. Pre-fix, `_OnPlay` ran the turn-mismatch self-heal before the duplicate/idempotence guard, so the duplicate rewound `S.s.turn` from Bot 3 back to Dedah and then returned because Dedah had already played in the trick. Since that rewind was a raw `S.s.turn` assignment, not `S.ApplyTurn` / `N.SendTurn`, no fresh AFK timer was armed. The result was the observed “Bot 3 → snaps back to Dedah” stall, including cases lasting longer than the normal 60-second AFK recovery window.
+
+  Fix: `_OnPlay` now checks “has this seat already played this trick?” before any turn-mismatch self-heal or local turn mutation. Duplicate/retry `MSG_PLAY` frames now no-op before they can rewind the turn pointer.
+
+### Relationship to v3.2.10
+
+v3.2.10 fixed a different half-applied-play failure: a throwing `Bot.OnPlayObserved(...)` could abort the play pipeline after `S.ApplyPlay` but before `_HostStepPlay`. v3.2.12 fixes a retry/idempotence ordering bug in the same user-visible family: card visible on table, human already acted, turn pointer stuck on that human. Together they harden the human-play pipeline against both observer errors and duplicate wire frames.
+
+### Unchanged
+
+- No gameplay rule changes.
+- No bot decision changes.
+- No protocol-version bump.
+- Saved-variable layout unchanged.
+- Packaging/workflow files unchanged.
+
+### Verification
+
+- Full harness: **1,327 checks passed, 0 failed** (was 1,320 at v3.2.10; +7 in new BR regression section).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- BR wire-proof: first Dedah play advances host turn to Bot 3; duplicate/retry Dedah play does not append a second card, does not rewind turn from Bot 3 back to Dedah, and leaves `turnKind == "play"`. Source/order pins ensure the duplicate guard remains above the turn self-heal.
+
 ## v3.2.10 — Multiplayer freeze fix after human play
 
 A focused runtime bugfix release for a confirmed 2-human +
