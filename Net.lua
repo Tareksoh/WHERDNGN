@@ -166,6 +166,45 @@ local function freezeLog(category, detail)
 end
 N._FreezeLog = freezeLog
 
+-- v3.2.10 (confirmed multiplayer freeze fix): isolate
+-- Bot.OnPlayObserved so a thrown error in bot-memory observation
+-- can NEVER leave host state half-applied. Confirmed root cause of
+-- the user-reported recurring ~60 s freeze:
+--
+--   N._OnPlay (and the four other play sites) applied the card via
+--   S.ApplyPlay — card becomes visible on the table, hand count
+--   drops — and THEN called B.Bot.OnPlayObserved(...) BEFORE
+--   N.CancelTurnTimer() / N._HostStepPlay(). If the observer threw
+--   (any bot-memory ledger edge case), the play was visibly
+--   applied but the turn never advanced and the previously-armed
+--   AFK timer stayed live. The game "recovered" only when
+--   K.TURN_TIMEOUT_SEC (60 s, Constants.lua:452) fired
+--   N._HostTurnTimeout and force-stepped the chain — exactly the
+--   "host shows 'Mants to act', Mants's card is on the table,
+--   resumes after ~60 s" symptom.
+--
+-- Bot-memory observation (void inference / firstDiscard / Fzloky /
+-- AKA dedup / trump-tempo) is a NON-authoritative side-channel.
+-- Its failure must never block the authoritative play pipeline:
+-- sending the play, cancelling the turn timer, host turn-stepping,
+-- bot dispatch, AFK recovery, or UI refresh. pcall-isolate, log
+-- the error (chat + freezelog), and never rethrow. `freezeLog` and
+-- `log` are both in scope at this point in the file.
+local function safeOnPlayObserved(seat, card, leadBefore, context)
+    if not (B.Bot and B.Bot.OnPlayObserved) then return end
+    local ok, err = pcall(B.Bot.OnPlayObserved, seat, card, leadBefore)
+    if not ok then
+        log("Error",
+            "OnPlayObserved failed (%s) seat=%s card=%s: %s",
+            tostring(context), tostring(seat), tostring(card),
+            tostring(err))
+        freezeLog("ERR",
+            ("OnPlayObserved threw (%s) seat=%s card=%s"):format(
+                tostring(context), tostring(seat), tostring(card)))
+    end
+end
+N._SafeOnPlayObserved = safeOnPlayObserved   -- test-visible handle
+
 -- 14th-audit helper (scoring-vs-rules audit). Saudi rule for Sun Bel
 -- (per "نظام الدبل في لعبة البلوت"):
 --   "ولايحق للاعب ان يدبل خصمة الا بعد ان يتجاوز المئة اي 101"
@@ -2458,8 +2497,8 @@ function N._OnPlay(sender, seat, card, replayFlag)
     -- that has Bot loaded. Currently safe because rejoiners are
     -- always human (B.Bot is nil-or-unused there), but the guard
     -- closes the latent risk if bot seats ever exist on non-host.
-    if not isReplay and B.Bot and B.Bot.OnPlayObserved then
-        B.Bot.OnPlayObserved(seat, card, leadBefore)
+    if not isReplay then
+        safeOnPlayObserved(seat, card, leadBefore, "_OnPlay")
     end
     -- Don't advance host's turn machinery on a replay frame — those
     -- are reconstructive, not new plays. (Host shouldn't be the
@@ -3321,9 +3360,7 @@ function N.LocalPlay(card)
     local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
     S.ApplyPlay(S.s.localSeat, card)
     S.s.localPlayedThisTrick = true
-    if B.Bot and B.Bot.OnPlayObserved then
-        B.Bot.OnPlayObserved(S.s.localSeat, card, leadBefore)
-    end
+    safeOnPlayObserved(S.s.localSeat, card, leadBefore, "LocalPlay")
     N.SendPlay(S.s.localSeat, card)
     if S.s.isHost then N._HostStepPlay() end
 end
@@ -5506,9 +5543,7 @@ function N._HostTurnTimeout(seat, kind)
         -- firstDiscard miss the AFK seat for the rest of the round.
         local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
         S.ApplyPlay(seat, best)
-        if B.Bot and B.Bot.OnPlayObserved then
-            B.Bot.OnPlayObserved(seat, best, leadBefore)
-        end
+        safeOnPlayObserved(seat, best, leadBefore, "_HostTurnTimeout")
         N.SendPlay(seat, best)
         N._HostStepPlay()
     end
@@ -6407,9 +6442,7 @@ function N.MaybeRunBot()
                 -- ~50% of all card observations dropped silently.
                 local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
                 S.ApplyPlay(seat, card)
-                if B.Bot and B.Bot.OnPlayObserved then
-                    B.Bot.OnPlayObserved(seat, card, leadBefore)
-                end
+                safeOnPlayObserved(seat, card, leadBefore, "MaybeRunBot/play")
                 N.SendPlay(seat, card)
                 -- v1.0.11 (D HIGH-2): bot auto-announce Baloot/Belote
                 -- when this play closes their K+Q-of-trump pair. PDF
@@ -6455,9 +6488,7 @@ function N.MaybeRunBot()
                             -- and AFK timeout use.
                             local leadBefore = S.s.trick and S.s.trick.leadSuit or nil
                             S.ApplyPlay(seat, best)
-                            if B.Bot and B.Bot.OnPlayObserved then
-                                B.Bot.OnPlayObserved(seat, best, leadBefore)
-                            end
+                            safeOnPlayObserved(seat, best, leadBefore, "MaybeRunBot/recover")
                             N.SendPlay(seat, best)
                             N._HostMaybeAutoBelote(seat, best)
                             N._HostStepPlay()

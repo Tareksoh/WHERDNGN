@@ -8710,6 +8710,183 @@ do
         end
     end
 
+    -- =================================================================
+    -- BQ. v3.2.10 — guard play observer so human plays always advance
+    --
+    -- Confirmed multiplayer root cause: the five play sites applied the
+    -- card via S.ApplyPlay (visible on table, hand count drops) and
+    -- THEN called the raw B.Bot.OnPlayObserved(...) BEFORE
+    -- N.CancelTurnTimer() / N._HostStepPlay(). A throw inside the
+    -- bot-memory observer left host state half-applied: card visible,
+    -- turn stuck on the player, old AFK timer still armed. The game
+    -- "recovered" only when K.TURN_TIMEOUT_SEC (60s) fired
+    -- _HostTurnTimeout — exactly the user-reported "host shows
+    -- 'Mants to act', Mants's card is on the table, resumes after
+    -- ~60s" symptom. Fix: safeOnPlayObserved() pcall-isolates the
+    -- observer at all five sites so observation failure can never
+    -- block the authoritative play pipeline.
+    --
+    -- Reuses the AZ Net harness (real broadcast spy `broadcastLog`,
+    -- captured C_Timer, loaded `N = WHEREDNGN.Net`).
+    -- =================================================================
+    section("BQ. v3.2.10 play-observer guard")
+
+    -- BQ.1 — host _OnPlay half-applied stall regression.
+    -- FAILS pre-fix (raw observer throw propagates out of _OnPlay
+    -- before CancelTurnTimer/_HostStepPlay → turn stuck on Mants),
+    -- PASSES post-fix (safeOnPlayObserved swallows → turn advances).
+    do
+        local origObs = Bot and Bot.OnPlayObserved
+        if Bot then
+            Bot.OnPlayObserved = function()
+                error("BQ.1 stub: OnPlayObserved boom")
+            end
+        end
+        S.s.isHost   = true
+        S.s.localName = "Mohtaal"
+        S.s.hostName  = "Mohtaal"
+        S.s.phase    = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+        S.s.seats = {
+            [1] = { name = "Mohtaal" },
+            [2] = { name = "Mants" },
+            [3] = { name = "Bot 3", isBot = true },
+            [4] = { name = "Bot 4", isBot = true },
+        }
+        S.s.hostHands = { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+        S.s.tricks = {}
+        -- Seat 1 (Mohtaal, bidder) already led 9C; Mants (seat 2)
+        -- is to act. Host turn pointer on seat 2.
+        S.s.trick = {
+            leadSuit = "C",
+            plays = { { seat = 1, card = "9C" } },
+        }
+        S.s.turn     = 2
+        S.s.turnKind = "play"
+        clearCaptures()
+        -- Mants's valid play arrives over the wire (sender = "Mants",
+        -- authorizeSeat passes: seats[2].name == "Mants", not bot).
+        local ok = pcall(N._OnPlay, "Mants", 2, "7C")
+        -- Post-fix: pcall succeeds AND state advanced. Pre-fix: the
+        -- raw observer throw propagates → ok == false AND turn stuck.
+        local seat2Count = 0
+        for _, p in ipairs(S.s.trick.plays or {}) do
+            if p.seat == 2 then seat2Count = seat2Count + 1 end
+        end
+        assertTrue(seat2Count == 1,
+            "BQ.1a (v3.2.10): Mants's play applied exactly once to the trick (got "
+            .. tostring(seat2Count) .. ")")
+        assertEq(S.s.turn, 3,
+            "BQ.1b (v3.2.10): turn advanced past Mants to seat 3 despite observer throw (got "
+            .. tostring(S.s.turn) .. ")")
+        assertEq(S.s.turnKind, "play",
+            "BQ.1c (v3.2.10): turnKind stays 'play' after the advance")
+        assertTrue(ok,
+            "BQ.1d (v3.2.10): _OnPlay did not rethrow the observer error (pcall ok)")
+        if Bot then Bot.OnPlayObserved = origObs end
+    end
+
+    -- BQ.2 — non-host LocalPlay send-safety. A throwing observer must
+    -- not abort LocalPlay before N.SendPlay broadcasts. broadcastLog
+    -- is the real broadcast spy (AZ harness).
+    do
+        local origObs = Bot and Bot.OnPlayObserved
+        if Bot then
+            Bot.OnPlayObserved = function()
+                error("BQ.2 stub: OnPlayObserved boom")
+            end
+        end
+        S.s.isHost   = false
+        S.s.localSeat = 2
+        S.s.localName = "Mants"
+        S.s.hostName  = "Mohtaal"
+        S.s.paused   = false
+        S.s.phase    = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+        S.s.localPlayedThisTrick = nil
+        S.s.meldsDeclared = { [2] = true }
+        S.s.hand     = { "7C", "8C", "9C" }
+        S.s.seats = {
+            [1] = { name = "Mohtaal" },
+            [2] = { name = "Mants" },
+            [3] = { name = "Bot 3", isBot = true },
+            [4] = { name = "Bot 4", isBot = true },
+        }
+        S.s.tricks = {}
+        S.s.trick = {
+            leadSuit = "C",
+            plays = { { seat = 1, card = "9C" } },
+        }
+        S.s.turn     = 2
+        S.s.turnKind = "play"
+        clearCaptures()
+        local ok = pcall(N.LocalPlay, "7C")
+        assertEq(broadcastsMatching(K.MSG_PLAY), 1,
+            "BQ.2a (v3.2.10): LocalPlay still reaches N.SendPlay despite observer throw (MSG_PLAY broadcast captured)")
+        local sentSeat2 = false
+        for _, p in ipairs(S.s.trick.plays or {}) do
+            if p.seat == 2 then sentSeat2 = true end
+        end
+        assertTrue(sentSeat2,
+            "BQ.2b (v3.2.10): LocalPlay applied the local seat's card before sending")
+        assertTrue(ok,
+            "BQ.2c (v3.2.10): LocalPlay did not rethrow the observer error (pcall ok)")
+        if Bot then Bot.OnPlayObserved = origObs end
+    end
+
+    -- BQ.3 — source pins: every play site routes through
+    -- safeOnPlayObserved and no raw B.Bot.OnPlayObserved(... ) direct
+    -- call remains (the only raw reference must be the pcall inside
+    -- the helper). Stops a future edit from reintroducing the bug.
+    do
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        assertTrue(netSrc:find("local function safeOnPlayObserved") ~= nil,
+            "BQ.3a (v3.2.10): safeOnPlayObserved helper defined in Net.lua")
+        assertTrue(netSrc:find('safeOnPlayObserved%(seat, card, leadBefore, "_OnPlay"%)') ~= nil,
+            "BQ.3b (v3.2.10): _OnPlay site routes through safeOnPlayObserved")
+        assertTrue(netSrc:find('safeOnPlayObserved%(S%.s%.localSeat, card, leadBefore, "LocalPlay"%)') ~= nil,
+            "BQ.3c (v3.2.10): LocalPlay site routes through safeOnPlayObserved")
+        assertTrue(netSrc:find('safeOnPlayObserved%(seat, best, leadBefore, "_HostTurnTimeout"%)') ~= nil,
+            "BQ.3d (v3.2.10): _HostTurnTimeout (AFK) site routes through safeOnPlayObserved")
+        assertTrue(netSrc:find('safeOnPlayObserved%(seat, card, leadBefore, "MaybeRunBot/play"%)') ~= nil,
+            "BQ.3e (v3.2.10): bot-play success site routes through safeOnPlayObserved")
+        assertTrue(netSrc:find('safeOnPlayObserved%(seat, best, leadBefore, "MaybeRunBot/recover"%)') ~= nil,
+            "BQ.3f (v3.2.10): bot-play recovery site routes through safeOnPlayObserved")
+        -- Negative pin: no raw direct B.Bot.OnPlayObserved(seat/...
+        -- call. The ONLY allowed raw reference is the pcall inside
+        -- the helper: `pcall(B.Bot.OnPlayObserved, seat, card, ...`.
+        assertTrue(netSrc:find("B%.Bot%.OnPlayObserved%(seat,") == nil,
+            "BQ.3g (v3.2.10): no raw B.Bot.OnPlayObserved(seat, ...) direct call remains")
+        assertTrue(netSrc:find("B%.Bot%.OnPlayObserved%(S%.s%.localSeat,") == nil,
+            "BQ.3h (v3.2.10): no raw B.Bot.OnPlayObserved(S.s.localSeat, ...) direct call remains")
+        assertTrue(netSrc:find("pcall%(B%.Bot%.OnPlayObserved,") ~= nil,
+            "BQ.3i (v3.2.10): the sole raw observer reference is the pcall inside the helper")
+    end
+
+    -- BQ.4 — helper behavioural: safeOnPlayObserved never rethrows.
+    do
+        local origObs = Bot and Bot.OnPlayObserved
+        if Bot then
+            Bot.OnPlayObserved = function()
+                error("BQ.4 stub: OnPlayObserved boom")
+            end
+        end
+        assertTrue(type(N._SafeOnPlayObserved) == "function",
+            "BQ.4a (v3.2.10): N._SafeOnPlayObserved test handle exposed")
+        local ok = pcall(N._SafeOnPlayObserved, 1, "7C", "C", "BQ.4")
+        assertTrue(ok,
+            "BQ.4b (v3.2.10): safeOnPlayObserved swallows a throwing observer (pcall ok, no rethrow)")
+        -- Sanity: with a non-throwing observer it still calls through.
+        local called = false
+        if Bot then
+            Bot.OnPlayObserved = function() called = true end
+        end
+        N._SafeOnPlayObserved(1, "7C", "C", "BQ.4-ok")
+        assertTrue(called,
+            "BQ.4c (v3.2.10): safeOnPlayObserved still invokes the observer on the happy path")
+        if Bot then Bot.OnPlayObserved = origObs end
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)
