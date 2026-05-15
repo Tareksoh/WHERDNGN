@@ -911,6 +911,76 @@ local function buildLobby()
         .. "tier you've selected (Basic / Advanced / M3lm / Fzloky / "
         .. "Saudi Master).")
 
+    -- v3.2.11 private raid-lobby invitee editor. Host-only, lobby-only,
+    -- and only meaningful in a raid/instance group (hidden in a normal
+    -- party — a party host can never reach this, guaranteeing
+    -- inviteAllow stays nil and PARTY behavior is unchanged). Adding
+    -- the first invitee implicitly opts the host into raid-lobby mode
+    -- (S.HostAddInvitee). See the design doc in .swarm_findings/.
+    local invPanel = CreateFrame("Frame", nil, lobbyPanel)
+    invPanel:SetSize(440, 24)
+    invPanel:SetPoint("BOTTOM", 0, 44)
+    local invLbl = makeText(invPanel, 11, "LEFT")
+    invLbl:SetPoint("LEFT", invPanel, "LEFT", 0, 0)
+    invLbl:SetWidth(52)
+    invLbl:SetText("|cff66ddffInvite|r")
+    local invBox = CreateFrame("EditBox", nil, invPanel, "InputBoxTemplate")
+    invBox:SetSize(150, 18)
+    invBox:SetPoint("LEFT", invLbl, "RIGHT", 8, 0)
+    invBox:SetAutoFocus(false)
+    invBox:SetMaxLetters(48)
+    invBox:SetFontObject("ChatFontNormal")
+    invBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    local function doInvite(nm)
+        if not nm or nm == "" then return end
+        local added = S.HostAddInvitee(nm)
+        if added then
+            invBox:SetText("")
+            net().SendLobby(S.s.seats, S.s.gameID)
+            net().SendHostAnnounce(S.s.gameID)
+            U.Refresh()
+        else
+            print("|cffff5555WHEREDNGN|r: could not invite \""
+                .. tostring(nm) .. "\" (host? lobby? yourself?)")
+        end
+    end
+    invBox:SetScript("OnEnterPressed", function(self)
+        doInvite((self:GetText() or ""):match("^%s*(.-)%s*$"))
+        self:ClearFocus()
+    end)
+    local invAddBtn = makeButton(invPanel, "Add", 52, 22)
+    invAddBtn:SetPoint("LEFT", invBox, "RIGHT", 6, 0)
+    invAddBtn:SetScript("OnClick", function()
+        doInvite((invBox:GetText() or ""):match("^%s*(.-)%s*$"))
+    end)
+    local invTgtBtn = makeButton(invPanel, "Add Target", 84, 22)
+    invTgtBtn:SetPoint("LEFT", invAddBtn, "RIGHT", 6, 0)
+    invTgtBtn:SetScript("OnClick", function()
+        if UnitExists and UnitExists("target") and GetUnitName then
+            doInvite(GetUnitName("target", true))
+        else
+            print("|cffff5555WHEREDNGN|r: no target to invite")
+        end
+    end)
+    local invClrBtn = makeButton(invPanel, "Clear", 52, 22)
+    invClrBtn:SetPoint("LEFT", invTgtBtn, "RIGHT", 6, 0)
+    invClrBtn:SetScript("OnClick", function()
+        for _, n in ipairs(S.HostInvitees()) do S.HostRemoveInvitee(n) end
+        net().SendHostAnnounce(S.s.gameID)
+        U.Refresh()
+    end)
+    setLobbyTooltip(invTgtBtn, "Invitees (raid/instance)",
+        "In a raid or instance group WHEREDNGN does NOT broadcast a "
+        .. "public invite. Add the 3 players you want; only they see "
+        .. "the invite and only they may take a seat. Adding the first "
+        .. "invitee starts the private game advertisement.")
+    local invList = makeText(lobbyPanel, 11, "CENTER")
+    invList:SetPoint("BOTTOM", invPanel, "TOP", 0, 4)
+    invList:SetWidth(440)
+    invList:SetText("")
+    lobbyPanel.invPanel = invPanel
+    lobbyPanel.invList  = invList
+
     -- Bot difficulty selector. Two checkboxes stacked just above the
     -- Fill Bots button: "Advanced" (functional) and "M3lm" (greyed —
     -- reserved for the deeper heuristic tier still in design). Both
@@ -3512,6 +3582,32 @@ local function renderLobby()
     local hasEmpty = S.s.isHost and S.s.phase == K.PHASE_LOBBY and not S.LobbyFull()
     if lobbyPanel.fillBotsBtn then
         lobbyPanel.fillBotsBtn:SetShown(hasEmpty)
+    end
+    -- v3.2.11: invitee editor — host + lobby + raid/instance group only
+    -- (hidden in a normal party so the legacy flow is untouched).
+    if lobbyPanel.invPanel then
+        local ch = net() and net()._GroupChannel and net()._GroupChannel()
+        local showInv = S.s.isHost and S.s.phase == K.PHASE_LOBBY
+                        and (ch == "RAID" or ch == "INSTANCE_CHAT")
+        lobbyPanel.invPanel:SetShown(showInv)
+        if lobbyPanel.invList then
+            lobbyPanel.invList:SetShown(showInv)
+            if showInv then
+                local inv = S.HostInvitees()
+                if #inv == 0 then
+                    lobbyPanel.invList:SetText("|cffaaaaaaNo invitees yet — "
+                        .. "no public raid invite is sent until you add "
+                        .. "one.|r")
+                else
+                    local disp = {}
+                    for _, n in ipairs(inv) do
+                        disp[#disp + 1] = shortName(n)
+                    end
+                    lobbyPanel.invList:SetText("|cff66ddffInvited:|r "
+                        .. table.concat(disp, ", "))
+                end
+            end
+        end
     end
     -- Bot difficulty checkboxes: host-only, lobby-only. Re-sync state
     -- with WHEREDNGNDB on every render so slash-command toggles

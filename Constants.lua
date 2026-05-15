@@ -266,7 +266,10 @@ end
 
 -- Message tags - keep short to fit 255-byte limit.
 -- See Net.lua for the wire grammar.
-K.MSG_HOST     = "H"   -- host announces lobby; payload: gameID
+K.MSG_HOST     = "H"   -- host announces lobby; payload: gameID;ver
+                       -- + optional v3.2.11 field 4 = comma-joined
+                       -- normalized allowlist (RAID/INSTANCE_CHAT
+                       -- private mode only; absent in PARTY)
 K.MSG_JOIN     = "J"   -- player asks to join; payload: gameID
 K.MSG_LOBBY    = "L"   -- host broadcasts seat list
 -- v0.11.5 XR-14: kick-a-seat constant removed (was tag "K"). Never

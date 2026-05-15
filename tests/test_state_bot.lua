@@ -7450,8 +7450,18 @@ do
     local _origIsInGroup = IsInGroup
     local _origIsInRaid = IsInRaid
     local _origGetTime = GetTime
-    IsInGroup = function() return true end
+    local _origIsInInstance = IsInInstance
+    local _origLEPCI = LE_PARTY_CATEGORY_INSTANCE
+    -- v3.2.11: Net.groupChannel() now calls IsInGroup(LE_PARTY_CATEGORY_
+    -- INSTANCE). The legacy AZ/BQ tests were written for PARTY sends, so
+    -- the DEFAULT stub must resolve to "PARTY": IsInGroup() true,
+    -- IsInGroup(2) false, IsInRaid() false. The CA section overrides
+    -- these per-case (party/raid/instance/solo) and restores this
+    -- default afterwards so later sections are unaffected.
+    LE_PARTY_CATEGORY_INSTANCE = 2
+    IsInGroup = function(cat) return cat ~= 2 end
     IsInRaid  = function() return false end
+    IsInInstance = function() return false, "none" end
     GetTime   = function() return fakeNow end
 
     -- Capture broadcasts. WHEREDNGN's `broadcast` local in Net.lua calls
@@ -8965,6 +8975,238 @@ do
             "BR.2b (v3.2.12): duplicate/retry guard appears before turn self-heal")
     end
 
+    -- =====================================================================
+    -- CA — v3.2.11 private raid-lobby support
+    -- (opt-in RAID/INSTANCE_CHAT transport + authoritative invite gate +
+    --  cosmetic receiver suppression). Design:
+    --  .swarm_findings/v3_2_11_private_raid_lobby_design.md
+    -- =====================================================================
+    do
+        -- Per-case group-state override. The AZ default resolves to
+        -- "PARTY" (IsInGroup() true, IsInGroup(2) false, IsInRaid false);
+        -- restored at the end of this block.
+        local function setGroup(kind)
+            if kind == "solo" then
+                IsInGroup    = function() return false end
+                IsInRaid     = function() return false end
+                IsInInstance = function() return false, "none" end
+            elseif kind == "party" then
+                IsInGroup    = function(cat) return cat ~= 2 end
+                IsInRaid     = function() return false end
+                IsInInstance = function() return false, "none" end
+            elseif kind == "raid" then
+                IsInGroup    = function(cat) return cat ~= 2 end
+                IsInRaid     = function() return true end
+                IsInInstance = function() return false, "none" end
+            elseif kind == "instance" then
+                IsInGroup    = function() return true end   -- incl. cat 2
+                IsInRaid     = function() return true end
+                IsInInstance = function() return true, "raid" end
+            end
+        end
+        local ver = K.GetAddonVersion()
+
+        -- CA.1 channel selector under stubbed group APIs ------------------
+        setGroup("party")
+        assertEq(N._GroupChannel(), "PARTY",
+            "CA.1a (v3.2.11): groupChannel = PARTY in a normal party")
+        setGroup("raid")
+        assertEq(N._GroupChannel(), "RAID",
+            "CA.1b (v3.2.11): groupChannel = RAID in a home raid")
+        setGroup("instance")
+        assertEq(N._GroupChannel(), "INSTANCE_CHAT",
+            "CA.1c (v3.2.11): groupChannel = INSTANCE_CHAT in an instance group")
+        setGroup("solo")
+        assertEq(N._GroupChannel(), nil,
+            "CA.1d (v3.2.11): groupChannel = nil when ungrouped")
+
+        -- CA.2 opt-in transport gate (raw broadcast via SendStart) -------
+        setGroup("raid"); S.s.raidLobby = nil
+        clearCaptures(); N.SendStart(1, 1)
+        assertEq(#broadcastLog, 0,
+            "CA.2a (v3.2.11): raid + no raidLobby → broadcast suppressed")
+        S.s.raidLobby = true
+        clearCaptures(); N.SendStart(1, 1)
+        assertEq(#broadcastLog, 1,
+            "CA.2b (v3.2.11): raid + raidLobby → broadcast sent")
+        assertEq(broadcastLog[1].channel, "RAID",
+            "CA.2c (v3.2.11): raid send goes on the RAID channel")
+        setGroup("instance"); S.s.raidLobby = true
+        clearCaptures(); N.SendStart(1, 1)
+        assertEq(broadcastLog[1] and broadcastLog[1].channel, "INSTANCE_CHAT",
+            "CA.2d (v3.2.11): instance send goes on INSTANCE_CHAT")
+        setGroup("party"); S.s.raidLobby = nil
+        clearCaptures(); N.SendStart(1, 1)
+        assertEq(#broadcastLog, 1,
+            "CA.2e (v3.2.11): PARTY is never opt-in-gated (legacy)")
+        assertEq(broadcastLog[1].channel, "PARTY",
+            "CA.2f (v3.2.11): party send goes on the PARTY channel")
+
+        -- CA.3 allowlist tri-state authoritative join gate ---------------
+        setGroup("party"); S.Reset(); S.s.localName = "Host-R"
+        S.HostBeginLobby()                       -- isHost, LOBBY, seat1
+        assertEq(S.HostHandleJoin("Bob-R"), 2,
+            "CA.3a (v3.2.11): inviteAllow=nil (legacy) seats anyone")
+        S.s.seats[2] = nil
+        S.s.inviteAllow = {}                     -- engaged, empty
+        assertEq(S.HostHandleJoin("Bob-R"), nil,
+            "CA.3b (v3.2.11): inviteAllow={} rejects ALL joins")
+        assertTrue(S.s.seats[2] == nil,
+            "CA.3c (v3.2.11): {} rejection grants no seat")
+        S.s.inviteAllow = { ["Bob-R"] = true }
+        assertEq(S.HostHandleJoin("Bob-R"), 2,
+            "CA.3d (v3.2.11): allowlisted name is seated")
+        assertEq(S.HostHandleJoin("Eve-R"), nil,
+            "CA.3e (v3.2.11): non-allowlisted name is rejected")
+
+        -- CA.4 receiver suppression + non-host opt-in (_OnHost) ----------
+        S.Reset()
+        S.s.localName = "Me-R"; S.s.isHost = false
+        S.s.phase = K.PHASE_IDLE; S.s.pendingHost = nil
+        S.s.raidLobby = nil; S.s.peerVersions = {}
+        N._OnHost("Host-R", "G1", ver, "Other-R,Another-R")
+        assertTrue(S.s.pendingHost == nil,
+            "CA.4a (v3.2.11): uninvited receiver → no pendingHost")
+        assertFalse(S.s.raidLobby,
+            "CA.4b (v3.2.11): uninvited receiver → raidLobby not set")
+        N._OnHost("Host-R", "G1", ver, "Me-R,Other-R")
+        assertTrue(S.s.pendingHost ~= nil,
+            "CA.4c (v3.2.11): invited receiver → pendingHost set")
+        assertTrue(S.s.raidLobby == true,
+            "CA.4d (v3.2.11): invited receiver opts into raid transport")
+
+        -- CA.5 allowlist/raidLobby reset lifecycle -----------------------
+        S.Reset(); S.s.localName = "Host-R"; S.HostBeginLobby()
+        S.HostAddInvitee("Bob-R")
+        assertTrue(S.s.inviteAllow ~= nil and S.s.raidLobby == true,
+            "CA.5a (v3.2.11): first invitee engages raid-lobby mode")
+        S.Reset()
+        assertTrue(S.s.inviteAllow == nil,
+            "CA.5b (v3.2.11): reset clears inviteAllow")
+        assertTrue(S.s.raidLobby == nil,
+            "CA.5c (v3.2.11): reset clears raidLobby")
+        S.s.localName = "Host-R"; local g1 = S.HostBeginLobby()
+        local g2 = S.HostBeginLobby()
+        assertTrue(g1 ~= g2,
+            "CA.5d (v3.2.11): HostBeginLobby regenerates gameID")
+        assertTrue(S.s.inviteAllow == nil,
+            "CA.5e (v3.2.11): fresh lobby starts in legacy (nil) mode")
+
+        -- CA.6 PARTY back-compat (unrestricted + PARTY channel) ----------
+        setGroup("party"); S.Reset(); S.s.localName = "Host-R"
+        S.HostBeginLobby(); S.s.raidLobby = nil
+        assertEq(S.HostHandleJoin("Zoe-R"), 2,
+            "CA.6a (v3.2.11): party nil-mode seats joiner exactly as v3.2.10")
+        clearCaptures(); N.SendStart(1, 1)
+        assertEq(#broadcastLog, 1,
+            "CA.6b (v3.2.11): party broadcast still sent (no gate)")
+        assertEq(broadcastLog[1].channel, "PARTY",
+            "CA.6c (v3.2.11): party broadcast on PARTY channel")
+
+        -- CA.7 MSG_HOST wire pin -----------------------------------------
+        setGroup("party"); S.Reset(); S.s.localName = "Host-R"
+        S.HostBeginLobby(); S.s.raidLobby = nil
+        clearCaptures(); N.SendHostAnnounce("ABC")
+        assertEq(#broadcastLog, 1,
+            "CA.7a (v3.2.11): party announce is sent")
+        assertEq(broadcastLog[1].msg, "H;ABC;" .. ver,
+            "CA.7b (v3.2.11): party wire is byte-identical H;id;ver (no field 4)")
+        setGroup("raid"); S.Reset(); S.s.localName = "Host-R"
+        S.HostBeginLobby(); S.HostAddInvitee("Bob-R")
+        clearCaptures(); N.SendHostAnnounce("ABC")
+        assertEq(broadcastLog[1] and broadcastLog[1].msg,
+            "H;ABC;" .. ver .. ";Bob-R",
+            "CA.7c (v3.2.11): raid-ready wire appends allowCSV (field 4)")
+        setGroup("raid"); S.Reset(); S.s.localName = "Host-R"
+        S.HostBeginLobby()
+        S.s.inviteAllow = {}; S.s.raidLobby = true
+        S.s._raidLobbyHintShown = nil
+        clearCaptures(); N.SendHostAnnounce("ABC")
+        assertEq(#broadcastLog, 0,
+            "CA.7d (v3.2.11): raid not-ready ({}) withholds advertisement")
+
+        -- CA.8 name normalization (bare ↔ realm-suffixed) ----------------
+        do
+            local _origGRN = GetRealmName
+            GetRealmName = function() return "Realm" end
+            setGroup("raid"); S.Reset(); S.s.localName = "Host-R"
+            S.HostBeginLobby(); S.HostAddInvitee("Alice")
+            assertEq(S.HostHandleJoin("Alice-Realm"), 2,
+                "CA.8a (v3.2.11): bare-added invitee matches suffixed join")
+            S.Reset(); S.s.localName = "Host-R"; S.HostBeginLobby()
+            S.HostAddInvitee("Bob-Realm")
+            assertEq(S.HostHandleJoin("Bob"), 2,
+                "CA.8b (v3.2.11): suffixed-added invitee matches bare join")
+            GetRealmName = _origGRN
+        end
+
+        -- CA.9 ready predicate + one-shot host-hint guard ----------------
+        setGroup("raid"); S.Reset(); S.s.localName = "Host-R"
+        S.HostBeginLobby()
+        S.s.inviteAllow = {}; S.s.raidLobby = true
+        S.s._raidLobbyHintShown = nil
+        clearCaptures(); N.SendHostAnnounce("ABC")
+        assertEq(#broadcastLog, 0,
+            "CA.9a (v3.2.11): not-ready → no advertisement")
+        assertTrue(S.s._raidLobbyHintShown == true,
+            "CA.9b (v3.2.11): host-hint one-shot guard flag set")
+        N.SendHostAnnounce("ABC")
+        assertEq(#broadcastLog, 0,
+            "CA.9c (v3.2.11): repeat call still suppressed")
+        assertTrue(S.s._raidLobbyHintShown == true,
+            "CA.9d (v3.2.11): one-shot guard stays set (no re-arm)")
+        S.HostAddInvitee("Bob-R")
+        clearCaptures(); N.SendHostAnnounce("ABC")
+        assertEq(#broadcastLog, 1,
+            "CA.9e (v3.2.11): ready after first invitee → advertisement sent")
+
+        -- CA.10 source pins + v3.2.8/9/10 no-touch guard -----------------
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        local stSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+        assertTrue(
+            netSrc:find("party%-only protocol skipping send", 1, true) == nil,
+            "CA.10a (v3.2.11): old IsInRaid hard-skip branch removed")
+        assertTrue(
+            netSrc:find("local function groupChannel", 1, true) ~= nil,
+            "CA.10b (v3.2.11): groupChannel() helper present")
+        assertTrue(
+            netSrc:find("N._GroupChannel = groupChannel", 1, true) ~= nil,
+            "CA.10c (v3.2.11): N._GroupChannel test handle exposed")
+        assertTrue(
+            netSrc:find('if ch ~= "PARTY" and not S.s.raidLobby then return end',
+                1, true) ~= nil,
+            "CA.10d (v3.2.11): broadcast() opt-in gate present")
+        assertTrue(
+            netSrc:find(
+                "function N._OnHost(sender, gameID, version, allowCSV)",
+                1, true) ~= nil,
+            "CA.10e (v3.2.11): _OnHost signature carries allowCSV")
+        assertTrue(
+            stSrc:find(
+                "if s.inviteAllow ~= nil and not s.inviteAllow[nname] then",
+                1, true) ~= nil,
+            "CA.10f (v3.2.11): State authoritative gate uses ~= nil (not truthiness)")
+        local _, instLits = netSrc:gsub('"INSTANCE_CHAT"', '')
+        assertEq(instLits, 1,
+            "CA.10g (v3.2.11): exactly one \"INSTANCE_CHAT\" literal (groupChannel only)")
+        local _, raidLits = netSrc:gsub('"RAID"', '')
+        assertEq(raidLits, 1,
+            "CA.10h (v3.2.11): exactly one \"RAID\" literal (groupChannel only)")
+        assertTrue(
+            netSrc:find("safeOnPlayObserved", 1, true) ~= nil,
+            "CA.10i (v3.2.11): v3.2.10 safeOnPlayObserved intact (no-touch guard)")
+        assertTrue(
+            netSrc:find("N._SafeOnPlayObserved", 1, true) ~= nil,
+            "CA.10j (v3.2.11): v3.2.10 N._SafeOnPlayObserved handle intact (no-touch guard)")
+
+        -- Restore the AZ-block default group stubs so anything after this
+        -- block (and the teardown) sees the expected PARTY-resolving state.
+        IsInGroup    = function(cat) return cat ~= 2 end
+        IsInRaid     = function() return false end
+        IsInInstance = function() return false, "none" end
+        S.Reset()
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)
@@ -8972,6 +9214,8 @@ do
     C_Timer.After = realCTimerAfter
     IsInGroup = _origIsInGroup
     IsInRaid = _origIsInRaid
+    IsInInstance = _origIsInInstance
+    LE_PARTY_CATEGORY_INSTANCE = _origLEPCI
     GetTime = _origGetTime
 end
 

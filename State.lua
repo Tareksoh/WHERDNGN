@@ -133,6 +133,19 @@ local function reset()
     s.swaRequest            = nil
     s.swaDenied             = nil
     s.pendingHost           = nil
+    -- v3.2.11 private raid-lobby. inviteAllow is a tri-state:
+    --   nil  = legacy unrestricted PARTY mode (backward-compat keystone)
+    --   {}   = raid-lobby mode engaged, no invitees yet (rejects ALL
+    --          non-host joins; never "unrestricted")
+    --   {[normName]=true,...} = explicit normalized allowlist
+    -- raidLobby is the transport opt-in marker consumed by
+    -- Net.broadcast (RAID/INSTANCE_CHAT only sends when set).
+    -- _raidLobbyHintShown is the one-shot guard for the host-facing
+    -- "no public raid invite" message. See
+    -- .swarm_findings/v3_2_11_private_raid_lobby_design.md.
+    s.inviteAllow           = nil
+    s.raidLobby             = nil
+    s._raidLobbyHintShown   = nil
     s.hostDeckRemainder     = nil
     -- v0.10.7: per-round one-shot flag for SND_SWEEP_TRACK gate.
     s.sweepTrackAnnounced   = nil
@@ -721,6 +734,16 @@ function S.HostHandleJoin(name)
             if seated == nname then return end
         end
     end
+    -- v3.2.11: authoritative private raid-lobby allowlist gate. When
+    -- inviteAllow is engaged (~= nil — INCLUDING the empty table {}),
+    -- only normalized allowlisted names may seat. This is the ONLY
+    -- trust boundary; the receiver-side suppression in Net._OnHost is
+    -- cosmetic and a modified client can bypass it. nil = legacy party
+    -- mode → gate skipped → byte-for-byte unchanged.
+    if s.inviteAllow ~= nil and not s.inviteAllow[nname] then
+        log("HostHandleJoin REJECT (not invited) %s", tostring(name))
+        return
+    end
     -- find first empty seat (2..4)
     for seat = 2, 4 do
         if not s.seats[seat] then
@@ -729,6 +752,59 @@ function S.HostHandleJoin(name)
             return seat
         end
     end
+end
+
+-- v3.2.11 private raid-lobby invitee management. Host-only, lobby-only.
+-- Adding the FIRST invitee performs the implicit opt-in (Codex Q1):
+-- inviteAllow transitions nil -> {} and raidLobby flips true, engaging
+-- the RAID/INSTANCE_CHAT transport. Entries are stored in normalized
+-- "Name-Realm" form (same normalization as authorizeSeat/SeatOf) so
+-- the join gate compares apples to apples. See
+-- .swarm_findings/v3_2_11_private_raid_lobby_design.md.
+function S.HostAddInvitee(name)
+    if not s.isHost or s.phase ~= K.PHASE_LOBBY then return end
+    if not name or name == "" then return end
+    local nn = (S.NormalizeName and S.NormalizeName(name)) or name
+    local meN = (S.NormalizeName and S.NormalizeName(s.localName))
+                or s.localName
+    if nn == meN then return end          -- never allowlist the host
+    if s.inviteAllow == nil then
+        s.inviteAllow = {}                -- nil -> {} implicit opt-in
+        s.raidLobby   = true              -- engage raid transport
+    end
+    s.inviteAllow[nn] = true
+    return nn
+end
+
+-- Remove an invitee. Removing the last one leaves inviteAllow == {}
+-- (still "engaged, not ready") — it does NOT revert to nil. Reverting
+-- to legacy party mode requires reset()/a fresh lobby, keeping the
+-- tri-state unambiguous.
+function S.HostRemoveInvitee(name)
+    if not s.isHost or s.phase ~= K.PHASE_LOBBY then return end
+    if s.inviteAllow == nil or not name then return end
+    local nn = (S.NormalizeName and S.NormalizeName(name)) or name
+    s.inviteAllow[nn] = nil
+    return nn
+end
+
+-- Sorted list of normalized invitee names for UI/slash display. The UI
+-- may render friendly short names; the gate always uses these.
+function S.HostInvitees()
+    local out = {}
+    if s.inviteAllow then
+        for n in pairs(s.inviteAllow) do out[#out + 1] = n end
+        table.sort(out)
+    end
+    return out
+end
+
+-- "Ready to advertise" predicate: raid-lobby mode engaged AND at least
+-- one invitee. Net.SendHostAnnounce / Net.SendLobby consult this before
+-- emitting any RAID/INSTANCE_CHAT public advertisement. {} (engaged but
+-- empty) is deliberately NOT ready.
+function S.HostRaidLobbyReady()
+    return s.inviteAllow ~= nil and next(s.inviteAllow) ~= nil
 end
 
 -- Host kicks a seat (e.g. someone who left).

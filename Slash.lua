@@ -13,6 +13,9 @@ local function help()
     print("  /baloot host         - start hosting a new game (solo OK; fill empty with bots)")
     print("  /baloot join         - accept a pending host invite")
     print("  /baloot bots         - fill all empty seats with bots (host only)")
+    print("  /baloot invite <name>   - raid/instance: add a private invitee (host only)")
+    print("  /baloot uninvite <name> - remove a private invitee (host only)")
+    print("  /baloot invites      - list current private invitees (host only)")
     print("  /baloot reset        - reset to idle (clears your local game state)")
     print("  /baloot advanced     - toggle Advanced bot heuristics (host only)")
     print("  /baloot m3lm         - toggle M3lm (pro) bot tier (host only)")
@@ -74,7 +77,12 @@ local function rules()
 end
 
 local function dispatch(msg)
-    msg = (msg or ""):lower():match("^%s*(.-)%s*$")
+    -- v3.2.11: keep a case-preserving copy BEFORE lowercasing. Player
+    -- names are case-sensitive on the wire (CHAT_MSG_ADDON sender is
+    -- proper-case "Name-Realm"); `/baloot invite Bob` must not be
+    -- folded to "bob" or the normalized join gate would never match.
+    local rawMsg = (msg or ""):match("^%s*(.-)%s*$")
+    msg = rawMsg:lower()
 
     if msg == "" or msg == "show" or msg == "toggle" then
         B.UI.Toggle()
@@ -144,6 +152,66 @@ local function dispatch(msg)
             biggestSwing = 0,
         }
         say("lifetime stats wiped")
+        return
+    end
+
+    -- v3.2.11 private raid-lobby invitee management. Mirrors the lobby
+    -- UI editor. Names are parsed from rawMsg to preserve case.
+    if msg == "invites" or msg == "invitelist" then
+        if not B.State.s.isHost then say("not host"); return end
+        local inv = B.State.HostInvitees and B.State.HostInvitees() or {}
+        if #inv == 0 then
+            say("no invitees (raid-lobby not engaged, or list empty)")
+        else
+            say("invitees: " .. table.concat(inv, ", "))
+        end
+        return
+    end
+    local invArg = rawMsg:match("^[Ii][Nn][Vv][Ii][Tt][Ee]%s+(.+)$")
+    if invArg or msg == "invite" then
+        if not B.State.s.isHost then say("not host"); return end
+        local ch = B.Net._GroupChannel and B.Net._GroupChannel()
+        if ch ~= "RAID" and ch ~= "INSTANCE_CHAT" then
+            say("invitees apply to raid/instance play only "
+                .. "(a normal party needs no invite list)")
+            return
+        end
+        if not invArg or invArg == "" then
+            say("usage: /baloot invite <name>")
+            return
+        end
+        local added = B.State.HostAddInvitee(invArg)
+        if added then
+            say("invited " .. added)
+            if B.Net.SendLobby then
+                B.Net.SendLobby(B.State.s.seats, B.State.s.gameID)
+            end
+            if B.Net.SendHostAnnounce then
+                B.Net.SendHostAnnounce(B.State.s.gameID)
+            end
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        else
+            say("could not invite that name (lobby? yourself?)")
+        end
+        return
+    end
+    local uninvArg = rawMsg:match("^[Uu][Nn][Ii][Nn][Vv][Ii][Tt][Ee]%s+(.+)$")
+    if uninvArg or msg == "uninvite" then
+        if not B.State.s.isHost then say("not host"); return end
+        if not uninvArg or uninvArg == "" then
+            say("usage: /baloot uninvite <name>")
+            return
+        end
+        local removed = B.State.HostRemoveInvitee(uninvArg)
+        if removed then
+            say("uninvited " .. removed)
+            if B.Net.SendHostAnnounce then
+                B.Net.SendHostAnnounce(B.State.s.gameID)
+            end
+            if B.UI and B.UI.Refresh then B.UI.Refresh() end
+        else
+            say("not on the invite list")
+        end
         return
     end
 

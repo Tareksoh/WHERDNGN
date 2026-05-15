@@ -34,14 +34,40 @@ local cancelLocalWarn
 
 -- -- Send -----------------------------------------------------------
 
+-- v3.2.11: outbound channel selector. PARTY for a normal party, RAID
+-- for a home raid, INSTANCE_CHAT for an instance group (LFR/LFD/
+-- premade-in-instance — WoW does NOT deliver RAID/PARTY addon messages
+-- to instance-group members), nil when ungrouped. Canonical AceComm-
+-- style discriminator; the instance category MUST be tested first
+-- (you can be in an instance group whose home category is still
+-- "raid", and vice-versa). `nil` exactly reproduces the pre-3.2.11
+-- `not IsInGroup()` early-out (solo host + bots unchanged).
+local function groupChannel()
+    -- Defensive: if the WoW group APIs are unavailable (headless test
+    -- env, or an unexpected client state) treat it as "ungrouped → no
+    -- send", exactly the intent of the pre-3.2.11
+    -- `if not IsInGroup() then return end` early-out.
+    if type(IsInGroup) ~= "function" then return nil end
+    local instCat = (LE_PARTY_CATEGORY_INSTANCE or 2)
+    if IsInGroup(instCat) then return "INSTANCE_CHAT" end
+    if type(IsInRaid) == "function" and IsInRaid() then return "RAID" end
+    if IsInGroup() then return "PARTY" end
+    return nil
+end
+N._GroupChannel = groupChannel   -- test handle (cf. N._SafeOnPlayObserved)
+
 local function broadcast(msg)
     if not msg or #msg == 0 then return end
-    if not IsInGroup() then return end
-    if IsInRaid() then
-        log("Warn", "in raid, party-only protocol skipping send: %s", msg)
-        return
-    end
-    local ok, err = pcall(C_ChatInfo.SendAddonMessage, K.PREFIX, msg, "PARTY")
+    local ch = groupChannel()
+    if not ch then return end          -- ungrouped: no send (unchanged)
+    -- v3.2.11: RAID/INSTANCE_CHAT is opt-in and OFF by default. PARTY
+    -- is never gated (legacy path byte-identical). A host/peer only
+    -- transmits on a raid/instance channel inside an explicit private
+    -- raid-lobby session (S.s.raidLobby set by HostAddInvitee on the
+    -- host, or by _OnHost on an invited non-host). Without this gate a
+    -- bare `/baloot host` in a raid would leak a public invite.
+    if ch ~= "PARTY" and not S.s.raidLobby then return end
+    local ok, err = pcall(C_ChatInfo.SendAddonMessage, K.PREFIX, msg, ch)
     if not ok then log("Warn", "send failed: %s", tostring(err)) end
     -- v3.1.5 freeze diagnostic: log broadcast attempts. SendAddonMessage
     -- can fail silently if the addon channel queue is saturated; the
@@ -49,8 +75,8 @@ local function broadcast(msg)
     if WHEREDNGNDB and WHEREDNGNDB.freezeDebug then
         local tag = msg:match("^([^;]+)")
         if N._FreezeLog then
-            N._FreezeLog("TX", ("tag=%s ok=%s"):format(
-                tostring(tag), tostring(ok)))
+            N._FreezeLog("TX", ("tag=%s ok=%s ch=%s"):format(
+                tostring(tag), tostring(ok), tostring(ch)))
         end
     end
 end
@@ -241,7 +267,38 @@ function N.SendHostAnnounce(gameID)
     -- Trailing field is the host's addon version so peers can flag
     -- mismatches before joining. Old clients just ignore the extra
     -- field — backward compatible.
-    broadcast(("%s;%s;%s"):format(K.MSG_HOST, gameID, K.GetAddonVersion()))
+    local ch = groupChannel()
+    if ch and ch ~= "PARTY" then
+        -- v3.2.11: in a raid/instance, never broadcast a public lobby
+        -- invite unless the host is "ready" (opted in AND >=1 invitee).
+        -- Otherwise surface a ONE-SHOT host-facing message and send
+        -- nothing. {} (engaged-but-empty) and nil both fail readiness.
+        if not (S.HostRaidLobbyReady and S.HostRaidLobbyReady()) then
+            if S.s and not S.s._raidLobbyHintShown then
+                S.s._raidLobbyHintShown = true
+                print("|cffff5544[WHEREDNGN]|r You are in a raid/instance. "
+                    .. "No public raid invite is broadcast. Open the lobby "
+                    .. "and add invitees (|cffffffff/baloot invite <name>|r"
+                    .. ") to start a private game.")
+            end
+            return
+        end
+    end
+    local frame = ("%s;%s;%s"):format(K.MSG_HOST, gameID,
+        K.GetAddonVersion())
+    -- v3.2.11: append the normalized allowlist as a comma-joined
+    -- optional field 4, RAID/INSTANCE_CHAT only (MSG_HOST-only per
+    -- Codex Q2). PARTY stays byte-identical to v3.2.10 (no field 4,
+    -- no trailing ';'). Names contain '-' but never ',' or ';'.
+    if ch and ch ~= "PARTY" and S.s.inviteAllow then
+        local names = {}
+        for n in pairs(S.s.inviteAllow) do names[#names + 1] = n end
+        table.sort(names)
+        if #names > 0 then
+            frame = frame .. ";" .. table.concat(names, ",")
+        end
+    end
+    broadcast(frame)
 end
 
 function N.SendJoin(gameID)
@@ -249,6 +306,16 @@ function N.SendJoin(gameID)
 end
 
 function N.SendLobby(seats, gameID)
+    -- v3.2.11: suppress the seat-list advertisement on a raid/instance
+    -- channel until the host is "ready" (opted in + >=1 invitee) so a
+    -- not-yet-ready private lobby doesn't leak the host/bot roster to
+    -- the raid. PARTY is never gated (legacy). MSG_LOBBY does NOT carry
+    -- allowCSV (Codex Q2 — MSG_HOST is the sole suppression carrier).
+    local ch = groupChannel()
+    if ch and ch ~= "PARTY"
+       and not (S.HostRaidLobbyReady and S.HostRaidLobbyReady()) then
+        return
+    end
     -- Wire format: L;<gameID>;<n1>;<n2>;<n3>;<n4>;<botMask4>;<hostVersion>
     -- The bot mask lets non-hosts tell bots from humans (otherwise
     -- authorizeSeat rejects host-signed bot bids). Trailing version
@@ -1142,7 +1209,9 @@ function N.HandleMessage(prefix, message, channel, sender)
         tostring(tag), tostring(sender), tostring(channel)))
 
     if tag == K.MSG_HOST then
-        N._OnHost(sender, fields[2], fields[3])
+        -- fields[4] is the optional v3.2.11 allowCSV (raid/instance
+        -- private mode); nil for party / pre-3.2.11 hosts.
+        N._OnHost(sender, fields[2], fields[3], fields[4])
     elseif tag == K.MSG_JOIN then
         N._OnJoin(sender, fields[2], fields[3])
     elseif tag == K.MSG_LOBBY then
@@ -1371,7 +1440,7 @@ end
 -- via CHAT_MSG_ADDON. Local actions (Local* / Host*) already apply state
 -- directly, so handlers SKIP self-loopbacks to avoid double-apply.
 
-function N._OnHost(sender, gameID, version)
+function N._OnHost(sender, gameID, version, allowCSV)
     if fromSelf(sender) then return end
     -- Track the host's addon version so the lobby can flag mismatches.
     -- 4th-audit X9-4 fix: normalize the key so same-realm senders merge
@@ -1410,6 +1479,24 @@ function N._OnHost(sender, gameID, version)
     if p ~= K.PHASE_IDLE and p ~= K.PHASE_LOBBY
        and p ~= K.PHASE_SCORE and p ~= K.PHASE_GAME_END then
         return
+    end
+    -- v3.2.11: private raid-lobby receiver-side suppression. If the
+    -- host advertised an allowlist (field 4 present → raid/instance
+    -- private mode) and our normalized name is NOT on it, stay
+    -- completely silent: no pendingHost, no chat, no sound. This is
+    -- cosmetic anti-spam ONLY — the authoritative bar is host-side
+    -- S.HostHandleJoin. If we ARE on it, opt this client into the
+    -- raid-channel transport so our subsequent MSG_JOIN can go out.
+    -- Field 4 absent (party / pre-3.2.11 host) → path unchanged.
+    if allowCSV and allowCSV ~= "" then
+        local me = (S.NormalizeName and S.NormalizeName(S.s.localName))
+                   or S.s.localName
+        local invited = false
+        for n in allowCSV:gmatch("[^,]+") do
+            if n == me then invited = true; break end
+        end
+        if not invited then return end
+        S.s.raidLobby = true
     end
     -- v2.0.0 (audit v1.6.1 PJ-02 HIGH): surface incoming host invite.
     -- Pre-fix `pendingHost` was set silently — invitee saw no chat
