@@ -188,8 +188,9 @@ N._FreezeLog = freezeLog
 -- Its failure must never block the authoritative play pipeline:
 -- sending the play, cancelling the turn timer, host turn-stepping,
 -- bot dispatch, AFK recovery, or UI refresh. pcall-isolate, log
--- the error (chat + freezelog), and never rethrow. `freezeLog` and
--- `log` are both in scope at this point in the file.
+-- the error (B.Log ring buffer via log("Error", ...) + the
+-- freezelog), and never rethrow. `freezeLog` and `log` are both
+-- in scope at this point in the file.
 local function safeOnPlayObserved(seat, card, leadBefore, context)
     if not (B.Bot and B.Bot.OnPlayObserved) then return end
     local ok, err = pcall(B.Bot.OnPlayObserved, seat, card, leadBefore)

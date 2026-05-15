@@ -8753,7 +8753,10 @@ do
             [3] = { name = "Bot 3", isBot = true },
             [4] = { name = "Bot 4", isBot = true },
         }
-        S.s.hostHands = { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+        -- Seat 2 (Mants) holds 7C so the play is a genuine legal
+        -- follow-suit, not relying on illegal-play tolerance — the
+        -- regression is purely the observer-throw stall, isolated.
+        S.s.hostHands = { [1] = {}, [2] = { "7C" }, [3] = {}, [4] = {} }
         S.s.tricks = {}
         -- Seat 1 (Mohtaal, bidder) already led 9C; Mants (seat 2)
         -- is to act. Host turn pointer on seat 2.
