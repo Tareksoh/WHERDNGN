@@ -1,5 +1,98 @@
 # Changelog
 
+## v3.2.10 — Multiplayer freeze fix after human play
+
+A focused runtime bugfix release for a confirmed 2-human +
+2-bot multiplayer stall. **No turn-order, legal-play, scoring,
+bot card-choice, protocol, saved-variable, .toc, .pkgmeta,
+.github, or packaging changes.** v3.1.x / v3.2.x clients remain
+addon-message-compatible.
+
+### Fixed
+
+- **Game froze for ~40-60 seconds after a human played, then
+  recovered on its own.** Reproduced in a 2-human + 2-bot table
+  (host Mohtaal, other human Mants, Bot 3 and Bot 4). After
+  Mants played, the host correctly showed Mants's card on the
+  table and Mants's hand count dropped — but the host banner
+  stayed stuck on "Playing — Mants to act" and the game did not
+  advance until it resumed by itself roughly a minute later.
+
+  Root cause: the play pipeline was being **half-applied**. The
+  card was committed via `S.ApplyPlay` (which is why it appeared
+  on the table and the hand count fell), then the code called
+  the bot-memory observer `B.Bot.OnPlayObserved(...)`
+  **before** `N.CancelTurnTimer()` and `N._HostStepPlay()`. If
+  that observer call **threw**, the play was left visibly
+  applied but the turn never advanced and the previously-armed
+  turn timer stayed live. The game only "recovered" because the
+  existing `K.TURN_TIMEOUT_SEC = 60` AFK safety timer eventually
+  fired `N._HostTurnTimeout` and force-stepped the chain — which
+  is why the stall lasted ~40-60 s and then fixed itself.
+
+  Fix: a new `safeOnPlayObserved(...)` helper in `Net.lua`
+  `pcall`-isolates the bot-memory observer and logs any failure
+  to the addon log ring buffer / freezelog **without
+  rethrowing**. Bot-memory observation (void inference,
+  first-discard reads, signal tracking) is a non-authoritative
+  side-channel; an **observer failure** must never block the
+  authoritative play pipeline — sending the play, cancelling the
+  turn timer, host turn-stepping, bot dispatch, AFK recovery, or
+  UI refresh. All five play sites now route through the guard:
+  - `_OnPlay` (host receives a remote human/bot play)
+  - `LocalPlay` (the local player plays)
+  - `_HostTurnTimeout` (AFK auto-play)
+  - `MaybeRunBot` bot-play success path
+  - `MaybeRunBot` bot-play recovery path
+
+  **`Bot.lua` is unchanged.** No bot decision logic was
+  touched and no specific `Bot.lua` defect was identified or
+  claimed — the fix purely hardens `Net.lua` so the
+  authoritative pipeline is resilient to any observer failure.
+
+### Relationship to v3.2.8 / v3.2.9
+
+The v3.2.8 (play-phase) and v3.2.9 (bid/contract-phase)
+host-turn fixes addressed a **different class** of problem:
+visual-refresh gaps where the host's UI went stale while the
+game state itself kept progressing underneath. v3.2.10 is not a
+visual-refresh bug — it is a genuine **half-applied play
+pipeline failure** where the authoritative state stopped
+advancing until the 60-second AFK timer rescued it.
+
+### Unchanged
+
+- Turn-order rules, legal-play rules, scoring, and bot
+  card-choice logic are all unchanged.
+- Protocol, saved-variable layout, `.toc`, `.pkgmeta`,
+  `.github/`, and packaging are unchanged. No protocol-version
+  bump.
+
+### Verification
+
+- Full harness: **1,320 checks passed, 0 failed** (was 1,301 at
+  v3.2.9; +19 in the new BQ regression section of
+  `tests/test_state_bot.lua`).
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- BQ wire-proof: with the `Net.lua` fix stashed and a throwing
+  observer stub, **BQ.1 reproduces the exact bug** — after
+  Mants's card is applied to the trick, the turn stays on Mants
+  (`S.s.turn == 2`) and the host never steps. With the fix in
+  place the turn correctly advances to Bot 3 (`S.s.turn == 3`)
+  and `_OnPlay` does not rethrow. BQ.2-BQ.4 cover non-host
+  `LocalPlay` send-safety, source-pins on all five guarded
+  sites (no raw observer call may be reintroduced), and the
+  helper's never-rethrow / happy-path behaviour.
+
+### Notes
+
+- The confirmed root-cause analysis and the multi-incident
+  freeze evidence (recurring ~60 s recovery matching
+  `K.TURN_TIMEOUT_SEC`) were captured during an in-session
+  multiplayer triage; the fix is the minimal Net.lua guard plus
+  its regression coverage.
+
 ## v3.2.9 — Host bid/contract visual fix (4-human games)
 
 A focused user-visible bugfix release. Bid-phase analog of the
