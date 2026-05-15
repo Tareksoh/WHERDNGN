@@ -8890,6 +8890,81 @@ do
         if Bot then Bot.OnPlayObserved = origObs end
     end
 
+    -- =================================================================
+    -- BR. v3.2.12 — duplicate human MSG_PLAY must not rewind turn
+    --
+    -- Confirmed live regression after v3.2.10: a human play applies,
+    -- host advances to the next bot, then the human's retry/duplicate
+    -- MSG_PLAY arrives. Pre-fix _OnPlay ran the turn-mismatch self-heal
+    -- BEFORE idempotence, so it rewound S.s.turn back to the already-
+    -- played human and then returned because their card was already on
+    -- the table. Since that rewind was a raw assignment, not
+    -- S.ApplyTurn/N.SendTurn, no fresh AFK timer was armed; the table
+    -- could remain stuck on the human indefinitely.
+    -- =================================================================
+    section("BR. v3.2.12 duplicate human play guard")
+
+    -- BR.1 — host receives a duplicate/retry P from the already-played
+    -- human after turn has advanced to Bot 3. The duplicate must be a
+    -- pure no-op: no second play, no turn rewind.
+    do
+        local origObs = Bot and Bot.OnPlayObserved
+        if Bot then Bot.OnPlayObserved = function() end end
+
+        S.s.isHost   = true
+        S.s.localName = "Mohtaal"
+        S.s.hostName  = "Mohtaal"
+        S.s.phase    = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+        S.s.seats = {
+            [1] = { name = "Mohtaal" },
+            [2] = { name = "Dedah" },
+            [3] = { name = "Bot 3", isBot = true },
+            [4] = { name = "Bot 4", isBot = true },
+        }
+        S.s.hostHands = { [1] = {}, [2] = { "7C" }, [3] = {}, [4] = {} }
+        S.s.tricks = {}
+        S.s.trick = {
+            leadSuit = "C",
+            plays = { { seat = 1, card = "9C" } },
+        }
+        S.s.turn     = 2
+        S.s.turnKind = "play"
+        S.s.playedCardsThisRound = { ["9C"] = true }
+        clearCaptures()
+
+        N._OnPlay("Dedah", 2, "7C")
+        assertEq(S.s.turn, 3,
+            "BR.1a (v3.2.12): first Dedah play advances host turn to Bot 3")
+        assertEq(#(S.s.trick.plays or {}), 2,
+            "BR.1b (v3.2.12): first Dedah play is applied")
+
+        -- Simulate N.SendPlay's 250ms duplicate/retry arriving after
+        -- the host already advanced to Bot 3. Pre-fix this rewound
+        -- S.s.turn to 2 before the idempotence guard returned.
+        N._OnPlay("Dedah", 2, "7C")
+        assertEq(S.s.turn, 3,
+            "BR.1c (v3.2.12): duplicate Dedah play does NOT rewind turn from Bot 3")
+        assertEq(#(S.s.trick.plays or {}), 2,
+            "BR.1d (v3.2.12): duplicate Dedah play does not append a second card")
+        assertEq(S.s.turnKind, "play",
+            "BR.1e (v3.2.12): turnKind remains play after duplicate no-op")
+
+        if Bot then Bot.OnPlayObserved = origObs end
+    end
+
+    -- BR.2 — source/order pin: the duplicate/retry guard must stay
+    -- above the turn-mismatch self-heal in _OnPlay.
+    do
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        local dup = netSrc:find("v3%.2%.12: duplicate/retry guard MUST run before")
+        local heal = netSrc:find("Turn: only the seat whose turn it is may play")
+        assertTrue(dup ~= nil,
+            "BR.2a (v3.2.12): duplicate/retry guard marker present")
+        assertTrue(dup and heal and dup < heal,
+            "BR.2b (v3.2.12): duplicate/retry guard appears before turn self-heal")
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)

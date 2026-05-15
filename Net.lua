@@ -2423,6 +2423,21 @@ function N._OnPlay(sender, seat, card, replayFlag)
     -- 13th-audit defense: hosts are never the target of a replay
     -- frame; resync replay only goes to rejoiners.
     if isReplay and S.s.isHost then return end
+    -- v3.2.12: duplicate/retry guard MUST run before the turn-mismatch
+    -- self-heal below. N.SendPlay has a 250ms retry; if a human's first
+    -- MSG_PLAY advanced the host from that human to the next bot, the
+    -- retry can arrive while S.s.turn already points at the bot. Pre-fix
+    -- the self-heal rewound S.s.turn back to the already-played human,
+    -- then this idempotence check returned because their card was on the
+    -- table. That recreates the "card visible, turn stuck on same human"
+    -- freeze, except no AFK timer is re-armed because the rewind is a raw
+    -- assignment rather than S.ApplyTurn/N.SendTurn. Ignore duplicates
+    -- before any local turn mutation.
+    if S.s.trick and S.s.trick.plays then
+        for _, p in ipairs(S.s.trick.plays) do
+            if p.seat == seat then return end
+        end
+    end
     if not isReplay then
         -- Turn: only the seat whose turn it is may play.
         --
@@ -2463,12 +2478,6 @@ function N._OnPlay(sender, seat, card, replayFlag)
             end
             S.s.turn     = seat
             S.s.turnKind = "play"
-        end
-    end
-    -- Idempotence: that seat must not have already played this trick.
-    if S.s.trick and S.s.trick.plays then
-        for _, p in ipairs(S.s.trick.plays) do
-            if p.seat == seat then return end
         end
     end
     -- Authority: sender must own the seat (or host if it's a bot,
