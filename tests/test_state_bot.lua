@@ -9304,6 +9304,89 @@ do
         S.Reset()
     end
 
+    -- =====================================================================
+    -- BS — v3.2.13 bid-card round identity
+    --
+    -- Root cause (NOT v3.2.12): S.ApplyStart unconditionally wiped
+    -- s.bidCard while MSG_BIDCARD carried no round, so a late/duplicate
+    -- MSG_START reprocessed on a non-host client wiped a correctly
+    -- received bid card. Fix mirrors the existing s.handRound guard.
+    -- =====================================================================
+    do
+        -- BS.1 — non-host gets bid card for the current round, THEN a
+        -- late/duplicate MSG_START for the SAME round must not wipe it.
+        S.Reset()
+        S.s.isHost    = false
+        S.s.localName = "Me-R"
+        S.s.hostName  = "Host-R"
+        S.s.roundNumber = 5
+        N._OnBidCard("Host-R", "JH", "5")
+        assertEq(S.s.bidCard, "JH",
+            "BS.1a (v3.2.13): _OnBidCard applies the bid card")
+        assertEq(S.s.bidCardRound, 5,
+            "BS.1b (v3.2.13): bidCardRound stamped from wire field 3")
+        N._OnStart("Host-R", 5, 2)   -- late/duplicate same-round start
+        assertEq(S.s.bidCard, "JH",
+            "BS.1c (v3.2.13): same-round late _OnStart does NOT wipe bidCard")
+        assertEq(S.s.bidCardRound, 5,
+            "BS.1d (v3.2.13): bidCardRound preserved through same-round _OnStart")
+
+        -- BS.2 — a stale prior-round bid card IS cleared when _OnStart
+        -- advances to a new round (and the stamp is reset).
+        S.Reset()
+        S.s.isHost    = false
+        S.s.localName = "Me-R"
+        S.s.hostName  = "Host-R"
+        S.s.roundNumber = 4
+        S.ApplyBidCard("9D", 4)
+        assertEq(S.s.bidCard, "9D",
+            "BS.2a (v3.2.13): prior-round bid card present (setup)")
+        assertEq(S.s.bidCardRound, 4,
+            "BS.2b (v3.2.13): prior-round bidCardRound present (setup)")
+        N._OnStart("Host-R", 5, 3)   -- new round
+        assertEq(S.s.bidCard, nil,
+            "BS.2c (v3.2.13): stale prior-round bidCard cleared on new-round _OnStart")
+        assertEq(S.s.bidCardRound, nil,
+            "BS.2d (v3.2.13): bidCardRound reset in the stale-clear case")
+
+        -- BS.3 — backward compatibility: old two-field b;<card> (no
+        -- round) defaults bidCardRound to the current round and is then
+        -- protected from a same-round _OnStart exactly like a v3.2.13
+        -- frame.
+        S.Reset()
+        S.s.isHost    = false
+        S.s.localName = "Me-R"
+        S.s.hostName  = "Host-R"
+        S.s.roundNumber = 7
+        N._OnBidCard("Host-R", "QH", nil)   -- legacy two-field form
+        assertEq(S.s.bidCard, "QH",
+            "BS.3a (v3.2.13): legacy two-field bid card still applies")
+        assertEq(S.s.bidCardRound, 7,
+            "BS.3b (v3.2.13): legacy bid card defaults bidCardRound to current round")
+        N._OnStart("Host-R", 7, 1)
+        assertEq(S.s.bidCard, "QH",
+            "BS.3c (v3.2.13): legacy bid card survives same-round _OnStart (back-compat)")
+
+        -- BS.4 — source/order pins protecting the round-identity logic.
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        local stSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/State.lua"):read("*a")
+        assertTrue(
+            stSrc:find("s.bidCardRound ~= newRoundNum", 1, true) ~= nil,
+            "BS.4a (v3.2.13): ApplyStart guards bidCard via s.bidCardRound ~= newRoundNum")
+        assertTrue(
+            netSrc:find('K.MSG_BIDCARD, card or "", S.s.roundNumber',
+                1, true) ~= nil,
+            "BS.4b (v3.2.13): SendBidCard wire carries the round as field 3")
+        assertTrue(
+            netSrc:find("N._OnBidCard(sender, fields[2], fields[3])",
+                1, true) ~= nil,
+            "BS.4c (v3.2.13): dispatcher passes fields[3] to _OnBidCard")
+        assertTrue(
+            netSrc:find("S.ApplyBidCard(card, tonumber(forRound))",
+                1, true) ~= nil,
+            "BS.4d (v3.2.13): _OnBidCard calls ApplyBidCard with tonumber(forRound)")
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)

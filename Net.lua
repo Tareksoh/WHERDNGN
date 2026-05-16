@@ -389,8 +389,12 @@ function N.SendBidCard(card)
     -- writes s.bidCard). Phase guard: bid-card is visible during
     -- DEAL1/DEAL2BID phases.
     -- v3.2.0 batch 2: routed via broadcastWithRetry.
+    -- v3.2.13: append the round number as optional field 3 so a late
+    -- or duplicate MSG_START can't wipe a bid card already applied for
+    -- this round on non-host clients (see S.ApplyStart / s.bidCardRound).
+    -- Old two-field receivers ignore field 3 (backward compatible).
     broadcastWithRetry(
-        ("%s;%s"):format(K.MSG_BIDCARD, card or ""),
+        ("%s;%s;%s"):format(K.MSG_BIDCARD, card or "", S.s.roundNumber or 0),
         function()
             return S.s.phase == K.PHASE_DEAL1
                 or S.s.phase == K.PHASE_DEAL2BID
@@ -1231,7 +1235,9 @@ function N.HandleMessage(prefix, message, channel, sender)
             N._OnHand(sender, fields[2], nil)
         end
     elseif tag == K.MSG_BIDCARD then
-        N._OnBidCard(sender, fields[2])
+        -- fields[3] is the optional v3.2.13 round number; nil for
+        -- old two-field hosts (handled by _OnBidCard back-compat).
+        N._OnBidCard(sender, fields[2], fields[3])
     elseif tag == K.MSG_TURN then
         N._OnTurn(sender, tonumber(fields[2]), fields[3])
     elseif tag == K.MSG_BID then
@@ -1697,7 +1703,7 @@ function N._OnHand(sender, encodedCards, forRound)
     S.ApplyHand(C.DecodeHand(encodedCards), forRound)
 end
 
-function N._OnBidCard(sender, card)
+function N._OnBidCard(sender, card, forRound)
     if fromSelf(sender) then return end
     if not fromHost(sender) then return end
     if S.s.isHost then return end
@@ -1707,7 +1713,11 @@ function N._OnBidCard(sender, card)
     -- Allow empty string (no-bidcard sentinel from SendBidCard);
     -- otherwise must be 2 chars (rank+suit). Mirrors XR-11's _OnPlay.
     if card and card ~= "" and #card ~= 2 then return end
-    S.ApplyBidCard(card)
+    -- v3.2.13: forRound (wire field 3) is the round this bid card
+    -- belongs to. Old two-field hosts omit it → tonumber(nil) == nil
+    -- → S.ApplyBidCard defaults s.bidCardRound to the current round
+    -- (backward compatible).
+    S.ApplyBidCard(card, tonumber(forRound))
 end
 
 function N._OnTurn(sender, seat, kind)

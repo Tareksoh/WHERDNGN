@@ -42,6 +42,10 @@ local function reset()
     s.dealer      = 1
     s.roundNumber = 0
     s.bidCard     = nil
+    -- v3.2.13: round identity for the bid card, mirroring s.handRound.
+    -- Lets ApplyStart avoid wiping a bid card that already arrived for
+    -- the new round (cross-frame MSG_START / MSG_BIDCARD ordering).
+    s.bidCardRound = nil
     s.bidRound    = 1
     s.bids        = {}      -- [seat] = "PASS" | "HOKM:S/H/D/C" | "SUN"
     s.contract    = nil     -- {type, trump, bidder, doubled, tripled, foured, gahwa, openClosed}
@@ -953,7 +957,17 @@ function S.ApplyStart(roundNumber, dealer)
     end
     s.roundNumber  = newRoundNum
     s.dealer       = dealer or s.dealer
-    s.bidCard      = nil
+    -- v3.2.13: mirror the s.hand / s.handRound protection below. The
+    -- Start broadcast (MSG_START) and the bid-card broadcast
+    -- (MSG_BIDCARD) are separate frames with no cross-frame ordering
+    -- guarantee; a late or duplicate MSG_START must not wipe a bid
+    -- card already received for THIS round. ApplyBidCard stamps
+    -- s.bidCardRound; only clear when it belongs to a different round
+    -- (and reset the stamp so a stale marker can't linger).
+    if s.bidCardRound ~= newRoundNum then
+        s.bidCard      = nil
+        s.bidCardRound = nil
+    end
     s.bidRound     = 1
     s.bids         = {}
     s.contract     = nil
@@ -1035,8 +1049,14 @@ function S.ApplyHand(cards, forRound)
     s.handRound = forRound or s.roundNumber
 end
 
-function S.ApplyBidCard(card)
+function S.ApplyBidCard(card, forRound)
     s.bidCard = card
+    -- v3.2.13: stamp the round this bid card belongs to so a late or
+    -- duplicate ApplyStart for the same round doesn't wipe it (see the
+    -- s.bidCardRound guard in ApplyStart). Mirrors s.handRound. Old
+    -- two-field MSG_BIDCARD has no round → forRound nil → default to
+    -- the current round (backward compatible).
+    s.bidCardRound = forRound or s.roundNumber
 end
 
 function S.ApplyTurn(seat, kind)
