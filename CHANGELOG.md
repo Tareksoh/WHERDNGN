@@ -1,5 +1,92 @@
 # Changelog
 
+## v3.2.13 — Private raid-lobby support
+
+A focused multiplayer usability release for four-player games inside a raid
+or instance group. **No turn-order, legal-play, scoring, bot card-choice,
+saved-variable, .toc, .pkgmeta, .github, or packaging changes.** v3.1.x /
+v3.2.x clients remain addon-message-compatible for normal party play.
+
+### Added
+
+- **Private raid/instance lobby mode.** Four players can now start a
+  WHEREDNGN table while sitting inside a larger raid or instance group,
+  instead of leaving the raid to form a separate four-person party. In a
+  normal party, behavior is unchanged. In a raid or instance group,
+  WHEREDNGN now uses an explicit invite allowlist before it transmits
+  lobby traffic over `RAID` or `INSTANCE_CHAT`.
+
+- **Host invitee controls.** The lobby UI and slash commands now let the
+  host add or remove the three intended players:
+  - `/baloot invite <name>`
+  - `/baloot uninvite <name>`
+  - `/baloot invites`
+
+  Adding the first invitee opts the host into private raid-lobby transport.
+  Until at least one invitee is configured, the addon withholds public
+  raid/instance advertisements and shows the host a one-shot reminder to
+  add invitees first.
+
+- **Raid/instance channel selector.** The networking layer now chooses the
+  correct addon channel from group state:
+  - `PARTY` for normal parties.
+  - `RAID` for home raid groups.
+  - `INSTANCE_CHAT` for instance groups.
+  - no send when ungrouped.
+
+  `INSTANCE_CHAT` is checked before `RAID`, matching WoW's group-category
+  behavior for players already inside an instance.
+
+### Fixed
+
+- **Uninvited raiders can no longer adopt lobby state from `MSG_LOBBY`.**
+  `MSG_HOST` carries the private allowlist and suppresses invite popups for
+  non-invitees, but `MSG_LOBBY` intentionally does not carry the allowlist.
+  The final blocker fix gates non-`PARTY` lobby adoption behind an explicit
+  trust anchor: known host, matching pending invite, or same `lastGameID`
+  reload recovery. This prevents uninvited raid listeners from silently
+  accepting lobby state and treating later host frames as authoritative.
+
+- **Invite removal now reports success only for names that were actually on
+  the invite list.** `/baloot uninvite <name>` no longer claims success for
+  a never-invited name.
+
+### Unchanged
+
+- Normal four-person party play remains legacy/unrestricted. `PARTY` sends
+  are not gated by the private raid-lobby allowlist.
+- Mid-game rules are unchanged. Turn order, legal-play enforcement, scoring,
+  bot decisions, Takweesh/AKA/SWA, and host refresh behavior are untouched.
+- Gameplay frames in a raid/instance are still broadcast on the shared
+  addon channel and ignored by non-participants; this release is lobby/join
+  safety, not gameplay-frame privacy.
+- No protocol-version bump. Saved-variable layout unchanged.
+
+### Verification
+
+- Full harness: **1,390 checks passed, 0 failed**.
+  - v3.2.12 baseline: 1,327 / 0.
+  - v3.2.13 private raid-lobby CA coverage: +63 checks total.
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- CA coverage includes:
+  - channel selection for `PARTY`, `RAID`, `INSTANCE_CHAT`, and solo.
+  - opt-in raid/instance broadcast gating.
+  - authoritative host-side invite allowlist gate.
+  - receiver-side `MSG_HOST` suppression for uninvited players.
+  - `MSG_LOBBY` non-`PARTY` trust gate blocker fix.
+  - `PARTY` backward-compatibility.
+  - reload recovery through matching `lastGameID`.
+  - source pins protecting the v3.2.8 / v3.2.9 / v3.2.10 fixes.
+
+### Notes
+
+- Design rationale lives in
+  `.swarm_findings/v3_2_11_private_raid_lobby_design.md`.
+- The original unamended feature branch `private-raid-lobby-v3.2.11`
+  remains preserved for audit comparison; the shipped code comes from the
+  amended implementation merged on main.
+
 ## v3.2.12 — Duplicate human-play freeze fix
 
 A focused runtime bugfix release for a confirmed human→bot turn stall in mixed human/bot multiplayer. **No turn-order rules, legal-play rules, scoring, bot card-choice logic, protocol, saved-variable layout, .toc, .pkgmeta, .github, or packaging changes.** v3.1.x / v3.2.x clients remain addon-message-compatible.
