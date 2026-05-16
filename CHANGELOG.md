@@ -1,5 +1,104 @@
 # Changelog
 
+## v3.2.17 — Multiplayer stability and bot Takweesh policy
+
+A combined release covering all unreleased mainline work after
+v3.2.14: the v3.2.15 non-host action-feedback extension, the v3.2.16
+deal-finish desync guard, and the v3.2.17 bot-Takweesh policy
+correction. **No turn-order, legal-play, scoring, bot card-choice,
+protocol, saved-variable, .toc, .pkgmeta, .github, or packaging
+changes beyond the listed runtime fixes.** v3.1.x / v3.2.x clients
+remain addon-message-compatible.
+
+### Fixed
+
+1. **Non-host action feedback no longer looks frozen after local
+   clicks.** The v3.2.14 `LocalBid` / `LocalPlay` immediate-feedback
+   fix was extended to the remaining self-applied non-host action
+   paths — escalation, Belote, and preempt — which still showed the
+   "I clicked and it froze" gap until the host echo round-tripped.
+
+   - Non-host self-applied actions now repaint immediately via the
+     existing watchdog-safe `deferredRefresh()` next-frame helper,
+     instead of waiting for the host echo.
+   - `UI.lua` suppresses or clears the acted-seat affordances where
+     relevant so the just-pressed control does not look re-pressable
+     during the echo gap.
+   - Host-side open escalation / preempt branches now refresh after
+     `MaybeRunBot()`, so the host UI also repaints once the dispatch
+     resolves.
+   - `LocalBelote` now refreshes for both the host and the non-host
+     caller (previously only one path repainted).
+
+2. **Deal-finish desync now auto-recovers instead of stranding
+   clients.** Reported from screenshots: the host reaches the PLAY /
+   8-card state while a non-host remains stuck in the Belote / double
+   decision window holding 5 cards.
+
+   - **Root cause:** the final `MSG_HAND` and `MSG_DEAL;play` frames
+     are one-shot — a `MSG_TURN;play` frame can arrive underneath
+     them and leave the non-host in a mixed / off-phase state (deal
+     window still open, play turn already applied).
+   - **Fix:** an off-phase play turn / card frame now triggers a
+     trust-gated, one-shot `MSG_RESYNC_REQ`, and `_OnDealPhase("play")`
+     is idempotent so a duplicate or late deal frame cannot wipe an
+     in-flight trick that has already started.
+   - **Codex blocker fix:** the off-phase `_OnPlay` resync is
+     trust-gated to the host or an authorized seat, so a spoofed
+     `RAID` / `INSTANCE_CHAT` frame cannot induce resync-request
+     noise.
+
+3. **Bot-generated false AKA is no longer auto-Takweeshed by opposing
+   bots.** Reported by a player: in a 1-human + 3-bot game, the
+   human's bot teammate could emit a false / noise AKA and the
+   opposing bots would immediately Takweesh it, punishing the
+   human-led team for the bot's own bluff.
+
+   - **New policy:** a bot caller of `Bot.PickTakweesh` ignores a
+     `false AKA` marker whose offender seat is itself a bot
+     (narrow helper gated on both `illegalReason == "false AKA"` and
+     a bot offender, applied to the completed-tricks scan and the
+     current-trick scan).
+   - **Human-offender false AKA remains catchable** by opposing bots.
+   - **Manual / human Takweesh is unchanged** — a human pressing
+     TAKWEESH can still catch a bot's false AKA via the existing
+     `HostBeginTakweeshReview` / `HostResolveTakweesh` path.
+   - **Non-false-AKA proven revokes / off-suit illegal plays remain
+     catchable** — the v1.5.1 realism gate still fires for those
+     (the immunity is scoped to false AKA only).
+
+### Unchanged
+
+- No turn-order, legal-play, scoring, bot card-choice, protocol,
+  saved-variable, `.toc`, `.pkgmeta`, `.github`, or packaging changes
+  beyond the listed runtime fixes.
+- Raid / private-lobby behavior remains exactly as shipped in
+  v3.2.13.
+- v3.1.x / v3.2.x addon-message compatibility remains intact.
+
+### Verification
+
+- Full harness: **1,499 checks passed, 0 failed**.
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- Harness delta since v3.2.14 (1,430): new **BU** (v3.2.15 non-host
+  escalation/Belote/preempt feedback), **BV** (v3.2.16 deal-finish
+  desync guard + trust-gate), and **BW** (v3.2.17 bot false-AKA
+  Takweesh immunity) coverage sections.
+
+### Notes
+
+- This is a combined release for all unreleased mainline work after
+  v3.2.14.
+- No v3.2.15 or v3.2.16 tags will be created; those version labels
+  were branch / work-item labels only and ship together under
+  v3.2.17.
+- The three untracked `.swarm_findings/` docs
+  (`v3_2_13_multiplayer_stabilization_checkpoint.md`,
+  `v3_2_x_dealfinish_desync_audit.md`,
+  `v3_2_x_multiplayer_stability_audit.md`) remain untracked and
+  uncommitted unless separately requested.
+
 ## v3.2.14 — Non-host action feedback fix
 
 A focused perceived-stability / UI-feedback release. **No turn-order,
