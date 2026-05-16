@@ -2577,19 +2577,8 @@ function N._OnPlay(sender, seat, card, replayFlag)
     -- (Net.lua:1592).
     if seat < 1 or seat > 4 then return end
     if #card ~= 2 then return end
-    -- Phase: plays only land during PLAY.
-    if S.s.phase ~= K.PHASE_PLAY then
-        -- v3.2.16: a non-replay play frame off-phase is the only
-        -- recovery clue that we missed MSG_DEAL;play / the final
-        -- 8-card MSG_HAND (deal-finish desync). Request a resync
-        -- instead of silently dropping it. Replay frames legitimately
-        -- arrive around resync — never self-trigger on those.
-        if not ((replayFlag == "1") and fromHost(sender)) then
-            requestPlayDesyncResync("_OnPlay")
-        end
-        return
-    end
-    -- Audit fix: replay-frame bypass. During a resync replay the host
+    -- Replay-frame bypass — computed up-front so the v3.2.16 off-phase
+    -- guard below can reuse it. During a resync replay the host
     -- whispers each in-flight play in turn-order; the rejoiner's
     -- snapshot has s.turn set to the seat about to act NEXT (the last
     -- in the trick), so the standard turn-check rejects every replay
@@ -2597,6 +2586,24 @@ function N._OnPlay(sender, seat, card, replayFlag)
     -- trust the frame and skip turn + authority checks. Idempotence
     -- still applies — never double-add a seat to the same trick.
     local isReplay = (replayFlag == "1") and fromHost(sender)
+    -- Phase: plays only land during PLAY.
+    if S.s.phase ~= K.PHASE_PLAY then
+        -- v3.2.16: a non-replay play frame off-phase is the only
+        -- recovery clue that we missed MSG_DEAL;play / the final
+        -- 8-card MSG_HAND (deal-finish desync). Request a resync
+        -- instead of silently dropping it — but ONLY for TRUSTED
+        -- frames. Codex blocker: _OnPlay has no top-level fromHost
+        -- gate (peers legitimately broadcast their own plays), so on
+        -- RAID/INSTANCE_CHAT an uninvited addon sender could otherwise
+        -- spoof a P;... frame and induce real players to broadcast
+        -- MSG_RESYNC_REQ. Trusted = host, or the authorized owner of
+        -- the seat. Replay frames never self-trigger.
+        if not isReplay
+           and (fromHost(sender) or authorizeSeat(seat, sender)) then
+            requestPlayDesyncResync("_OnPlay")
+        end
+        return
+    end
     -- 13th-audit defense: hosts are never the target of a replay
     -- frame; resync replay only goes to rejoiners.
     if isReplay and S.s.isHost then return end

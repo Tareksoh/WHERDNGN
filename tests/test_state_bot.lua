@@ -9918,6 +9918,23 @@ do
         assertTrue(S.s.trick ~= nil and #(S.s.trick.plays) == 0,
             "BV.5c (v3.2.16): the legitimate transition still installs a fresh trick")
 
+        -- BV.7 — Codex blocker: off-phase _OnPlay from an UNtrusted
+        -- sender (not host, not the seat owner) must NOT induce a
+        -- resync request (RAID/INSTANCE_CHAT spoof defense). The
+        -- trusted-host case is already covered by BV.2/BV.3.
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.seats = { [2] = { name = "Dedah-R" } }   -- seat 2 owned elsewhere
+        S.s.trick = { leadSuit = nil, plays = {} }
+        N._ResetPlayDesyncGuard(); clearCaptures()
+        N._OnPlay("Stranger-R", 2, "7C")             -- not host, not seat owner
+        assertEq(reqCount(), 0,
+            "BV.7a (v3.2.16): off-phase _OnPlay from an untrusted sender does NOT request resync")
+        assertEq(#(S.s.trick.plays), 0,
+            "BV.7b (v3.2.16): untrusted off-phase _OnPlay still applies no play")
+
         -- BV.6 — source pins
         local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
         assertTrue(
@@ -9938,6 +9955,11 @@ do
         assertTrue(
             netSrc:find("N._ResetPlayDesyncGuard", 1, true) ~= nil,
             "BV.6e (v3.2.16): one-shot guard reset handle exposed for tests")
+        assertTrue(
+            netSrc:find(
+                "and (fromHost(sender) or authorizeSeat(seat, sender)) then",
+                1, true) ~= nil,
+            "BV.6f (v3.2.16): _OnPlay off-phase resync is trust-gated (host or authorized seat)")
 
         S.Reset()
     end
