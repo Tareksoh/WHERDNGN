@@ -12467,18 +12467,14 @@ do
     S.s.cumulative = { A = 0, B = 0 }
     S.s.target = 152
     local picked = Bot.PickTakweesh(3)
-    -- Strict assertion: post-v3.2.6 carve-out → bot returns the
-    -- seat-2 false-AKA play record. Pre-fix this returns nil
-    -- because laterPlayedLeadSuit(seat=2, "H", 1) walks subsequent
-    -- tricks finds no H play by seat 2.
-    assertTrue(picked ~= nil,
-        "BM.1 (v3.2.6): false AKA marker on opp lead → Bot.PickTakweesh returns the illegal play (carve-out at Bot.lua:5957)")
-    if picked then
-        assertEq(picked.illegalReason, "false AKA",
-            "BM.1 (v3.2.6): returned record IS the false-AKA play (not a stray revoke)")
-        assertEq(picked.seat, 2,
-            "BM.1 (v3.2.6): returned record belongs to opp seat 2 (not same-team)")
-    end
+    -- v3.2.17 policy change (supersedes the original v3.2.6 BM.1
+    -- expectation): offender seat 2 is a BOT (S.s.seats[2].isBot),
+    -- caller seat 3 is an opposing BOT. A bot caller must NOT
+    -- auto-Takweesh a bot-emitted false-AKA bluff → returns nil.
+    -- Human-offender false AKA is still caught (BW.1); manual
+    -- TAKWEESH via HostBeginTakweeshReview is unchanged (BM.3).
+    assertTrue(picked == nil,
+        "BM.1 (v3.2.17): bot-offender false AKA in a completed trick is NOT auto-Takweeshed by an opposing bot")
     math.random = origRandom
     WHEREDNGNDB.advancedBots = nil
     if Bot.ResetMemory then Bot.ResetMemory() end
@@ -12867,22 +12863,281 @@ do
     S.s.cumulative = { A = 0, B = 0 }
     S.s.target = 152
     local picked = Bot.PickTakweesh(3)
-    -- Strict assertion: current-trick false-AKA scan finds the
-    -- seat-2 illegal play. A returned nil would indicate the
-    -- v3.2.6 round-2 carve-out at Bot.lua:5986-6004 has
-    -- regressed (or never landed), and the bot is back to the
-    -- pre-fix v1.5.1 "do NOT scan in-progress trick" rule.
+    -- v3.2.17 policy change (supersedes the original v3.2.6 round-2
+    -- BM.6 expectation): the seat-2 offender of this current-trick
+    -- "false AKA" bluff is itself a BOT (S.s.seats[2].isBot == true).
+    -- A bot caller must NOT auto-Takweesh a bot-generated false-AKA
+    -- bluff — that would punish the (often human-led) opposing team
+    -- for a bot's own flavor noise. The current-trick scan now gates
+    -- on `not botFalseAkaImmune(p)`, so the seat-3 bot caller returns
+    -- nil here. (Human-offender current-trick false AKA is still
+    -- caught — see BW.2. Non-false-AKA bot revokes are still caught —
+    -- see BW.3. The v3.2.6 current-trick carve-out itself is intact;
+    -- only the bot-offender immunity is layered on top.)
+    assertTrue(picked == nil,
+        "BM.6 (v3.2.17): bot-offender false AKA in the current trick is NOT auto-Takweeshed by an opposing bot")
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- =====================================================================
+-- BW. v3.2.17 bot-generated false AKA not auto-Takweeshed by bots
+--
+-- Design correction: a bot caller of Bot.PickTakweesh must NOT
+-- auto-punish a "false AKA" bluff whose offender seat is itself a
+-- BOT. Bot noise-AKA (Bot.PickAKANoise) is intentional
+-- uncertainty/flavor; auto-Takweeshing the (often human-led)
+-- opposing team for another bot's bluff is undesired. The carve-out
+-- is deliberately NARROW — gated by helper botFalseAkaImmune(p) on
+-- BOTH illegalReason == "false AKA" AND a bot offender seat.
+--
+-- BM.1 / BM.6 (above) were the v3.2.6 tests that locked the OLD
+-- "bot always catches false AKA" behaviour; both fixtures have a
+-- bot offender (seat 2 isBot == true) and were flipped in-place to
+-- expect nil under the new policy. BW.1–BW.4 add the complementary
+-- coverage the policy needs:
+--
+--   BW.1 — HUMAN offender, completed trick: false AKA is STILL
+--          caught (mirrors BM.1's trick layout; only seat 2's
+--          isBot flag differs). Proves the immunity is offender-
+--          identity-scoped, not a blanket false-AKA suppression.
+--   BW.2 — HUMAN offender, current in-progress trick: STILL caught
+--          (mirrors BM.6). The v3.2.6 current-trick carve-out is
+--          intact for human offenders.
+--   BW.3 — Control: BOT offender, NON-false-AKA revoke WITH a later
+--          same-suit reveal → STILL caught. botFalseAkaImmune is
+--          false here (reason ≠ "false AKA"), so the v1.5.1 realism
+--          gate fires normally. Proves the helper does not over-
+--          suppress ordinary bot revokes.
+--   BW.4 — Source pins: the helper and both scan gates exist in
+--          Bot.lua exactly as designed.
+-- =====================================================================
+section("BW. v3.2.17 bot false-AKA not auto-Takweeshed by bots")
+
+-- BW.1: HUMAN-offender false AKA in a completed trick → STILL
+-- caught. Mirrors BM.1's fixture verbatim except seat 2 is a human
+-- ({ name = "Human", isBot = false }). botFalseAkaImmune(p) is
+-- false (offender not a bot), so the v3.2.6 false-AKA carve-out at
+-- Bot.lua:5989-5996 returns the play to the seat-3 bot caller.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    S.s.tricks = {
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 2, card = "KH",
+                  illegal = true, illegalReason = "false AKA" },
+                { seat = 3, card = "8H" },
+                { seat = 4, card = "9H" },
+                { seat = 1, card = "JH" },
+            },
+            winner = 2,
+        },
+        {
+            leadSuit = "D",
+            plays = {
+                { seat = 4, card = "9D" },
+                { seat = 1, card = "8D" },
+                { seat = 2, card = "QD" },
+                { seat = 3, card = "7D" },
+            },
+            winner = 2,
+        },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {
+        KH = true, ["8H"] = true, ["9H"] = true, JH = true,
+        ["9D"] = true, ["8D"] = true, QD = true, ["7D"] = true,
+    }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S" },
+        [4] = {},
+    }
+    -- Seat 2 (the false-AKA offender) is a HUMAN here — the one
+    -- difference from BM.1's all-bot seats table.
+    S.s.seats = {
+        [1] = { isBot = true },
+        [2] = { name = "Human", isBot = false },
+        [3] = { isBot = true },
+        [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
     assertTrue(picked ~= nil,
-        "BM.6 (v3.2.6 round 2): current-trick false-AKA marker → Bot.PickTakweesh returns the illegal play (current-trick carve-out)")
+        "BW.1 (v3.2.17): HUMAN-offender false AKA in a completed trick IS still caught by an opposing bot")
     if picked then
         assertEq(picked.illegalReason, "false AKA",
-            "BM.6 (v3.2.6 round 2): returned record IS the current-trick false-AKA play")
+            "BW.1 (v3.2.17): returned record IS the human's false-AKA play")
         assertEq(picked.seat, 2,
-            "BM.6 (v3.2.6 round 2): returned record belongs to opp seat 2 (current-trick same-team filter holds)")
+            "BW.1 (v3.2.17): returned record belongs to human opp seat 2")
     end
     math.random = origRandom
     WHEREDNGNDB.advancedBots = nil
     if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BW.2: HUMAN-offender false AKA in the CURRENT in-progress trick →
+-- STILL caught. Mirrors BM.6's fixture verbatim except seat 2 is a
+-- human. The v3.2.6 current-trick carve-out at Bot.lua:6033-6044
+-- gates on `not botFalseAkaImmune(p)`; for a human offender that
+-- predicate is false, so the seat-3 bot caller still returns the
+-- play.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    S.s.tricks = {}
+    S.s.trick = {
+        leadSuit = "H",
+        plays = {
+            { seat = 2, card = "KH",
+              illegal = true, illegalReason = "false AKA" },
+        },
+    }
+    S.s.playedCardsThisRound = { KH = true }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S", "8S", "7S" },
+        [4] = {},
+    }
+    S.s.seats = {
+        [1] = { isBot = true },
+        [2] = { name = "Human", isBot = false },
+        [3] = { isBot = true },
+        [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
+    assertTrue(picked ~= nil,
+        "BW.2 (v3.2.17): HUMAN-offender false AKA in the current trick IS still caught by an opposing bot")
+    if picked then
+        assertEq(picked.illegalReason, "false AKA",
+            "BW.2 (v3.2.17): returned record IS the human's current-trick false-AKA play")
+        assertEq(picked.seat, 2,
+            "BW.2 (v3.2.17): returned record belongs to human opp seat 2")
+    end
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BW.3 (control): BOT-offender NON-false-AKA revoke WITH a later
+-- same-suit reveal → STILL caught. Mirrors BM.2B verbatim (all-bot
+-- seats). botFalseAkaImmune(p) is false because the reason is
+-- "must follow suit", not "false AKA" — so the helper does not
+-- short-circuit and the v1.5.1 realism gate fires after seat 2's
+-- AH reveal in trick 2. Proves the v3.2.17 immunity is scoped to
+-- false AKA only and does not over-suppress ordinary bot revokes.
+do
+    WHEREDNGNDB.advancedBots = true
+    freshState()
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "C", bidder = 1 }
+    Bot._memory = nil
+    Bot.ResetMemory()
+    local origRandom = math.random
+    math.random = function(a, b)
+        if a == nil then return 0.5 end
+        if b == nil then return a end
+        return 0
+    end
+    S.s.tricks = {
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 4, card = "8H" },
+                { seat = 1, card = "JH" },
+                { seat = 2, card = "7C",
+                  illegal = true, illegalReason = "must follow suit" },
+                { seat = 3, card = "9H" },
+            },
+            winner = 1,
+        },
+        {
+            leadSuit = "H",
+            plays = {
+                { seat = 4, card = "QH" },
+                { seat = 1, card = "TH" },
+                { seat = 2, card = "AH" },
+                { seat = 3, card = "7H" },
+            },
+            winner = 2,
+        },
+    }
+    S.s.trick = { leadSuit = nil, plays = {} }
+    S.s.playedCardsThisRound = {
+        ["8H"] = true, JH = true, ["7C"] = true, ["9H"] = true,
+        QH = true, TH = true, AH = true, ["7H"] = true,
+    }
+    S.s.hostHands = {
+        [1] = {}, [2] = {},
+        [3] = { "AS", "TS", "KS", "QS", "JS", "9S" },
+        [4] = {},
+    }
+    -- All-bot seats: the offender (seat 2) is a bot, yet the revoke
+    -- is STILL caught because botFalseAkaImmune only covers false AKA.
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.cumulative = { A = 0, B = 0 }
+    S.s.target = 152
+    local picked = Bot.PickTakweesh(3)
+    assertTrue(picked ~= nil,
+        "BW.3 (v3.2.17 control): bot-offender NON-false-AKA revoke WITH later reveal is STILL caught (immunity scoped to false AKA only)")
+    if picked then
+        assertEq(picked.illegalReason, "must follow suit",
+            "BW.3 (v3.2.17 control): caught the revoke, not suppressed as a bot false-AKA")
+        assertEq(picked.seat, 2,
+            "BW.3 (v3.2.17 control): returned record belongs to bot opp seat 2")
+    end
+    math.random = origRandom
+    WHEREDNGNDB.advancedBots = nil
+    if Bot.ResetMemory then Bot.ResetMemory() end
+end
+
+-- BW.4: source pins. Lock the helper and both scan gates in
+-- Bot.lua so a future refactor can't silently drop the v3.2.17
+-- bot-offender immunity.
+do
+    local botSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Bot.lua"):read("*a")
+    assertTrue(botSrc:find("local function botFalseAkaImmune(p)", 1, true) ~= nil,
+        "BW.4a (v3.2.17): botFalseAkaImmune helper present in Bot.lua")
+    assertTrue(botSrc:find('return p.illegalReason == "false AKA"', 1, true) ~= nil,
+        "BW.4b (v3.2.17): helper gates on illegalReason == \"false AKA\"")
+    assertTrue(botSrc:find("S.s.seats[p.seat].isBot == true", 1, true) ~= nil,
+        "BW.4c (v3.2.17): helper gates on offender seat isBot == true")
+    assertTrue(botSrc:find("if not botFalseAkaImmune(p) then", 1, true) ~= nil,
+        "BW.4d (v3.2.17): completed-trick scan gated on `not botFalseAkaImmune(p)`")
+    assertTrue(botSrc:find("and not botFalseAkaImmune(p) then", 1, true) ~= nil,
+        "BW.4e (v3.2.17): current-trick scan gated on `not botFalseAkaImmune(p)`")
 end
 
 -- =====================================================================

@@ -5952,6 +5952,22 @@ function Bot.PickTakweesh(seat)
         return false
     end
 
+    -- v3.2.17: a BOT caller must not auto-Takweesh a "false AKA"
+    -- bluff whose offender seat is itself a BOT. Bot noise-AKA is
+    -- intentional uncertainty/flavor; auto-punishing the (often
+    -- human-led) team for another bot's bluff is undesired. Narrow by
+    -- design: ONLY illegalReason == "false AKA" AND a bot offender.
+    -- Human-offender false AKA, and ALL non-false-AKA illegals
+    -- (revoke / off-suit), are unaffected. Human/manual Takweesh
+    -- (HostBeginTakweeshReview / HostResolveTakweesh) is also
+    -- unaffected — that path may still catch a bot's false AKA when a
+    -- human presses TAKWEESH.
+    local function botFalseAkaImmune(p)
+        return p.illegalReason == "false AKA"
+           and S.s.seats and S.s.seats[p.seat]
+           and S.s.seats[p.seat].isBot == true
+    end
+
     -- Find the first realistically-observable illegal opposing play.
     local found
     for tIdx, t in ipairs(S.s.tricks or {}) do
@@ -5971,16 +5987,23 @@ function Bot.PickTakweesh(seat)
                 -- / v1.6.0 noise-AKA design intent: noise-AKA is a
                 -- bluff with a real probability of being caught.
                 if p.illegalReason == "false AKA" then
-                    found = p; break
-                end
+                    -- v3.2.17: a bot caller does NOT auto-Takweesh a
+                    -- false-AKA bluff emitted by a BOT. Human-offender
+                    -- false AKA stays immediately catchable; manual
+                    -- TAKWEESH (HostBeginTakweeshReview) is unchanged.
+                    if not botFalseAkaImmune(p) then
+                        found = p; break
+                    end
                 -- Realism gate (v1.5.1, preserved for revoke /
                 -- off-suit cases): was the violation later
                 -- revealed by the violator playing the led-suit
                 -- in a subsequent trick? If yes → bot can call
                 -- Takweesh from publicly-visible info. If no →
                 -- skip (the revoke, while real, isn't yet
-                -- publicly proven).
-                if t.leadSuit and laterPlayedLeadSuit(p.seat, t.leadSuit, tIdx) then
+                -- publicly proven). Reached only for NON-false-AKA
+                -- illegals (false AKA handled above), so a
+                -- bot-immune false AKA cannot leak in via this gate.
+                elseif t.leadSuit and laterPlayedLeadSuit(p.seat, t.leadSuit, tIdx) then
                     found = p; break
                 end
             end
@@ -6011,7 +6034,9 @@ function Bot.PickTakweesh(seat)
         for _, p in ipairs(S.s.trick.plays) do
             if p.illegal
                and p.illegalReason == "false AKA"
-               and R.TeamOf(p.seat) ~= myTeam then
+               and R.TeamOf(p.seat) ~= myTeam
+               -- v3.2.17: not for a bot-offender false-AKA bluff.
+               and not botFalseAkaImmune(p) then
                 found = p
                 break
             end
