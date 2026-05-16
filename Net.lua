@@ -1042,6 +1042,41 @@ function N.SendResyncReq(gameID)
     end
 end
 
+-- v3.2.16 deal-finish desync recovery. The deal-finish transition
+-- (final 8-card MSG_HAND whisper + MSG_DEAL;play) is one-shot/no-retry;
+-- if either drops, a non-host can be stranded in the prior phase
+-- (e.g. PHASE_DOUBLE / 5-card) while the host is in PHASE_PLAY. The
+-- only recovery clue is a non-replay play turn/card arriving while we
+-- are NOT in PHASE_PLAY. Convert that into a single, rate-limited
+-- MSG_RESYNC_REQ — the host's existing SendResyncRes replays the full
+-- phase+hand snapshot, auto-healing the client. Never mutates game
+-- state; host never self-requests.
+local _playDesyncResyncAt = 0
+local function requestPlayDesyncResync(context)
+    if S.s.isHost then return end
+    if not N.SendResyncReq then return end
+    -- One-shot over a short window so a burst of off-phase frames
+    -- (host MSG_TURN retry + trick-1 MSG_PLAY, etc.) yields exactly
+    -- one request, not a storm. GetTime unavailable → don't gate.
+    local now = (GetTime and GetTime()) or 0
+    if now ~= 0 and (now - _playDesyncResyncAt) < 5 then return end
+    _playDesyncResyncAt = now
+    local gameID = S.s.gameID
+                   or (type(WHEREDNGNDB) == "table" and WHEREDNGNDB.lastGameID)
+                   or ""
+    log("Warn",
+        "v3.2.16: off-phase play frame (%s) in phase=%s — requesting resync",
+        tostring(context), tostring(S.s.phase))
+    freezeLog("DESYNC",
+        ("off-phase %s phase=%s -> resync req"):format(
+            tostring(context), tostring(S.s.phase)))
+    N.SendResyncReq(gameID)
+end
+-- Test-visible handle (mirrors N._SafeOnPlayObserved / N._GroupChannel
+-- convention) so the harness can reset the one-shot window between
+-- independent cases.
+N._ResetPlayDesyncGuard = function() _playDesyncResyncAt = 0 end
+
 -- Pack a compact snapshot of the host's gameplay state and whisper it
 -- back to the requester. ApplyResyncSnapshot on the receiver side
 -- decodes the same wire format.
@@ -1676,7 +1711,11 @@ function N._OnDealPhase(sender, phase, extra)
             end)
         end
     elseif phase == "3" then S.s.phase = K.PHASE_DEAL3
-    elseif phase == "play" then S.ApplyPlayPhase()
+    elseif phase == "play" then
+        -- v3.2.16: idempotent — a duplicate or late MSG_DEAL;play must
+        -- not re-run ApplyPlayPhase (which resets s.trick) and wipe an
+        -- in-flight trick on a client that already entered play.
+        if S.s.phase ~= K.PHASE_PLAY then S.ApplyPlayPhase() end
     elseif phase == "redeal" then
         -- Host broadcasts this when all four players passed both rounds
         -- and the deal is rotating. The trailing field is the next
@@ -1734,6 +1773,15 @@ function N._OnTurn(sender, seat, kind)
     -- breaking turn-glow UI (S.s.seats[99] is nil) and AFK timer
     -- arming (isBotSeat returns nil → bot dispatch noops).
     if seat < 1 or seat > 4 then return end
+    -- v3.2.16: never apply a "play" turn into a non-play phase — that
+    -- is the deal-finish-desync signature (missed MSG_DEAL;play or the
+    -- final 8-card MSG_HAND). Mixing phase=DOUBLE with turnKind=play
+    -- strands the client; request a resync and bail (ApplyTurn is NOT
+    -- called, so no mixed state is created).
+    if kind == "play" and S.s.phase ~= K.PHASE_PLAY then
+        requestPlayDesyncResync("_OnTurn")
+        return
+    end
     S.ApplyTurn(seat, kind)
 end
 
@@ -2530,7 +2578,17 @@ function N._OnPlay(sender, seat, card, replayFlag)
     if seat < 1 or seat > 4 then return end
     if #card ~= 2 then return end
     -- Phase: plays only land during PLAY.
-    if S.s.phase ~= K.PHASE_PLAY then return end
+    if S.s.phase ~= K.PHASE_PLAY then
+        -- v3.2.16: a non-replay play frame off-phase is the only
+        -- recovery clue that we missed MSG_DEAL;play / the final
+        -- 8-card MSG_HAND (deal-finish desync). Request a resync
+        -- instead of silently dropping it. Replay frames legitimately
+        -- arrive around resync — never self-trigger on those.
+        if not ((replayFlag == "1") and fromHost(sender)) then
+            requestPlayDesyncResync("_OnPlay")
+        end
+        return
+    end
     -- Audit fix: replay-frame bypass. During a resync replay the host
     -- whispers each in-flight play in turn-order; the rejoiner's
     -- snapshot has s.turn set to the seat about to act NEXT (the last

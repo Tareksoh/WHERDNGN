@@ -9837,6 +9837,111 @@ do
         S.Reset()
     end
 
+    -- =====================================================================
+    -- BV — v3.2.16: deal-finish desync guard. Off-phase play turn/card
+    -- (missed MSG_DEAL;play / final MSG_HAND) → one-shot resync request
+    -- instead of mixed state / silent drop; idempotent MSG_DEAL;play.
+    -- =====================================================================
+    do
+        local function reqCount() return broadcastsMatching(K.MSG_RESYNC_REQ) end
+
+        -- BV.1 — off-phase _OnTurn("play") → resync, NO play turn applied
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_DOUBLE
+        N._ResetPlayDesyncGuard(); clearCaptures()
+        N._OnTurn("Host-R", 3, "play")
+        assertTrue(reqCount() >= 1,
+            "BV.1a (v3.2.16): off-phase play _OnTurn requests a resync")
+        assertTrue(S.s.turnKind ~= "play",
+            "BV.1b (v3.2.16): off-phase play _OnTurn does NOT apply turnKind=play")
+        assertTrue(S.s.turn ~= 3,
+            "BV.1c (v3.2.16): off-phase play _OnTurn does NOT set the turn seat")
+
+        -- BV.2 — off-phase _OnPlay → resync, NO play applied
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.trick = { leadSuit = nil, plays = {} }
+        N._ResetPlayDesyncGuard(); clearCaptures()
+        N._OnPlay("Host-R", 2, "7C")
+        assertTrue(reqCount() >= 1,
+            "BV.2a (v3.2.16): off-phase _OnPlay requests a resync (not silently dropped)")
+        assertEq(#(S.s.trick.plays), 0,
+            "BV.2b (v3.2.16): off-phase _OnPlay does NOT apply the play")
+
+        -- BV.3 — one-shot / rate limit: repeated off-phase frames → 1 req
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_DOUBLE
+        N._ResetPlayDesyncGuard(); clearCaptures()
+        N._OnTurn("Host-R", 3, "play")
+        N._OnTurn("Host-R", 4, "play")
+        N._OnPlay("Host-R", 2, "7C")
+        assertEq(reqCount(), 1,
+            "BV.3 (v3.2.16): a burst of off-phase frames yields exactly ONE resync request")
+
+        -- BV.4 — normal in-phase _OnTurn("play") still applies, no resync
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_PLAY
+        S.s.tricks = {}; S.s.trick = nil; S.s.contract = nil
+        N._ResetPlayDesyncGuard(); clearCaptures()
+        N._OnTurn("Host-R", 3, "play")
+        assertEq(S.s.turn, 3,
+            "BV.4a (v3.2.16): in-phase _OnTurn(play) still applies the turn")
+        assertEq(S.s.turnKind, "play",
+            "BV.4b (v3.2.16): in-phase _OnTurn(play) sets turnKind=play")
+        assertEq(reqCount(), 0,
+            "BV.4c (v3.2.16): in-phase _OnTurn(play) does NOT request a resync")
+
+        -- BV.5 — idempotent _OnDealPhase("play")
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_PLAY
+        S.s.trick = { leadSuit = "C", plays = { { seat = 1, card = "9C" } } }
+        N._OnDealPhase("Host-R", "play")
+        assertEq(#(S.s.trick.plays), 1,
+            "BV.5a (v3.2.16): duplicate MSG_DEAL;play while already PLAY does NOT wipe the in-flight trick")
+        S.Reset()
+        S.s.isHost = false; S.s.localName = "Me-R"
+        S.s.hostName = "Host-R"; S.s.gameID = "G1"
+        S.s.phase = K.PHASE_DOUBLE; S.s.trick = nil
+        N._OnDealPhase("Host-R", "play")
+        assertEq(S.s.phase, K.PHASE_PLAY,
+            "BV.5b (v3.2.16): MSG_DEAL;play from a non-play phase still transitions to PLAY")
+        assertTrue(S.s.trick ~= nil and #(S.s.trick.plays) == 0,
+            "BV.5c (v3.2.16): the legitimate transition still installs a fresh trick")
+
+        -- BV.6 — source pins
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        assertTrue(
+            netSrc:find("local function requestPlayDesyncResync", 1, true) ~= nil,
+            "BV.6a (v3.2.16): off-phase desync-resync helper present")
+        assertTrue(
+            netSrc:find('if kind == "play" and S.s.phase ~= K.PHASE_PLAY then',
+                1, true) ~= nil,
+            "BV.6b (v3.2.16): _OnTurn off-phase play guard present")
+        assertTrue(
+            netSrc:find('requestPlayDesyncResync("_OnPlay")', 1, true) ~= nil,
+            "BV.6c (v3.2.16): _OnPlay off-phase resync request present")
+        assertTrue(
+            netSrc:find(
+                "if S.s.phase ~= K.PHASE_PLAY then S.ApplyPlayPhase() end",
+                1, true) ~= nil,
+            "BV.6d (v3.2.16): _OnDealPhase(\"play\") is idempotent")
+        assertTrue(
+            netSrc:find("N._ResetPlayDesyncGuard", 1, true) ~= nil,
+            "BV.6e (v3.2.16): one-shot guard reset handle exposed for tests")
+
+        S.Reset()
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)
