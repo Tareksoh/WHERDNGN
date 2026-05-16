@@ -136,9 +136,13 @@ N.Whisper   = whisper
 -- UI.lua:502 from a bot-play callback at Net.lua:5427).
 --
 -- Fix: defer the Refresh by one frame via `C_Timer.After(0, ...)` so
--- the picker and UI render don't share a budget. Used ONLY in the bot
--- dispatch callbacks (Triple/Four/Gahwa/Preempt/Bid/Play); humans-side
--- Refresh stays inline since it doesn't follow heavy work.
+-- the picker and UI render don't share a budget. Originally used only
+-- by the bot-dispatch callbacks (Triple/Four/Gahwa/Preempt/Bid/Play).
+-- v3.2.14 (F1): also used by the acting non-host's LocalBid/LocalPlay
+-- tails — addon messages don't loop back, so a non-host actor has no
+-- host echo to drive a refresh; deferredRefresh gives it immediate,
+-- still watchdog-safe, local feedback. Host-side LocalBid/LocalPlay
+-- continue to refresh via _HostStepBid/_HostStepPlay (not this helper).
 local function deferredRefresh()
     if not (B.UI and B.UI.Refresh) then return end
     if C_Timer and C_Timer.After then

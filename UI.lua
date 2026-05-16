@@ -2141,7 +2141,13 @@ local function renderActions()
     -- buttons remain reachable because the host always has a seat.
     if not S.s.localSeat then return end
     if S.s.phase == K.PHASE_DEAL1 or S.s.phase == K.PHASE_DEAL2BID then
-        if S.IsMyTurn() and S.s.turnKind == "bid" then
+        -- v3.2.14 F1: once this seat has bid, suppress the bid action
+        -- buttons even while S.IsMyTurn() is still true. Non-host
+        -- LocalBid does not advance S.s.turn locally, so during the
+        -- echo gap before the host's MSG_TURN the optimistic refresh
+        -- would otherwise still present a (duplicate-inviting) bid.
+        if S.IsMyTurn() and S.s.turnKind == "bid"
+           and S.s.bids[S.s.localSeat] == nil then
             -- Pass label: "Pass" in round 1, "wla" (ولا) in round 2 to
             -- match the Saudi-table verbal convention. The round-2
             -- pass is essentially "I have no preference / confirm
@@ -2935,7 +2941,14 @@ local function renderHand()
         local labels = { b.center, b.tlRank, b.tlSuit, b.brRank, b.brSuit }
         for _, fs in ipairs(labels) do fs:SetAlpha(1) end
 
-        local isPlayable = (S.s.phase == K.PHASE_PLAY and S.IsMyTurn())
+        -- v3.2.14 F1: after this seat has played this trick the cards
+        -- must not look or behave playable even while S.IsMyTurn() is
+        -- still true. Non-host LocalPlay does not advance S.s.turn
+        -- locally, so the echo-gap optimistic refresh must not invite
+        -- a second play (N.LocalPlay also dedupes; this is the visible
+        -- affordance half of the same guard).
+        local isPlayable = (S.s.phase == K.PHASE_PLAY and S.IsMyTurn()
+            and not S.s.localPlayedThisTrick)
         if isPlayable then
             if legalSet[card] then
                 -- Gold border + bright = the "safe" play
@@ -2985,6 +2998,11 @@ local function renderHand()
         b:SetScript("OnClick", function()
             if S.s.phase ~= K.PHASE_PLAY then return end
             if not S.IsMyTurn() then return end
+            -- v3.2.14 F1: belt-and-suspenders — this seat already
+            -- played this trick (echo gap before S.s.turn advances).
+            -- N.LocalPlay also dedupes, but a stale-pooled clickable
+            -- card must not even attempt a second play.
+            if S.s.localPlayedThisTrick then return end
             -- v1.8.1 (audit v1.6.1 UX-21 HIGH): paused-state gate.
             -- Pre-fix the click was rejected silently downstream by
             -- N.LocalPlay's `S.s.paused` check at Net.lua:~2300, but

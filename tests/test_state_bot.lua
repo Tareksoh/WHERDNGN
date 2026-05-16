@@ -9509,6 +9509,24 @@ do
         assertTrue(netSrc:find("N._HostStepPlay()", 1, true) ~= nil,
             "BT.5c (v3.2.14): host LocalPlay path (_HostStepPlay) preserved")
 
+        -- BT.6 — Codex re-review blocker: echo-gap affordance gates in
+        -- UI.lua (UI.lua is not harness-loaded → source pins), plus the
+        -- refreshed deferredRefresh helper comment in Net.lua.
+        local uiSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+        assertTrue(
+            uiSrc:find("and S.s.bids[S.s.localSeat] == nil then", 1, true) ~= nil,
+            "BT.6a (v3.2.14): bid buttons suppressed once this seat has bid (echo-gap gate)")
+        assertTrue(
+            uiSrc:find("and not S.s.localPlayedThisTrick)", 1, true) ~= nil,
+            "BT.6b (v3.2.14): hand-card isPlayable gated on not-yet-played-this-trick")
+        assertTrue(
+            uiSrc:find("if S.s.localPlayedThisTrick then return end", 1, true) ~= nil,
+            "BT.6c (v3.2.14): hand-card OnClick hard-guards a second play in the echo gap")
+        assertTrue(
+            netSrc:find("v3.2.14 (F1): also used by the acting non-host",
+                1, true) ~= nil,
+            "BT.6d (v3.2.14): deferredRefresh helper comment updated (no longer 'bot-dispatch only')")
+
         if Bot then Bot.OnPlayObserved = origObs end
         N._HostStepBid  = origHSB
         N._HostStepPlay = origHSP
