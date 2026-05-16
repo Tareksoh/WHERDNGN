@@ -3788,13 +3788,31 @@ local function statusFor(phase)
     if phase == K.PHASE_IDLE then return "Idle. /baloot host to start." end
     if phase == K.PHASE_LOBBY then return "Lobby — waiting for 4 players" end
     if phase == K.PHASE_DEAL1 then
-        if S.IsMyTurn() then return "|cffffaa55Your turn to bid|r" end
+        -- v3.2.14 F1: non-host LocalBid does not advance S.s.turn
+        -- locally, so during the echo gap IsMyTurn() is still true
+        -- even though this seat already bid. Prompt only when this
+        -- seat genuinely still owes a bid; once bid, show a neutral
+        -- waiting state so it does not look stuck / invite a re-bid.
+        if S.IsMyTurn() and S.s.turnKind == "bid"
+           and S.s.bids[S.s.localSeat] == nil then
+            return "|cffffaa55Your turn to bid|r"
+        end
+        if S.IsMyTurn() and S.s.bids[S.s.localSeat] ~= nil then
+            return "|cffaaaaaaBid sent — waiting for table|r"
+        end
         local seat = S.s.turn
         local nm = seat and S.s.seats[seat] and shortName(S.s.seats[seat].name) or "?"
         return ("Bidding (round 1) — %s to act"):format(nm)
     end
     if phase == K.PHASE_DEAL2BID then
-        if S.IsMyTurn() then return "|cffffaa55Your turn to bid (round 2)|r" end
+        -- v3.2.14 F1: same echo-gap suppression as round 1.
+        if S.IsMyTurn() and S.s.turnKind == "bid"
+           and S.s.bids[S.s.localSeat] == nil then
+            return "|cffffaa55Your turn to bid (round 2)|r"
+        end
+        if S.IsMyTurn() and S.s.bids[S.s.localSeat] ~= nil then
+            return "|cffaaaaaaBid sent — waiting for table|r"
+        end
         local seat = S.s.turn
         local nm = seat and S.s.seats[seat] and shortName(S.s.seats[seat].name) or "?"
         return ("Bidding (round 2) — %s to act"):format(nm)
@@ -3806,7 +3824,17 @@ local function statusFor(phase)
     if phase == K.PHASE_GAHWA then return "Bidder: Gahwa? (match-win)" end
     if phase == K.PHASE_DEAL3 then return "Final 3 dealt — declare melds" end
     if phase == K.PHASE_PLAY then
-        if S.IsMyTurn() then return "|cff55ff55Your turn|r" end
+        -- v3.2.14 F1: non-host LocalPlay does not advance S.s.turn
+        -- locally; during the echo gap IsMyTurn() stays true even
+        -- though this seat already played this trick. Show a neutral
+        -- waiting state instead of "Your turn" so it does not look
+        -- stuck / invite a second play.
+        if S.IsMyTurn() and not S.s.localPlayedThisTrick then
+            return "|cff55ff55Your turn|r"
+        end
+        if S.IsMyTurn() and S.s.localPlayedThisTrick then
+            return "|cffaaaaaaPlay sent — waiting for table|r"
+        end
         local seat = S.s.turn
         local nm = seat and S.s.seats[seat] and shortName(S.s.seats[seat].name) or "?"
         return ("Playing — %s to act"):format(nm)

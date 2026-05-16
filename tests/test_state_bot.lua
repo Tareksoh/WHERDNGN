@@ -9527,6 +9527,23 @@ do
                 1, true) ~= nil,
             "BT.6d (v3.2.14): deferredRefresh helper comment updated (no longer 'bot-dispatch only')")
 
+        -- BT.7 — Codex re-review blocker #2: UI.statusFor must not say
+        -- "Your turn" during the echo gap after the actor already
+        -- bid/played; it shows a neutral sent/waiting status instead.
+        assertTrue(
+            uiSrc:find("S.s.bids[S.s.localSeat] ~= nil then", 1, true) ~= nil,
+            "BT.7a (v3.2.14): statusFor bid branch detects already-bid (echo gap)")
+        assertTrue(
+            uiSrc:find("Bid sent", 1, true) ~= nil,
+            "BT.7b (v3.2.14): statusFor shows a neutral 'Bid sent — waiting' status")
+        assertTrue(
+            uiSrc:find("S.IsMyTurn() and not S.s.localPlayedThisTrick then",
+                1, true) ~= nil,
+            "BT.7c (v3.2.14): statusFor 'Your turn' (play) gated on not-yet-played")
+        assertTrue(
+            uiSrc:find("Play sent", 1, true) ~= nil,
+            "BT.7d (v3.2.14): statusFor shows a neutral 'Play sent — waiting' status")
+
         if Bot then Bot.OnPlayObserved = origObs end
         N._HostStepBid  = origHSB
         N._HostStepPlay = origHSP
