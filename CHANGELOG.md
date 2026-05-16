@@ -1,5 +1,72 @@
 # Changelog
 
+## v3.2.14 — Non-host action feedback fix
+
+A focused perceived-stability / UI-feedback release. **No turn-order,
+legal-play, scoring, bot-decision, protocol, saved-variable, .toc,
+.pkgmeta, .github, or packaging changes.** v3.1.x / v3.2.x clients
+remain addon-message-compatible.
+
+### Fixed
+
+- **Non-host players now get immediate local UI feedback after bidding
+  or playing.** Previously a non-host who bid or played saw no response
+  until the host's echo round-tripped — under latency or addon-channel
+  throttle this looked like "I clicked and the game froze."
+
+  - **Root cause:** `C_ChatInfo.SendAddonMessage` does not loop back to
+    the sender, so `N.LocalBid` / `N.LocalPlay` on a non-host applied
+    state locally and broadcast the action but then waited for the host
+    echo before the UI repainted. Only the host branch refreshed (via
+    `_HostStepBid` / `_HostStepPlay`); the acting non-host had no
+    repaint trigger of its own.
+  - **Refresh:** `Net.lua` now calls `deferredRefresh()` for the acting
+    non-host in `LocalBid` / `LocalPlay`, while host paths continue to
+    use `_HostStepBid` / `_HostStepPlay` unchanged. `deferredRefresh()`
+    is the existing watchdog-safe, next-frame helper.
+  - **Affordances:** `UI.lua` suppresses duplicate-looking bid/play
+    controls during the echo gap — bid buttons hide once this seat has
+    bid (`S.s.bids[S.s.localSeat] ~= nil`), and hand cards stop looking
+    or behaving playable once `S.s.localPlayedThisTrick` is set (with a
+    belt-and-suspenders guard in the card OnClick).
+  - **Status text:** `UI.statusFor` now shows a neutral
+    "Bid sent — waiting for table" / "Play sent — waiting for table"
+    instead of a misleading "Your turn" during the echo gap.
+
+### Relationship to prior fixes
+
+- v3.2.10 (`safeOnPlayObserved`) and v3.2.12 (duplicate-`MSG_PLAY`
+  before turn self-heal) fixed **hard play-pipeline stalls**.
+- v3.2.14 fixes the remaining **non-host perceived-freeze feedback** —
+  it is purely optimistic local rendering. It does **not** change
+  authority, turn order, or game-state correctness; the authoritative
+  pipeline is unchanged and continues to self-heal on the host echo.
+
+### Unchanged
+
+- No gameplay rule changes; no bot-decision changes.
+- No protocol-version bump; saved-variable layout unchanged.
+- Host-side `LocalBid` / `LocalPlay` refresh behavior unchanged
+  (still `_HostStepBid` / `_HostStepPlay`).
+- Packaging / workflow files unchanged.
+
+### Verification
+
+- Full harness: **1,430 checks passed, 0 failed**.
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- New **BT** section: **+25 checks** total — covering non-host
+  deferred refresh (LocalBid/LocalPlay), host-path preservation
+  (`_HostStep*` still used, non-host path not taken), the UI
+  affordance gates, and the neutral status text.
+
+### Notes
+
+- The untracked
+  `.swarm_findings/v3_2_13_multiplayer_stabilization_checkpoint.md`
+  (the stabilization audit that surfaced this F1 finding) remains
+  untouched and uncommitted unless separately requested.
+
 ## v3.2.13 — Private raid-lobby support
 
 A focused multiplayer usability release for four-player games inside a raid
