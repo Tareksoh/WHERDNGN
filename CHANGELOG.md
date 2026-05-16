@@ -3,7 +3,8 @@
 ## v3.2.13 — Private raid-lobby support
 
 A focused multiplayer usability release for four-player games inside a raid
-or instance group. **No turn-order, legal-play, scoring, bot card-choice,
+or instance group. It also includes a bid-card visibility fix for non-host
+clients. **No turn-order, legal-play, scoring, bot card-choice,
 saved-variable, .toc, .pkgmeta, .github, or packaging changes.** v3.1.x /
 v3.2.x clients remain addon-message-compatible for normal party play.
 
@@ -51,6 +52,17 @@ v3.2.x clients remain addon-message-compatible for normal party play.
   the invite list.** `/baloot uninvite <name>` no longer claims success for
   a never-invited name.
 
+- **Seat 2 / non-host bid card no longer disappears after round start.**
+  The host always saw the bid card because it applies the card locally
+  right after its own `ApplyStart`. Non-hosts receive `MSG_BIDCARD` as a
+  separate frame from `MSG_START`, and a late or duplicate `MSG_START`
+  could re-run `State.ApplyStart` and unconditionally wipe the
+  already-received `s.bidCard`. `MSG_BIDCARD` now carries an optional
+  round identity and `State.ApplyStart` preserves a same-round bid card
+  via `s.bidCardRound`, mirroring the existing `handRound` protection.
+  This is **not** caused by v3.2.12 — v3.2.12 only touched `_OnPlay`
+  (mid-trick duplicate handling).
+
 ### Unchanged
 
 - Normal four-person party play remains legacy/unrestricted. `PARTY` sends
@@ -64,9 +76,10 @@ v3.2.x clients remain addon-message-compatible for normal party play.
 
 ### Verification
 
-- Full harness: **1,390 checks passed, 0 failed**.
+- Full harness: **1,405 checks passed, 0 failed**.
   - v3.2.12 baseline: 1,327 / 0.
   - v3.2.13 private raid-lobby CA coverage: +63 checks total.
+  - v3.2.13 bid-card round-identity BS coverage: +15 checks total.
 - `test_H1_pin_J9_trump`: 11 passed, 0 failed.
 - `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
 - CA coverage includes:
@@ -78,6 +91,13 @@ v3.2.x clients remain addon-message-compatible for normal party play.
   - `PARTY` backward-compatibility.
   - reload recovery through matching `lastGameID`.
   - source pins protecting the v3.2.8 / v3.2.9 / v3.2.10 fixes.
+- BS coverage includes:
+  - same-round late/duplicate `_OnStart` does not wipe `s.bidCard`.
+  - a stale prior-round bid card is cleared on a new-round `_OnStart`.
+  - legacy two-field `b;<card>` (no round) remains compatible and
+    defaults to the current round.
+  - source pins protect the wire round field and the `s.bidCardRound`
+    guard in `ApplyStart`.
 
 ### Notes
 
