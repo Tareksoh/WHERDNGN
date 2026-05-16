@@ -129,4 +129,4 @@ approval. Standard flow:
 6. `git tag -a vX.Y.Z -m "..."`, push commits, push tag.
 
 The tag triggers BigWigsMods packager → CurseForge auto-publish.
-Project ID: 1526129.
+Project ID: 1529200 ("Loot & Baloot", slug `wheredngn`).
