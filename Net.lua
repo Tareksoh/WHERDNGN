@@ -3207,6 +3207,13 @@ function N.LocalDouble(open)
         else
             N.MaybeRunBot()
         end
+    else
+        -- v3.2.15 M1: addon messages do not loop back, so the acting
+        -- non-host has no host echo to drive a refresh. ApplyDouble
+        -- already advanced s.phase, so this repaint also drops the
+        -- now-stale Bel affordance. Host refreshes via its
+        -- HostFinishDeal / MaybeRunBot branch above.
+        deferredRefresh()
     end
 end
 
@@ -3221,6 +3228,10 @@ function N.LocalTriple(open)
     N.SendTriple(S.s.localSeat, open)
     if S.s.isHost then
         if open then N.MaybeRunBot() else N.HostFinishDeal() end
+    else
+        -- v3.2.15 M1: non-host echo-gap feedback (ApplyTriple already
+        -- advanced s.phase, so the Bel x3 affordance drops on repaint).
+        deferredRefresh()
     end
 end
 
@@ -3240,6 +3251,10 @@ function N.LocalFour(open)
     N.SendFour(S.s.localSeat, open)
     if S.s.isHost then
         if open then N.MaybeRunBot() else N.HostFinishDeal() end
+    else
+        -- v3.2.15 M1: non-host echo-gap feedback (ApplyFour already
+        -- advanced s.phase, so the Four affordance drops on repaint).
+        deferredRefresh()
     end
 end
 
@@ -3252,7 +3267,15 @@ function N.LocalGahwa()
     S.ApplyGahwa(S.s.localSeat)
     N.SendGahwa(S.s.localSeat)
     -- Terminal: no further window.
-    if S.s.isHost then N.HostFinishDeal() end
+    if S.s.isHost then
+        N.HostFinishDeal()
+    else
+        -- v3.2.15 M1: non-host echo-gap feedback. ApplyGahwa set
+        -- contract.gahwa; paired with the UI Gahwa-affordance gate
+        -- (this release) the button also goes non-actionable on this
+        -- repaint even though phase only advances on the host echo.
+        deferredRefresh()
+    end
 end
 
 -- v1.0.11 (D HIGH-2): local Baloot/Belote announce. Called from the
@@ -3305,6 +3328,13 @@ function N.LocalBelote()
     if not (hasK and hasQ) then return end
     S.ApplyBeloteAnnounce(S.s.localSeat)
     N.SendBelote(S.s.localSeat)
+    -- v3.2.15 M1: LocalBelote is announce-only (no host post-step).
+    -- The non-host actor still has no loopback, so refresh its own UI
+    -- now — ApplyBeloteAnnounce set beloteAnnounced[localSeat], so the
+    -- BALOOT! button hides on this repaint. Scope is the non-host
+    -- no-loopback class only; the host's announce visual is driven by
+    -- its own subsequent play flow and is intentionally unchanged.
+    if not S.s.isHost then deferredRefresh() end
 end
 
 -- Local pre-emption (الثالث, "Triple-on-Ace") action.
@@ -3342,6 +3372,11 @@ function N.LocalPreempt()
             return
         end
         N.MaybeRunBot()
+    else
+        -- v3.2.15 M1: non-host echo-gap feedback. ApplyPreempt cleared
+        -- s.preemptEligible and advanced s.phase, so the preempt
+        -- affordance drops on this repaint.
+        deferredRefresh()
     end
 end
 
@@ -3361,6 +3396,11 @@ function N.LocalPreemptPass()
             -- Non-final pass: dispatch the next eligible seat.
             N.MaybeRunBot()
         end
+    else
+        -- v3.2.15 M1: non-host echo-gap feedback. ApplyPreemptPass
+        -- removed this seat from s.preemptEligible, so this seat's
+        -- preempt affordance drops on this repaint.
+        deferredRefresh()
     end
 end
 

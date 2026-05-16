@@ -9551,6 +9551,214 @@ do
         S.Reset()
     end
 
+    -- =====================================================================
+    -- BU — v3.2.15 M1: extend the v3.2.14 no-loopback feedback pattern
+    -- to the remaining confirmed self-applied non-host Local* actions
+    -- (escalation chain, Belote, preempt). Request-only paths
+    -- (SkipDouble Triple/Four/Gahwa, Takweesh, Kawesh, Overcall) are
+    -- deliberately NOT bare-patched here — deferred for a pending-state
+    -- design (see the audit report).
+    -- =====================================================================
+    do
+        local B = WHEREDNGN
+        local origUI = B.UI
+        local refreshCount = 0
+        B.UI = { Refresh = function() refreshCount = refreshCount + 1 end }
+        local origHFD, origMRB = N.HostFinishDeal, N.MaybeRunBot
+        local origFP, origSBA = N._FinalizePreempt, N._SunBelAllowed
+        local hfd, mrb = false, false
+        N.HostFinishDeal   = function() hfd = true end
+        N.MaybeRunBot      = function() mrb = true end
+        N._FinalizePreempt = function() end
+        N._SunBelAllowed   = function() return true end
+        local origCanBel = R and R.CanBel
+        if R then R.CanBel = function() return true end end
+        local function hasDelayZeroTimer()
+            for _, e in ipairs(timerCallbacks) do
+                if e.delay == 0 then return true end
+            end
+            return false
+        end
+        local function resetSpies()
+            hfd = false; mrb = false; refreshCount = 0; clearCaptures()
+        end
+
+        -- BU.1 — non-host LocalDouble → deferredRefresh, no host step
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.belPending = { 2 }; S.s.cumulative = { A = 0, B = 0 }
+        resetSpies()
+        N.LocalDouble(true)
+        assertFalse(hfd or mrb,
+            "BU.1a (v3.2.15): non-host LocalDouble does NOT take a host-step branch")
+        assertTrue(hasDelayZeroTimer(),
+            "BU.1b (v3.2.15): non-host LocalDouble schedules a deferred refresh")
+        assertTrue(S.s.contract.doubled == true,
+            "BU.1c (v3.2.15): the Bel was still applied locally")
+        fireTimers()
+        assertTrue(refreshCount >= 1,
+            "BU.1d (v3.2.15): deferred refresh fires B.UI.Refresh for the non-host")
+
+        -- BU.2 — host LocalDouble → host step, NO non-host deferred path
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.belPending = { 2 }; S.s.cumulative = { A = 0, B = 0 }
+        resetSpies()
+        N.LocalDouble(false)             -- closed → HostFinishDeal branch
+        assertTrue(hfd,
+            "BU.2a (v3.2.15): host LocalDouble still calls its host-step (HostFinishDeal)")
+        assertFalse(hasDelayZeroTimer(),
+            "BU.2b (v3.2.15): host LocalDouble does NOT take the non-host deferred path")
+        fireTimers()
+        assertEq(refreshCount, 0,
+            "BU.2c (v3.2.15): host path did not invoke the non-host refresh")
+
+        -- BU.3 — non-host LocalTriple
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_TRIPLE
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 2 }
+        resetSpies()
+        N.LocalTriple(true)
+        assertFalse(hfd or mrb,
+            "BU.3a (v3.2.15): non-host LocalTriple does NOT take a host-step branch")
+        assertTrue(hasDelayZeroTimer(),
+            "BU.3b (v3.2.15): non-host LocalTriple schedules a deferred refresh")
+        assertTrue(S.s.contract.tripled == true,
+            "BU.3c (v3.2.15): the Triple was still applied locally")
+
+        -- BU.4 — non-host LocalFour
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_FOUR
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1,
+                         doublerSeat = 2 }
+        resetSpies()
+        N.LocalFour(true)
+        assertFalse(hfd or mrb,
+            "BU.4a (v3.2.15): non-host LocalFour does NOT take a host-step branch")
+        assertTrue(hasDelayZeroTimer(),
+            "BU.4b (v3.2.15): non-host LocalFour schedules a deferred refresh")
+        assertTrue(S.s.contract.foured == true,
+            "BU.4c (v3.2.15): the Four was still applied locally")
+
+        -- BU.5 — non-host LocalGahwa
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_GAHWA
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 2 }
+        resetSpies()
+        N.LocalGahwa()
+        assertFalse(hfd,
+            "BU.5a (v3.2.15): non-host LocalGahwa does NOT call HostFinishDeal")
+        assertTrue(hasDelayZeroTimer(),
+            "BU.5b (v3.2.15): non-host LocalGahwa schedules a deferred refresh")
+        assertTrue(S.s.contract.gahwa == true,
+            "BU.5c (v3.2.15): Gahwa was still applied locally (contract.gahwa)")
+
+        -- BU.6 — host LocalGahwa → HostFinishDeal, no deferred
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_GAHWA
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 2 }
+        resetSpies()
+        N.LocalGahwa()
+        assertTrue(hfd,
+            "BU.6a (v3.2.15): host LocalGahwa still calls HostFinishDeal")
+        assertFalse(hasDelayZeroTimer(),
+            "BU.6b (v3.2.15): host LocalGahwa does NOT take the non-host deferred path")
+
+        -- BU.7 — non-host LocalBelote (announce-only fall-through).
+        -- LocalBelote gates on PHASE_PLAY (it is announced as the 2nd
+        -- of K/Q-of-trump hits the table), so the fixture must be in
+        -- PHASE_PLAY with the local seat holding K+Q of trump.
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.hand = { "KH", "QH" }
+        S.s.tricks = {}; S.s.trick = nil; S.s.beloteAnnounced = {}
+        resetSpies()
+        N.LocalBelote()
+        assertTrue(hasDelayZeroTimer(),
+            "BU.7a (v3.2.15): non-host LocalBelote schedules a deferred refresh")
+        assertTrue(S.s.beloteAnnounced[2] == true,
+            "BU.7b (v3.2.15): the Belote announcement was applied locally")
+        fireTimers()
+        assertTrue(refreshCount >= 1,
+            "BU.7c (v3.2.15): deferred refresh fires for the non-host Belote actor")
+
+        -- BU.8 — non-host LocalPreempt
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2 }
+        resetSpies()
+        N.LocalPreempt()
+        assertFalse(hfd or mrb,
+            "BU.8a (v3.2.15): non-host LocalPreempt does NOT take a host-step branch")
+        assertTrue(hasDelayZeroTimer(),
+            "BU.8b (v3.2.15): non-host LocalPreempt schedules a deferred refresh")
+        assertTrue(S.s.preemptEligible == nil,
+            "BU.8c (v3.2.15): ApplyPreempt cleared preemptEligible locally")
+
+        -- BU.9 — non-host LocalPreemptPass
+        S.Reset()
+        S.s.paused = false; S.s.isHost = false; S.s.localSeat = 2
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2, 3 }
+        resetSpies()
+        N.LocalPreemptPass()
+        assertTrue(hasDelayZeroTimer(),
+            "BU.9a (v3.2.15): non-host LocalPreemptPass schedules a deferred refresh")
+        local stillHas2 = false
+        for _, s2 in ipairs(S.s.preemptEligible or {}) do
+            if s2 == 2 then stillHas2 = true end
+        end
+        assertFalse(stillHas2,
+            "BU.9b (v3.2.15): ApplyPreemptPass removed this seat from preemptEligible")
+
+        -- BU.10 — source pins
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        local uiSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
+        local n, idx = 0, 0
+        while true do
+            idx = netSrc:find("v3.2.15 M1", idx + 1, true)
+            if not idx then break end
+            n = n + 1
+        end
+        assertEq(n, 7,
+            "BU.10a (v3.2.15): exactly 7 v3.2.15 M1 tails fixed (Double/Triple/Four/Gahwa/Belote/Preempt/PreemptPass) — request-only paths NOT bare-patched")
+        assertTrue(
+            uiSrc:find("not (S.s.contract and S.s.contract.gahwa) then",
+                1, true) ~= nil,
+            "BU.10b (v3.2.15): UI Gahwa affordance gated on the already-mutated contract.gahwa")
+        local v14, j = 0, 0
+        while true do
+            j = netSrc:find("v3.2.14 F1: addon messages do not loop back",
+                j + 1, true)
+            if not j then break end
+            v14 = v14 + 1
+        end
+        assertEq(v14, 2,
+            "BU.10c (v3.2.15): v3.2.14 LocalBid/LocalPlay markers remain intact (exactly 2)")
+        assertTrue(netSrc:find("N._HostStepBid()", 1, true) ~= nil
+               and netSrc:find("N._HostStepPlay()", 1, true) ~= nil,
+            "BU.10d (v3.2.15): v3.2.14 host LocalBid/LocalPlay paths preserved")
+
+        if R then R.CanBel = origCanBel end
+        N.HostFinishDeal   = origHFD
+        N.MaybeRunBot      = origMRB
+        N._FinalizePreempt = origFP
+        N._SunBelAllowed   = origSBA
+        B.UI = origUI
+        S.Reset()
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)

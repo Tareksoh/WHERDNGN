@@ -2387,7 +2387,12 @@ local function renderActions()
         -- the entire match outright if the contract makes; loses if
         -- it fails. No open/closed (terminal).
         local b = S.s.contract and S.s.contract.bidder
-        if b == S.s.localSeat then
+        -- v3.2.15 M1/echo-gap: ApplyGahwa sets contract.gahwa but the
+        -- local phase only advances on the host echo. Gate the bidder's
+        -- Gahwa/Skip affordances on the already-mutated contract.gahwa
+        -- flag so the button is non-actionable during the echo gap
+        -- (LocalGahwa is also idempotent — a re-click is a no-op).
+        if b == S.s.localSeat and not (S.s.contract and S.s.contract.gahwa) then
             addConfirmAction("|cffffd055Gahwa (match-win)|r",
                 "|cffff0000Confirm Gahwa? (match-win or match-loss)|r",
                 function() net().LocalGahwa() end,
