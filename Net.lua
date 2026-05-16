@@ -3206,6 +3206,11 @@ function N.LocalDouble(open)
             N.HostFinishDeal()
         else
             N.MaybeRunBot()
+            -- v3.2.15 blocker1: host open-Bel — the next actor may be
+            -- a human (MaybeRunBot only dispatches a bot), so the host
+            -- must refresh its own UI now. The HostFinishDeal branch
+            -- drives its own refresh — not duplicated here.
+            deferredRefresh()
         end
     else
         -- v3.2.15 M1: addon messages do not loop back, so the acting
@@ -3227,7 +3232,15 @@ function N.LocalTriple(open)
     S.ApplyTriple(S.s.localSeat, open)
     N.SendTriple(S.s.localSeat, open)
     if S.s.isHost then
-        if open then N.MaybeRunBot() else N.HostFinishDeal() end
+        if open then
+            N.MaybeRunBot()
+            -- v3.2.15 blocker1: host open Triple — next actor may be
+            -- a human; refresh host UI now (closed → HostFinishDeal
+            -- already refreshes).
+            deferredRefresh()
+        else
+            N.HostFinishDeal()
+        end
     else
         -- v3.2.15 M1: non-host echo-gap feedback (ApplyTriple already
         -- advanced s.phase, so the Bel x3 affordance drops on repaint).
@@ -3250,7 +3263,15 @@ function N.LocalFour(open)
     S.ApplyFour(S.s.localSeat, open)
     N.SendFour(S.s.localSeat, open)
     if S.s.isHost then
-        if open then N.MaybeRunBot() else N.HostFinishDeal() end
+        if open then
+            N.MaybeRunBot()
+            -- v3.2.15 blocker1: host open Four — next actor may be a
+            -- human; refresh host UI now (closed → HostFinishDeal
+            -- already refreshes).
+            deferredRefresh()
+        else
+            N.HostFinishDeal()
+        end
     else
         -- v3.2.15 M1: non-host echo-gap feedback (ApplyFour already
         -- advanced s.phase, so the Four affordance drops on repaint).
@@ -3328,13 +3349,12 @@ function N.LocalBelote()
     if not (hasK and hasQ) then return end
     S.ApplyBeloteAnnounce(S.s.localSeat)
     N.SendBelote(S.s.localSeat)
-    -- v3.2.15 M1: LocalBelote is announce-only (no host post-step).
-    -- The non-host actor still has no loopback, so refresh its own UI
-    -- now — ApplyBeloteAnnounce set beloteAnnounced[localSeat], so the
-    -- BALOOT! button hides on this repaint. Scope is the non-host
-    -- no-loopback class only; the host's announce visual is driven by
-    -- its own subsequent play flow and is intentionally unchanged.
-    if not S.s.isHost then deferredRefresh() end
+    -- v3.2.15 M1 + blocker2: LocalBelote is announce-only (no host
+    -- post-step). The acting seat — host OR non-host — has no other
+    -- repaint trigger here, so refresh now: ApplyBeloteAnnounce set
+    -- beloteAnnounced[localSeat], so the BALOOT! button hides on the
+    -- immediate repaint regardless of who clicked it.
+    deferredRefresh()
 end
 
 -- Local pre-emption (الثالث, "Triple-on-Ace") action.
@@ -3372,6 +3392,11 @@ function N.LocalPreempt()
             return
         end
         N.MaybeRunBot()
+        -- v3.2.15 blocker1: host preempt → contract set, next actor
+        -- may be a human (MaybeRunBot only dispatches a bot). The
+        -- HostFinishDeal+return path above already refreshes — not
+        -- duplicated here.
+        deferredRefresh()
     else
         -- v3.2.15 M1: non-host echo-gap feedback. ApplyPreempt cleared
         -- s.preemptEligible and advanced s.phase, so the preempt
@@ -3395,6 +3420,10 @@ function N.LocalPreemptPass()
         else
             -- Non-final pass: dispatch the next eligible seat.
             N.MaybeRunBot()
+            -- v3.2.15 blocker1: non-final pass — the next eligible
+            -- actor may be a human; host must refresh its own UI now.
+            -- The _FinalizePreempt branch already refreshes.
+            deferredRefresh()
         end
     else
         -- v3.2.15 M1: non-host echo-gap feedback. ApplyPreemptPass

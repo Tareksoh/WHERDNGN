@@ -9722,6 +9722,71 @@ do
         assertFalse(stillHas2,
             "BU.9b (v3.2.15): ApplyPreemptPass removed this seat from preemptEligible")
 
+        -- BU.11 — Codex blocker 1: host-side open/non-final escalation
+        -- & preempt MaybeRunBot branches must refresh the host UI
+        -- (next actor may be a human; MaybeRunBot only dispatches a
+        -- bot). HostFinishDeal branches must NOT be double-refreshed.
+        -- Codex blocker 2: LocalBelote refreshes for host too.
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_DOUBLE
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.belPending = { 2 }; S.s.cumulative = { A = 0, B = 0 }
+        resetSpies()
+        N.LocalDouble(true)              -- host, open, Hokm → MaybeRunBot
+        assertTrue(mrb,
+            "BU.11a (v3.2.15): host open LocalDouble takes MaybeRunBot branch")
+        assertTrue(hasDelayZeroTimer(),
+            "BU.11b (v3.2.15): host open LocalDouble refreshes after MaybeRunBot")
+
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_TRIPLE
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 2 }
+        resetSpies()
+        N.LocalTriple(true)
+        assertTrue(mrb and hasDelayZeroTimer(),
+            "BU.11c (v3.2.15): host open LocalTriple refreshes after MaybeRunBot")
+
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_FOUR
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1,
+                         doublerSeat = 2 }
+        resetSpies()
+        N.LocalFour(true)
+        assertTrue(mrb and hasDelayZeroTimer(),
+            "BU.11d (v3.2.15): host open LocalFour refreshes after MaybeRunBot")
+
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2 }
+        resetSpies()
+        N.LocalPreempt()                 -- _SunBelAllowed stub → true
+        assertTrue(mrb and hasDelayZeroTimer(),
+            "BU.11e (v3.2.15): host LocalPreempt (SunBel allowed) refreshes after MaybeRunBot")
+
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_PREEMPT
+        S.s.preemptEligible = { 2, 3 }
+        resetSpies()
+        N.LocalPreemptPass()             -- seat 3 still eligible → non-final
+        assertTrue(mrb and hasDelayZeroTimer(),
+            "BU.11f (v3.2.15): host LocalPreemptPass non-final refreshes after MaybeRunBot")
+
+        S.Reset()
+        S.s.paused = false; S.s.isHost = true; S.s.localSeat = 2
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = { type = K.BID_HOKM, trump = "H", bidder = 1 }
+        S.s.hand = { "KH", "QH" }
+        S.s.tricks = {}; S.s.trick = nil; S.s.beloteAnnounced = {}
+        resetSpies()
+        N.LocalBelote()
+        assertTrue(S.s.beloteAnnounced[2] == true and hasDelayZeroTimer(),
+            "BU.11g (v3.2.15): host LocalBelote also refreshes (blocker 2)")
+
         -- BU.10 — source pins
         local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
         local uiSrc  = io.open(WHEREDNGN_TESTS_ROOT .. "/UI.lua"):read("*a")
@@ -9749,6 +9814,19 @@ do
         assertTrue(netSrc:find("N._HostStepBid()", 1, true) ~= nil
                and netSrc:find("N._HostStepPlay()", 1, true) ~= nil,
             "BU.10d (v3.2.15): v3.2.14 host LocalBid/LocalPlay paths preserved")
+        local nb, k = 0, 0
+        while true do
+            k = netSrc:find("v3.2.15 blocker1", k + 1, true)
+            if not k then break end
+            nb = nb + 1
+        end
+        assertEq(nb, 5,
+            "BU.10e (v3.2.15): exactly 5 host MaybeRunBot direct-refresh sites (Double/Triple/Four/Preempt/PreemptPass) — HostFinishDeal branches not double-refreshed")
+        assertTrue(
+            netSrc:find("v3.2.15 M1 + blocker2", 1, true) ~= nil
+            and netSrc:find("if not S.s.isHost then deferredRefresh() end",
+                1, true) == nil,
+            "BU.10f (v3.2.15): LocalBelote refresh is now unconditional (host + non-host); old non-host-only guard removed")
 
         if R then R.CanBel = origCanBel end
         N.HostFinishDeal   = origHFD
