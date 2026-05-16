@@ -9387,6 +9387,135 @@ do
             "BS.4d (v3.2.13): _OnBidCard calls ApplyBidCard with tonumber(forRound)")
     end
 
+    -- =====================================================================
+    -- BT — v3.2.14 F1: acting non-host gets an immediate local refresh
+    -- (LocalBid / LocalPlay). Addon messages don't loop back, so the
+    -- non-host had no host echo to drive a refresh. Host path unchanged
+    -- (still _HostStep*); non-host now calls deferredRefresh().
+    -- =====================================================================
+    do
+        -- deferredRefresh no-ops unless B.UI.Refresh exists → install a
+        -- spy. _HostStep* are spied as no-ops so the ONLY thing that can
+        -- schedule a delay-0 timer in the tail is deferredRefresh.
+        local B = WHEREDNGN
+        local origUI = B.UI
+        local refreshCount = 0
+        B.UI = { Refresh = function() refreshCount = refreshCount + 1 end }
+        local origHSB, origHSP = N._HostStepBid, N._HostStepPlay
+        local hostStepBid, hostStepPlay = false, false
+        N._HostStepBid  = function() hostStepBid  = true end
+        N._HostStepPlay = function() hostStepPlay = true end
+        local origObs = Bot and Bot.OnPlayObserved
+        if Bot then Bot.OnPlayObserved = function() end end
+        local function hasDelayZeroTimer()
+            for _, e in ipairs(timerCallbacks) do
+                if e.delay == 0 then return true end
+            end
+            return false
+        end
+
+        -- BT.1 — non-host LocalBid → deferredRefresh, NOT _HostStepBid
+        S.Reset()
+        S.s.isHost = false; S.s.paused = false
+        S.s.localSeat = 2; S.s.localName = "Me-R"
+        S.s.turn = 2; S.s.turnKind = "bid"; S.s.bids = {}
+        S.s.phase = K.PHASE_DEAL1
+        hostStepBid = false; refreshCount = 0; clearCaptures()
+        N.LocalBid("PASS")
+        assertFalse(hostStepBid,
+            "BT.1a (v3.2.14): non-host LocalBid does NOT call _HostStepBid")
+        assertTrue(hasDelayZeroTimer(),
+            "BT.1b (v3.2.14): non-host LocalBid schedules a deferred (delay-0) refresh")
+        assertEq(S.s.bids[2], "PASS",
+            "BT.1c (v3.2.14): the bid is still applied locally")
+        fireTimers()
+        assertTrue(refreshCount >= 1,
+            "BT.1d (v3.2.14): deferred refresh fires B.UI.Refresh for the acting non-host")
+
+        -- BT.2 — host LocalBid → _HostStepBid, NO non-host deferred path
+        S.Reset()
+        S.s.isHost = true; S.s.paused = false
+        S.s.localSeat = 1; S.s.localName = "Host-R"
+        S.s.turn = 1; S.s.turnKind = "bid"; S.s.bids = {}
+        S.s.phase = K.PHASE_DEAL1
+        hostStepBid = false; refreshCount = 0; clearCaptures()
+        N.LocalBid("PASS")
+        assertTrue(hostStepBid,
+            "BT.2a (v3.2.14): host LocalBid still calls _HostStepBid")
+        assertFalse(hasDelayZeroTimer(),
+            "BT.2b (v3.2.14): host LocalBid does NOT take the non-host deferred-refresh path")
+        fireTimers()
+        assertEq(refreshCount, 0,
+            "BT.2c (v3.2.14): host path did not invoke the non-host refresh")
+
+        -- BT.3 — non-host LocalPlay → deferredRefresh, NOT _HostStepPlay
+        S.Reset()
+        S.s.isHost = false; S.s.paused = false
+        S.s.localSeat = 2; S.s.localName = "Me-R"
+        S.s.turn = 2; S.s.turnKind = "play"
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = nil
+        S.s.hand = { "7C" }
+        S.s.trick = { leadSuit = nil, plays = {} }
+        S.s.meldsDeclared = {}
+        S.s.localPlayedThisTrick = nil
+        hostStepPlay = false; refreshCount = 0; clearCaptures()
+        N.LocalPlay("7C")
+        assertFalse(hostStepPlay,
+            "BT.3a (v3.2.14): non-host LocalPlay does NOT call _HostStepPlay")
+        assertTrue(hasDelayZeroTimer(),
+            "BT.3b (v3.2.14): non-host LocalPlay schedules a deferred (delay-0) refresh")
+        assertTrue(S.s.localPlayedThisTrick == true,
+            "BT.3c (v3.2.14): the play is still applied locally (localPlayedThisTrick)")
+        fireTimers()
+        assertTrue(refreshCount >= 1,
+            "BT.3d (v3.2.14): deferred refresh fires B.UI.Refresh for the acting non-host")
+
+        -- BT.4 — host LocalPlay → _HostStepPlay, NO non-host deferred path
+        S.Reset()
+        S.s.isHost = true; S.s.paused = false
+        S.s.localSeat = 1; S.s.localName = "Host-R"
+        S.s.turn = 1; S.s.turnKind = "play"
+        S.s.phase = K.PHASE_PLAY
+        S.s.contract = nil
+        S.s.hand = { "7C" }
+        S.s.trick = { leadSuit = nil, plays = {} }
+        S.s.meldsDeclared = {}
+        S.s.localPlayedThisTrick = nil
+        hostStepPlay = false; refreshCount = 0; clearCaptures()
+        N.LocalPlay("7C")
+        assertTrue(hostStepPlay,
+            "BT.4a (v3.2.14): host LocalPlay still calls _HostStepPlay")
+        assertFalse(hasDelayZeroTimer(),
+            "BT.4b (v3.2.14): host LocalPlay does NOT take the non-host deferred-refresh path")
+        fireTimers()
+        assertEq(refreshCount, 0,
+            "BT.4c (v3.2.14): host path did not invoke the non-host refresh")
+
+        -- BT.5 — source pins: F1 non-host branch in both tails; host
+        -- calls preserved.
+        local netSrc = io.open(WHEREDNGN_TESTS_ROOT .. "/Net.lua"):read("*a")
+        local marker = "v3.2.14 F1: addon messages do not loop back"
+        local mcount, idx = 0, 0
+        while true do
+            idx = netSrc:find(marker, idx + 1, true)
+            if not idx then break end
+            mcount = mcount + 1
+        end
+        assertEq(mcount, 2,
+            "BT.5a (v3.2.14): F1 non-host-refresh marker present in exactly 2 tails (LocalBid + LocalPlay)")
+        assertTrue(netSrc:find("N._HostStepBid()", 1, true) ~= nil,
+            "BT.5b (v3.2.14): host LocalBid path (_HostStepBid) preserved")
+        assertTrue(netSrc:find("N._HostStepPlay()", 1, true) ~= nil,
+            "BT.5c (v3.2.14): host LocalPlay path (_HostStepPlay) preserved")
+
+        if Bot then Bot.OnPlayObserved = origObs end
+        N._HostStepBid  = origHSB
+        N._HostStepPlay = origHSP
+        B.UI = origUI
+        S.Reset()
+    end
+
     -- Restore real harness stubs for any subsequent test sections.
     -- (Currently this is the last `do` block before the test summary, but
     -- restore anyway so future inserts don't pick up our captures.)

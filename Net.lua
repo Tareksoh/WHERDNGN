@@ -3154,7 +3154,15 @@ function N.LocalBid(bid)
     cancelLocalWarn()
     S.ApplyBid(S.s.localSeat, bid)
     N.SendBid(S.s.localSeat, bid)
-    if S.s.isHost then N._HostStepBid() end
+    -- v3.2.14 F1: addon messages do not loop back, so the acting
+    -- non-host gets no host echo to drive a refresh. The host
+    -- refreshes via _HostStepBid; the non-host must refresh its own
+    -- UI now (deferredRefresh is the existing watchdog-safe helper).
+    if S.s.isHost then
+        N._HostStepBid()
+    else
+        deferredRefresh()
+    end
 end
 
 -- Each Local* escalation action takes an `open` flag (default true)
@@ -3487,7 +3495,15 @@ function N.LocalPlay(card)
     S.s.localPlayedThisTrick = true
     safeOnPlayObserved(S.s.localSeat, card, leadBefore, "LocalPlay")
     N.SendPlay(S.s.localSeat, card)
-    if S.s.isHost then N._HostStepPlay() end
+    -- v3.2.14 F1: addon messages do not loop back, so the acting
+    -- non-host gets no host echo to drive a refresh. The host
+    -- refreshes via _HostStepPlay; the non-host must refresh its own
+    -- UI now (deferredRefresh is the existing watchdog-safe helper).
+    if S.s.isHost then
+        N._HostStepPlay()
+    else
+        deferredRefresh()
+    end
 end
 
 -- ---------------------------------------------------------------------
