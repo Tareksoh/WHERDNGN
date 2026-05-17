@@ -1040,10 +1040,16 @@ function BM.PickPlay(seat)
     -- /baloot ismctsdiag never reports a STALE memory delta / world
     -- count from a prior heavy move when the current move
     -- short-circuits (single-card / no-legal / build-failed).
+    -- v3.2.18 Codex polish #2: _lastWorldsCompleted is part of that
+    -- "world count" the comment promises — reset it here too so the
+    -- no-legal / legal-build-failed exits (which never reach the
+    -- post-loop BM._lastWorldsCompleted assignment) cannot surface a
+    -- prior heavy move's completed-world count via ismctsdiag.
     BM._lastMemKB = 0
     BM._lastMemCapped = false
     BM._lastNumWorlds = 0
     BM._lastLegalCount = 0
+    BM._lastWorldsCompleted = 0
     BM._lastTrickCount = #(S.s.tricks or {})
     local legalOk = pcall(buildLegalSet)
     if not legalOk then
@@ -1226,10 +1232,17 @@ function BM.PickPlay(seat)
     --     a budget/mem-capped move is still paid down before the next
     --     of the 3 back-to-back Saudi-Master moves in the trick.
     -- gcAvail-guarded so collectgarbage-less environments are no-ops.
+    -- v3.2.18 Codex polish #1: honor the documented "0 disables"
+    -- contract for K.BOT_ISMCTS_GC_STEP_KB. Resolve the step size
+    -- first and gate on `> 0` — a bare `if gcAvail then step(0)` would
+    -- still issue a step(0) call when the tunable is set to 0, which
+    -- the Constants doc explicitly says should disable the post-move
+    -- step entirely.
     BM._lastMemKB = math.max(0, math.floor((memNowKB() - startMemKB) + 0.5))
     BM._lastMemCapped = memCapped
-    if gcAvail then
-        collectgarbage("step", (K and K.BOT_ISMCTS_GC_STEP_KB) or 256)
+    local gcStepKB = (K and K.BOT_ISMCTS_GC_STEP_KB) or 256
+    if gcAvail and gcStepKB > 0 then
+        collectgarbage("step", gcStepKB)
     end
     -- v0.11.18-final B2-FALLBACK-REGRESSION (ultra audit): compare
     -- against worldsCompleted, not numWorlds. With B2 budget, the

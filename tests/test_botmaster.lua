@@ -578,12 +578,34 @@ do
         "G.3h (v3.2.18): memory guard compares net heap growth to the budget")
     assertTrue(src:find("if overBudget() or overMemBudget() then break end", 1, true) ~= nil,
         "G.3i (v3.2.18): world loop breaks on time OR memory budget")
-    assertTrue(src:find('collectgarbage("step", (K and K.BOT_ISMCTS_GC_STEP_KB) or 256)', 1, true) ~= nil,
-        "G.3j (v3.2.18): post-move incremental GC step present")
+    -- v3.2.18 Codex polish #1: the post-move step must HONOR the
+    -- documented "K.BOT_ISMCTS_GC_STEP_KB = 0 disables" contract.
+    -- Pin the resolve + explicit `> 0` gate + the gated call so a
+    -- regression back to a bare `if gcAvail then step(0)` is caught.
+    assertTrue(src:find("local gcStepKB = (K and K.BOT_ISMCTS_GC_STEP_KB) or 256", 1, true) ~= nil,
+        "G.3j (v3.2.18): GC step size resolved into gcStepKB before use")
+    assertTrue(src:find("if gcAvail and gcStepKB > 0 then", 1, true) ~= nil,
+        "G.3j2 (v3.2.18 Codex#1): post-move GC step gated on gcStepKB > 0 (0 disables)")
+    assertTrue(src:find('collectgarbage("step", gcStepKB)', 1, true) ~= nil,
+        "G.3j3 (v3.2.18): the gated post-move incremental GC step call is present")
+    assertTrue(src:find('collectgarbage("step", (K and K.BOT_ISMCTS_GC_STEP_KB) or 256)', 1, true) == nil,
+        "G.3j4 (v3.2.18 Codex#1): old un-gated step(0)-capable form is gone")
     assertTrue(src:find('collectgarbage("collect")', 1, true) == nil,
         "G.3k (v3.2.18): NO full collectgarbage(\"collect\") anywhere in BotMaster (never full-collect)")
     assertTrue(src:find("if worldsCompleted == 0 or rolloutErrors == worldsCompleted then", 1, true) ~= nil,
         "G.3l (v3.2.18): zero-worlds heuristic-fallback gate preserved")
+    -- v3.2.18 Codex polish #2: _lastWorldsCompleted is reset in the
+    -- per-move telemetry block (before the short-circuit exits), so
+    -- the no-legal / legal-build-failed paths cannot surface a prior
+    -- heavy move's completed-world count via /baloot ismctsdiag.
+    do
+        local resetStart = src:find("reset per-move telemetry", 1, true)
+        local legalOkPos = src:find("local legalOk = pcall(buildLegalSet)", 1, true)
+        assertTrue(resetStart ~= nil and legalOkPos ~= nil
+            and src:find("BM._lastWorldsCompleted = 0", resetStart, true) ~= nil
+            and src:find("BM._lastWorldsCompleted = 0", resetStart, true) < legalOkPos,
+            "G.3m (v3.2.18 Codex#2): _lastWorldsCompleted = 0 reset before the short-circuit exits")
+    end
 end
 
 -- G.4 SOURCE PINS — Constants.lua: the two new tunables exist with
@@ -623,6 +645,56 @@ do
         "G.6c (v3.2.18): trick≤5 3-bot cap = 30")
     assertTrue(src:find("numWorlds = math.min(numWorlds, 20)", 1, true) ~= nil,
         "G.6d (v3.2.18): late-trick 3-bot cap = 20")
+end
+
+-- G.7 BEHAVIORAL (v3.2.18 Codex polish #2): a short-circuit exit that
+-- has NO _lastWorldsCompleted assignment of its own must still NOT
+-- surface a prior heavy move's completed-world count. We seed a stale
+-- value, then force the `no-legal-moves` exit by stubbing
+-- R.IsLegalPlay → false for every card (a non-empty hand still reaches
+-- the per-move telemetry reset + buildLegalSet, but #legal == 0). Only
+-- the reset block can zero _lastWorldsCompleted on that path, so this
+-- isolates the fix end-to-end (the single-card path's own reset is
+-- separately covered by F.1c).
+do
+    freshState()
+    WHEREDNGNDB.saudiMasterBots = true
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 3 }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = "H", plays = { { seat = 4, card = "8H" } } }
+    S.s.hostHands = {
+        [1] = { "9H", "KH", "AS", "TS", "QD", "JD", "8C", "7C" },
+        [2] = { "AH", "TH", "JH", "QH", "AD", "KD", "9D", "7D" },
+        [3] = { "AC", "TC", "KC", "QC", "JC", "9C", "JS", "9S" },
+        [4] = { "KS", "QS", "8S", "7S", "AD", "8D", "TD", "8H" },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true }
+    S.s.akaCalled = nil
+
+    -- Simulate a prior heavy move having left a non-zero count.
+    BM._lastWorldsCompleted = 999
+    BM._lastShortCircuit = nil
+
+    local origIsLegal = R.IsLegalPlay
+    R.IsLegalPlay = function() return false end
+    local preInRollout = Bot._inRollout
+    local pick = BM.PickPlay(1)
+    R.IsLegalPlay = origIsLegal
+
+    assertTrue(pick == nil,
+        "G.7a (v3.2.18 Codex#2): forced no-legal short-circuit returns nil")
+    assertEq(BM._lastShortCircuit, "no-legal-moves",
+        "G.7b (v3.2.18 Codex#2): took the no-legal-moves exit (no own _lastWorldsCompleted write)")
+    assertEq(BM._lastWorldsCompleted, 0,
+        "G.7c (v3.2.18 Codex#2): stale _lastWorldsCompleted (999) cleared to 0 by the reset block")
+    assertEq(Bot._inRollout, preInRollout,
+        "G.7d (v3.2.18 Codex#2): Bot._inRollout restored after the no-legal short-circuit")
 end
 
 -- =====================================================================
