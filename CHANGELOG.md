@@ -1,5 +1,103 @@
 # Changelog
 
+## v3.2.18 — ISMCTS memory guard (whole-client freeze/crash fix)
+
+A focused, high-priority stability release. It targets a
+**whole-WoW-client freeze / crash class** — not an addon-only stall —
+reported around trick ~3 in 1-human + 3-bot Saudi-Master games, with
+high memory usage. **No turn-order, legal-play, scoring, bot
+card-choice, protocol, saved-variable, .toc, .pkgmeta, .github, or
+packaging changes.** v3.1.x / v3.2.x clients remain
+addon-message-compatible.
+
+### Fixed
+
+- **Saudi-Master ISMCTS no longer spikes the Lua heap into a client
+  freeze/crash.** The v0.11.17 wall-clock budget caps Saudi-Master
+  *move latency* but not *allocation*. On a fast client the
+  determinization + rollout loop (`sampleConsistentDeal` +
+  `rolloutValue`, per world per legal card) allocates megabytes of
+  transient tables well within the 0.12s time budget; with three
+  Saudi-Master bots sampling back-to-back inside one trick the heap
+  grows faster than the incremental GC reclaims it, and WoW itself
+  freezes / crashes (not just the addon).
+
+  - **Root cause:** time-bounded ≠ allocation-bounded. The pre-fix
+    loop had no memory ceiling and no GC pacing, so a 1-human +
+    3-bot table at maximum early-trick world uncertainty could
+    out-allocate the collector.
+  - **Runtime memory emergency brake.** A new guard tracks net Lua
+    heap growth (`collectgarbage("count")`) across the move and, if
+    it exceeds `K.BOT_ISMCTS_MEM_BUDGET_KB` (default 16384 — an
+    emergency-only ceiling several times the addon's steady-state
+    footprint; `0` disables), stops sampling further worlds. It is
+    structured exactly like the existing wall-clock brake (per-world
+    **and** per-card checks). On trip, the worlds already completed
+    vote; if **zero** completed, the existing `_restore(nil)` →
+    heuristic-picker fallback fires unchanged. `collectgarbage` is
+    availability-guarded so environments without it degrade
+    gracefully (cap off, no error).
+  - **More conservative world counts on 3+-bot tables.** When 3 or
+    more seats are bots, the early/mid determinization counts are
+    capped harder (`math.min`): trick ≤2 100→50, ≤5 60→30, later
+    30→20. Flat Monte-Carlo converges well below these counts;
+    responsiveness and memory headroom matter far more on a 3-bot
+    table. This is purely an internal sample-count change.
+  - **Post-move incremental GC nudge.** After the world loop (never
+    inside the per-world / per-card tight loops, and **never** a
+    full stop-the-world collect), a single bounded
+    `collectgarbage("step", K.BOT_ISMCTS_GC_STEP_KB)` (default 256;
+    `0` disables) pays down the move's transient garbage so it does
+    not accumulate across the three back-to-back Saudi-Master moves
+    in a trick.
+  - **Diagnostics.** `/baloot ismctsdiag` now also reports the
+    last move's memory delta, configured cap, target vs. completed
+    world counts, trick index, legal-card count, and a
+    `[MEM-CAPPED]` tag when the memory brake tripped — so a
+    memory-driven early stop is distinguishable from a time-driven
+    one when diagnosing this freeze class.
+
+### Unchanged
+
+- No turn-order, legal-play, scoring, bot card-choice, protocol,
+  saved-variable, `.toc`, `.pkgmeta`, `.github`, or packaging
+  changes. The fix is confined to the Saudi-Master ISMCTS sampler,
+  its tunables, and the diagnostic slash command.
+- **Explicitly verified bounded and NOT modified:** the UI hand
+  frame pool (`handPool`, ≤8 slots, reused via `clearHand()` — never
+  recreated per refresh), `B.Log` (fixed 200-slot ring buffer),
+  `freezeLog` (200-event ring, off by default), and
+  `WHEREDNGNDB.history` (200-row ring, one row per round). This was a
+  Saudi-Master allocation problem, not a UI/log/history leak.
+- v3.1.x / v3.2.x addon-message compatibility remains intact.
+
+### Verification
+
+- Full harness: **1,545 checks passed, 0 failed**.
+- `test_H1_pin_J9_trump`: 11 passed, 0 failed.
+- `test_H7_sun_shortest_lead`: 9 passed, 0 failed.
+- New **BotMaster section G** (Codex-reviewed across two passes):
+  behavioral coverage (telemetry populated; 3-bot trick-0 cap = 50;
+  forced 0-world → heuristic fallback with no `_inRollout` leak;
+  stale `_lastWorldsCompleted` cleared on a no-legal short-circuit)
+  plus source pins (memory-guard structure, the `gcStepKB > 0`
+  disable gate, the absence of any full-collect literal, the
+  Constants tunables, and the `ismctsdiag` memory output).
+
+### Notes
+
+- Released promptly because the symptom is a whole-client
+  freeze/crash, not a recoverable addon stall.
+- This release also folds in the only other unreleased mainline
+  commit since v3.2.17: a **non-addon documentation fix** correcting
+  the CurseForge project ID recorded in `CLAUDE.md`
+  (1526129 → 1529200, "Loot & Baloot", slug `wheredngn`). It does
+  not affect the packaged addon in any way.
+- No interim v3.2.x work-item tags were created; the v3.2.18 tag is
+  the single release point for all mainline work after v3.2.17.
+- The three untracked `.swarm_findings/` audit docs remain
+  untracked and uncommitted unless separately requested.
+
 ## v3.2.17 — Multiplayer stability and bot Takweesh policy
 
 A combined release covering all unreleased mainline work after
