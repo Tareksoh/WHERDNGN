@@ -421,6 +421,17 @@ local function dispatch(msg)
         local last = bm._lastWorldsCompleted or 0
         local budget = K.BOT_ISMCTS_BUDGET_SEC or 0
         local shortCircuit = bm._lastShortCircuit
+        -- v3.2.18 (ismcts-memory-guard): memory telemetry — net Lua-
+        -- heap delta for the last move, the configured cap, and
+        -- whether the memory brake actually tripped. Helps users /
+        -- Codex tell a memory-driven early stop apart from a time-
+        -- driven one when diagnosing the trick-3 freeze class.
+        local memKB = bm._lastMemKB or 0
+        local memBudget = K.BOT_ISMCTS_MEM_BUDGET_KB or 0
+        local target = bm._lastNumWorlds or 0
+        local legalN = bm._lastLegalCount or 0
+        local trickN = bm._lastTrickCount or 0
+        local memTag = bm._lastMemCapped and " [MEM-CAPPED]" or ""
         -- v0.11.19 (ultra-audit BM-03 follow-up): differentiate the
         -- "0 worlds" cases. Single-card-shortcut is normal/expected;
         -- budget-cut-on-iter-1 would suggest a perf concern.
@@ -432,11 +443,14 @@ local function dispatch(msg)
         elseif shortCircuit == "legal-build-failed" then
             say("ISMCTS: legal-set build pcall failed — heuristic fallback")
         elseif last == 0 then
-            say(("ISMCTS: last move completed 0 worlds (budget %.2fs cut on iter 1?); "
-                 .. "if you see this often, raise K.BOT_ISMCTS_BUDGET_SEC"):format(budget))
+            say(("ISMCTS: last move completed 0 worlds (budget %.2fs / Δmem %dKB "
+                 .. "cut on iter 1?)%s; if frequent, raise K.BOT_ISMCTS_BUDGET_SEC "
+                 .. "or investigate memory"):format(budget, memKB, memTag))
         else
-            say(("ISMCTS: last move completed %d worlds (budget %.2fs)")
-                :format(last, budget))
+            say(("ISMCTS: last move completed %d/%d worlds @ trick %d, %d legal; "
+                 .. "Δmem %dKB (cap %dKB) budget %.2fs%s")
+                :format(last, target, trickN, legalN, memKB, memBudget,
+                        budget, memTag))
         end
         return
     end

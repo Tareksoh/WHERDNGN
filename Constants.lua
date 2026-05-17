@@ -751,3 +751,33 @@ K.BOT_OVERCALL_SHORT_TRUMP_BONUS =  8  -- 1 card in opp's trump suit
 -- loop check at BotMaster.lua:1117-1119 (also v3.0.5) handles the
 -- single-world overshoot case.
 K.BOT_ISMCTS_BUDGET_SEC = 0.12
+
+-- v3.2.18 (ismcts-memory-guard): runtime MEMORY budget per Saudi
+-- Master move, complementing the wall-clock budget above. The time
+-- cap bounds *latency* but not *allocation*: on a fast client the
+-- world loop can allocate megabytes of transient determinization /
+-- rollout tables well within 0.12s, and if the incremental GC can't
+-- keep pace the Lua heap spikes and WoW freezes/crashes. User-
+-- reported: client freeze + high memory around trick 3 in 1-human +
+-- 3-bot games (3 Saudi-Master bots sampling back-to-back per trick).
+--
+-- This is an EMERGENCY BRAKE, not a tight cap. It trips only on
+-- decisively abnormal NET Lua-heap growth within a single move —
+-- 16 MB, several times the addon's entire steady-state footprint —
+-- at which point we stop sampling further worlds and vote with the
+-- worlds already completed (or fall back to heuristics if none
+-- completed, exactly like the time-budget path). Healthy play never
+-- approaches this, especially with the 3-bot world-count reduction
+-- at BotMaster.lua. Set to 0 to disable the memory cap entirely.
+-- collectgarbage("count") is a cheap counter read (no collection);
+-- environments without collectgarbage degrade gracefully (cap off).
+K.BOT_ISMCTS_MEM_BUDGET_KB = 16384
+
+-- v3.2.18: post-move incremental GC nudge size (KB hint to
+-- collectgarbage("step", n)). Run ONCE after the world loop — never
+-- inside the per-world / per-card tight loops, and never a full
+-- collectgarbage("collect") (that would itself stall the frame).
+-- A small bounded step pays down the move's transient garbage so it
+-- doesn't accumulate across the 3 back-to-back Saudi-Master moves in
+-- a single trick. Set to 0 to disable the post-move step.
+K.BOT_ISMCTS_GC_STEP_KB = 256

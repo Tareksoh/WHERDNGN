@@ -1036,6 +1036,15 @@ function BM.PickPlay(seat)
             if lok then legal[#legal + 1] = c end
         end
     end
+    -- v3.2.18 (ismcts-memory-guard): reset per-move telemetry so
+    -- /baloot ismctsdiag never reports a STALE memory delta / world
+    -- count from a prior heavy move when the current move
+    -- short-circuits (single-card / no-legal / build-failed).
+    BM._lastMemKB = 0
+    BM._lastMemCapped = false
+    BM._lastNumWorlds = 0
+    BM._lastLegalCount = 0
+    BM._lastTrickCount = #(S.s.tricks or {})
     local legalOk = pcall(buildLegalSet)
     if not legalOk then
         BM._lastShortCircuit = "legal-build-failed"
@@ -1052,6 +1061,7 @@ function BM.PickPlay(seat)
         -- budget cut on iter 1". Pre-fix users couldn't tell which.
         BM._lastShortCircuit = "single-card"
         BM._lastWorldsCompleted = 0
+        BM._lastLegalCount = 1
         return _restore(legal[1])
     end
     BM._lastShortCircuit = nil  -- enters world loop normally
@@ -1075,6 +1085,39 @@ function BM.PickPlay(seat)
     if numTricks <= 2 then numWorlds = 100
     elseif numTricks <= 5 then numWorlds = 60
     else numWorlds = BASE_NUM_WORLDS end
+
+    -- v3.2.18 (ismcts-memory-guard): under a table with 3+ bot seats
+    -- and Saudi Master active, several bots run this sampler back-to-
+    -- back within a single trick. The combined transient-table
+    -- allocation (sampleConsistentDeal + rolloutValue, per world per
+    -- legal card, ×3 consecutive Saudi-Master moves) is the dominant
+    -- memory-pressure source behind the reported trick-~3 freeze /
+    -- high-memory crash in 1-human + 3-bot games. Cap early/mid world
+    -- counts more conservatively when 3+ seats are bots. Accuracy
+    -- impact is small — flat Monte-Carlo converges well below these
+    -- caps (file header: "30 worlds is enough to pick reliably") —
+    -- while responsiveness and memory headroom matter much more on a
+    -- 3-bot table. NO rules / scoring / wire / UI / card-legality
+    -- change: this only lowers the internal determinization sample
+    -- count. Caps use math.min so a future lower base is never raised.
+    local botSeatCount = 0
+    if S.s.seats then
+        for i = 1, 4 do
+            local si = S.s.seats[i]
+            if si and si.isBot then botSeatCount = botSeatCount + 1 end
+        end
+    end
+    if botSeatCount >= 3 then
+        if numTricks <= 2 then numWorlds = math.min(numWorlds, 50)
+        elseif numTricks <= 5 then numWorlds = math.min(numWorlds, 30)
+        else numWorlds = math.min(numWorlds, 20) end
+    end
+
+    -- v3.2.18: seed per-move telemetry for /baloot ismctsdiag.
+    BM._lastNumWorlds = numWorlds
+    BM._lastLegalCount = #legal
+    BM._lastTrickCount = numTricks
+    BM._lastMemCapped = false
 
     -- v0.5.3 BUG fix: wrap the rollout in pcall so a mid-rollout
     -- error (sampler nil-deref, malformed card, ScoreRound edge case)
@@ -1120,13 +1163,43 @@ function BM.PickPlay(seat)
     local function overBudget()
         return budgetSec > 0 and (nowSec() - startedAt) > budgetSec
     end
+    -- v3.2.18 (ismcts-memory-guard): runtime MEMORY emergency brake,
+    -- structured exactly like the wall-clock budget above. The time
+    -- cap bounds latency but not allocation — on a fast client the
+    -- world loop can allocate megabytes of transient determinization
+    -- / rollout tables well within budgetSec, and if the incremental
+    -- GC can't keep pace the Lua heap spikes and the client freezes
+    -- (user-reported, trick ~3, high memory, 1-human + 3-bot). When
+    -- NET heap growth since loop start exceeds the (large, emergency-
+    -- only) cap we stop sampling: already-completed worlds vote;
+    -- zero-completed falls back to heuristics via the existing
+    -- worldsCompleted==0 gate below. collectgarbage("count") is a
+    -- cheap counter read (no collection); guarded for availability so
+    -- headless / collectgarbage-less environments disable the cap and
+    -- degrade gracefully rather than erroring. memCapped feeds
+    -- /baloot ismctsdiag so a memory-driven early stop is visible.
+    local gcAvail = type(collectgarbage) == "function"
+    local function memNowKB()
+        return gcAvail and collectgarbage("count") or 0
+    end
+    local startMemKB = memNowKB()
+    local memBudgetKB = (K and K.BOT_ISMCTS_MEM_BUDGET_KB) or 0
+    local memCapped = false
+    local function overMemBudget()
+        if not gcAvail or memBudgetKB <= 0 then return false end
+        if (memNowKB() - startMemKB) > memBudgetKB then
+            memCapped = true
+            return true
+        end
+        return false
+    end
     for w = 1, numWorlds do
-        if overBudget() then break end
+        if overBudget() or overMemBudget() then break end
         local ok, err = pcall(function()
             local world = sampleConsistentDeal(seat, unseen)
             if world then
                 for _, card in ipairs(legal) do
-                    if overBudget() then break end
+                    if overBudget() or overMemBudget() then break end
                     scores[card] = scores[card]
                                   + rolloutValue(seat, card, world, S.s.contract)
                 end
@@ -1137,6 +1210,27 @@ function BM.PickPlay(seat)
     end
     -- Track for ismctsdiag: actual worlds completed (vs configured numWorlds).
     BM._lastWorldsCompleted = worldsCompleted
+    -- v3.2.18 (ismcts-memory-guard): record the move's NET heap delta
+    -- and whether the memory brake tripped, then run ONE bounded
+    -- incremental GC step. Rationale for placement / form:
+    --   • POST-LOOP only — never inside the per-world / per-card tight
+    --     loops (stepping there would stall the very frame we're
+    --     trying to protect).
+    --   • the step call is INCREMENTAL — never a full stop-the-world
+    --     GC collect (a full collect mid-frame is itself a freeze
+    --     source; the watchdog hotfix history at Constants
+    --     BOT_ISMCTS_BUDGET_SEC is the cautionary tale). G.3k pins
+    --     the absence of the full-collect literal in this file.
+    --   • Runs on BOTH the normal and the worldsCompleted==0 fallback
+    --     path (it is above that gate) so the transient garbage from
+    --     a budget/mem-capped move is still paid down before the next
+    --     of the 3 back-to-back Saudi-Master moves in the trick.
+    -- gcAvail-guarded so collectgarbage-less environments are no-ops.
+    BM._lastMemKB = math.max(0, math.floor((memNowKB() - startMemKB) + 0.5))
+    BM._lastMemCapped = memCapped
+    if gcAvail then
+        collectgarbage("step", (K and K.BOT_ISMCTS_GC_STEP_KB) or 256)
+    end
     -- v0.11.18-final B2-FALLBACK-REGRESSION (ultra audit): compare
     -- against worldsCompleted, not numWorlds. With B2 budget, the
     -- loop can break early (worldsCompleted < numWorlds). Pre-fix

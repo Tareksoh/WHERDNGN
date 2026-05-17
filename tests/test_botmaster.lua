@@ -407,6 +407,225 @@ do
 end
 
 -- =====================================================================
+-- G. v3.2.18 ISMCTS runtime memory guard + 3-bot world-count cap
+-- =====================================================================
+-- HIGH stability incident: WoW client freeze / high-memory crash
+-- around trick ~3 in 1-human + 3-bot games. Root cause: the v0.11.17
+-- wall-clock budget bounds ISMCTS *latency* but not *allocation* —
+-- on a fast client the determinization / rollout loop can allocate
+-- megabytes of transient tables well within 0.12s, and with 3
+-- Saudi-Master bots sampling back-to-back per trick the Lua heap
+-- spikes faster than the incremental GC reclaims it. v3.2.18 adds:
+--   (1) a runtime memory emergency brake in the world loop,
+--   (2) per-move memory telemetry surfaced via /baloot ismctsdiag,
+--   (3) a more conservative world-count cap on 3+-bot tables,
+--   (4) a single post-move incremental GC step (never a full
+--       collect, never inside the tight loops).
+-- Heuristic fallback when zero worlds complete is unchanged and is
+-- re-validated here.
+
+local function bmSrc()
+    local f = io.open((ROOT .. "/BotMaster.lua"):gsub("\\", "/"), "r")
+    local s = f:read("*a"); f:close(); return s
+end
+local function constSrc()
+    local f = io.open((ROOT .. "/Constants.lua"):gsub("\\", "/"), "r")
+    local s = f:read("*a"); f:close(); return s
+end
+local function slashSrc()
+    local f = io.open((ROOT .. "/Slash.lua"):gsub("\\", "/"), "r")
+    local s = f:read("*a"); f:close(); return s
+end
+
+section("G. v3.2.18 ISMCTS memory guard + 3-bot world cap")
+
+-- G.1 BEHAVIORAL: a real multi-legal Saudi-Master move on a 3-bot
+-- table enters the world loop, populates ALL new memory-telemetry
+-- fields, AND has its world count reduced by the 3-bot cap (trick 0:
+-- base 100 → min(100,50) = 50). One test covers Goal 1 (telemetry
+-- fields exist + populated) and Goal 3 (3-bot reduction) behaviorally.
+do
+    freshState()
+    WHEREDNGNDB.saudiMasterBots = true
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 3 }
+    -- 3 bot seats + 1 human → botSeatCount == 3 → reduction active.
+    S.s.seats = {
+        [1] = { isBot = true },
+        [2] = { isBot = false, name = "Human" },
+        [3] = { isBot = true },
+        [4] = { isBot = true },
+    }
+    -- In-progress FIRST trick (no completed tricks → numTricks 0):
+    -- seat 4 led 8H; seat 1 (bot caller) must follow Hearts → exactly
+    -- 2 legal cards, so we enter the world loop (no single-card
+    -- short-circuit) with a small, fast rollout set.
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = "H", plays = { { seat = 4, card = "8H" } } }
+    S.s.hostHands = {
+        [1] = { "9H", "KH", "AS", "TS", "QD", "JD", "8C", "7C" },
+        [2] = { "AH", "TH", "JH", "QH", "AD", "KD", "9D", "7D" },
+        [3] = { "AC", "TC", "KC", "QC", "JC", "9C", "JS", "9S" },
+        [4] = { "KS", "QS", "8S", "7S", "AD", "8D", "TD", "8H" },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true }
+    S.s.akaCalled = nil
+
+    local preInRollout = Bot._inRollout
+    local pick = BM.PickPlay(1)
+
+    assertTrue(pick ~= nil,
+        "G.1a (v3.2.18): multi-legal Saudi-Master move returns a card (entered world loop)")
+    assertTrue(pick == "9H" or pick == "KH",
+        "G.1b (v3.2.18): returned card is one of the 2 follow-suit legal cards")
+    -- Goal 3: 3-bot table caps trick-0 world count at 50 (was 100).
+    assertEq(BM._lastNumWorlds, 50,
+        "G.1c (v3.2.18): 3-bot table caps trick-0 numWorlds at 50 (base 100 reduced)")
+    -- Goal 1: telemetry fields exist and are populated correctly.
+    assertEq(BM._lastLegalCount, 2,
+        "G.1d (v3.2.18): _lastLegalCount records the 2-card legal set")
+    assertEq(BM._lastTrickCount, 0,
+        "G.1e (v3.2.18): _lastTrickCount records trick index 0")
+    assertEq(type(BM._lastMemKB), "number",
+        "G.1f (v3.2.18): _lastMemKB is a number (memory delta telemetry present)")
+    assertTrue(BM._lastMemKB >= 0,
+        "G.1g (v3.2.18): _lastMemKB is non-negative (clamped delta)")
+    assertEq(type(BM._lastMemCapped), "boolean",
+        "G.1h (v3.2.18): _lastMemCapped is a boolean")
+    assertFalse(BM._lastMemCapped,
+        "G.1i (v3.2.18): memory brake did NOT trip on a tiny 50-world test (16MB cap)")
+    assertTrue((BM._lastWorldsCompleted or 0) >= 1,
+        "G.1j (v3.2.18): at least one world completed (loop actually ran)")
+    assertEq(Bot._inRollout, preInRollout,
+        "G.1k (v3.2.18): Bot._inRollout restored after a memory-guarded move")
+end
+
+-- G.2 BEHAVIORAL: heuristic fallback remains intact when ZERO worlds
+-- complete. We force a 0-world outcome via a monotonic GetTime stub
+-- so the wall-clock brake trips before world 1; BM.PickPlay must
+-- return nil, and Bot.PickPlay must then fall through to the
+-- heuristic picker and still return a legal card. (Goal 2 "fall back
+-- to normal heuristic when the guard trips before any useful
+-- rollout"; Goal 4 "heuristic fallback remains when zero worlds
+-- complete".) The mem brake shares this exact 0-worlds → _restore(nil)
+-- gate, so validating the time path validates the shared fallback.
+do
+    freshState()
+    WHEREDNGNDB.saudiMasterBots = true
+    S.s.isHost = true
+    S.s.phase = K.PHASE_PLAY
+    S.s.contract = { type = K.BID_HOKM, trump = "S", bidder = 3 }
+    S.s.seats = {
+        [1] = { isBot = true }, [2] = { isBot = true },
+        [3] = { isBot = true }, [4] = { isBot = true },
+    }
+    S.s.tricks = {}
+    S.s.trick = { leadSuit = "H", plays = { { seat = 4, card = "8H" } } }
+    S.s.hostHands = {
+        [1] = { "9H", "KH", "AS", "TS", "QD", "JD", "8C", "7C" },
+        [2] = { "AH", "TH", "JH", "QH", "AD", "KD", "9D", "7D" },
+        [3] = { "AC", "TC", "KC", "QC", "JC", "9C", "JS", "9S" },
+        [4] = { "KS", "QS", "8S", "7S", "AD", "8D", "TD", "8H" },
+    }
+    S.s.playedCardsThisRound = { ["8H"] = true }
+    S.s.akaCalled = nil
+
+    -- Monotonic GetTime: every call advances 1000s, so the first
+    -- in-loop overBudget() check (now - startedAt ≥ 1000 > 0.12s)
+    -- trips before any world runs → worldsCompleted stays 0.
+    local origGetTime = GetTime
+    local _t = 0
+    GetTime = function() _t = _t + 1000; return _t end
+
+    local preInRollout = Bot._inRollout
+    local mc = BM.PickPlay(1)
+    assertTrue(mc == nil,
+        "G.2a (v3.2.18): BM.PickPlay returns nil when 0 worlds complete (budget brake)")
+    assertEq(BM._lastWorldsCompleted, 0,
+        "G.2b (v3.2.18): _lastWorldsCompleted == 0 recorded")
+    -- Bot.PickPlay must fall through to the heuristic picker.
+    local hp = Bot.PickPlay(1)
+    GetTime = origGetTime
+    assertTrue(hp ~= nil,
+        "G.2c (v3.2.18): Bot.PickPlay falls back to heuristic (non-nil card) when ISMCTS yields 0 worlds")
+    assertTrue(hp == "9H" or hp == "KH",
+        "G.2d (v3.2.18): heuristic fallback returned a legal follow-suit card")
+    assertEq(Bot._inRollout, preInRollout,
+        "G.2e (v3.2.18): Bot._inRollout restored after 0-world fallback (no leak)")
+end
+
+-- G.3 SOURCE PINS — BotMaster.lua: telemetry assignments + memory
+-- guard structure + post-move incremental GC step, and the
+-- "never a full collect" guarantee.
+do
+    local src = bmSrc()
+    assertTrue(src:find("BM._lastNumWorlds = numWorlds", 1, true) ~= nil,
+        "G.3a (v3.2.18): _lastNumWorlds telemetry assignment present")
+    assertTrue(src:find("BM._lastLegalCount = #legal", 1, true) ~= nil,
+        "G.3b (v3.2.18): _lastLegalCount telemetry assignment present")
+    assertTrue(src:find("BM._lastTrickCount = numTricks", 1, true) ~= nil,
+        "G.3c (v3.2.18): _lastTrickCount telemetry assignment present")
+    assertTrue(src:find("BM._lastMemKB = math.max(0, math.floor((memNowKB() - startMemKB) + 0.5))", 1, true) ~= nil,
+        "G.3d (v3.2.18): _lastMemKB net-delta telemetry assignment present")
+    assertTrue(src:find("BM._lastMemCapped = memCapped", 1, true) ~= nil,
+        "G.3e (v3.2.18): _lastMemCapped telemetry assignment present")
+    assertTrue(src:find("local gcAvail = type(collectgarbage) == \"function\"", 1, true) ~= nil,
+        "G.3f (v3.2.18): collectgarbage availability is guarded (graceful when absent)")
+    assertTrue(src:find("local function overMemBudget()", 1, true) ~= nil,
+        "G.3g (v3.2.18): overMemBudget() guard helper exists")
+    assertTrue(src:find("(memNowKB() - startMemKB) > memBudgetKB", 1, true) ~= nil,
+        "G.3h (v3.2.18): memory guard compares net heap growth to the budget")
+    assertTrue(src:find("if overBudget() or overMemBudget() then break end", 1, true) ~= nil,
+        "G.3i (v3.2.18): world loop breaks on time OR memory budget")
+    assertTrue(src:find('collectgarbage("step", (K and K.BOT_ISMCTS_GC_STEP_KB) or 256)', 1, true) ~= nil,
+        "G.3j (v3.2.18): post-move incremental GC step present")
+    assertTrue(src:find('collectgarbage("collect")', 1, true) == nil,
+        "G.3k (v3.2.18): NO full collectgarbage(\"collect\") anywhere in BotMaster (never full-collect)")
+    assertTrue(src:find("if worldsCompleted == 0 or rolloutErrors == worldsCompleted then", 1, true) ~= nil,
+        "G.3l (v3.2.18): zero-worlds heuristic-fallback gate preserved")
+end
+
+-- G.4 SOURCE PINS — Constants.lua: the two new tunables exist with
+-- the documented emergency-only defaults.
+do
+    local src = constSrc()
+    assertTrue(src:find("K.BOT_ISMCTS_MEM_BUDGET_KB = 16384", 1, true) ~= nil,
+        "G.4a (v3.2.18): K.BOT_ISMCTS_MEM_BUDGET_KB default 16384 present")
+    assertTrue(src:find("K.BOT_ISMCTS_GC_STEP_KB = 256", 1, true) ~= nil,
+        "G.4b (v3.2.18): K.BOT_ISMCTS_GC_STEP_KB default 256 present")
+end
+
+-- G.5 SOURCE PINS — Slash.lua: /baloot ismctsdiag surfaces the
+-- memory delta + mem-capped tag.
+do
+    local src = slashSrc()
+    assertTrue(src:find("local memKB = bm._lastMemKB or 0", 1, true) ~= nil,
+        "G.5a (v3.2.18): ismctsdiag reads _lastMemKB")
+    assertTrue(src:find("local memTag = bm._lastMemCapped", 1, true) ~= nil,
+        "G.5b (v3.2.18): ismctsdiag reads _lastMemCapped")
+    assertTrue(src:find("Δmem %dKB", 1, true) ~= nil,
+        "G.5c (v3.2.18): ismctsdiag output includes the memory-delta field")
+    assertTrue(src:find("[MEM-CAPPED]", 1, true) ~= nil,
+        "G.5d (v3.2.18): ismctsdiag flags a memory-capped move")
+end
+
+-- G.6 SOURCE PIN — BotMaster.lua: the 3-bot world-count reduction
+-- ladder (Goal 3), behaviorally proven by G.1c, pinned here so a
+-- refactor can't silently drop the early/mid caps.
+do
+    local src = bmSrc()
+    assertTrue(src:find("if botSeatCount >= 3 then", 1, true) ~= nil,
+        "G.6a (v3.2.18): 3+-bot-seat branch present")
+    assertTrue(src:find("numWorlds = math.min(numWorlds, 50)", 1, true) ~= nil,
+        "G.6b (v3.2.18): trick≤2 3-bot cap = 50")
+    assertTrue(src:find("numWorlds = math.min(numWorlds, 30)", 1, true) ~= nil,
+        "G.6c (v3.2.18): trick≤5 3-bot cap = 30")
+    assertTrue(src:find("numWorlds = math.min(numWorlds, 20)", 1, true) ~= nil,
+        "G.6d (v3.2.18): late-trick 3-bot cap = 20")
+end
+
+-- =====================================================================
 -- Summary
 -- =====================================================================
 print("")
